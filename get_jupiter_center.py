@@ -16,12 +16,7 @@ ndfilter_width = 100
 # Number of steps to move the model ND filter across an image
 nd_num_steps = 20
 
-#def rot_ang(im):
-#    """Find rotation angle of flat image"""
-#    for ang in 
-#    tim = ndimage.interpolation.rotate(im, ang)
-
-def nd_filt_pos(im, ny=15, x_filt=25, initial_try=None, max_movement=50, max_delta_pix=10):
+def nd_filt_pos(im, ny=10, x_filt=25, initial_try=None, max_movement=50, max_delta_pix=10):
     """Find the position of an ND filter"""
 
     nd_edges = [] ; ypts = []
@@ -72,18 +67,6 @@ def nd_filt_pos(im, ny=15, x_filt=25, initial_try=None, max_movement=50, max_del
         if s[peak_idx[-2]] < 3 * noise:
             #print("Rejected")
             continue
-        #
-        ##fs = signal.medfilt(ss, 101) + np.median(ss)
-        ##chop_idx = np.where(ss - fs > 0)
-        #chop_idx = np.where(ss > (3 * np.std(ss)))
-        #ss[chop_idx] = 0
-        #plt.plot(ss)
-        #plt.show()
-        ##print(np.median(fs), np.std(fs))
-        #print(np.median(ss), np.std(ss))
-        #if s[peak_idx[-2]] < 3 * np.std(ss):
-        #    print("Rejected")
-        #    continue
 
         # Find top two and put back in index order
         top_two = np.sort(peak_idx[-2:])
@@ -116,10 +99,6 @@ def nd_filt_pos(im, ny=15, x_filt=25, initial_try=None, max_movement=50, max_del
     #print(params)
     return(params)
 
-        #d = profile[1:-1] - profile[0:-2]
-        #d = misc.derivative(profile)
-
-
 def nd_coords(im, params, edge_mask=5):
     """Returns coordinates of ND filter in im given parameters of fit from nd_filt_pos"""
 
@@ -131,7 +110,7 @@ def nd_coords(im, params, edge_mask=5):
             xs.append(ix)
             ys.append(iy)
 
-    # NOTE C order!
+    # NOTE C order and the fact that this is a tuple of tuples
     return((ys, xs))
 
 def hist_of_im(im):
@@ -181,7 +160,7 @@ def get_jupiter_center(fname, flat='/data/io/IoIO/raw/2017-04-20/Sky_Flat-0007_N
     # Check to see if Jupiter is sticking out significantly from
     # behind the ND filter, in which case we are better off just using
     # the center of mass of the image and calling that good enough
-    print(np.sum(im))
+    #print(np.sum(im))
     if np.sum(im) > 1E9: 
         y_x = ndimage.measurements.center_of_mass(im)
         return(y_x[::-1])
@@ -204,21 +183,19 @@ def get_jupiter_center(fname, flat='/data/io/IoIO/raw/2017-04-20/Sky_Flat-0007_N
 
     # Use that to boot-strap finding accurate edges of ND filter in image
     im_nd_pos =  nd_filt_pos(im, initial_try=flat_nd_pos)
-    # Boost the ND filter by 1000
-    oim = im.copy()
+    # Translate that into a list of coordinates
     NDc = nd_coords(im, im_nd_pos)
+    # Filter those by ones that are at least 1 std above the median
     boostc = np.where(im[NDc] > (np.median(im[NDc]) + np.std(im[NDc])))
     boost_NDc0 = np.asarray(NDc[0])[boostc]
     boost_NDc1 = np.asarray(NDc[1])[boostc]
+    # Here is where we boost what is sure to be Jupiter, if Jupiter is
+    # in the ND filter
     im[boost_NDc0, boost_NDc1] *= 1000
     y_x = ndimage.measurements.center_of_mass(im)
-    print(y_x[::-1])
-    negc = np.where(im < 0)
-    im[negc] = 0
-    y_x = ndimage.measurements.center_of_mass(im)
-    print(y_x[::-1])
-    plt.imshow(im)
-    plt.show()
+    #print(y_x[::-1])
+    #plt.imshow(im)
+    #plt.show()
     return(y_x[::-1])
 
 
@@ -366,6 +343,11 @@ def get_jupiter_center(fname, flat='/data/io/IoIO/raw/2017-04-20/Sky_Flat-0007_N
     # plt.show()
     # y_x = ndimage.measurements.center_of_mass(im)
     return(y_x[::-1])
+
+# Totally cool way to be able to run this as a script
+if __name__ == "__main__":
+    import sys
+    fib(int(sys.argv[1]))
 
 
 # print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0032_off-band.fit'))
