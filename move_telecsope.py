@@ -559,4 +559,4 @@ class cCamera:
 #    # Warm the CCD to ambient
 #    testCamera.warmCCD()
 
-if __name__ == "__main__":
+

@@ -1,0 +1,262 @@
+[Make a separate software development notebook so my observing
+notebook doesn't get mucked up by this stuff]
+
+Wed May  3 01:20:10 2017  jpmorgen@snipe
+
+OK, now that I have Jupiter's center, how do I want to handle it in
+real time?  That depends on what is available in the maxim object
+namespace.
+
+CCDCamera.ImageArray safearray of Long of size NumX * NumY
+containing the values from the last exposure  BINGO!
+I need Maxim on puppy.
+
+CCDCamera.GuiderArray analogous for guider
+
+Ah! There are some events that we can monitor, so we can potentially
+run in parallel, saving the trouble of loading all of the Python
+packages I depend on
+
+CCDCamera.GuiderMoveStar moves the guide star _while tracking_ which
+is exactly what I want! (delta move)
+
+CCDCamera.GuiderXStarPosition plus CCDCamera.GuiderXError,
+CCDCamera.GuiderYError tell exact position of the guide object
+
+
+CCDCamera.SetFITSKey ( Key, Value )  Cool!  So I can record FITS
+stuff in the raw files!  GetFITSKey returns a key, but you can't
+seem to get the whole FITS header
+
+CCDCamera.StartSequence HEY!  So I can do a hybrid interaction,
+where I use my existing sequences
+
+CCDCamera.PinPointStatus, ImageScale, PositionAngle, CenterDEC, and
+CenterRA get at the Pintpoint stuff, but there seems to be no way to
+get the info stored about the scope like the focal length, so this
+is stuff we will have to store long-term.
+
+So I envision having MaxIm running and the Python scripts
+controlling it.  Lets see if we can really do this
+
+Wed May  3 23:06:14 2017  jpmorgen@snipe
+
+So I can do what I want with CCDCamera.GuiderMoveStar, but I have to
+be the one in control of that.  So I need some sort of loop that
+updates it periodically.  That would be a good thing to have be an
+object, with the property of that object the rate I want, which can
+be adjusted by other parts of the module that have that object.
+There could be another object that keeps track of the guide scope
+flexure...  Hmmm.  My original idea was to keep track of all motion
+under the assumption that restarts of the guider picked up just
+where the unguided scope motion left off.  I am finding that is not
+the case: Jupiter can move around quite a bit when the guider
+starts, so I will probably have to start fresh on motion
+calculations if I really need to do a reposition.  But while I am
+guiding, the motion should be relatively consistent.  So my original
+idea was to have a model which set the starting rates.  I guess if
+there is a deviation of Jupiter from where I want it, I want to
+tweak the value used to move the guide box, but the model can still
+do its thing.
+
+Taking a step back, the guide box will have a certain trajectory
+which will keep Jupiter perfectly centered.  What we really have is
+a trajectory on the main camera and a separate one on the guider,
+with the one on the main camera informing the one on the guider.
+
+Trajectory is a listing of:
+time, gx, gy, mx, my
+
+We know the plate scales and orientations
+(e.g. CCDCamera.GuiderAngle) of the respective cameras, so we can
+use that to measure the real offset between the guider and main
+scope, whether or not Jupiter is centered.
+
+But fundamentally what we care about is putting Jupiter where we
+want it and zeroing its motion.  In offset_guide.py, guide_calc did
+the simple delta between adjacent points to calculate new rates.  Ah
+HA.  In our move object, we could have space for the model and a
+separate space for the measured.  In general, I might want an array
+so arbitrary terms can be added, like for guiding on a star for a
+faint non-siderial object.  So there could be some sort of a
+registration process for the objects that send info to the guide box
+moving object
+
+OK, I think I have a good concept of a general guide box moving
+object.  The next step is when the telescope takes an image, there
+needs to be an analysis that tells us where the object is and where
+we want to put it.  That analysis needs to happen in, or at least be
+provided to a module that figures out how to tweak the measured
+portion of the move object.  That is the module I have been
+struggling with thinking about.  If we use the same registration
+idea for that, the object finder/center calculators can be easily
+added after-the-fact.  The module that does the calculation of the
+offset rates that counteract the measured motion and delta from
+desired position can then be developed independent of source of
+information.
+
+So I now am thinking about a module that uses the measured and
+desired positions as a function of time and calculates the
+correction rates to feed to the guide box moving object.  This is
+where the trajectory concept comes in.  This module accepts a
+function that feeds it the input values.  This measurement module
+could use CCDCamera_Notify(ceSequenceCompleted)
+
+So the measurement master module, or whatever I want to call it,
+would handle all of the interface with MaxIm.  Hmm.  I am finding
+that I might want the FITS header, but that does not seem possible.
+I can, however, get one card at a time if I know what I am looking
+for.  So the MMM could accept a list of FITS keys (e.g. FILTER,
+DATE-OBS, etc.) which it would query when a new image is available.
+It would pass the image and any desired FITS keys to the module that
+does the measurement.  It could return None, if it declines to do a
+measurement (wrong filter [might want to measure multiple quantities
+like filters separately]).  But if it provides a measurement, the
+MMM will process it.  Maybe different filters can be handled by
+having different prefered centers....  And/or, it might be good to
+have some sort of list of, e.g., filters, where each is only
+compared to each other.  Say we do that, with a list of measurement
+slots.  The MMM could calculate motions for each one separately.  If
+they were "consistent enough," they could then be used by MMM to
+derive the offsets.  
+
+OK, so the MMM needs an algorithm for converting a series of
+measurements to a rate for the guide box mover.  And here is where
+we need the guide box mover to provide its trajectory.  Ultimately,
+we just want to subtract our measurement trajectory from the
+existing trajectory.  Not sure if we want to work in extrapolation
+space or not.  Well, if the data are not slowly varying and
+reaosnably consistent, then I am not going to be able to do anything
+with them.  So applying that as a test criterion is something I
+should do.
+
+Thu May  4 15:59:26 2017  jpmorgen@snipe
+
+OK, after some sleep, I realize that this is going to be some
+background job that I am going to want a stop button for.  If I have
+a stop button, I might as well have that also be a status display
+panel.  Cool.  As far as measurement goes, because I can get the
+absolute pixel that the object is on in both the guider and main
+camera, I don't think it matters whether or not I have guided
+between, just that I am guiding and the errors are reasonable when
+the measurement is recorded
+
+Wed May 10 12:31:46 2017  jpmorgen@snipe
+
+On day schedule for concentrated effort on this.  Based on some code
+I found at
+http://wt5l.blogspot.com/2011/05/automated-astrophotography-with-python_28.html
+I am going to make an object that contains stuff having to do with
+MaxIm.  I am calling it MaxImData.  Maybe I should call the whole
+package maximpy, where the offset guide component would be a
+separate program to run for its event loop, but would import all the
+code in maximpy.
+
+I have some angst about whether or not maximdata or maximpy should
+import numpy or just math.  Clearly I am going to need numpy to
+identify Jupiter, etc., but for basic measurement, it will probably
+not be needed.... No, I can't say that.  I might want to do some
+pretty sophisticated estimation and fitting even if centers are
+passed using guide stars or PinPoint.
+
+Thu May 11 10:31:33 2017  jpmorgen@snipe
+
+Got something up and running with MaxIm + now I need to get the
+desired center stuff squared away.  At this point, I just want
+something that works with the ND filter and a Y coordinate.  Since
+the desired center moves, maybe I should call it measured center.
+The routine is going to need an NDData and so does jupiter_center.
+I think that it makes sense to have the NDData generated by the
+desired center routine which is called first, but I can make the
+logic so it can go either way.
+
+Hmm.  Angst.  That is not clean and there isn't an easy way to get
+values out into a parameter.  Things are expected to come out as
+tuples.  But the function jupiter_center doesn't suggest it is
+outputing the desired center, I just find it handy to do that.  I
+suppose I could check on the receiving end for the second tuple/vector
+and if it doesn't exist, assume center of image.
+
+Thu May 11 11:30:13 2017  jpmorgen@snipe
+
+OK, so jupiter_center turns into self.object_center in MaxImData.  But
+it is more complicated than that.  I was thinking of having motion
+calculated afer each exposure was recorded.  But it makes sense for
+something else to trigger that, like a watchdog process monitoring the
+events.  So I still need the intermediate level that I want to call
+independently.
+
+And I am also thinking that jupiter_center works for one image, but
+ultimately I am going to want a more complicated function, like
+ensemble_center that monitors the different filters, etc., and makes
+decisions on whether or not to move things around.
+
+Thu May 11 15:30:43 2017  jpmorgen@snipe
+
+ACKK!  A hitch in my plans.  I am getting
+
+com_error: (-2147352567, 'Exception occurred.', (65535, 'MaxIm DL 6', 'Image Not Available', None, 0, 0), None)
+
+when I try to read an image with CCDCamera.ImageArray.
+CCDCamera.ImageReady is true and the example off the next lets me
+save, but it seems as though the approbation to not hand the array off
+to vbscript and 
+
+I might be able to get it through the Document object
+
+http://www.newastro.com/tutorials/maxim_objects.html helped me with
+that, but it is just from the documentation....
+
+Ack!  What a pain.  It looks like I need to read things with
+Document.GetFITSKey to get my own FITS header.  But at least I can do
+it.
+
+OK, so fundamentally I would like im to be a real astropy FITS im so I
+could slog around in the FITS header at will.  To do that, I would
+need to save things in an HDUlist
+
+Fri May 12 08:54:59 2017  jpmorgen@snipe
+
+OK, got the HDUlist thing to work, but the description of the image is
+the transpose of what I want it to be.  im.shape reports X, Y as I
+expect when I see the image in MaxIm and when it saves it to a FITS
+file.  But when I make an HDU out of it, astropy reports the shape as
+Y, X, presumably because it goes off the shape of the image assuming C
+ordering.  Sigh.
+
+There seems to be no tricky way out of this without transposition,
+since the ordering of the bytes in memory are locked into the way
+MaxIm sent them and Python received them.  If only a simple 1D array
+had been sent, I would be fine.  At some level, that 1D array was
+sent..  Let see if we can use flatten to see what it really looked
+like.
+
+BINGO!
+
+I am reasonably happy with the solution and it checks out with
+plt.imshow and the header
+
+Now there is a problem with my approach, that the last image read in
+is not necessarily the one that is going to have focus, if someone is
+playing around selecting images with MaxIM.  But the Document object
+is the only place I can get at the FITS keys I need.
+
+I guess if this is running in the background the way I envision, I
+shouldn't worry too much about it, because as soon as an event
+happens, control is passed to the code querying the event, preventing
+anything else from happening.
+
+--> I am thinking that it might be a good idea to always have my
+    coordinates transposed.  This is a pain, but it completes the job
+    of transposing everything and results in things being able to plug
+    right through in code.
+
+Fri May 12 14:42:07 2017  jpmorgen@snipe
+
+I want to be a little more clear about center pix vs center
+astrometric coord.  I also now see that I can get guider images to
+work with too, since I am forced to go through the Document object.
+
+--> The watchdog should just retrieve the FITS keys to see if
+    additional code should be triggered.  This saves transferring the
+    whole image

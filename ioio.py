@@ -87,7 +87,7 @@ class NDData:
                 self.get_params()
             params = self.params
         params = np.asarray(params)
-        if y.size == 1:
+        if np.asarray(y).size == 1:
             return(params[1,:] + params[0,:]*(y - self.im_shape[0]/2))
         es = []
         for this_y in y:
@@ -181,15 +181,15 @@ class NDData:
         # tuple apart in Python
         goodc0 = np.where(abs(resid[:,0]) < self.max_delta_pix)
         goodc1 = np.where(abs(resid[:,1]) < self.max_delta_pix)
-        print(ypts[goodc1]-self.im_shape[0]/2)
-        print(nd_edges[goodc1, 1])
+        #print(ypts[goodc1]-self.im_shape[0]/2)
+        #print(nd_edges[goodc1, 1])
         if len(goodc0) < resid.shape[1]:
             params[:,0] = np.polyfit(ypts[goodc0]-self.im_shape[0]/2,
                                      nd_edges[goodc0, 0][0], 1)
         if len(goodc1) < resid.shape[1]:
             params[:,1] = np.polyfit(ypts[goodc1]-self.im_shape[0]/2,
                                      nd_edges[goodc1, 1][0], 1)
-        print(params)
+        #print(params)
         # Check parallelism by calculating shift of ends relative to each other
         dp = abs((params[0,1] - params[0,0]) * self.im_shape[0]/2)
         if dp > self.max_delta_pix:
@@ -280,8 +280,11 @@ class NDData:
         return(v1, v2, v3)
 
 
-def jupiter_center(im_or_fname):
-    """Return the center of Jupiter, correcting for the ND filter, if Jupiter is behind it"""
+def get_jupiter_center(im_or_fname, y=None):
+    """Returns two vectors, the center of Jupiter (whether or not Jupiter
+    is on ND filter) and the desired position of Jupiter, assuming we
+    want it to be centered on the ND filter at a postion y.  If y not
+    specified, y center of image is used."""
 
     if isinstance(im_or_fname, str):
         H = fits.open(im_or_fname)
@@ -290,11 +293,12 @@ def jupiter_center(im_or_fname):
     else:
         im = im_or_fname
     
-    # Prepare to zero saturated pixels, since they confuse the region
-    # around the ND filter if Jupiter or its scattered light is poking
-    # out.  But don't zero them out until after we bias subtract
-    satc = np.where(im > 60000)
-
+    if y is None:
+        y = im.shape[0]/2
+    # Get our neutral density filter object
+    ND = NDData(im)
+    ND_center = (np.average(ND.edges(y)), y)
+    
     # Use the histogram technique to spot the bias level of the image.
     # The coronagraph creates a margin of un-illuminated pixels on the
     # CCD.  These are great for estimating the bias and scattered
@@ -311,15 +315,11 @@ def jupiter_center(im_or_fname):
     #print(np.sum(im))
     if np.sum(im) > 1E9: 
         y_x = ndimage.measurements.center_of_mass(im)
-        return(y_x[::-1])
+        return(y_x[::-1], ND_center)
 
-    # If we made it here, Jupiter is at least mostly behind the ND
-    # filter.  Create an NDData object
-
-    ND = NDData(im)
     # Get the coordinates of the ND filter
     NDc = ND.coords()
-    
+
     # Filter those by ones that are at least 1 std above the median
     boostc = np.where(im[NDc] > (np.median(im[NDc]) + np.std(im[NDc])))
     boost_NDc0 = np.asarray(NDc[0])[boostc]
@@ -331,147 +331,7 @@ def jupiter_center(im_or_fname):
     #print(y_x[::-1])
     #plt.imshow(im)
     #plt.show()
-    return(y_x[::-1])
-
-# Wed May  3 01:20:10 2017  jpmorgen@snipe
-
-# OK, now that I have Jupiter's center, how do I want to handle it in
-# real time?  That depends on what is available in the maxim object
-# namespace.
-
-# CCDCamera.ImageArray safearray of Long of size NumX * NumY
-# containing the values from the last exposure  BINGO!
-# I need Maxim on puppy.
-
-# CCDCamera.GuiderArray analogous for guider
-
-# Ah! There are some events that we can monitor, so we can potentially
-# run in parallel, saving the trouble of loading all of the Python
-# packages I depend on
-
-# CCDCamera.GuiderMoveStar moves the guide star _while tracking_ which
-# is exactly what I want! (delta move)
-
-# CCDCamera.GuiderXStarPosition plus CCDCamera.GuiderXError,
-# CCDCamera.GuiderYError tell exact position of the guide object
-
-
-# CCDCamera.SetFITSKey ( Key, Value )  Cool!  So I can record FITS
-# stuff in the raw files!  GetFITSKey returns a key, but you can't
-# seem to get the whole FITS header
-
-# CCDCamera.StartSequence HEY!  So I can do a hybrid interaction,
-# where I use my existing sequences
-
-# CCDCamera.PinPointStatus, ImageScale, PositionAngle, CenterDEC, and
-# CenterRA get at the Pintpoint stuff, but there seems to be no way to
-# get the info stored about the scope like the focal length, so this
-# is stuff we will have to store long-term.
-
-# So I envision having MaxIm running and the Python scripts
-# controlling it.  Lets see if we can really do this
-
-# Wed May  3 23:06:14 2017  jpmorgen@snipe
-
-# So I can do what I want with CCDCamera.GuiderMoveStar, but I have to
-# be the one in control of that.  So I need some sort of loop that
-# updates it periodically.  That would be a good thing to have be an
-# object, with the property of that object the rate I want, which can
-# be adjusted by other parts of the module that have that object.
-# There could be another object that keeps track of the guide scope
-# flexure...  Hmmm.  My original idea was to keep track of all motion
-# under the assumption that restarts of the guider picked up just
-# where the unguided scope motion left off.  I am finding that is not
-# the case: Jupiter can move around quite a bit when the guider
-# starts, so I will probably have to start fresh on motion
-# calculations if I really need to do a reposition.  But while I am
-# guiding, the motion should be relatively consistent.  So my original
-# idea was to have a model which set the starting rates.  I guess if
-# there is a deviation of Jupiter from where I want it, I want to
-# tweak the value used to move the guide box, but the model can still
-# do its thing.
-
-# Taking a step back, the guide box will have a certain trajectory
-# which will keep Jupiter perfectly centered.  What we really have is
-# a trajectory on the main camera and a separate one on the guider,
-# with the one on the main camera informing the one on the guider.
-
-# Trajectory is a listing of:
-# time, gx, gy, mx, my
-
-# We know the plate scales and orientations
-# (e.g. CCDCamera.GuiderAngle) of the respective cameras, so we can
-# use that to measure the real offset between the guider and main
-# scope, whether or not Jupiter is centered.
-
-# But fundamentally what we care about is putting Jupiter where we
-# want it and zeroing its motion.  In offset_guide.py, guide_calc did
-# the simple delta between adjacent points to calculate new rates.  Ah
-# HA.  In our move object, we could have space for the model and a
-# separate space for the measured.  In general, I might want an array
-# so arbitrary terms can be added, like for guiding on a star for a
-# faint non-siderial object.  So there could be some sort of a
-# registration process for the objects that send info to the guide box
-# moving object
-
-# OK, I think I have a good concept of a general guide box moving
-# object.  The next step is when the telescope takes an image, there
-# needs to be an analysis that tells us where the object is and where
-# we want to put it.  That analysis needs to happen in, or at least be
-# provided to a module that figures out how to tweak the measured
-# portion of the move object.  That is the module I have been
-# struggling with thinking about.  If we use the same registration
-# idea for that, the object finder/center calculators can be easily
-# added after-the-fact.  The module that does the calculation of the
-# offset rates that counteract the measured motion and delta from
-# desired position can then be developed independent of source of
-# information.
-
-# So I now am thinking about a module that uses the measured and
-# desired positions as a function of time and calculates the
-# correction rates to feed to the guide box moving object.  This is
-# where the trajectory concept comes in.  This module accepts a
-# function that feeds it the input values.  This measurement module
-# could use CCDCamera_Notify(ceSequenceCompleted)
-
-# So the measurement master module, or whatever I want to call it,
-# would handle all of the interface with MaxIm.  Hmm.  I am finding
-# that I might want the FITS header, but that does not seem possible.
-# I can, however, get one card at a time if I know what I am looking
-# for.  So the MMM could accept a list of FITS keys (e.g. FILTER,
-# DATE-OBS, etc.) which it would query when a new image is available.
-# It would pass the image and any desired FITS keys to the module that
-# does the measurement.  It could return None, if it declines to do a
-# measurement (wrong filter [might want to measure multiple quantities
-# like filters separately]).  But if it provides a measurement, the
-# MMM will process it.  Maybe different filters can be handled by
-# having different prefered centers....  And/or, it might be good to
-# have some sort of list of, e.g., filters, where each is only
-# compared to each other.  Say we do that, with a list of measurement
-# slots.  The MMM could calculate motions for each one separately.  If
-# they were "consistent enough," they could then be used by MMM to
-# derive the offsets.  
-
-# OK, so the MMM needs an algorithm for converting a series of
-# measurements to a rate for the guide box mover.  And here is where
-# we need the guide box mover to provide its trajectory.  Ultimately,
-# we just want to subtract our measurement trajectory from the
-# existing trajectory.  Not sure if we want to work in extrapolation
-# space or not.  Well, if the data are not slowly varying and
-# reaosnably consistent, then I am not going to be able to do anything
-# with them.  So applying that as a test criterion is something I
-# should do.
-
-# Thu May  4 15:59:26 2017  jpmorgen@snipe
-
-# OK, after some sleep, I realize that this is going to be some
-# background job that I am going to want a stop button for.  If I have
-# a stop button, I might as well have that also be a status display
-# panel.  Cool.  As far as measurement goes, because I can get the
-# absolute pixel that the object is on in both the guider and main
-# camera, I don't think it matters whether or not I have guided
-# between, just that I am guiding and the errors are reasonable when
-# the measurement is recorded
+    return(y_x[::-1], ND_center)
 
 def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10, guide_dx=0, guide_dy=0, last_guide=None, aggressiveness=0.5, target_c = np.asarray((1297, 1100))):
     """ Calculate offset guider values given pixel and times"""
@@ -533,21 +393,21 @@ def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10
     return(new_guide_dt, r[0], r[1])
 
 
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0032_off-band.fit'))
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0033_off-band.fit'))
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0034_off-band.fit'))
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0035_off-band.fit'))
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0036_off-band.fit'))
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0037_off-band.fit'))
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0038_off-band.fit'))
-#  
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0042_off-band.fit'))
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0043_off-band.fit'))
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0044_off-band.fit'))
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit'))
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0046_off-band.fit'))
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0047_off-band.fit'))
-# print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0048_off-band.fit'))
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0032_off-band.fit'))
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0033_off-band.fit'))
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0034_off-band.fit'))
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0035_off-band.fit'))
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0036_off-band.fit'))
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0037_off-band.fit'))
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0038_off-band.fit'))
+ 
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0042_off-band.fit'))
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0043_off-band.fit'))
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0044_off-band.fit'))
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit'))
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0046_off-band.fit'))
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0047_off-band.fit'))
+print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0048_off-band.fit'))
 # 
 # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0032_off-band.fit'))
 # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0033_off-band.fit'))
@@ -567,4 +427,4 @@ def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10
 #ND=NDData('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit')
 #print(ND.get_params())
 
-print(jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit'))
+#print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit'))
