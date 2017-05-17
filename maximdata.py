@@ -17,8 +17,61 @@ import win32com.client
 import numpy as np
 import time
 
+#Every day usage commands
+def wait(seconds):
+    time.sleep(seconds)
+def AddListItem(List, Item):
+    List.append(Item)
+def Help():
+    print("""
+wait(seconds)
+
+print('h')
+wait(3)
+print('i')
+________
+
+h
+
+
+i
+--------
+AddListItem(List, Item)
+
+h[]
+AddListItem(h "hi")
+print(h)
+________
+
+[ hi ]
+--------
+""")
+def startup():
+    print("These are every day usage commands.")
+    Help()
+def Error(text):
+    raise ValueError(text)
+
+#Change True to False for no text
+if True:
+    startup()
+
 class MaxImData():
-    """Stores data related to controlling MaxIm DL via ActiveX/COM events."""
+    """Stores data related to controlling MaxIm DL via ActiveX/COM events.
+    NOTE: we don't have access to the MaxIm CCDCamera.ImageArray, but
+    we do have access to similar information (and FITS keys) in the
+    Document object.  The CCDCamera object is linked to the actual
+    last image read, where the Document object is linked to the
+    currently active window.  This means the calling routine could
+    potentially expect the last image read in but instead get the
+    image currently under focus by the user.  The solution to this is
+    to (carefully) use notify events to interrupt MaxIm precisely when
+    the event you expect happens (e.g. exposure or guide image
+    acuired).  Then you are sure the Document object has the info you
+    expect.  Beware that while you have control, MaxIm is stuck and
+    back things may happen, like the guider might get lost, etc.  If
+    your program is going to take a long time to work with the
+    information it just got, figure out a way to do so asynchronously"""
 
     def __init__(self):
         # Create containers for all of the objects that can be
@@ -27,7 +80,12 @@ class MaxImData():
         self.Application = None
         self.CCDCamera = None
         self.Document = None
-        self.main_HDUlist = None
+        # There is no convenient way to get the FITS header from MaxIm
+        # unless we write the file and read it in.  Instead allow for
+        # getting a selection of FITS keys to pass around in a
+        # standard astropy fits HDUlist
+        self.FITS_keys = None
+        self.HDUlist = None
         self.required_FITS_keys = ('DATE-OBS', 'EXPTIME', 'EXPOSURE', 'XBINNING', 'YBINNING', 'XORGSUBF', 'YORGSUBF', 'FILTER', 'IMAGETYP', 'OBJECT')
 
         # Maxim doesn't expose the results of this menu item from the
@@ -156,7 +214,7 @@ class MaxImData():
         while self.CCDCamera.GuiderMoving:
             time.sleep(0.1)
         return(RA_success and DEC_success)
-    
+
     def rot(self, vec, theta):
         """Rotates vector counterclockwise by theta degrees IN A
         TRANSPOSED COORDINATE SYSTEM Y,X"""
@@ -184,15 +242,17 @@ class MaxImData():
         dpix = self.rot(dpix, self.main_angle)
         return(dpix * self.main_plate)
 
-    # --> finish this
     def get_keys(self):
-        """Puts current MaxIm image (the image with focus) into a FITS HDUlist.  If an exposure is being taken or there is no image, the im array is set equal to None"""
+        """Gets list of self.required_FITS_keys from current image"""
+        self.FITS_keys = []
+        for k in self.required_FITS_keys:
+            self.FITS_keys.append((k, self.Document.GetFITSKey(k)))
         
     def get_im(self):
         """Puts current MaxIm image (the image with focus) into a FITS HDUlist.  If an exposure is being taken or there is no image, the im array is set equal to None"""
         self.connect()
-        # Clear out main_HDUlist in case we fail
-        self.main_HDUlist = None
+        # Clear out HDUlist in case we fail
+        self.HDUlist = None
         if not self.CCDCamera.ImageReady:
             return(None) 
         # For some reason, we can't get at the image array or its FITS
@@ -222,12 +282,13 @@ class MaxImData():
         # The [::-1] reverses the indices
         nddata = np.ndarray(shape=c_im.shape[::-1],
                             buffer=adata, order='F')
+        
         hdu = fits.PrimaryHDU(nddata)
-        # --> use get_keys
-        for k in self.required_FITS_keys:
-            hdu.header[k] = self.Document.GetFITSKey(k)
-        self.main_HDUlist = fits.HDUList(hdu)
-        return(self.main_HDUlist)        
+        self.get_keys()
+        for k in self.FITS_keys:
+            hdu.header[k[0]] = k[1]
+        self.HDUlist = fits.HDUList(hdu)
+        return(self.HDUlist)        
 
     # This is a really crummy object finder, since it will be confused
     # by cosmic ray hits.  It is up to the user to define an object
@@ -236,10 +297,10 @@ class MaxImData():
     # NOTE: The return order of indices is astropy FITS Pythonic: Y, X
     def get_object_center_pix(self):
         self.get_im()
-        im = self.main_HDUlist[0].data
+        im = self.HDUlist[0].data
         return(np.unravel_index(np.argmax(im), im.shape))
-        
-        
+    
+    
     def center_object(self):
         self.guider_move(self.calc_main_move(self.get_object_center()))
 
@@ -257,7 +318,9 @@ if __name__ == "__main__":
     #print(M.guider_move(10000,20))
     print(M.get_object_center_pix())
     print(M.calc_main_move((50,50)))
-    plt.imshow(M.main_HDUlist[0].data)
+    print(M.rot((1,1), 45))
+    print(M.HDUlist[0].header)
+    plt.imshow(M.HDUlist[0].data)
     plt.show()
     # Kill MaxIm
     #M = None

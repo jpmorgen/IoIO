@@ -260,3 +260,10 @@ work with too, since I am forced to go through the Document object.
 --> The watchdog should just retrieve the FITS keys to see if
     additional code should be triggered.  This saves transferring the
     whole image
+
+Wed May 17 13:30:27 2017  jpmorgen@byted
+
+On the way to the 'scope.
+
+At this point I think it makes sense to subsume the maximdata
+development into ioio.py so it is easier to just cut-paste
