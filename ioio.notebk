@@ -267,3 +267,27 @@ On the way to the 'scope.
 
 At this point I think it makes sense to subsume the maximdata
 development into ioio.py so it is easier to just cut-paste
+
+Wed May 17 17:39:05 2017  jpmorgen@byted
+
+--> Wondering what the Pythonic way to deal with unexpected results
+    is.  For now returning None seems to work pretty well.
+
+Revisiting NDData now that I have had a little more experience with
+classes.  Since I am going to slog around HDULists, I can define a
+FITS key that has the ND prameters + check for that early on.
+
+Wed May 17 19:55:20 2017  jpmorgen@byted
+
+Cool!  I got things in the NDData object to work the way I want!  The
+object stores things in the FITS header, which can bubble through
+jupiter_center (or whatever I want to call it) without jupiter_center
+having to worry about it.  If the MaxIm stuff works the way I think, I
+can potentially write those keys back into the header before it
+writes, though I may wish to let them be recalculated by reduction,
+assuming it is important and needs to be rewritten
+
+--> I want to use add_history from west_aux.py.  This highlights the
+    necessity of figuring out the PYTHONPATH stuff on Windows/anaconda
+
+
