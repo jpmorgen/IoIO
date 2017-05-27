@@ -290,4 +290,15 @@ assuming it is important and needs to be rewritten
 --> I want to use add_history from west_aux.py.  This highlights the
     necessity of figuring out the PYTHONPATH stuff on Windows/anaconda
 
+Hmm.  I am running into the problem of tuple of tuple return from
+jupiter_center.  It is not working the way I want.  The fundamental
+problem is that I am returning TMI.  Or I am returning the I in the
+wrong form.  Maybe I need to return an object that when queried, gives
+the desired center, etc.
 
+Hmm.  That is a good idea!  So the object would be of a subclass of
+GetObjectCenterPix.  That object would be instantiated with the
+HDUList_im_or_fname construct and then queried for the center pix of
+the object and the desired center.  That object can get more
+complicated if it needs to, particularly with respect to keeping track
+of the desired center

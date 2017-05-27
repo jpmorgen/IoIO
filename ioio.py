@@ -55,6 +55,9 @@ def hist_of_im(im):
 
     return(hist, centers)
 
+class GetObjectCenterPix(HDUList_im_or_fname=None):
+    """Base class for containing objects which calculate center pixel of an object and desired """
+
 class NDData:
     """Neutral Density Data storage object"""
 
@@ -92,7 +95,7 @@ class NDData:
         self.im = np.asfarray(self.HDUList[0].data)
         self.im_shape = self.im.shape
         h = self.HDUList[0].header
-        if not header.get('NDPAR') is None:
+        if not h.get('NDPAR') is None:
             # Note transpose, since we are working in C!
             params[0,0] = h['NDPAR00']
             params[1,0] = h['NDPAR01']
@@ -296,18 +299,14 @@ class NDData:
         return(v1, v2, v3)
 
 
-def get_jupiter_center(im_or_fname, y=None):
+def get_jupiter_center(HDUList_im_or_fname, y=None):
     """Returns two vectors, the center of Jupiter (whether or not Jupiter
     is on ND filter) and the desired position of Jupiter, assuming we
     want it to be centered on the ND filter at a postion y.  If y not
     specified, y center of image is used."""
 
-    if isinstance(im_or_fname, str):
-        H = fits.open(im_or_fname)
-        im = np.asfarray(H[0].data)
-        H.close()
-    else:
-        im = im_or_fname
+    HDUList = read_im(HDUList_im_or_fname)
+    im = HDUList[0].data
     
     if y is None:
         y = im.shape[0]/2
@@ -451,9 +450,9 @@ class MaxImData():
         # There is no convenient way to get the FITS header from MaxIm
         # unless we write the file and read it in.  Instead allow for
         # getting a selection of FITS keys to pass around in a
-        # standard astropy fits HDUlist
+        # standard astropy fits HDUList
         self.FITS_keys = None
-        self.HDUlist = None
+        self.HDUList = None
         self.required_FITS_keys = ('DATE-OBS', 'EXPTIME', 'EXPOSURE', 'XBINNING', 'YBINNING', 'XORGSUBF', 'YORGSUBF', 'FILTER', 'IMAGETYP', 'OBJECT')
 
         # Maxim doesn't expose the results of this menu item from the
@@ -619,7 +618,7 @@ class MaxImData():
     # --> Not sure if FITS files get written by MaxIm before or after
     # --> they become Document property after a fresh read.  Could use
     # --> CCDCamera version, but this keeps it consistent
-    def set_keys(self keylist):
+    def set_keys(self, keylist):
         """Write desired keys to current image FITS header"""
         if not getDocument():
             log.warning('Cannot get Document object, no FITS keys set')
@@ -640,10 +639,10 @@ class MaxImData():
             
 
     def get_im(self):
-        """Puts current MaxIm image (the image with focus) into a FITS HDUlist.  If an exposure is being taken or there is no image, the im array is set equal to None"""
+        """Puts current MaxIm image (the image with focus) into a FITS HDUList.  If an exposure is being taken or there is no image, the im array is set equal to None"""
         self.connect()
-        # Clear out HDUlist in case we fail
-        self.HDUlist = None
+        # Clear out HDUList in case we fail
+        self.HDUList = None
         if not self.CCDCamera.ImageReady:
             return(None) 
         # For some reason, we can't get at the image array or its FITS
@@ -685,8 +684,8 @@ class MaxImData():
         self.get_keys()
         for k in self.FITS_keys:
             hdu.header[k[0]] = k[1]
-        self.HDUlist = fits.HDUList(hdu)
-        return(self.HDUlist)        
+        self.HDUList = fits.HDUList(hdu)
+        return(self.HDUList)        
 
     # This is a really crummy object finder, since it will be confused
     # by cosmic ray hits.  It is up to the user to define an object
@@ -697,38 +696,48 @@ class MaxImData():
         if self.get_im() is None:
             log.warning('No image')
             return(None)
-        im = self.HDUlist[0].data
+        im = self.HDUList[0].data
         return(np.unravel_index(np.argmax(im), im.shape))
     
     
     def center_object(self):
-        self.guider_move(self.calc_main_move(self.get_object_center()))
+        if self.get_im() is None:
+            log.warning('No image')
+            return(None)
+
+        #self.guider_move(self.calc_main_move(self.get_object_center_pix()))
+        obj_c = get_jupiter_center(self.HDUList)
+        print('jupiter center = ', obj_c)
+        self.guider_move(self.calc_main_move(obj_c))
 
 
 log.setLevel('INFO')
 
-## # Start MaxIm
-## print('Getting MaxImData object...')
-## M = MaxImData()
-## print('Done')
-## print('Getting MaxImData camera...')
-## M.getCCDCamera()
-## print('Done')
-## # Keep it alive for these experiments
-## M.CCDCamera.DisableAutoShutdown = True
-## #M.connect()
-## #print(M.calc_main_move((50,50)))
-## #print(M.guider_move(10000,20))
-## print('Getting object center...')
-## print(M.get_object_center_pix())
-## print('Done')
-## print(M.calc_main_move((50,50)))
-## print(M.rot((1,1), 45))
-## print(M.HDUlist[0].header)
-## plt.imshow(M.HDUlist[0].data)
-## plt.show()
-## # Kill MaxIm
-## #M = None
+# Start MaxIm
+print('Getting MaxImData object...')
+M = MaxImData()
+print('Done')
+print('Getting MaxImData camera...')
+M.getCCDCamera()
+print('Done')
+# Keep it alive for these experiments
+M.CCDCamera.DisableAutoShutdown = True
+#M.connect()
+#print(M.calc_main_move((50,50)))
+#print(M.guider_move(10000,20))
+print('Getting object center...')
+print(M.get_object_center_pix())
+print('Done')
+print('Centering Jupiter!')
+M.center_object()
+print('Done')
+print(M.calc_main_move((50,50)))
+print(M.rot((1,1), 45))
+print(M.HDUList[0].header)
+plt.imshow(M.HDUList[0].data)
+plt.show()
+# Kill MaxIm
+#M = None
 
 print('Getting jupiter center')
 print(get_jupiter_center('/Users/jpmorgen/byted/xfr/2017-04-20/IPT-0032_off-band.fit'))
