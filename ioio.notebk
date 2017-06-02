@@ -302,3 +302,101 @@ HDUList_im_or_fname construct and then queried for the center pix of
 the object and the desired center.  That object can get more
 complicated if it needs to, particularly with respect to keeping track
 of the desired center
+
+Sat May 27 19:32:39 2017 EDT  jpmorgen@snipe
+
+Think about what I want to call the object, because the method I want
+is really oging to return the desired center + MaxImData.center_object
+is going to move it there
+
+So it is really going to be something like ImageHandler, or something
+like that + have methods
+
+.desired_center
+.desired_rate?
+
+Hmm.  So the ImageHandler object (or whatever I call it) is going to
+accept the stream of images and make decisions about what to do with them.
+
+I was hoping to avoid having everything centrally scripted, but the
+focus stuff suggests I might need to do that.
+
+But I still should try to keep abstraction layers sensible.  I have an
+NDData object + probably should have a JupData object, or more
+generally an ObjData object.
+
+At least for JupData, I would have center and desired center
+
+There is another set of stuff I need to keep track of for moving the
+guide box.  I could potentially put that into the ObjData base class,
+or have another class entirely for that
+
+Thu Jun 01 21:24:28 2017 EDT  jpmorgen@snipe
+
+Well, going with ObjData/JupData for now.  At the moment they are
+hollow, in the sense that are not instantiated with the image as
+property.  The image does get written in to property, but it can
+change.  I am not sure I like that.  Potentially better to have the
+layered objects, where the ObjData exists for each image that is read
+in and can be queried for its obj center and prefered center.  Then
+there is a separate object that keeps track of all of those, perhaps
+OffsetGuide or OffsetGuideData.
+
+OK, so how is the ObjData going to be handled with MaxImData?  I guess
+a better question to ask is: who should be in charge?  The MaxImData
+is going to be there connected to MaxIm.  The ObjData objects get
+instantiated when an image is taken.  MaxImData might have the code
+for that, but I don't think it is the right thing to be in charge of
+that.  In other words, a separate application has the event-driven
+logic.  Similarly, I think that I should keep the ObjData stuff out of
+MaxImData, since it is just too individualized.  Rather, the ObjData,
+or whatever subclass thereof should be driven by yet a third thing for
+now.
+
+Fri Jun 02 00:35:04 2017 EDT  jpmorgen@snipe
+
+Ack.  I have to actually select the window for it to be the active one.
+
+So next step is to read in an image
+
+Fri Jun 02 10:36:49 2017 EDT  jpmorgen@snipe
+
+Well, wait a minute.  I need to go back to the NDData logic since I am
+using images of different size and binning.
+
+So I want some property for the subimage and binning.  The
+default_nd_pos and other nd position parameters should read in binning
+= 1.
+
+--> Either that or I just limit myself to binning = 1 cases for now
+
+In any case, I need to make sure I check for out-of-bounds
+
+Fri Jun 02 11:16:57 2017 EDT  jpmorgen@snipe
+
+Now ready to read in an IPT image!
+
+The acid test is to just read one in and have that be the active Document
+
+It worked!
+
+Revisited desire to just have math in MaxImData section and find that
+since I am dealing with the astropy FITS stuff, I need to have
+np.ndarrays, so np is necessary for MaxImdata
+
+So now I want to see if I can make a script out of it that I can run
+from the command line or with MaxIm!
+
+Fri Jun 02 14:22:09 2017 EDT  jpmorgen@snipe
+
+Apparently there is a thing called conda.
+
+Ah.  Conda is like pip3 as a package manager.  It also creates
+environments
+
+python at the command prompt does bring up python
+
+Type hello_argv.py + get the option to make a file association.  Took
+a while to find python.exe, but now it is there (on puppy)
+
+Hmm
