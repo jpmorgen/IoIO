@@ -400,3 +400,64 @@ Type hello_argv.py + get the option to make a file association.  Took
 a while to find python.exe, but now it is there (on puppy)
 
 Hmm
+
+Fri Jun 02 22:42:32 2017 EDT  jpmorgen@snipe
+
+Got ioio.py to work on IoIO1U1! At least during twilight with old
+images.
+
+--> I need to get the default position of the current ND filter
+
+ND=NDData('//snipe/data/io/IoIO/raw/2017-05-29/Sky_Flat-0001_Na_off-band.fit')
+print(ND.get_params())
+
+Sat Jun 03 15:27:29 2017 EDT  jpmorgen@snipe
+
+<sigh> that is not as easy as I would like it to be.  Plus I need to
+deal with binning stuff too.  So think about that for awhile.
+
+I have been trying to keep NDData as a separate object.  I am seeing
+there isn't much need for that.  As long as I don't call
+get_obj_center on a flat, I am OK + I can potentially do some
+safeguards against that. 
+
+I am thinking a little more generally about the JupData.  Yes, I want
+to use that to work with Jupiter, but I am also working with other
+observations, like stars for focus and maybe other things.
+
+So I am thinking that maybe ObjData should be ObsData, data about an
+observation.  And I could have CorObsData for a coronagraph observation 
+
+Wed Jun 07 10:28:03 2017 EDT  jpmorgen@snipe
+
+Tried to work at town office + date was messed up on byted, so work
+was lost.  Decided to put NDData into CorObsData.  Just need to add
+nd_ to a couple of its methods + move some of the ingest_im stuff into
+the base init and CorObsData init methods.
+
+Sun Jun 11 13:39:06 2017 CEST  jpmorgen@byted
+
+<sigh> now that the ND filter is tipped, the ND edge finding algorithm
+doesn't work as well.  At least with the flats, I can use small
+vertical binning and that fixes the problem for them.  Maybe for the
+Jupiter images, I can rotate 
+
+Sat Jul 01 23:34:03 2017 EDT  jpmorgen@snipe
+
+Wonder if I can do the diagonal thing starting from the flats?
+
+Tue Aug 01 19:17:30 2017 EDT  jpmorgen@byted
+
+To do this effectively, I should make a decision when I am
+processing the file if it is a flat or not.  I have IMAGETYP in the
+list of required_FITS_keys, so it should come over fine in real time.
+
+It would nice to have a place where I store the current paramters.  A
+well-organized disk file is the right place.  That would be at the top
+level of the raw data directory.  In the short term, it would be nice
+to have that number in the property stashed from a previous flat run.
+
+Well, that cann just be a CorObsData on a flat!  That can be an
+optional input.  Actuality the way to do that is just with a file name
+and have CorObsData do it itself.
+
