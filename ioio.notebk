@@ -457,7 +457,223 @@ well-organized disk file is the right place.  That would be at the top
 level of the raw data directory.  In the short term, it would be nice
 to have that number in the property stashed from a previous flat run.
 
-Well, that cann just be a CorObsData on a flat!  That can be an
+Well, that can just be a CorObsData on a flat!  That can be an
 optional input.  Actuality the way to do that is just with a file name
 and have CorObsData do it itself.
 
+Hey, if I make the reference_flat a variable that is global to all
+CorObsData types, I can at least for one session do what I am thinking of
+
+Tue Nov 14 15:36:20 2017 EST  jpmorgen@snipe
+
+Time to start thinking of getting this up and running, since I am 2
+months out from deployment
+
+Tried to send buffer to python:
+
+Python 3.5.3 (default, Jan 19 2017, 14:11:04) 
+[GCC 6.3.0 20170118] on linux
+Type "help", "copyright", "credits" or "license" for more information.
+>>> Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/home/jpmorgen/py/IoIO/ioio.py", line 10, in <module>
+    from scipy import signal, ndimage
+ImportError: No module named 'scipy'
+
+I might need to get anaconda for snipe.  It looks like the latest
+version of python is 3.6, but snipe only supports 3.5.
+
+Since I use anaconda on puppy and IoIO1U1, it might be prudent to
+install it on snipe....
+
+OTOH, it looks like I can get scipy easily:
+
+https://www.scipy.org/install.html
+
+Sun Nov 26 14:43:54 2017 EST  jpmorgen@snipe
+
+root@snipe> pip3 install -U pip
+
+http://docs.astropy.org/en/stable/install.html
+
+pip3 install -U numpy
+  Found existing installation: numpy 1.12.1
+    Not uninstalling numpy at /usr/lib/python3/dist-packages, outside environment /usr
+Successfully installed numpy-1.13.3
+
+https://askubuntu.com/questions/797058/not-uninstalling-paramiko-at-usr-lib-python2-7-dist-packages-outside-environme
+
+OK, I think that means I have things under apt package management 
+
+So numpy is installed and is at 1.12.1, as suggested by pip.
+
+I have python3-astropy installed already.  Get python3-scipy
+
+ioio.py now works!
+
+But I need to implement the shifted row algorithm.
+
+. Center of image = 0 shift
+. dy * tan(angle) = dx, round that
+. X + dx = corrected X.  Maybe shift row by -(X + dx)
+. collapse shifted rows to increase signal
+
+Sun Nov 26 17:01:28 2017 EST  jpmorgen@snipe
+
+Reading through ioio.py and finding some things are confusing and left
+over from previous iterations.
+
+I like the ObsData and CorObsData inheritance construct.  CorObsData
+replaces NDData.  "params" is not too illuminating a name.  ND_coords,
+ND_edges, and ND_angle are more sensible.  ND_params might be better,
+but I don't know if it is worth changing it for that
+
+And I wanted to figure out a good place to store a file with the ND_params
+
+https://stackoverflow.com/questions/7374748/whats-the-difference-between-a-python-property-and-attribute
+
+Ah Ha!  I might want to define some methods __get__, __set__ and/or
+__delete__ in some sort of ND_params object, so that when I call
+something like print(flat.ND_params), it automatically does the
+__get__ method
+
+That is a refinement.  For now, I need to work at making it implement
+the tilted algorithm.
+
+The tilted algorithm depends on what I currently call the
+default_nd_pos system, but which I think I would like to improve.
+
+In the absence of any recorded previous ND_params and because I used a
+variety of angles, 0 or 21 degrees is probably the best to start
+with.  Alternately, I hard-code in ones for date ranges
+
+It think it will be important to have a written area for this
+
+Sun Nov 26 18:48:50 2017 EST  jpmorgen@snipe
+
+ypt, ypts, etc. may need to change.
+
+Mon Nov 27 16:45:31 2017 EST  jpmorgen@snipe
+
+Having trouble with inheritance
+
+ObsData.read_im does FITS stuff, but not y_center.  That is why I want
+to override it in CorObsData.  But when I try to use the version of
+read_im in CorObsData, I get passed the name...
+
+Ahh.  The problem seems to be growing pains between old-style
+functions that I am used to and doing things more with objects.  I was
+not storing the image from read_im into self!
+
+>>> [[  3.78040775e-01   3.84787113e-01]
+ [  1.24664929e+03   1.35807856e+03]]
+1.56926110854
+
+Hey, that makes a big difference when I use the wrong value!
+
+ND filter edges are not parallel.  Edges are off by 14.3094258117 pixels.
+WARNING: ND filter edges are not parallel.  Edges are off by 14.3094258117 pixels. Returning initial try. [unknown]
+[[  3.78040775e-01   3.84787113e-01]
+ [  1.24664929e+03   1.35807856e+03]]
+1.56926110854
+
+--> Relax edges criterion a bit:
+[[  3.74787350e-01   3.87795919e-01]
+ [  2.56409969e+03   2.78656027e+03]]
+1.57004886213
+
+Hmm.  This seems wrong!  Intercepts are way too high
+
+--> Oops, recursion error with default_ND_params = None
+
+Not putting them back where they belong:
+
+[[ -3.25342466e-03   3.00880626e-03]
+ [  1.31745040e+03   1.42848171e+03]]
+1.56933962744
+
+Interesting that they are bowed
+--> ND_angle is not returning the right thing
+
+>>> [[  3.74787350e-01   3.87795919e-01]
+ [  1.18909969e+03   1.41156027e+03]]
+1.56925870775
+
+OK, somne things to work on.  First of all, I want to stop the
+recursion error and consider working from the center out to find the
+best peaks, since the edges of the flatfield confuse the issue.  Maybe
+I could just multiply the profile by some function that peaks in the middle....
+
+OK, fixed recursion error and got angle correct
+
+Now onto making flats more reliable.  Note that the second derivative
+helps here to pslot the sharp edge and re-multiplying by the profile
+de-emphasizes the noise in the middle
+
+            profile = np.sum(subim, 0)
+            smoothed_profile = signal.savgol_filter(profile, self.x_filt_width, 3)
+            d = np.gradient(smoothed_profile, 10)
+            d2 = np.gradient(d, 10)
+            s = np.abs(d2) * profile
+
+[[  3.77351116e-01   3.82876712e-01]
+ [  1.21697817e+03   1.38464772e+03]]
+0.363246546527
+
+Second run through looks even better with no missed points
+[[  3.75447820e-01   3.87551301e-01]
+ [  1.18163633e+03   1.42002571e+03]]
+0.364456703475
+
+Is that algorithm good for non-flats?
+
+[[  3.71191460e-01   4.03051953e-01]
+ [  1.17661504e+03   1.29683655e+03]]
+0.369355340751
+
+Holy smokes!  That's not bad!
+
+In fact, it is better than the other way
+
+Well, that is because a number are being rejected
+
+Old way:
+[[  6.27488411e-01   6.60076892e-01]
+ [  1.09770298e+03   1.29057039e+03]]
+0.57199207656
+
+That is pretty crummy!
+
+SII with new way:
+[[  8.30095570e-01   8.50540538e-01]
+ [  1.15190956e+03   1.27540733e+03]]
+0.698846271587
+
+Not good.  Of course, I am a little off in the initial
+default_ND_params, but I still want to be able to get close.
+
+It might be that I have to just remove stars and cosmic rays first,
+so they don't mess up the signal from the edge.  Or I could try that
+edge detection routine....
+
+And now that I have a cheap and dirty way to rotate the images, I
+might go back to the collapse vertical idea, since mostly I want to
+just get the left-right
+
+I am not doing a true rotation, but a shift, which is why Jupiter
+looks so weird, as does the flatfield image.
+
+Tue Nov 28 17:39:39 2017 EST  jpmorgen@snipe
+
+Not sure if that matters too much.  After fixing the algorithm to work
+differently for flats and images, realizing my bounds did not need to move
+
+[[  3.72612513e-01   3.91825984e-01]
+ [  1.12312877e+03   1.47317201e+03]]
+0.365084804118
+
+Wed Nov 29 11:48:56 2017 EST  jpmorgen@snipe
+
+OK, I think I can improve on the peak selection algorithm if I choose
+peaks that are the right distance apart.   But before I do that, check
+things in

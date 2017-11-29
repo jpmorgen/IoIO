@@ -110,7 +110,7 @@ from scipy import signal, ndimage
 ##!##         #self.get_object_center = None
 ##!## 
 ##!##     def getApplication(self):
-##!##         if not self.Application is None:
+##!##         if self.Application is not None:
 ##!##             return(True)
 ##!##         try:
 ##!##             self.Application = win32com.client.Dispatch("MaxIm.Application")
@@ -120,7 +120,7 @@ from scipy import signal, ndimage
 ##!##         return(isinstance(self.Application, win32com.client.CDispatch))
 ##!##         
 ##!##     def getCCDCamera(self):
-##!##         if not self.CCDCamera is None:
+##!##         if self.CCDCamera is not None:
 ##!##             return(True)
 ##!##         try:
 ##!##             self.CCDCamera = win32com.client.Dispatch("MaxIm.CCDCamera")
@@ -134,7 +134,7 @@ from scipy import signal, ndimage
 ##!##         # The CurrentDocument object gets refreshed when new images
 ##!##         # are taken, so all we need is to make sure we are connected
 ##!##         # to begin with
-##!##         if not self.Document is None:
+##!##         if self.Document is not None:
 ##!##             return(True)
 ##!##         self.getApplication()
 ##!##         try:
@@ -336,11 +336,12 @@ class ObsData():
     def __init__(self, HDUList_im_or_fname=None):
         self.binning = None
         self.subframe_origin = None
+        self.open_fits = None
         if HDUList_im_or_fname is None:
             log.info('ObsData initialized with no image')
             self.HDUList = None
         else:
-            self.HDUList = self.read_im(HDUList_im_or_fname)
+            self.read_im(HDUList_im_or_fname)
 
     def read_im(self, HDUList_im_or_fname=None):
         """Returns an astropy.fits.HDUList given a filename, image or HDUList"""
@@ -353,14 +354,16 @@ class ObsData():
         elif isinstance(HDUList_im_or_fname, str):
             fname = HDUList_im_or_fname
             HDUList = fits.open(fname)
+            self.open_fits = True
             # --> when are we going to close the file?
+            # --> need to have some property that keeps track of this
             #HDUList.close()
         elif isinstance(HDUList_im_or_fname, np.ndarray):
             hdu = fits.PrimaryHDU(HDUList_im_or_fname)
             HDUList = fits.HDUList(hdu)
         else:
             raise ValueError('Not a valid input, HDUList_im_or_fname')
-        if not HDUList is None:
+        if HDUList is not None:
             try:
                 h = HDUList[0].header
                 # Note Astropy Pythonic transpose Y, X order
@@ -372,8 +375,12 @@ class ObsData():
                 log.warning('Could not read binning or subframe origin from image header.  Did you pass a valid MaxIm-recorded image and header')
                 self.binning = None
                 self.subframe_origin = None
-        return(HDUList)
+        self.HDUList = HDUList
     
+    def close_fits(self):
+        if self.open_fits:
+            HDUList.close()        
+
     def hist_of_im(self, im, readnoise=5):
         """Returns histogram of image and index into centers of bins.  
 Uses readnoise (default = 5 e- RMS) to define bin widths"""
@@ -399,7 +406,7 @@ Uses readnoise (default = 5 e- RMS) to define bin widths"""
         # light for spontanous subtraction.  The ND filter provides a
         # similar peak after bias subutraction (or, rather, it is the
         # second such peak)
-        # --> This is very specific to the coronagraph.  COnsider porting first peak find from IDL
+        # --> This is very specific to the coronagraph.  Consider porting first peak find from IDL
         # Pass on readnoise, if supplied
         im_hist, im_hist_centers = hist_of_im(im, kwargs)
         im_peak_idx = signal.find_peaks_cwt(im_hist, np.arange(10, 50))
@@ -447,22 +454,22 @@ Uses readnoise (default = 5 e- RMS) to define bin widths"""
 #        self.fname = None
 #        self.im = None
 #        # The shape of im is really all we need to store for
-#        # calculations, once we have the params
+#        # calculations, once we have the ND_params
 #        self.im_shape = None
-#        self.params = None
+#        self.ND_params = None
 #
 #        self.ingest_im(HDUList_im_or_fname)
 #
 #        # ND filter position in case none is derivable from flats.  This is from:
 #        # print(nd_filt_pos('/data/io/IoIO/raw/2017-04-20/Sky_Flat-0007_Na_off-band.fit'))
-#        self.default_nd_pos = ((-7.35537190e-02,  -6.71900826e-02), 
+#        self.default_ND_params = ((-7.35537190e-02,  -6.71900826e-02), 
 #                               (1.24290909e+03,   1.34830909e+03))
 #
 #        # And we can refine it further for a good Jupiter example
 #        #print(nd_filt_pos('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit',
 #        #                  initial_try=((-7.35537190e-02,  -6.71900826e-02), 
 #        #                               (1.24290909e+03,   1.34830909e+03))))
-#        self.default_nd_pos = ((-6.57640346e-02,  -5.77888855e-02),
+#        self.default_ND_params = ((-6.57640346e-02,  -5.77888855e-02),
 #                               (1.23532221e+03,   1.34183584e+03))
 #        self.n_y_steps = 15
 #        self.x_filt_width = 25
@@ -479,13 +486,13 @@ Uses readnoise (default = 5 e- RMS) to define bin widths"""
 #        self.im_shape = self.im.shape
 #        h = self.HDUList[0].header
 #        if not h.get('NDPAR00') is None:
-#            params = np.zeros((2,2))
+#            ND_params = np.zeros((2,2))
 #            # Note transpose, since we are working in C!
-#            params[0,0] = h['NDPAR00']
-#            params[1,0] = h['NDPAR01']
-#            params[0,1] = h['NDPAR10']
-#            params[1,1] = h['NDPAR11']
-#            self.params = params
+#            ND_params[0,0] = h['NDPAR00']
+#            ND_params[1,0] = h['NDPAR01']
+#            ND_params[0,1] = h['NDPAR10']
+#            ND_params[1,1] = h['NDPAR11']
+#            self.ND_params = ND_params
 #
 #        return(self.im)
 #
@@ -494,215 +501,151 @@ Uses readnoise (default = 5 e- RMS) to define bin widths"""
 class CorObsData(ObsData):
     """Calculates Jupiter current center and desired center given an image"""
 
-    def __init__(self, HDUList_im_or_fname=None, y=None):
-        # Inherit init from base class, which reads the basic FITS
-        # image and initializes binning and subframe origin 
-        ObsData.__init__(self, HDUList_im_or_fname)
+    reference_flat = None
 
-        # Define y pixel value along ND filter where we want our center
-        # --> This may change if we are able to track ND filter sag in Y
-        self.y = y
-        # Let the NDData be populated when we need it
-        self.ND = None
+    def __init__(self, HDUList_im_or_fname=None, reference_flat=None, y_center=None):
+        # Inherit init from base class, which reads the basic FITS
+        # image (subject to our roverriding the read_im) and
+        # initializes binning and subframe origin
+        super().__init__(HDUList_im_or_fname)
+        # Define y pixel value along ND filter where we want our
+        # center --> This may change if we are able to track ND filter
+        # sag in Y.  By default this starts as None and gets filled as
+        # the midpoint of the image when we read it
+        self.y_center = y_center
         
-        # Initialize params, the parameters of our ND filter to None.
-        # These will be two lines defining the edges of the filter.
-        # The origin of the lines is the Y center of the unbinned,
-        # full-frame chip
-        self.params = None
+        # The ND_params are the primary property we work hard to
+        # generate.  These will be the slopes and intercepts of the
+        # two lines defining the edges of the ND filter.  The origin
+        # of the lines is the Y center of the unbinned, full-frame
+        # chip
+        self.ND_params = None
+        # Angle is the (average) angle of the lines, useful for cases
+        # where the filter is rotated significantly off of 90 degrees
+        # (which is where I will run it frequently)
+        self.angle = None
+
         # If we were passed an image, see if it has already been
         # through the system
-        if not self.HDUList is None:
+        if self.HDUList is not None:
             h = self.HDUList[0].header
-            if not h.get('NDPAR00') is None:
-                params = np.zeros((2,2))
+            if h.get('NDPAR00') is not None:
+                ND_params = np.zeros((2,2))
                 # Note transpose, since we are working in C!
-                params[0,0] = h['NDPAR00']
-                params[1,0] = h['NDPAR01']
-                params[0,1] = h['NDPAR10']
-                params[1,1] = h['NDPAR11']
-                self.params = params
+                ND_params[0,0] = h['NDPAR00']
+                ND_params[1,0] = h['NDPAR01']
+                ND_params[0,1] = h['NDPAR10']
+                ND_params[1,1] = h['NDPAR11']
+                self.ND_params = ND_params
+
+        # Make it easy to change the reference flat
+        self.reference_flat = reference_flat
 
         # Define defaults for ND mask finding algorithm.  It is easy
         # to find the ND mask in flats, but not Jupiter images.  We
         # can use the answer from the flats to get the answer for
         # Jupiter.  This was from:
         # '/data/io/IoIO/raw/2017-04-20/Sky_Flat-0007_Na_off-band.fit'
-        self.default_nd_pos = ((-7.35537190e-02,  -6.71900826e-02), 
-                               (1.24290909e+03,   1.34830909e+03))
+        self.default_ND_params = ((-7.35537190e-02,  -6.71900826e-02), 
+                                  (1.24290909e+03,   1.34830909e+03))
 
         # And we can refine it further for a good Jupiter example
         #print(nd_filt_pos('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit',
         #                  initial_try=((-7.35537190e-02,  -6.71900826e-02), 
         #                               (1.24290909e+03,   1.34830909e+03))))
-        self.default_nd_pos = ((-6.57640346e-02,  -5.77888855e-02),
-                               (1.23532221e+03,   1.34183584e+03))
+        self.default_ND_params = ((-6.57640346e-02,  -5.77888855e-02),
+                                  (1.23532221e+03,   1.34183584e+03))
+        
+        # flat = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
+        self.default_ND_params = ((3.78040775e-01,  3.84787113e-01),
+                                  (1.24664929e+03,   1.35807856e+03))
+
+        # flat = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
+        self.default_ND_params = ((3.75447820e-01,  3.87551301e-01),
+                                  (1.18163633e+03,   1.42002571e+03))
+
+        #self.default_ND_params = None
         self.n_y_steps = 15
         self.x_filt_width = 25
         self.edge_mask = 5
         self.max_movement=50
-        self.max_delta_pix=10
+        self.max_delta_pix=25
 
-    def ND_edges(self, y, external_params=None):
-        """Returns x coords of ND filter edges at given y coordinate(s)"""
-        if not external_params is None:
-            params = external_params
-        else:
-            if self.params is None:
-                self.get_params()
-            params = self.params
-        params = np.asarray(params)
-        im = self.HDUList[0].data
-        if np.asarray(y).size == 1:
-            return(params[1,:] + params[0,:]*(y - im.shape[0]/2))
-        es = []
-        for this_y in y:
-            es.append(params[1,:] + params[0,:]*(this_y - im.shape[0]/2))
-        return(es)
-        
-    def get_params(self):
-        """Returns parameters which characterize ND filter (currently 2 lines fir to edges)"""
-        if not self.params is None:
-            return(self.params)
+    def read_im(self, HDUList_im_or_fname=None):
+        # Call our super-class read_im method + add to it
+        super().read_im(HDUList_im_or_fname)
 
         if self.HDUList is None:
             return(None)
+        # If we made it here, initialize our y_center to the midpoint
+        # of the image, unless another was given when the object was
+        # created
+        self.y_center = self.HDUList[0].data.shape[0]/2
 
-        # If we made it here, we need to calculate params.  Take
-        # n_y_steps and make profiles, take the gradient and absolute
-        # value to spot the edges of the ND filter
+    def get_obj_center(self):
+        """Returns center pixel coords of Jupiter whether or not Jupiter is on ND filter"""
+        if self.HDUList is None:
+            return(None)
+        
         im = self.HDUList[0].data
-        h = self.HDUList[0].header
-        nd_edges = [] ; ypts = []
-        y_bin = int(im.shape[0]/self.n_y_steps)
-        yrange = np.arange(0, im.shape[0], y_bin)
-        for ypt in yrange:
-            subim = im[ypt:ypt+y_bin, :]
-            profile = np.sum(subim, 0)
-            smoothed_profile = signal.savgol_filter(profile, self.x_filt_width, 3)
-            d = np.gradient(smoothed_profile, 10)
-            s = np.abs(d)
-            #plt.plot(profile)
-            #plt.show()
-            #plt.plot(s)
-            #plt.show()
-
-            # https://blog.ytotech.com/2015/11/01/findpeaks-in-python/
-            # points out same problem I had with with cwt.  It is too
-            # sensitive to little peaks.  However, I can find the peaks
-            # and just take the two largest ones
-            peak_idx = signal.find_peaks_cwt(s, np.arange(5, 20), min_snr=2)
-            # Need to change peak_idx into an array instead of a list for
-            # indexing
-            peak_idx = np.array(peak_idx)
-            # For flats, it is easy to spot the edge of the ND filter
-            if h['IMAGETYP'] == 'FLAT':
-                bounds = (0,s.size)
-            else:
-                # --> I am eventually going to want to hard-code in ND
-                # params for the various date ranges
-                bounds = self.ND_edges(ypt, self.default_nd_pos) + np.asarray((-self.max_movement, self.max_movement))
-                bounds = bounds.astype(int)
-                goodc = np.where(np.logical_and(bounds[0] < peak_idx, peak_idx < bounds[1]))
-                peak_idx = peak_idx[goodc]
-                #print(peak_idx)
-                #print(s[peak_idx])
-                #plt.plot(s)
-                #plt.show()
-                # Give up if we don't find two clear edges
-                if peak_idx.size < 2:
-                    continue
-    
-            # Assuming we have a set of good peaks, sort on peak size
-            sorted_idx = np.argsort(s[peak_idx])
-            # Unwrap
-            peak_idx = peak_idx[sorted_idx]
-    
-            # Thow out if lower peak is too weak.  Use Carey Woodward's
-            # trick of estimating the noise on the continuum To avoid
-            # contamination, do this calc just over our desired interval
-            ss = s[bounds[0]:bounds[1]]
-    
-            noise = np.std(ss[1:-1] - ss[0:-2])
-            #print(noise)
-            if s[peak_idx[-2]] < 3 * noise:
-                #print("Rejected")
-                continue
-    
-            # Find top two and put back in index order
-            top_two = np.sort(peak_idx[-2:])
-            # Accumulate in tuples
-            nd_edges.append(top_two)
-            ypts.append(ypt)
-    
-        nd_edges = np.asarray(nd_edges)
-        ypts = np.asarray(ypts)
-        if nd_edges.size < 2:
-            if self.default_nd_pos is None:
-                raise ValueError('Not able to find ND filter position')
-            log.warning('Unable to improve filter position over initial guess')
-            self.params = np.asarray(self.default_nd_pos)
-            return(self.default_nd_pos)
+        im -= self.back_level(im)
         
-        # DEBUGGING
-        #plt.plot(ypts, nd_edges)
+        # Check to see if Jupiter is sticking out significantly from
+        # behind the ND filter, in which case we are better off just using
+        # the center of mass of the image and calling that good enough
+        #print(np.sum(im))
+        # --> This may need some improvement
+        if np.sum(im) > 1E9: 
+            y_x = ndimage.measurements.center_of_mass(im)
+            return(y_x)
+        
+        # Get the coordinates of the ND filter
+        NDc = self.ND_coords()
+
+        # Do a sanity check.  Note C order of indices
+        badidx = np.where(np.asarray(NDc[0]) > im.shape[0])
+        if np.any(badidx[0]):
+            log.warning('Y dimension of image is smaller than position of ND filter!  Subimaging/binning mismatch?')
+            return(None)
+        badidx = np.where(np.asarray(NDc[1]) > im.shape[1])
+        if np.any(badidx[0]):
+            log.warning('X dimension of image is smaller than position of ND filter!  Subimaging/binning mismatch?')
+            return(None)
+        
+        # Filter those by ones that are at least 1 std above the median
+        boostc = np.where(im[NDc] > (np.median(im[NDc]) + np.std(im[NDc])))
+        boost_NDc0 = np.asarray(NDc[0])[boostc]
+        boost_NDc1 = np.asarray(NDc[1])[boostc]
+        # Here is where we boost what is sure to be Jupiter, if Jupiter is
+        # in the ND filter
+        im[boost_NDc0, boost_NDc1] *= 1000
+        y_x = ndimage.measurements.center_of_mass(im)
+        #print(y_x[::-1])
+        #plt.imshow(im)
         #plt.show()
-    
-        # Fit lines to our points, making the origin the center of the image in Y
-        params = np.polyfit(ypts-im.shape[0]/2, nd_edges, 1)
-        params = np.asarray(params)
-        #print(params)
+        #return(y_x[::-1], ND_center)
+        # Stay in Pythonic y, x coords
+        return(y_x)
+
+    def get_desired_center(self, y=None):
+        """Returns center of ND filter at position y.  In absence of user
+input, default y = ny/2.  Default y can also be set at instantiation of
+object"""
+        if self.HDUList is None:
+            return(None)
+        desired_center = np.average(self.ND_edges(self.y_center)), self.y_center
+        im = self.HDUList[0].data
+        if (desired_center[0] < 0 or desired_center[0] > im.shape[0] or
+            desired_center[1] < 0 or desired_center[1] > im.shape[1]):
+            log.warning('Desired center is outside of image area!  Subimaging/binning mismatch?')
+            return(None)
+        else:
+            return(desired_center)
         
-        # Check to see if there are any bad points, removing them and
-        # refitting
-        resid = nd_edges - self.ND_edges(ypts, params)
-        #print(resid)
-        # Do this one side at a time, since the points might not be on
-        # the same y level and it is not easy to zipper the coordinate
-        # tuple apart in Python
-        goodc0 = np.where(abs(resid[:,0]) < self.max_delta_pix)
-        goodc1 = np.where(abs(resid[:,1]) < self.max_delta_pix)
-        #print(ypts[goodc1]-im.shape[0]/2)
-        #print(nd_edges[goodc1, 1])
-        #print(nd_edges)
-        if len(goodc0) < resid.shape[1]:
-            params[:,0] = np.polyfit(ypts[goodc0]-im.shape[0]/2,
-                                     nd_edges[goodc0, 0][0], 1)
-        if len(goodc1) < resid.shape[1]:
-            params[:,1] = np.polyfit(ypts[goodc1]-im.shape[0]/2,
-                                     nd_edges[goodc1, 1][0], 1)
-        #print(params)
-        # Check parallelism by calculating shift of ends relative to each other
-        dp = abs((params[0,1] - params[0,0]) * im.shape[0]/2)
-        if dp > self.max_delta_pix:
-            txt = 'ND filter edges are not parallel.  Edges are off by ' + str(dp) + ' pixels.'
-            # DEBUGGING
-            print(txt)
-            plt.plot(ypts, nd_edges)
-            plt.show()
-    
-            if self.default_nd_pos is None:
-                raise ValueError(txt)
-            log.warning(txt + ' Returning initial try.')
-            params = self.default_nd_pos
-
-        self.params = params
-        # The HDUList headers are objects, so we can do this
-        # assignment and the original object property gets modified
-        h = self.HDUList[0].header
-        # Note transpose, since we are working in C!
-        h['NDPAR00'] = (params[0,0], 'ND filt left side slope at Y center of im')
-        h['NDPAR01'] = (params[1,0], 'ND filt left side offset at Y center of im')
-        h['NDPAR10'] = (params[0,1], 'ND filt right side slope at Y center of im')
-        h['NDPAR11'] = (params[1,1], 'ND filt right side offset at Y center of im')
-
-        #print(self.params)
-        return(self.params)
-
     def ND_coords(self):
-        """Returns coordinates of ND filter in im given an ND_filt_pos"""
-        if self.params is None:
-            self.get_params()
+        """Returns tuple of coordinates of ND filter"""
+        if self.ND_params is None:
+            self.get_ND_params()
 
         if self.HDUList is None:
             return(None)
@@ -710,14 +653,418 @@ class CorObsData(ObsData):
         
         xs = [] ; ys = []
         for iy in np.arange(0, im.shape[0]):
-            bounds = self.params[1,:] + self.params[0,:]*(iy - im.shape[0]/2) + np.asarray((self.edge_mask, -self.edge_mask))
+            bounds = self.ND_params[1,:] + self.ND_params[0,:]*(iy - im.shape[0]/2) + np.asarray((self.edge_mask, -self.edge_mask))
             bounds = bounds.astype(int)
             for ix in np.arange(bounds[0], bounds[1]):
                 xs.append(ix)
                 ys.append(iy)
-    
+                
         # NOTE C order and the fact that this is a tuple of tuples
         return((ys, xs))
+
+    def ND_edges(self, y, external_ND_params=None):
+        """Returns x coords of ND filter edges at given y coordinate(s)"""
+        if external_ND_params is not None:
+            ND_params = external_ND_params
+        else:
+            if self.ND_params is None:
+                self.get_ND_params()
+                ND_params = self.ND_params
+
+        ND_params = np.asarray(ND_params)
+        im = self.HDUList[0].data
+        if np.asarray(y).size == 1:
+            return(ND_params[1,:] + ND_params[0,:]*(y - im.shape[0]/2))
+        es = []
+        for this_y in y:
+            es.append(ND_params[1,:] + ND_params[0,:]*(this_y - im.shape[0]/2))
+        return(es)
+    
+    def ND_angle(self):
+        """Note this assumes square pixels"""
+        if self.angle is not None:
+            return(self.angle)
+        if self.ND_params is None:
+            self.get_ND_params()
+        if self.ND_params is None:
+            log.warning('Failed to get ND_params')
+            return(None)
+
+        # If we made it here, we need to calculate the angle
+        # get_ND_params should have caught pathological cases, so we can
+        # just use the average of the slopes
+        self.angle = np.arctan(np.average(self.ND_params[0,:]))
+        return(self.angle)
+
+    # Might eventually want to make this part of a property system
+    # https://docs.python.org/3/library/functions.html#property
+    # PEP8 suggests I would name ND_params _ND_params and go from there
+    def get_ND_params(self):
+        """Returns parameters which characterize ND filter (currently 2 lines fit to edges)"""
+
+        if self.ND_params is not None:
+            return(self.ND_params)
+
+        if self.HDUList is None:
+            return(None)
+
+        # If we made it here, we need to calculate ND_params.  
+        im = self.HDUList[0].data
+        ##-> clipc = np.where(im > 5000)
+        ##-> im[clipc] = np.median(im)
+
+        h = self.HDUList[0].header
+        # See if we are a flat, in which case we should have high
+        # contrast and can have small step size.
+        # --> Plus we don't necessarily have a correct default_ND_params
+        #if h['IMAGETYP'] == 'FLAT':
+        #    # Note pythonic y dim is [0]
+        #    self.n_y_steps = int(im.shape[0]/10)
+
+        # The general method is to take the absolute value of the
+        # gradient along each row to spot the edges of the ND filter.
+        # Because contrast can be low in the Jupiter images, we need
+        # to combine n_y_steps rows.  However, since the ND filter is
+        # tilted by ~20 degrees or so, combining rows washes out the
+        # edge of the ND filter unless we need to shift the rows in
+        # the X direction based on the expected amount from the
+        # default_ND_params.  Flats are high contrast, so we can
+        # jump-start the process
+
+        ND_edges = [] ; ypts = []
+
+        # Create yrange at y_bin intervals, chopping of the last one
+        # if it goes too far
+        y_bin = int(im.shape[0]/self.n_y_steps)
+        yrange = np.arange(0, im.shape[0], y_bin)
+        if yrange[-1] + y_bin > im.shape[0]:
+            yrange = yrange[0:-1]
+        # picturing the image in C fashion, indexed from the top down,
+        # ytop is the top point from which we bin y_bin rows together
+        # --> remove me
+        newim = im.copy()
+        for ytop in yrange:
+            # We will be referencing the measured points to the center of the bin
+            ycent = ytop+y_bin/2
+            # rowpt is each row in the ytop y_bin, which we need to
+            # shift to accumulate into a subim that is effectively in
+            # the rotated frame of default_ND_params
+            subim = np.zeros((y_bin, im.shape[1]))
+            for rowpt in np.arange(y_bin):
+                # determine how many columns we will shift each row by
+                # using the default_ND_params
+                if self.default_ND_params is None:
+                    this_ND_center = im.shape[1]/2.
+                else:
+                    this_ND_center = np.round(np.mean(self.ND_edges(rowpt+ytop, self.default_ND_params)))
+                cshift = int(this_ND_center - im.shape[1]/2.)
+                subim[rowpt, :] = np.roll(im[ytop+rowpt, :], -cshift)
+
+            # --> remove me
+            newim[ytop:ytop+y_bin, :] = subim
+            #subim = im[ytop:ytop+y_bin, :]
+
+            profile = np.sum(subim, 0)
+            if h['IMAGETYP'] == 'FLAT':
+                smoothed_profile = signal.savgol_filter(profile, self.x_filt_width, 3)#, deriv=1)
+                d = np.gradient(smoothed_profile, 10)
+                d2 = np.gradient(d, 10)
+                s = np.abs(d2) * profile
+            else:
+                smoothed_profile = signal.savgol_filter(profile, self.x_filt_width, 0)#, deriv=1)
+                d = np.gradient(smoothed_profile, 10)
+                s = np.abs(d)
+                
+            plt.plot(profile)
+            plt.show()
+            #plt.plot(s)
+            #plt.show()
+
+            # https://blog.ytotech.com/2015/11/01/findpeaks-in-python/
+            # points out same problem I had with with cwt.  It is too
+            # sensitive to little peaks.  However, I can find the peaks
+            # and just take the two largest ones
+            #peak_idx = signal.find_peaks_cwt(s, np.arange(5, 20), min_snr=2)
+            peak_idx = signal.find_peaks_cwt(s, np.arange(2, 80), min_snr=2)
+            # Need to change peak_idx into an array instead of a list for
+            # indexing
+            peak_idx = np.array(peak_idx)
+            # For flats, it is easy to spot the edge of the ND filter
+            if h['IMAGETYP'] == 'FLAT':
+                bounds = (0,s.size)
+            else:
+                # now that we are shifting to line up on the
+                # centerline, bounds are easier to calculate
+                #bounds = self.ND_edges(ycent, self.default_ND_params) + np.asarray((-self.max_movement, self.max_movement))
+                tmp = np.asarray(self.default_ND_params)
+                default_ND_width = tmp[1,1] - tmp[1,0]
+                bounds = im.shape[1]/2 + np.asarray((-default_ND_width, default_ND_width))/2 + \
+                         np.asarray((-self.max_movement, self.max_movement))/2
+                bounds = bounds.astype(int)
+                print(bounds)
+                goodc = np.where(np.logical_and(bounds[0] < peak_idx, peak_idx < bounds[1]))
+                peak_idx = peak_idx[goodc]
+                print(peak_idx)
+                print(s[peak_idx])
+                plt.plot(s)
+                plt.show()
+                # Give up if we don't find two clear edges
+                if peak_idx.size < 2:
+                    print('No clear two peaks inside bounds')
+                    continue
+                
+            # Assuming we have a set of good peaks, sort on peak size
+            sorted_idx = np.argsort(s[peak_idx])
+            # Unwrap
+            peak_idx = peak_idx[sorted_idx]
+            
+            # Thow out if lower peak is too weak.  Use Carey Woodward's
+            # trick of estimating the noise on the continuum To avoid
+            # contamination, do this calc just over our desired interval
+            ss = s[bounds[0]:bounds[1]]
+            
+            noise = np.std(ss[1:-1] - ss[0:-2])
+            print(noise)
+            if s[peak_idx[-2]] < noise:
+                print("Rejected -- not above noise threshold")
+                continue
+            
+            # Find top two and put back in index order
+            top_two = np.sort(peak_idx[-2:])
+            # Accumulate in tuples
+            ND_edges.append(top_two)
+            ypts.append(ycent)
+            
+
+        # --> remove me
+        plt.imshow(newim)
+        plt.show()
+
+        ND_edges = np.asarray(ND_edges)
+        ypts = np.asarray(ypts)
+        if ND_edges.size < 2:
+            if self.default_ND_params is None:
+                raise ValueError('Not able to find ND filter position')
+            log.warning('Unable to improve filter position over initial guess')
+            self.ND_params = np.asarray(self.default_ND_params)
+            return(self.default_ND_params)
+        
+        # Put the ND_edges back into the original orientation before
+        # we cshifted them with default_ND_params
+        if self.default_ND_params is not None:
+            self.default_ND_params = np.asarray(self.default_ND_params)
+            es = []
+            for this_y in ypts:
+                es.append(self.default_ND_params[1,:] - im.shape[1]/2. + self.default_ND_params[0,:]*(this_y - im.shape[0]/2))
+            ND_edges =  ND_edges + es
+
+
+        # DEBUGGING
+        plt.plot(ypts, ND_edges)
+        plt.show()
+        
+        # Fit lines to our points, making the origin the center of the image in Y
+        ND_params = np.polyfit(ypts-im.shape[0]/2, ND_edges, 1)
+        ND_params = np.asarray(ND_params)
+        #print(ND_params)
+        
+        # Check to see if there are any bad points, removing them and
+        # refitting
+        resid = ND_edges - self.ND_edges(ypts, ND_params)
+        #print(resid)
+        # Do this one side at a time, since the points might not be on
+        # the same y level and it is not easy to zipper the coordinate
+        # tuple apart in Python.  For some reason, np.where is
+        # returning a tuple of arrays
+        goodc0 = np.where(abs(resid[:,0]) < self.max_delta_pix)
+        goodc1 = np.where(abs(resid[:,1]) < self.max_delta_pix)
+        #print(ypts[goodc1]-im.shape[0]/2)
+        #print(ND_edges[goodc1, 1])
+        #print(ND_edges)
+        #print(goodc0)
+        #print(goodc1)
+        
+        if (len(goodc0[0]) < 2) or (len(goodc1[0]) < 2):
+            txt = 'Not enough good fit points.' 
+            if self.default_ND_params is None:
+                raise ValueError(txt + '  No initial try available, raising error.')
+            log.warning(txt + '  Returning initial try.')
+            ND_params = self.default_ND_params
+            return(self.ND_params)
+            
+        # If we made it here, we should have two lines to fit
+        if len(goodc0[0]) < resid.shape[0]:
+            ND_params[:,0] = np.polyfit(ypts[goodc0]-im.shape[0]/2,
+                                        ND_edges[goodc0, 0][0], 1)
+        if len(goodc1[0]) < resid.shape[1]:
+            ND_params[:,1] = np.polyfit(ypts[goodc1]-im.shape[0]/2,
+                                        ND_edges[goodc1, 1][0], 1)
+            #print(ND_params)
+            # Check parallelism by calculating shift of ends relative to each other
+        dp = abs((ND_params[0,1] - ND_params[0,0]) * im.shape[0]/2)
+        if dp > self.max_delta_pix:
+            txt = 'ND filter edges are not parallel.  Edges are off by ' + str(dp) + ' pixels.'
+            # DEBUGGING
+            print(txt)
+            plt.plot(ypts, ND_edges)
+            plt.show()
+            
+            if self.default_ND_params is None:
+                raise ValueError(txt + '  No initial try available, raising error.')
+            log.warning(txt + ' Returning initial try.')
+            ND_params = self.default_ND_params
+
+        self.ND_params = ND_params
+        # The HDUList headers are objects, so we can do this
+        # assignment and the original object property gets modified
+        h = self.HDUList[0].header
+        # Note transpose, since we are working in C!
+        h['NDPAR00'] = (ND_params[0,0], 'ND filt left side slope at Y center of im')
+        h['NDPAR01'] = (ND_params[1,0], 'ND filt left side offset at Y center of im')
+        h['NDPAR10'] = (ND_params[0,1], 'ND filt right side slope at Y center of im')
+        h['NDPAR11'] = (ND_params[1,1], 'ND filt right side offset at Y center of im')
+
+        #print(self.ND_params)
+        return(self.ND_params)
+
+##SAVED##    def get_ND_params(self):
+##SAVED##        """Returns parameters which characterize ND filter (currently 2 lines fir to edges)"""
+##SAVED##        if not self.ND_params is None:
+##SAVED##            return(self.ND_params)
+##SAVED##
+##SAVED##        if self.HDUList is None:
+##SAVED##            return(None)
+##SAVED##
+##SAVED##        # If we made it here, we need to calculate ND_params.  Take
+##SAVED##        # n_y_steps and make profiles, take the gradient and absolute
+##SAVED##        # value to spot the edges of the ND filter
+##SAVED##        im = self.HDUList[0].data
+##SAVED##        h = self.HDUList[0].header
+##SAVED##        ND_edges = [] ; ypts = []
+##SAVED##        y_bin = int(im.shape[0]/self.n_y_steps)
+##SAVED##        yrange = np.arange(0, im.shape[0], y_bin)
+##SAVED##        for ytop in yrange:
+##SAVED##            subim = im[ytop:ytop+y_bin, :]
+##SAVED##            profile = np.sum(subim, 0)
+##SAVED##            smoothed_profile = signal.savgol_filter(profile, self.x_filt_width, 3)
+##SAVED##            d = np.gradient(smoothed_profile, 10)
+##SAVED##            s = np.abs(d)
+##SAVED##            #plt.plot(profile)
+##SAVED##            #plt.show()
+##SAVED##            #plt.plot(s)
+##SAVED##            #plt.show()
+##SAVED##
+##SAVED##            # https://blog.ytotech.com/2015/11/01/findpeaks-in-python/
+##SAVED##            # points out same problem I had with with cwt.  It is too
+##SAVED##            # sensitive to little peaks.  However, I can find the peaks
+##SAVED##            # and just take the two largest ones
+##SAVED##            peak_idx = signal.find_peaks_cwt(s, np.arange(5, 20), min_snr=2)
+##SAVED##            # Need to change peak_idx into an array instead of a list for
+##SAVED##            # indexing
+##SAVED##            peak_idx = np.array(peak_idx)
+##SAVED##            # For flats, it is easy to spot the edge of the ND filter
+##SAVED##            if h['IMAGETYP'] == 'FLAT':
+##SAVED##                bounds = (0,s.size)
+##SAVED##            else:
+##SAVED##                # --> I am eventually going to want to hard-code in ND
+##SAVED##                # ND_params for the various date ranges
+##SAVED##                bounds = self.ND_edges(ytop, self.default_ND_params) + np.asarray((-self.max_movement, self.max_movement))
+##SAVED##                bounds = bounds.astype(int)
+##SAVED##                goodc = np.where(np.logical_and(bounds[0] < peak_idx, peak_idx < bounds[1]))
+##SAVED##                peak_idx = peak_idx[goodc]
+##SAVED##                #print(peak_idx)
+##SAVED##                #print(s[peak_idx])
+##SAVED##                #plt.plot(s)
+##SAVED##                #plt.show()
+##SAVED##                # Give up if we don't find two clear edges
+##SAVED##                if peak_idx.size < 2:
+##SAVED##                    continue
+##SAVED##    
+##SAVED##            # Assuming we have a set of good peaks, sort on peak size
+##SAVED##            sorted_idx = np.argsort(s[peak_idx])
+##SAVED##            # Unwrap
+##SAVED##            peak_idx = peak_idx[sorted_idx]
+##SAVED##    
+##SAVED##            # Thow out if lower peak is too weak.  Use Carey Woodward's
+##SAVED##            # trick of estimating the noise on the continuum To avoid
+##SAVED##            # contamination, do this calc just over our desired interval
+##SAVED##            ss = s[bounds[0]:bounds[1]]
+##SAVED##    
+##SAVED##            noise = np.std(ss[1:-1] - ss[0:-2])
+##SAVED##            #print(noise)
+##SAVED##            if s[peak_idx[-2]] < 3 * noise:
+##SAVED##                #print("Rejected")
+##SAVED##                continue
+##SAVED##    
+##SAVED##            # Find top two and put back in index order
+##SAVED##            top_two = np.sort(peak_idx[-2:])
+##SAVED##            # Accumulate in tuples
+##SAVED##            ND_edges.append(top_two)
+##SAVED##            ypts.append(ytop)
+##SAVED##    
+##SAVED##        ND_edges = np.asarray(ND_edges)
+##SAVED##        ypts = np.asarray(ypts)
+##SAVED##        if ND_edges.size < 2:
+##SAVED##            if self.default_ND_params is None:
+##SAVED##                raise ValueError('Not able to find ND filter position')
+##SAVED##            log.warning('Unable to improve filter position over initial guess')
+##SAVED##            self.ND_params = np.asarray(self.default_ND_params)
+##SAVED##            return(self.default_ND_params)
+##SAVED##        
+##SAVED##        # DEBUGGING
+##SAVED##        #plt.plot(ypts, ND_edges)
+##SAVED##        #plt.show()
+##SAVED##    
+##SAVED##        # Fit lines to our points, making the origin the center of the image in Y
+##SAVED##        ND_params = np.polyfit(ypts-im.shape[0]/2, ND_edges, 1)
+##SAVED##        ND_params = np.asarray(ND_params)
+##SAVED##        #print(ND_params)
+##SAVED##        
+##SAVED##        # Check to see if there are any bad points, removing them and
+##SAVED##        # refitting
+##SAVED##        resid = ND_edges - self.ND_edges(ypts, ND_params)
+##SAVED##        #print(resid)
+##SAVED##        # Do this one side at a time, since the points might not be on
+##SAVED##        # the same y level and it is not easy to zipper the coordinate
+##SAVED##        # tuple apart in Python
+##SAVED##        goodc0 = np.where(abs(resid[:,0]) < self.max_delta_pix)
+##SAVED##        goodc1 = np.where(abs(resid[:,1]) < self.max_delta_pix)
+##SAVED##        #print(ypts[goodc1]-im.shape[0]/2)
+##SAVED##        #print(ND_edges[goodc1, 1])
+##SAVED##        #print(ND_edges)
+##SAVED##        if len(goodc0) < resid.shape[1]:
+##SAVED##            ND_params[:,0] = np.polyfit(ypts[goodc0]-im.shape[0]/2,
+##SAVED##                                     ND_edges[goodc0, 0][0], 1)
+##SAVED##        if len(goodc1) < resid.shape[1]:
+##SAVED##            ND_params[:,1] = np.polyfit(ypts[goodc1]-im.shape[0]/2,
+##SAVED##                                     ND_edges[goodc1, 1][0], 1)
+##SAVED##        #print(ND_params)
+##SAVED##        # Check parallelism by calculating shift of ends relative to each other
+##SAVED##        dp = abs((ND_params[0,1] - ND_params[0,0]) * im.shape[0]/2)
+##SAVED##        if dp > self.max_delta_pix:
+##SAVED##            txt = 'ND filter edges are not parallel.  Edges are off by ' + str(dp) + ' pixels.'
+##SAVED##            # DEBUGGING
+##SAVED##            print(txt)
+##SAVED##            plt.plot(ypts, ND_edges)
+##SAVED##            plt.show()
+##SAVED##    
+##SAVED##            if self.default_ND_params is None:
+##SAVED##                raise ValueError(txt)
+##SAVED##            log.warning(txt + ' Returning initial try.')
+##SAVED##            ND_params = self.default_ND_params
+##SAVED##
+##SAVED##        self.ND_params = ND_params
+##SAVED##        # The HDUList headers are objects, so we can do this
+##SAVED##        # assignment and the original object property gets modified
+##SAVED##        h = self.HDUList[0].header
+##SAVED##        # Note transpose, since we are working in C!
+##SAVED##        h['NDPAR00'] = (ND_params[0,0], 'ND filt left side slope at Y center of im')
+##SAVED##        h['NDPAR01'] = (ND_params[1,0], 'ND filt left side offset at Y center of im')
+##SAVED##        h['NDPAR10'] = (ND_params[0,1], 'ND filt right side slope at Y center of im')
+##SAVED##        h['NDPAR11'] = (ND_params[1,1], 'ND filt right side offset at Y center of im')
+##SAVED##
+##SAVED##        #print(self.ND_params)
+##SAVED##        return(self.ND_params)
 
     def imshow(self):
         if self.HDUList is None:
@@ -727,7 +1074,7 @@ class CorObsData(ObsData):
         plt.show()
         return(True)
 
-    #def pos(self, default_nd_pos=self.default_nd_pos,):
+    #def pos(self, default_ND_params=self.default_ND_params,):
         
     # Code provided by Daniel R. Morgenthaler, May 2017
     #
@@ -761,69 +1108,6 @@ class CorObsData(ObsData):
 
     # Code above was provided by Daniel R. Morgenthaler, May 2017
 
-    def get_obj_center(self):
-        """Returns center pixel coords of Jupiter whether or not Jupiter is on ND filter"""
-        if self.HDUList is None:
-            return(None)
-        
-        im = self.HDUList[0].data
-        if self.y is None:
-            self.y = im.shape[0]/2
-             
-
-        im -= self.back_level(im)
-    
-        # Check to see if Jupiter is sticking out significantly from
-        # behind the ND filter, in which case we are better off just using
-        # the center of mass of the image and calling that good enough
-        #print(np.sum(im))
-        if np.sum(im) > 1E9: 
-            y_x = ndimage.measurements.center_of_mass(im)
-            return(y_x)
-    
-        # Get the coordinates of the ND filter
-        NDc = self.ND_coords()
-
-        # Do a sanity check.  Note C order of indices
-        badidx = np.where(np.asarray(NDc[0]) > im.shape[0])
-        if np.any(badidx[0]):
-            log.warning('Y dimension of image is smaller than position of ND filter!  Subimaging/binning mismatch?')
-            return(None)
-        badidx = np.where(np.asarray(NDc[1]) > im.shape[1])
-        if np.any(badidx[0]):
-            log.warning('X dimension of image is smaller than position of ND filter!  Subimaging/binning mismatch?')
-            return(None)
-        
-        # Filter those by ones that are at least 1 std above the median
-        boostc = np.where(im[NDc] > (np.median(im[NDc]) + np.std(im[NDc])))
-        boost_NDc0 = np.asarray(NDc[0])[boostc]
-        boost_NDc1 = np.asarray(NDc[1])[boostc]
-        # Here is where we boost what is sure to be Jupiter, if Jupiter is
-        # in the ND filter
-        im[boost_NDc0, boost_NDc1] *= 1000
-        y_x = ndimage.measurements.center_of_mass(im)
-        #print(y_x[::-1])
-        #plt.imshow(im)
-        #plt.show()
-        #return(y_x[::-1], ND_center)
-        # Stay in Pythonic y, x coords
-        return(y_x)
-
-    def get_desired_center(self, y=None):
-        """Returns center of ND filter at position y.  In absence of user
-input, default y ny/2.  Default y can also be set at instantiation of
-object"""
-        if self.HDUList is None:
-            return(None)
-        desired_center = np.average(self.ND_edges(self.y)), self.y
-        im = self.HDUList[0].data
-        if (desired_center[0] < 0 or desired_center[0] > im.shape[0] or
-            desired_center[1] < 0 or desired_center[1] > im.shape[1]):
-            log.warning('Desired center is outside of image area!  Subimaging/binning mismatch?')
-            return(None)
-        else:
-            return(desired_center)
-        
         
 
 def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10, guide_dx=0, guide_dy=0, last_guide=None, aggressiveness=0.5, target_c = np.asarray((1297, 1100))):
@@ -834,7 +1118,7 @@ def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10
     guide_scale = 4.42
     typical_expo = 385 * u.s
     
-    if last_guide == None:
+    if last_guide is None:
         guide_dt = guide_dt * u.s
         previous_dc_dt = np.asarray((guide_dx, guide_dy)) / guide_dt
     else:
@@ -846,15 +1130,15 @@ def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10
     # time period to use in offset guide file
     new_guide_dt = 10 * u.s
 
-    if fits_t1 == None:
+    if fits_t1 is None:
         t1 = Time('2017-01-01T00:00:00', format='fits')
     else:
         t1 = Time(fits_t1, format='fits')
-    if fits_t2 == None:
+    if fits_t2 is None:
         # Take our typical exposure time to settle toward the center
         t2 = t1 + typical_expo
     else:
-        if fits_t1 == None:
+        if fits_t1 is None:
             raise ValueError('fits_t1 given, but fits_t1 not supplied')
         t2 = Time(fits_t2, format='fits')
     dt = (t2 - t1) * 24*3600 * u.s / u.day
@@ -862,7 +1146,7 @@ def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10
     c1 = np.asarray((x1, y1))
     c2 = np.asarray((x2, y2))
     
-    if x2 == None and y2 == None:
+    if x2 is None and y2 is None:
         latest_c = c1
         measured_dc_dt = 0
     else:
@@ -886,18 +1170,28 @@ def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10
     return(new_guide_dt, r[0], r[1])
 
 log.setLevel('INFO')
+Na =   CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0007_Na_off-band.fit')
+print(Na.get_ND_params())
+print(Na.ND_angle())
+
+# SII =  CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0035_SII_on-band.fit')
+# print(SII.get_ND_params())
+# print(SII.ND_angle())
+
+
 flat = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
 #flat.imshow()
-flat.n_y_steps = 100
-print(flat.get_params())
+#flat.n_y_steps = 100
+#print(flat.get_ND_params())
+#print(flat.ND_angle())
 
 
 #ND=NDData('//snipe/data/io/IoIO/raw/2017-05-29/Sky_Flat-0001_Na_off-band.fit')
-#print(ND.get_params())
+#print(ND.get_ND_params())
 if __name__ == "__main__":
     flat = CorObsData('/Users/jpmorgen/byted/xfr/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
     #flat.imshow()
-    flat.get_params()
+    flat.get_ND_params()
 #     # Start MaxIm
 #     print('Getting MaxImData object...')
 #     M = MaxImData()
@@ -975,6 +1269,6 @@ if __name__ == "__main__":
 # # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0047_off-band.fit'))
 # # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0048_off-band.fit'))
 # #ND=NDData('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit')
-# #print(ND.get_params())
+# #print(ND.get_ND_params())
 # 
 # #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit'))
