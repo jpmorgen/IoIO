@@ -676,4 +676,81 @@ Wed Nov 29 11:48:56 2017 EST  jpmorgen@snipe
 
 OK, I think I can improve on the peak selection algorithm if I choose
 peaks that are the right distance apart.   But before I do that, check
-things in
+things in & re-check for flat performance
+
+Ah Ha!  I should probably iterate when I do the point rejection
+algorithm.  I do a second pass, but that is different, since lots are
+missing from the first pass
+
+I might do well to include weights.  Or not have absolute difference
+but use stdev
+
+Thu Nov 30 07:46:55 2017 EST  jpmorgen@snipe
+
+Ah.  I can use weights in the subsequent iterations
+
+Thu Nov 30 09:21:05 2017 EST  jpmorgen@snipe
+
+https://stackoverflow.com/questions/23797825/what-is-the-pythonic-way-to-bubble-up-error-conditions
+
+Has a good discussion about how to handle errors and exceptions and
+whether or not to return None vs a null object:
+
+http://code.activestate.com/recipes/68205-null-object-design-pattern/
+
+I'll have to think more about this as time goes on.
+
+I think that I will not handle all possible errors, but just in case,
+this is an interesting bit of code
+
+        except:
+            # Thanks to https://stackoverflow.com/questions/15605925/how-to-get-the-last-exception-object-after-an-error-is-raised-at-a-python-prompt
+            log.error(sys.exc_info()[1])
+            return None
+
+OK, I am having trouble with the array being the wrong orientation for
+my new way of fitting the lines.  When given two sets of lines points
+polyfit made the first column the first line, the second column the
+second line.  This is pythonic.  I did things row-by-row with
+
+ND_params = np.asarray((ND_params0, ND_params1))
+
+Hmm
+
+SII =  CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0035_SII_on-band.fit')
+print(SII.get_ND_params())
+print(SII.ND_angle())
+
+Shows things aren't working all that well for the SII image....
+
+I think this might benefit from the differences method
+
+Na image
+[[  3.70590906e-01   3.91039665e-01]
+ [  1.11869115e+03   1.47671815e+03]]
+0.363859230268
+
+After clean up linfit, max_fit_delta_pix = 5
+[[  3.72491235e-01   3.92456403e-01]
+ [  1.12169240e+03   1.47507210e+03]]
+0.365306905718
+
+max_fit_delta_pix = 25
+[[  3.71568935e-01   3.92436721e-01]
+ [  1.12235642e+03   1.47245281e+03]]
+0.364895956723
+
+
+OK, that looks good, but the SII image needs help.  In particular, I
+need to know when to start looking for peaks, since the cwt finds some
+where there are none.
+
+We are generally looking for [1312 1419]
+
+OK, as I am doing the SII flat, I see that I can set an upper limit to
+the spread in flat mode as just under 1/2 of the CCD width, though
+that is definitely liberal + will likely have problems when close to
+the edges.
+
+
+Ah ha, the bounds can be the size of the SII filter for all the flats
