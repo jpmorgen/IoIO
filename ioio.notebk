@@ -754,3 +754,45 @@ the edges.
 
 
 Ah ha, the bounds can be the size of the SII filter for all the flats
+
+Well, that ended up being worse.  But I can use the vertical size too
+350 1900
+
+Beautiful SII flat
+
+[[  3.78470178e-01   3.86181647e-01]
+ [  1.21542960e+03   1.38570910e+03]]
+0.365177868072
+
+Hickup in one location in Na flat
+[[  3.79115598e-01   3.87003140e-01]
+ [  1.21585461e+03   1.38458248e+03]]
+0.365817629192
+
+SII image
+[[  3.67503733e-01   3.89594787e-01]
+ [  1.11991952e+03   1.46640214e+03]]
+0.361878713669
+
+Na image (slight glip)
+[[  3.72051081e-01   3.88777783e-01]
+ [  1.12240319e+03   1.47295464e+03]]
+0.363509099347
+
+1.12240319e+03 - 1.11991952e+03
+2.4836700000000747
+>>> 1.47295464e+03 - 1.46640214e+03
+6.552500000000009
+
+I'd say that is pretty good!
+
+1.12240319e+03 - 1.21585461e+03
+-93.4514200000001
+
+1.47295464e+03 - 1.38458248e+03
+88.3721599999999
+
+So there is some bowing, but that is probably because of the 2nd
+derivative technique.  This might also explain why I have such a wide
+bounds.  For now it looks like I don't need to get the flats precise,
+just good enough to get the morph and bounds set

@@ -447,58 +447,6 @@ Uses readnoise (default = 5 e- RMS) to define bin widths"""
         return im.shape/2
     
 
-#class NDData:
-#    """Neutral Density Data storage object"""
-#
-#    def __init__(self, HDUList_im_or_fname=None):
-#
-#        self.fname = None
-#        self.im = None
-#        # The shape of im is really all we need to store for
-#        # calculations, once we have the ND_params
-#        self.im_shape = None
-#        self.ND_params = None
-#
-#        self.ingest_im(HDUList_im_or_fname)
-#
-#        # ND filter position in case none is derivable from flats.  This is from:
-#        # print(nd_filt_pos('/data/io/IoIO/raw/2017-04-20/Sky_Flat-0007_Na_off-band.fit'))
-#        self.default_ND_params = ((-7.35537190e-02,  -6.71900826e-02), 
-#                               (1.24290909e+03,   1.34830909e+03))
-#
-#        # And we can refine it further for a good Jupiter example
-#        #print(nd_filt_pos('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit',
-#        #                  initial_try=((-7.35537190e-02,  -6.71900826e-02), 
-#        #                               (1.24290909e+03,   1.34830909e+03))))
-#        self.default_ND_params = ((-6.57640346e-02,  -5.77888855e-02),
-#                               (1.23532221e+03,   1.34183584e+03))
-#        self.n_y_steps = 15
-#        self.x_filt_width = 25
-#        self.edge_mask = 5
-#        self.max_movement=50
-#        self.max_delta_pix=10
-#
-#    def ingest_im(self, HDUList_im_or_fname=None):
-#        """Returns image, reading from fname, if necessary"""
-#        self.HDUList = read_im(HDUList_im_or_fname)
-#        if self.HDUList is None:
-#            return None
-#        self.im = np.asfarray(self.HDUList[0].data)
-#        self.im_shape = self.im.shape
-#        h = self.HDUList[0].header
-#        if not h.get('NDPAR00') is None:
-#            ND_params = np.zeros((2,2))
-#            # Note transpose, since we are working in C!
-#            ND_params[0,0] = h['NDPAR00']
-#            ND_params[1,0] = h['NDPAR01']
-#            ND_params[0,1] = h['NDPAR10']
-#            ND_params[1,1] = h['NDPAR11']
-#            self.ND_params = ND_params
-#
-#        return self.im
-#
-
-
 class CorObsData(ObsData):
     """Calculates Jupiter current center and desired center given an image"""
 
@@ -565,7 +513,8 @@ class CorObsData(ObsData):
         self.default_ND_params = ((3.75447820e-01,  3.87551301e-01),
                                   (1.18163633e+03,   1.42002571e+03))
 
-        self.default_ND_params = None
+        #self.default_ND_params = None
+
         self.n_y_steps = 15
         self.x_filt_width = 25
         self.edge_mask = 5
@@ -740,7 +689,8 @@ object"""
         # Create yrange at y_bin intervals, chopping of the last one
         # if it goes too far
         y_bin = int(im.shape[0]/self.n_y_steps)
-        yrange = np.arange(0, im.shape[0], y_bin)
+        #yrange = np.arange(0, im.shape[0], y_bin)
+        yrange = np.arange(350, 1900, y_bin)
         if yrange[-1] + y_bin > im.shape[0]:
             yrange = yrange[0:-1]
         # picturing the image in C fashion, indexed from the top down,
@@ -785,10 +735,10 @@ object"""
                 d = np.gradient(smoothed_profile, 10)
                 s = np.abs(d)
                 
-            plt.plot(profile)
-            plt.show()
-            plt.plot(s)
-            plt.show()
+            #plt.plot(profile)
+            #plt.show()
+            #plt.plot(s)
+            #plt.show()
 
             # https://blog.ytotech.com/2015/11/01/findpeaks-in-python/
             # points out same problem I had with with cwt.  It is too
@@ -804,7 +754,9 @@ object"""
             peak_idx = np.array(peak_idx)
             # For flats, it is easy to spot the edge of the ND filter
             if h['IMAGETYP'] == 'FLAT':
-                bounds = (0,s.size)
+                #bounds = (0,s.size)
+                # We can chop off the edges of the smaller SII filters
+                bounds = (512,2100)
             else:
                 # now that we are shifting to line up on the
                 # centerline, bounds are easier to calculate
@@ -812,21 +764,23 @@ object"""
                 if self.default_ND_params is None:
                     raise ValueError('Set default_ND_params before attempting a run on a non-flat exposure')
                 tmp = np.asarray(self.default_ND_params)
+                # --> this needs to be tweaked for morph
                 default_ND_width = tmp[1,1] - tmp[1,0]
                 bounds = im.shape[1]/2 + np.asarray((-default_ND_width, default_ND_width))/2 + \
                          np.asarray((-self.max_movement, self.max_movement))/2
                 bounds = bounds.astype(int)
-                print(bounds)
-                print(peak_idx)
-                print(s[peak_idx])
-                goodc = np.where(np.logical_and(bounds[0] < peak_idx, peak_idx < bounds[1]))
-                peak_idx = peak_idx[goodc]
-                # Give up if we don't find two clear edges
-                if peak_idx.size < 2:
-                    print('No clear two peaks inside bounds')
-                    #plt.plot(s)
-                    #plt.show()
-                    continue
+
+            print(peak_idx)
+            print(s[peak_idx])
+            goodc = np.where(np.logical_and(bounds[0] < peak_idx, \
+                                            peak_idx < bounds[1]))
+            peak_idx = peak_idx[goodc]
+            # Give up if we don't find two clear edges
+            if peak_idx.size < 2:
+                print('No clear two peaks inside bounds')
+                #plt.plot(s)
+                #plt.show()
+                continue
                 
             # Assuming we have a set of good peaks, sort on peak size
             sorted_idx = np.argsort(s[peak_idx])
@@ -890,59 +844,10 @@ object"""
         ND_edges = np.asarray(ND_edges)
         ND_params0 = self.iter_linfit(ypts-im.shape[0]/2, ND_edges[:,0], self.max_fit_delta_pix)
         ND_params1 = self.iter_linfit(ypts-im.shape[0]/2, ND_edges[:,1], self.max_fit_delta_pix)
-        # Note when np.polyfit is given 2 vectors, the coordinates come out as the 
+        # Note when np.polyfit is given 2 vectors, the coefs
+        # come out in columns, one per vector, as expected in C.
         ND_params = np.transpose(np.asarray((ND_params0, ND_params1)))
-        print(ND_params)
                 
-        #### Fit lines to our points, making the origin the center of the image in Y
-        ###ND_params = np.polyfit(ypts-im.shape[0]/2, ND_edges, 1)
-        ###ND_params = np.asarray(ND_params)
-        ####print(ND_params)
-        ###
-        #### Check to see if there are any bad points, removing them and
-        #### refitting
-        ###resid = ND_edges - self.ND_edges(ypts, ND_params)
-        ###print(resid)
-        ###
-        ###
-        ###
-        ###
-        #### Do this one side at a time, since the points might not be on
-        #### the same y level and it is not easy to zipper the coordinate
-        #### tuple apart in Python.  For some reason, np.where is
-        #### returning a tuple of arrays
-        ###goodc0 = np.where(abs(resid[:,0]) < self.max_fit_delta_pix)
-        ###goodc1 = np.where(abs(resid[:,1]) < self.max_fit_delta_pix)
-        ###print(ypts[goodc1]-im.shape[0]/2)
-        ###print(ND_edges[goodc1, 1])
-        ###print(ND_edges)
-        ###print(goodc0)
-        ###print(goodc1)
-        ###
-        ###if (len(goodc0[0]) < 2) or (len(goodc1[0]) < 2):
-        ###    txt = 'Not enough good fit points.' 
-        ###    if self.default_ND_params is None:
-        ###        raise ValueError(txt + '  No initial try available, raising error.')
-        ###    log.warning(txt + '  Returning initial try.')
-        ###    ND_params = self.default_ND_params
-        ###    return self.ND_params
-        ###    
-        #### If we made it here, we should have two lines to fit
-        #### --> we want to iterate
-        ###if len(goodc0[0]) < resid.shape[0]:
-        ###    ND_params[:,0] = np.polyfit(ypts[goodc0]-im.shape[0]/2,
-        ###                                ND_edges[goodc0, 0][0], 1)
-        ###if len(goodc1[0]) < resid.shape[1]:
-        ###    ND_params[:,1] = np.polyfit(ypts[goodc1]-im.shape[0]/2,
-        ###                                ND_edges[goodc1, 1][0], 1)
-        ###    #print(ND_params)
-        ###    # Check parallelism by calculating shift of ends relative to each other
-        ###
-        #### DEBUGGING
-        ###plt.plot(ypts[goodc0], np.asarray(ND_edges[goodc0, 0]))
-        ###plt.plot(ypts[goodc1], np.asarray(ND_edges[goodc1, 1]))
-        ###plt.show()
-
         # DEBUGGING
         plt.plot(ypts, self.ND_edges(ypts, ND_params))
         plt.show()
@@ -970,9 +875,6 @@ object"""
         h['NDPAR10'] = (ND_params[0,1], 'ND filt right side slope at Y center of im')
         h['NDPAR11'] = (ND_params[1,1], 'ND filt right side offset at Y center of im')
 
-        #print(self.ND_params)
-        print('About to return')
-        print(self.ND_params)            
         return self.ND_params
 
     def iter_linfit(self, x, y, max_resid=None):
@@ -1124,25 +1026,24 @@ def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10
 
 log.setLevel('INFO')
 
-#Na =   CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0007_Na_off-band.fit')
-#print(Na.get_ND_params())
-#print(Na.ND_angle())
+Na =   CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0007_Na_off-band.fit')
+print(Na.get_ND_params())
+print(Na.ND_angle())
 
 #SII =  CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0035_SII_on-band.fit')
 #print(SII.get_ND_params())
 #print(SII.ND_angle())
 
-flat = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit')
-flat.imshow()
-print(flat.get_ND_params())
-print(flat.ND_angle())
-
-
-#flat = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
+#flat = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit')
 #flat.imshow()
-#flat.n_y_steps = 100
 #print(flat.get_ND_params())
 #print(flat.ND_angle())
+
+
+# flat = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
+# flat.imshow()
+# print(flat.get_ND_params())
+# print(flat.ND_angle())
 
 
 #ND=NDData('//snipe/data/io/IoIO/raw/2017-05-29/Sky_Flat-0001_Na_off-band.fit')
