@@ -326,26 +326,37 @@ from scipy import signal, ndimage
 ##!##     #        return None
 ##!##     #    #self.guider_move(self.calc_main_move(self.get_object_center_pix()))
 ##!##     #    #obj_c = get_jupiter_center(self.HDUList)
-##!##     #    obj_c = self.ObsData.get_obj_center(self.HDUList)
+##!##     #    obj_c = self.ObsData.obj_center(self.HDUList)
 ##!##     #    log.info('object center = ', obj_c)
 ##!##     #    self.guider_move(self.calc_main_move(obj_c))
 
 
 class ObsData():
-    """Base class for observations, enabling object centering, etc."""
+    """Base class for observations, enabling object centering, etc.
+
+    This is intended to work in an active obsering setting, so
+    generally an image array will be received, the desired properties
+    will be calculated from it and those properties will be read by
+    the calling code.
+
+    """
 
     def __init__(self, HDUList_im_or_fname=None):
         self.binning = None
         self.subframe_origin = None
-        self.open_fits = None
+        self.we_opened_file = None
         if HDUList_im_or_fname is None:
             log.info('ObsData initialized with no image')
             self.HDUList = None
         else:
             self.read_im(HDUList_im_or_fname)
+        
 
     def read_im(self, HDUList_im_or_fname=None):
-        """Returns an astropy.fits.HDUList given a filename, image or HDUList"""
+        """Returns an astropy.fits.HDUList given a filename, image or
+        HDUList.  If you have a set of HDUs, you'll need to put them
+        together into an HDUList yourself, since this can't guess how
+        to do that"""
         if HDUList_im_or_fname is None:
             log.info('No error, just saying that you have no image.')
             HDUList = None
@@ -353,12 +364,8 @@ class ObsData():
         elif isinstance(HDUList_im_or_fname, fits.HDUList):
             HDUList = HDUList_im_or_fname
         elif isinstance(HDUList_im_or_fname, str):
-            fname = HDUList_im_or_fname
-            HDUList = fits.open(fname)
-            self.open_fits = True
-            # --> when are we going to close the file?
-            # --> need to have some property that keeps track of this
-            #HDUList.close()
+            HDUList = fits.open(HDUList_im_or_fname)
+            self.we_opened_file = True
         elif isinstance(HDUList_im_or_fname, np.ndarray):
             hdu = fits.PrimaryHDU(HDUList_im_or_fname)
             HDUList = fits.HDUList(hdu)
@@ -379,8 +386,9 @@ class ObsData():
         self.HDUList = HDUList
     
     def close_fits(self):
-        if self.open_fits:
-            HDUList.close()        
+        if HDUList.fileinfo is not None:
+            HDUList.close()
+            self.we_opened_file = None
 
     def hist_of_im(self, im, readnoise=5):
         """Returns histogram of image and index into centers of bins.  
@@ -414,10 +422,8 @@ Uses readnoise (default = 5 e- RMS) to define bin widths"""
         return im_hist_centers[im_peak_idx[0]]
         #im -= im_hist_centers[im_peak_idx[0]]
 
-
-
-    # --> This is going to need some improvement
-    def get_obj_center(self):
+    @property
+    def obj_center(self):
         """This is a really crummy object finder, since it will be confused
         by cosmic ray hits.  It is up to the user to define an object
         center finder that suits them, for instance one that uses
@@ -425,6 +431,8 @@ Uses readnoise (default = 5 e- RMS) to define bin widths"""
         NOTE: The return order of indices is astropy FITS Pythonic: Y,
         X in unbinned coordinates from the ccd origin."""
     
+        if self._obj_center is not None:
+            return self._obj_center
         if self.HDUList is None:
             log.warning('No image')
             return None
@@ -437,7 +445,7 @@ Uses readnoise (default = 5 e- RMS) to define bin widths"""
         unbinned_center = self.binning * im_center + self.subframe_origin
         return unbinned_center
 
-    def get_desired_center(self):
+    def desired_center(self):
         """Returns geometric center of image.
         NOTE: The return order of indices is astropy FITS Pythonic: Y, X"""
         if self.HDUList is None:
@@ -448,7 +456,7 @@ Uses readnoise (default = 5 e- RMS) to define bin widths"""
     
 
 class CorObsData(ObsData):
-    """Calculates Jupiter current center and desired center given an image"""
+    """Object for containing coronagraph image data used for centering Jupiter"""
 
     reference_flat = None
 
@@ -468,11 +476,11 @@ class CorObsData(ObsData):
         # two lines defining the edges of the ND filter.  The origin
         # of the lines is the Y center of the unbinned, full-frame
         # chip
-        self.ND_params = None
+        self._ND_params = None
         # Angle is the (average) angle of the lines, useful for cases
         # where the filter is rotated significantly off of 90 degrees
         # (which is where I will run it frequently)
-        self.angle = None
+        self._ND_angle = None
 
         # If we were passed an image, see if it has already been
         # through the system
@@ -485,7 +493,7 @@ class CorObsData(ObsData):
                 ND_params[1,0] = h['NDPAR01']
                 ND_params[0,1] = h['NDPAR10']
                 ND_params[1,1] = h['NDPAR11']
-                self.ND_params = ND_params
+                self._ND_params = ND_params
 
         # Make it easy to change the reference flat
         self.reference_flat = reference_flat
@@ -535,7 +543,8 @@ class CorObsData(ObsData):
         # created
         self.y_center = self.HDUList[0].data.shape[0]/2
 
-    def get_obj_center(self):
+    @property
+    def obj_center(self):
         """Returns center pixel coords of Jupiter whether or not Jupiter is on ND filter"""
         if self.HDUList is None:
             return None
@@ -553,7 +562,7 @@ class CorObsData(ObsData):
             return y_x
         
         # Get the coordinates of the ND filter
-        NDc = self.ND_coords()
+        NDc = self.ND_coords
 
         # Do a sanity check.  Note C order of indices
         badidx = np.where(np.asarray(NDc[0]) > im.shape[0])
@@ -580,7 +589,7 @@ class CorObsData(ObsData):
         # Stay in Pythonic y, x coords
         return y_x
 
-    def get_desired_center(self, y=None):
+    def desired_center(self, y=None):
         """Returns center of ND filter at position y.  In absence of user
 input, default y = ny/2.  Default y can also be set at instantiation of
 object"""
@@ -595,10 +604,11 @@ object"""
         else:
             return desired_center
         
+    @property
     def ND_coords(self):
         """Returns tuple of coordinates of ND filter"""
-        if self.ND_params is None:
-            self.get_ND_params()
+        #if self._ND_params is None:
+        #    self.get_ND_params()
 
         if self.HDUList is None:
             return None
@@ -611,7 +621,6 @@ object"""
             for ix in np.arange(bounds[0], bounds[1]):
                 xs.append(ix)
                 ys.append(iy)
-                
         # NOTE C order and the fact that this is a tuple of tuples
         return (ys, xs)
 
@@ -620,9 +629,7 @@ object"""
         if external_ND_params is not None:
             ND_params = external_ND_params
         else:
-            if self.ND_params is None:
-                self.get_ND_params()
-                ND_params = self.ND_params
+            ND_params = self.ND_params
 
         ND_params = np.asarray(ND_params)
         im = self.HDUList[0].data
@@ -633,30 +640,46 @@ object"""
             es.append(ND_params[1,:] + ND_params[0,:]*(this_y - im.shape[0]/2))
         return es
     
+    # Turn ND_angle into a "getter"
+    @property
     def ND_angle(self):
-        """Note this assumes square pixels"""
-        if self.angle is not None:
-            return self.angle
-        if self.ND_params is None:
-            self.get_ND_params()
-        if self.ND_params is None:
-            log.warning('Failed to get ND_params')
-            return None
+        """Calculate ND angle from vertical.  Note this assumes square pixels"""
+        #if self._ND_angle is not None:
+        #    return self._ND_angle
+        #if self._ND_params is None:
+        #    self.get_ND_params()
+        #if self._ND_params is None:
+        #    log.warning('Failed to get ND_params')
+        #    return None
 
         # If we made it here, we need to calculate the angle
         # get_ND_params should have caught pathological cases, so we can
         # just use the average of the slopes
-        self.angle = np.arctan(np.average(self.ND_params[0,:]))
-        return self.angle
+
+        self._ND_angle = np.degrees(np.arctan(np.average(self.ND_params[0,:])))
+        return self._ND_angle
 
     # Might eventually want to make this part of a property system
     # https://docs.python.org/3/library/functions.html#property
     # PEP8 suggests I would name ND_params _ND_params and go from there
-    def get_ND_params(self):
-        """Returns parameters which characterize ND filter (currently 2 lines fit to edges)"""
+    @property
+    def ND_params(self):
+        """Returns parameters which characterize the coronagraph ND filter, calculating if necessary"""
+        if self._ND_params is not None:
+            return self._ND_params
+        return self.calc_ND_params()
 
-        if self.ND_params is not None:
-            return self.ND_params
+    @ND_params.setter
+    def ND_params(self, ND_params):
+        if ND_params == 'recalc':
+            self.calc_ND_params()
+            return
+        if self._ND_params is not None:
+            log.warning('Overwriting existing ND_params')
+        self._ND_params = np.asarray(ND_params)
+
+    def calc_ND_params(self):
+        """Calculates parameters which characterize ND filter (currently 2 lines fit to edges)"""
 
         if self.HDUList is None:
             return None
@@ -822,7 +845,7 @@ object"""
             if self.default_ND_params is None:
                 raise ValueError('Not able to find ND filter position')
             log.warning('Unable to improve filter position over initial guess')
-            self.ND_params = np.asarray(self.default_ND_params)
+            self._ND_params = np.asarray(self.default_ND_params)
             return self.default_ND_params
         
         # Put the ND_edges back into the original orientation before
@@ -865,7 +888,7 @@ object"""
             log.warning(txt + ' Returning initial try.')
             ND_params = self.default_ND_params
 
-        self.ND_params = ND_params
+        self._ND_params = ND_params
         # The HDUList headers are objects, so we can do this
         # assignment and the original object property gets modified
         h = self.HDUList[0].header
@@ -875,7 +898,7 @@ object"""
         h['NDPAR10'] = (ND_params[0,1], 'ND filt right side slope at Y center of im')
         h['NDPAR11'] = (ND_params[1,1], 'ND filt right side offset at Y center of im')
 
-        return self.ND_params
+        return self._ND_params
 
     def iter_linfit(self, x, y, max_resid=None):
         """Performs least squares linear fit iteratively to discard bad points
@@ -1027,23 +1050,28 @@ def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10
 log.setLevel('INFO')
 
 Na =   CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0007_Na_off-band.fit')
-print(Na.get_ND_params())
-print(Na.ND_angle())
+#print(Na.get_ND_params())
+print(Na.ND_params)
+print(Na.ND_angle)
+Na.ND_params = (((3.75447820e-01,  3.87551301e-01), \
+                 (1.18163633e+03,   1.42002571e+03)))
+#Na.ND_params = ('recalc')
+
 
 #SII =  CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0035_SII_on-band.fit')
 #print(SII.get_ND_params())
-#print(SII.ND_angle())
+#print(SII.ND_angle)
 
 #flat = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit')
 #flat.imshow()
 #print(flat.get_ND_params())
-#print(flat.ND_angle())
+#print(flat.ND_angle)
 
 
 # flat = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
 # flat.imshow()
 # print(flat.get_ND_params())
-# print(flat.ND_angle())
+# print(flat.ND_angle)
 
 
 #ND=NDData('//snipe/data/io/IoIO/raw/2017-05-29/Sky_Flat-0001_Na_off-band.fit')
@@ -1069,10 +1097,10 @@ if __name__ == "__main__":
 #     print('Done')
 #     print('Getting object center...')
 #     J = CorObsData(M.HDUList)
-#     obj_cent = J.get_obj_center()
+#     obj_cent = J.obj_center()
 #     print('object center = ', obj_cent)
 #     print('Getting desired center...')
-#     desired_cent = J.get_desired_center()
+#     desired_cent = J.desired_center()
 #     print('desired center = ', desired_cent)
 #     print('Done')
 #     print('Calculating movement required to center object...')

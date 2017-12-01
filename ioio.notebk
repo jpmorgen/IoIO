@@ -796,3 +796,152 @@ So there is some bowing, but that is probably because of the 2nd
 derivative technique.  This might also explain why I have such a wide
 bounds.  For now it looks like I don't need to get the flats precise,
 just good enough to get the morph and bounds set
+
+Thu Nov 30 16:37:01 2017 EST  jpmorgen@snipe
+
+OK, reading to clean up code.  Do I want to use the getter and setter?
+The advantage of doing it that way is that the caller doesn't have to
+know the internal workings.  They just ask for the property and it is
+produced.  Disadvantage is that there may be some instances where it
+is expedient to pass parameters to tweak the algorithm used to
+generate it.  Although that is not necessarily wise, since one of the
+whole points is that I calculate it once and then return the cached
+value.  It is more set up to tweak the property or attribute, or
+whatever they are called on instantiation or shortly thereafter,
+before the first call to do the long calculations.
+
+I should have a way to re-do the calculations on an existing file with
+the NDPAR* keywords, since they might refine.  Or I could remove them
+externally and go with that.
+
+It could be that I do:
+
+ND_params = property(get_ND_params, set_ND_params, fdel=None, 'ND_params characterize the coronagraph ND filter')
+
+for both ND_params and default_ND_params.  Of course that brings up
+the long-term storage issue for default_ND_params, but I will deal
+with that later.
+
+Thu Nov 30 20:57:08 2017 EST  jpmorgen@snipe
+
+Learning about the property() decorators and their limitations.  The
+setter really takes just one argument and can't be used like a
+function call to recalculate.  I would have to say something like
+
+Na.ND_params = 'recalc'
+
+The alternative is Na.calc_ND_params()
+
+Either way is fine.  Might as well enable both for now.
+
+As far as ND_angle goes, it is probably safest to recalculate it when
+needed, since it is cheap, but in general I would want some sort of
+registration system that listed the things that needed to be
+recalced.  For now, I can just put the calculation of the angle in 
+
+--> The ND_coords, obj_center, etc. would need to be recalculated
+    too.  I could have a flat that indicated for each of those
+    components if recalc had happened.  All of this to avoid just
+    discarding and restarting the object, which could be expensive
+    with an open file, though I could possibly extract the HDUList
+
+My primary use for this is for a live system, with one chance to get
+it right.  It will move on to the next image.
+
+This brings up the question of efficiency.  I was hoping I could have
+this running all the time, but it looks like ACP wants to call it on a
+per exposure basis.  I suppose I could have it be like one long
+exposure....  but worry about that later.  The point is, I don't need
+to be infinitely flexible here on this particular object.
+
+Fri Dec 01 12:09:10 2017 EST  jpmorgen@snipe
+
+So go back to the ACP question.
+
+It looks like AcquireImage() can completely replace what ACP does when
+acquiring a single image.  ** it has to check for the need to flip **
+Return True = differ to ACP, OK means user function presumably handled
+acquisition and False is abort entire run.  That can handle all of the
+filter motion, recentering, guiding, etc.  It could be that I have the
+background helper process running & looking for images showing up in
+MaxIm that have been initiated by this script.  But at the very least,
+I can have this script do periodic centering on a per exposure basis
+
+TargetStart() is also a possibility, but it is before AcquireImage()
+and seems to be more for tweaking things you should probably have
+tweaked in your observing plan.  TargetStart() could potentially help
+redefine things based on moon position, but I might want to put all of
+that logic into AcquireImage()
+
+Aside: I still don't see anywhere where I can tweak focus, but that
+might be something I can do in AqcuireImage()!
+--> Want to make sure I can be tracking Jupiter properly
+
+So if I just set up for one Jupiter AcquireImage(), I grab the
+observatory for the whole of when Jupiter is up, make my own flip
+decisions, autofocus, etc.  Then when I release, ACP can pick up on
+whatever plan/Schedule is available.  Autofocus from there might not
+be the greatest, but I could still have a general part of AcuireImage
+for that.
+
+
+--> Hey, on-the-fly exposure adjustment is possible with this!
+http://forums.dc3.com/showthread.php?10314-Question-on-UserActions-or-similar&highlight=TargetStart
+
+#tag can be saved in a global part of UserActions
+
+#tag is available to AcquireImage() and Description field of ImageSet
+ or Observation is available
+
+--> I will have to dig deep into AcquireImage.js
+
+Either that or I could just have every Nth time through my internal
+AcquireImage() loop return True so that there is just a generic
+picture of Jupiter recorded and scope flip, autofocus, etc. is handled
+automatically
+
+--> HEY WAIT A MINUTE!  There is an autofocus script!  No, that is
+    just a shell around SUP.AutoFocus.  But if I tweak all of the
+    calls to SUP.AutoFocus in AcquireImages.js to add a little bit to
+    the target RA, I should be set.  I can do this in IoIO mode only
+
+In any case, however I end up structuring the AcquireImage()
+
+ret = SUP.UserActions.AcquireImage(Pl, Tc, Is, imgFile + ".fts");   // Call with full name
+
+where Pl is the plan object, Tc is the telescope control object and Is
+might be image set?  We would basically replace one image with many.
+
+So my personal AcquireImage could check to see that the background
+guiding process was running (if I use that) and then just bang away
+and telling MaxIm to record images
+--> might need to insert yield statements
+
+Taking a step back... No, I don't think I want to use the default
+AcquireImage because it does the whole tracking thing.  So even though
+it gets me name logic.  Wait.  Does it?  Not sure.  Anyway it looks
+like my original plan should work, with the background task looking
+MaxIm and feeding it to my Python script.  If there is a fight going
+on for MaxIm, I can just have my script exit (might need to learn how
+to pass it messages) when I do the periodic ACP thing.  I mostly want
+it running to avoid the long startup time (assuming there is one).
+
+OK, so I should plan for occational starts to ioio.py, or whatever it
+ends up being called.
+
+So this means I am going to need a way to read in the
+default_ND_params, or have them hard-coded.  It would be cushy to have
+a way to write them within the object + read them back + I suppose I
+could check for system names like I did for something else.
+
+So all of this is leaning me away from a system that has the
+complexity to re-process the innards
+
+Looking into the fitsio stuff, it looks like I can extract the HDUList
+object from a running ObsData and shove it into a new ObsData for
+processing there.  So there is no need to do the reprocessing within &
+there is possible motivation for having multiple objects storing the
+results
+
+OK, so if I open a file, keep it open, if I read a file from a
+filename, close it
