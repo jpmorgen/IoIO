@@ -945,3 +945,193 @@ results
 
 OK, so if I open a file, keep it open, if I read a file from a
 filename, close it
+
+Fri Dec 01 20:13:05 2017 EST  jpmorgen@snipe
+
+For some reason, when **kwargs is empty, an empty dict is passed
+instead on None
+
+Just look for falseness
+
+Mon Dec 04 14:17:23 2017 EST  jpmorgen@snipe
+
+https://stackoverflow.com/questions/986006/how-do-i-pass-a-variable-by-reference
+
+arguments are passed by reference.  Once I rebind the reference
+(physically set the parameter name to something else), it is separated
+from the outer object.  But I can operate on the parameter name 
+
+So the way I have read_im written, I assign the value of the argument
+to something else, but I think that means the full object goes along
+and I can mutate it
+
+def try_to_change_list_contents(the_list):
+    print('got', the_list)
+    inner_list = the_list
+    print('assigned to inner_list')
+    inner_list.append('four')
+    print('changed inner_list to', inner_list)
+
+outer_list = ['one', 'two', 'three']
+
+print('before, outer_list =', outer_list)
+try_to_change_list_contents(outer_list)
+print('after, outer_list =', outer_list)
+
+Confirms that the inner name mutates the actual object
+
+OK, so when I read_im an nd_array, if I were to del self.HDUList, I
+would delete that original nd_array?  No, I think I would delete the
+self.HDUList pointing to it, but the original nd_array would live.
+No, only if something else is pointing to it.
+
+I am planning to have a process monitor the MaxIm notify events and
+grab the image then.  Whatever loop is doing that is going to call the
+MaxImData.get_im and receive a tuple from MaxIm and shove that into an
+NDarray that will eventually get into an ObsData.HDUList.  If the
+MaxImData.get_im returns an HDUList into a loop variable, presumably
+all past versions of that loop variable are not kept.  But if there
+are objects that reference the NDarray(s), they will stay hogging
+memory.  So the trick is to delete the objects referencing the NDarray.
+
+Hmm.  Deleting obj.HDUList removes it from the namespace, which is
+different than setting it to None.  Either one will deference and let
+the memory free, but one is a little more gentle than the other.
+
+If I really am using the ObjData to store data about the observation
+and not the observation itself (which could be stored outside without
+being deleted when I delete the HDUList inside), I should definitely
+delete the HDUList, because there will be a hard error when I try to
+improperly use the object.  The object is only for calculating,
+storing and delivering the property of the obj_center and
+desired_center and whatever else I may need (e.g. y_cent)
+
+OK, I am now running into problems with the binned and unbinned
+center.  I absolutely need unbinned to be able to do the re-centering
+calculations.  I may want to 
+
+Mon Dec 04 17:10:26 2017 EST  jpmorgen@snipe
+
+OK, now I am facing the binning issue.  It might be that I just need a
+method that takes care of unbinned coordinate calculation.  Maybe
+something like "unbinned."
+
+Ah, then I could have another function that would be for binned.  That
+might be motivation for having the center type property be methods
+again, or I could just have a separate property.
+
+To be clear I might need to have unbinned always referenced in my
+calls.  Or have both so it is always clear
+
+Not necessarily!  I can use ObsData.binned() to do the conversion!
+
+As far as binned exposures for calc_ND_params, the best thing might be
+to just rebin them.  Apparently I need to write my own code or get
+some from a wheel.
+
+Tue Dec 05 15:55:36 2017 EST  jpmorgen@snipe
+
+I think I can get the rebin code into ioio.py
+
+Done!  Might be slow the way I do it rather than binning all the
+calculations
+
+Background seems to confuse:
+
+atv, '/data/io/IoIO/raw/2017-05-28/Na_IPT-0001_moving_to_SII_on-band.fit
+
+--> need to have checks for inside image
+
+/data/io/IoIO/raw/2017-05-28/Trius_SX694-0009_1x1_bias.fit
+
+crashed program
+
+Fixed that.  Did whole directory in 1123s.  That is 252 files
+1123.5540227890015/252
+4.458547709480165
+
+I can cut that a bit maybe by making the n_y_steps smaller, say 8
+
+Center of mass is used for obj_center, so there is no risk that it
+would be outside of the image, though it might be wrong.
+
+Tue Dec 05 21:03:22 2017 EST  jpmorgen@snipe
+
+Rj = np.asarray((50.1, 29.8))/2. # arcsec
+plate = 1.59/2 # main "/pix
+
+Rj/plate # Jupiter pixel radius
+array([ 31.50943396,  18.74213836])
+
+np.pi * (Rj/plate)**2 # Jupiter area
+array([ 3119.11276312,  1103.54018437])
+
+np.pi * (Rj/plate)**2 * 5 # Jupiter 5 sigma
+array([ 15595.56381559,   5517.70092183])
+
+Wed Dec 06 08:02:13 2017 EST  jpmorgen@snipe
+
+Down to 966 seconds with 8, as expected
+--> I should do a comparison of values
+
+
+
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0018_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0016_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0013_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0025_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0022_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0028_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0024_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0029_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0037_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0010_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0039_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0020_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0023_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0005_moving_to_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0038_moving_to_SII_on-band.fit
+
+Seems to be the problem here is that there is just not enough signal,
+which is fine
+
+
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0038_moving_to_SII_off-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0027_moving_to_SII_off-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0015_moving_to_SII_off-band.fit
+
+
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0040_moving_to_Na_on-band.fit
+
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0001_moving_to_Na_off-band.fit
+
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0036_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0011_SII_on-band.fit
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0014_SII_on-band.fit
+
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0026_SII_off-band.fit
+
+
+Go over worrisome pathological cases
+atv, '/data/io/IoIO/raw/2017-05-28/Na_IPT-0014_SII_on-band.fit
+
+That was cleared up with medfilt with a kernel size of 3.  Harder to
+get rid of saturated moons.  On the moving_to, they are not saturated.
+
+As I am moving on in this, I am wondering if the right thing to do is
+let the files be written and handle the calculations off-line with
+another program, since I am not sure they can happen quickly enough to
+keep MaxIm happy.  It would be great if I could fork a child process
+that takes the HDU and does its work while the primary process
+returns.  But ultimately, I just need to know where Jupiter was at a
+particular time and how to tweak the guider, if I am going that far.
+If I am just setting things up, I have to wait for my process anyway,
+reading a file might not be that much more time.
+
+--> last thing I need to do is a sensitive adjustment for the distance
+    between the peaks
+
+Wed Dec 06 12:45:02 2017 EST  jpmorgen@snipe
+
+Hey, I can save some time with the savgol_filter by only checking
+around bounds.  Better check code in before I mess with that....
