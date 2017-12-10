@@ -1135,3 +1135,168 @@ Wed Dec 06 12:45:02 2017 EST  jpmorgen@snipe
 
 Hey, I can save some time with the savgol_filter by only checking
 around bounds.  Better check code in before I mess with that....
+
+Wed Dec 06 15:58:25 2017 EST  jpmorgen@snipe
+
+Well, I have the sorting stuff working, but it doesn't necessarily
+give a better value.
+
+Thu Dec 07 09:44:18 2017 EST  jpmorgen@snipe
+
+Whew!  Found an error in rotating ND_params back.  Things look a bit
+better now + check with reality in a very difficult case.
+
+I am starting to think that the best place to put the
+default_ND_params determination is where I call CorObsData, not in the
+object itself.
+
+OK, so I am facing the problem I had earlier, that to jump-start the
+process the flats need different parameters than the objects.  DO I
+want to deal with this inside the object or outside?
+
+For now it is handy to do so inside.
+
+Last bit of bullet proofing would be default width
+
+
+1st time
+[[  3.73167520e-01   3.66137275e-01]
+ [  1.19204226e+03   1.40353646e+03]]
+2nd time
+[[  3.80135555e-01   3.84551127e-01]
+ [  1.24392453e+03   1.35668924e+03]]
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0014_SII_on-band.fit
+[[  3.80797076e-01   3.83683119e-01]
+ [  1.24304866e+03   1.35375702e+03]]
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0028_moving_to_SII_on-band.fit
+[[  3.89720321e-01   3.82599096e-01]
+ [  1.24469871e+03   1.34865465e+03]]
+
+I am liking this now.
+
+1.24469871e+03   -1.34865465e+03
+-103.95594000000006
+>>> 1.24304866e+03   -1.35375702e+03
+-110.70836000000008
+>>> 1.24392453e+03   -1.35668924e+03
+-112.76470999999992
+>>> 1.19204226e+03   -1.40353646e+03
+-211.4942000000001
+>>> 
+
+That is inverse order
+
+1st
+[[  3.73167520e-01   3.66137275e-01]
+ [  1.19204226e+03   1.40353646e+03]]
+2nd (one missing point in lower profile)
+[[  3.79288017e-01   3.84777194e-01]
+ [  1.24398821e+03   1.35656141e+03]]
+3rd
+[[  3.79288017e-01   3.84777194e-01]
+ [  1.24398821e+03   1.35656141e+03]]
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0014_SII_on-band.fit
+[[  3.79359014e-01   3.84492566e-01]
+ [  1.24230393e+03   1.35360561e+03]]
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0028_moving_to_SII_on-band.fit
+[[  3.90798410e-01   3.82329457e-01]
+ [  1.24535857e+03   1.34778286e+03]]
+
+Looking very nice
+
+The next thing I want is a distance from the center of the ND filter
+
+https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
+
+They prefer the parameterized form of the line
+
+ax + by + c = 0
+
+http://mathworld.wolfram.com/Point-LineDistance2-Dimensional.html
+
+Has
+
+y = -a/b x - c/b
+
+That is what I am looking for
+
+m = -a/b
+h = -c/b
+
+where h is the intercept
+
+b = -a/m = -c/h
+c/a = h/m
+h = mc/a
+
+This is just chasing my tail.  Use 2-point form:
+
+abs((x2 - x1) * (y1 - y0) - (x1 - x0) * (y2 - y1)) /
+((x2 - x1)**2 + (y2 - y1)**2)**0.5
+
+Thu Dec 07 20:51:44 2017 EST  jpmorgen@snipe
+
+Got that working.  It was a problem with the X origin.
+
+Now doing the long run and finding that, predictably, all dy valyes in
+the desired_center are 0.  Nicely, the dx values are pretty darn small
+too.
+
+--> the variation in the obj_center is unexpectedly large
+
+Fri Dec 08 12:48:05 2017 EST  jpmorgen@snipe
+
+--> first few exposures on 2017-05-28 might be having a problem with
+    background being so bright -- my silliness of exposign during
+    civil twilight
+
+--> consider subtracting median of cropped image or use histogram
+    technique to spot that background.
+
+
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0011_moving_to_SII_on-band.fit
+/usr/lib/python3/dist-packages/scipy/signal/_peak_finding.py:412: RuntimeWarning: invalid value encountered in double_scalars
+5.73232033471
+[ 0.          7.23630139]
+[ 0.  0.]
+4^---8>-----
+[ 0.          5.37101387]
+[ 0.04228364  0.00387351]
+
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0013_moving_to_SII_on-band.fit
+2.15110699901
+[ 0.          4.60368123]
+[-0.81430089  2.35449183]
+4^---8>-----
+[ 0.          2.41291612]
+[-0.79947457  2.29283603]
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0017_moving_to_SII_on-band.fit
+0.461735778369
+[ 0.         -3.19025364]
+[ 0.8024765  -1.35503926]
+4^---8>-----
+[ 0.          5.44327348]
+[-0.42432581  2.11040623]
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0021_moving_to_SII_on-band.fit
+3.00364028726
+[ 0.          5.28533696]
+[-0.16645221  0.48286966]
+4^---8>-----
+[ 0.          1.97240713]
+[-0.00626509  0.02047843]
+/data/io/IoIO/raw/2017-05-28/Na_IPT-0022_moving_to_SII_on-band.fit
+1.63188808341
+[ 0.         -3.67625137]
+[ 0.01745688 -0.31393855]
+4^---8>-----
+[ 0.        -7.4422813]
+[ 0.0973593  -0.86116534]
+
+Where the top is the desired center difference between tries with
+different y_steps and the bottom is the difference in the
+obj_centers.  Basically, the obj_centers are very stable except for
+the case where the background sky was very bright.
+
+Sun Dec 10 15:03:27 2017 EST  jpmorgen@snipe
+
+I think the ioio.py algorithm is shaping up pretty well.  Check it in

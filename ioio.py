@@ -350,6 +350,7 @@ class ObsData():
         if HDUList_im_or_fname is None:
             raise ValueError('No HDUList_im_or_fname provided')
         # Set up our basic FITS image info
+        self.fname = None
         self._binning = None
         self._subframe_origin = None
         self._we_opened_file = None
@@ -366,6 +367,14 @@ class ObsData():
         
     def populate_obj(self):
         """Calculate quantities that will be stored long-term in object"""
+        # Note that if MaxIm is not configured to write IRAF-complient
+        # keywords, IMAGETYP gets a little longer and is capitalized
+        # http://diffractionlimited.com/wp-content/uploads/2016/11/sbfitsext_1r0.pdf
+        h = self.HDUList[0].header
+        kwd = h['IMAGETYP'].upper()
+        if 'DARK' in kwd or 'BIAS' in kwd or 'FLAT' in kwd:
+            raise ValueError('Not able to process IMAGETYP = ' + h['IMAGETYP'])
+        # Do our work & leave the results in the property
         self.obj_center
         self.desired_center
 
@@ -387,8 +396,10 @@ class ObsData():
         # --> These should potentially be issubclass
         elif isinstance(HDUList_im_or_fname, fits.HDUList):
             HDUList = HDUList_im_or_fname
+            self.fname = HDUList.filename()
         elif isinstance(HDUList_im_or_fname, str):
             HDUList = fits.open(HDUList_im_or_fname)
+            self.fname = HDUList.filename()
             self._we_opened_file = True
         elif isinstance(HDUList_im_or_fname, np.ndarray):
             hdu = fits.PrimaryHDU(HDUList_im_or_fname)
@@ -406,7 +417,7 @@ class ObsData():
                 self._subframe_origin = np.asarray(self._subframe_origin)
             except:
                 log.warning('Could not read binning or subframe origin from image header.  Did you pass a valid MaxIm-recorded image and header?  Assuming binning = 1, subframe_origin = 0,0')
-                self._binning = 1
+                self._binning = (1,1)
                 self._subframe_origin = (0,0)
         self.HDUList = HDUList
         return self.HDUList
@@ -509,10 +520,13 @@ Uses readnoise (default = 5 e- RMS) to define bin widths"""
             # to infinity
             yfit = x * coefs[0] + coefs[1]
             resid = (y - yfit)
-            resid2 = resid**2
+            if resid.all == 0:
+                break
+            # Add 1 to avoid divide by zero error
+            resid2 = resid**2 + 1
             # Use the residual as the variance + do the algebra
-            redchi2 = np.sum(1/resid2)
-            coefs = np.polyfit(x, y, 1, w=1/(resid2 + 1))
+            redchi2 = np.sum(1/(resid2))
+            coefs = np.polyfit(x, y, 1, w=1/resid2)
             # Converge to a reasonable epsilon
             if last_redchi2 and last_redchi2 - redchi2 < np.finfo(float).eps*10:
                 break
@@ -565,27 +579,30 @@ Uses readnoise (default = 5 e- RMS) to define bin widths"""
 class CorObsData(ObsData):
     """Object for containing coronagraph image data used for centering Jupiter"""
 
-    reference_flat = None
+    # This is for jump-starting the ND_params calculation with flats.
+    # Be generous in case the angle is very large.  If it is still
+    # hard to get a good ND solution, use more n_y_steps
+    
 
     def __init__(self,
                  HDUList_im_or_fname=None,
-                 reference_flat=None,
                  default_ND_params=None,
                  y_center=None,
                  n_y_steps=8, # was 15
                  x_filt_width=25,
                  edge_mask=5,
-                 cwt_width_arange=np.arange(2, 80),
-                 cwt_min_snr=2,
-                 max_movement=50,
-                 max_fit_delta_pix=25,
-                 max_parallel_delta_pix=50,
+                 cwt_width_arange=None, # Default set by image type in populate_obj
+                 cwt_min_snr=1, # Their default seems to work well
+                 search_margin=50, # on either side of nominal ND filter
+                 max_fit_delta_pix=25, # Thowing out point in 1 line fit
+                 max_parallel_delta_pix=50, # Find 2 lines inconsistent
+                 max_ND_width_range=[80,400], # jump-starting flats & sanity check others
                  plot_prof=False,
                  plot_dprof=False,
                  plot_ND_edges=False):
 
-        # Make it easy to change the reference flat (might be obsolete)
-        self.reference_flat = reference_flat
+        # These should be invariants of the instrument:
+        self.SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 
         self.y_center = y_center
 
@@ -594,38 +611,50 @@ class CorObsData(ObsData):
         # can use the answer from the flats to get the answer for
         # Jupiter.  This was from:
         # '/data/io/IoIO/raw/2017-04-20/Sky_Flat-0007_Na_off-band.fit'
-        self.default_ND_params = ((-7.35537190e-02,  -6.71900826e-02), 
-                                  (1.24290909e+03,   1.34830909e+03))
-
-        # And we can refine it further for a good Jupiter example
-        #print(nd_filt_pos('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit',
-        #                  initial_try=((-7.35537190e-02,  -6.71900826e-02), 
-        #                               (1.24290909e+03,   1.34830909e+03))))
-        self.default_ND_params = ((-6.57640346e-02,  -5.77888855e-02),
-                                  (1.23532221e+03,   1.34183584e+03))
+        #self.default_ND_params = ((-7.35537190e-02,  -6.71900826e-02), 
+        #                          (1.24290909e+03,   1.34830909e+03))
+        #
+        ## And we can refine it further for a good Jupiter example
+        ##print(nd_filt_pos('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit',
+        ##                  initial_try=((-7.35537190e-02,  -6.71900826e-02), 
+        ##                               (1.24290909e+03,   1.34830909e+03))))
+        #self.default_ND_params = ((-6.57640346e-02,  -5.77888855e-02),
+        #                          (1.23532221e+03,   1.34183584e+03))
+        #
+        ## flat = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
+        #self.default_ND_params = ((3.78040775e-01,  3.84787113e-01),
+        #                          (1.24664929e+03,   1.35807856e+03))
+        #
+        ## flat = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
+        #self.default_ND_params = ((3.75447820e-01,  3.87551301e-01),
+        #                          (1.18163633e+03,   1.42002571e+03))
         
-        # flat = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
-        self.default_ND_params = ((3.78040775e-01,  3.84787113e-01),
-                                  (1.24664929e+03,   1.35807856e+03))
+        #self.default_ND_params = ((3.73276728e-01,   3.89055377e-01),
+        #                          (1.12473263e+03,   1.47580210e+03))
 
-        # flat = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
-        self.default_ND_params = ((3.75447820e-01,  3.87551301e-01),
-                                  (1.18163633e+03,   1.42002571e+03))
+        #--> temporary
+        #self.default_ND_params = np.asarray(self.default_ND_params)
 
-        #self.default_ND_params = None
+        self.default_ND_params = None
+        if default_ND_params is not None:
+            self.default_ND_params = np.asarray(default_ND_params)
 
         self.n_y_steps =              n_y_steps              
         self.x_filt_width =           x_filt_width           
         self.edge_mask =              edge_mask              
         self.cwt_width_arange =       cwt_width_arange       
         self.cwt_min_snr =            cwt_min_snr            
-        self.max_movement =           max_movement           
+        self.search_margin =           search_margin           
         self.max_fit_delta_pix =      max_fit_delta_pix      
-        self.max_parallel_delta_pix = max_parallel_delta_pix 
+        self.max_parallel_delta_pix = max_parallel_delta_pix
+        self.max_ND_width_range	    = max_ND_width_range
         self.plot_prof		    = plot_prof 
         self.plot_dprof             = plot_dprof
         self.plot_ND_edges	    = plot_ND_edges
 
+        # Flats use a different algorithm
+        self.isflat = None
+        
         # The ND_params are the primary property we work hard to
         # generate.  These will be the slopes and intercepts of the
         # two lines defining the edges of the ND filter.  The origin
@@ -636,15 +665,34 @@ class CorObsData(ObsData):
         # where the filter is rotated significantly off of 90 degrees
         # (which is where I will run it frequently)
         self._ND_angle = None
-
+        # Distance from center of object to center of ND filter
+        self._obj_to_ND = None
         # Inherit init from base class, which does basic FITS reading,
         # calls populate_obj, and cleanup methods
         super().__init__(HDUList_im_or_fname)
 
     def populate_obj(self):
-        # If we were passed an image, see if it has already been
-        # through the system
+        """Calculate quantities that will be stored long-term in object"""
+        # Note that if MaxIm is not configured to write IRAF-complient
+        # keywords, IMAGETYP gets a little longer and is capitalized
+        # http://diffractionlimited.com/wp-content/uploads/2016/11/sbfitsext_1r0.pdf
         h = self.HDUList[0].header
+        kwd = h['IMAGETYP'].upper()
+        if 'DARK' in kwd or 'BIAS' in kwd:
+            raise ValueError('Not able to process IMAGETYP = ' + h['IMAGETYP'])
+        # We can go as far as the N_params for flats.  In fact, we
+        # have to to get a good default_ND_params for LIGHT frames
+        if 'FLAT' in kwd:
+            self.isflat = True
+
+        # Define y pixel value along ND filter where we want our
+        # center --> This may change if we are able to track ND filter
+        # sag in Y.
+        if self.y_center is None:
+            self.y_center = self.HDUList[0].data.shape[0]*self._binning[0]/2
+
+        # See if our image has already been through the system.  This
+        # saves us the work of using self.get_ND_params
         if h.get('NDPAR00') is not None:
             ND_params = np.zeros((2,2))
             # Note transpose, since we are working in C!
@@ -653,18 +701,37 @@ class CorObsData(ObsData):
             ND_params[0,1] = h['NDPAR10']
             ND_params[1,1] = h['NDPAR11']
             self._ND_params = ND_params
-        # Define y pixel value along ND filter where we want our
-        # center --> This may change if we are able to track ND filter
-        # sag in Y.
-        if self.y_center is None:
-            self.y_center = self.HDUList[0].data.shape[0]*self._binning[0]/2
+        else:
+            if not self.isflat and self.default_ND_params is None:
+                raise ValueError('Set default_ND_params before attempting a run on a non-flat exposure')
+                
+        # Get ready to generate the ND_params, which is our hardest work
+        
+        # The flats produce very narrow peaks in the ND_param
+        # algorithm when processed without a default_ND_param and
+        # there is a significant filter rotation.  Once things are
+        # morphed by the default_ND_params (assuming they match the
+        # image), the peaks are much broader
+        if self.cwt_width_arange is None:
+            if self.default_ND_params is None:
+                self.cwt_width_arange = np.arange(2, 60)
+            else:
+                self.cwt_width_arange = np.arange(8, 80)
+
+        # Do our work & leave the results in the property
+        self.ND_params
+        if self.isflat:
+            return
         self.obj_center
         self.desired_center
+        self.obj_to_ND
 
     @property
     def obj_center(self):
-        """Returns center pixel coords of Jupiter whether or not Jupiter is on ND filter.  Unbinned pixel coords are returned.  Use Obs_Data"""
-        if self._obj_center is not None:
+        """Returns center pixel coords of Jupiter whether or not Jupiter is on ND filter.  Unbinned pixel coords are returned.  Use [Cor]Obs_Data.binned() to convert to binned pixels.
+        """
+        # Returns stored center for object, None for flats
+        if self._obj_center is not None or self.isflat:
             return self._obj_center
         
         # Work with unbinned image
@@ -742,7 +809,8 @@ class CorObsData(ObsData):
         proper X value
 
         """
-        if self._desired_center is not None:
+        # Returns stored center for object, None for flats
+        if self._desired_center is not None or self.isflat:
             return self._desired_center
         desired_center = np.asarray((self.y_center, np.average(self.ND_edges(self.y_center))))
         # Check to make sure desired center is close to the center of the image
@@ -762,8 +830,6 @@ class CorObsData(ObsData):
         im = self.HDU_unbinned()
         
         xs = [] ; ys = []
-        #D.say(im.shape[0])
-        #D.say(self.ND_params)
         for iy in np.arange(0, im.shape[0]):
             bounds = self.ND_params[1,:] + self.ND_params[0,:]*(iy - im.shape[0]/2) + np.asarray((self.edge_mask, -self.edge_mask))
             bounds = bounds.astype(int)
@@ -787,6 +853,8 @@ class CorObsData(ObsData):
         if external_ND_params is not None:
             ND_params = external_ND_params
         else:
+            # Avoid recursion error
+            assert self._ND_params is not None
             ND_params = self.ND_params
 
         ND_params = np.asarray(ND_params)
@@ -802,15 +870,11 @@ class CorObsData(ObsData):
     # Turn ND_angle into a "getter"
     @property
     def ND_angle(self):
-        """Calculate ND angle from vertical.  Note this assumes square pixels"""
-        #if self._ND_angle is not None:
-        #    return self._ND_angle
-        #if self._ND_params is None:
-        #    self.get_ND_params()
-        #if self._ND_params is None:
-        #    log.warning('Failed to get ND_params')
-        #    return None
-
+        """Calculate ND angle from vertical.  Note this assumes square pixels
+        """
+        if self._ND_angle is not None or self.isflat:
+            return self._ND_angle
+    
         # If we made it here, we need to calculate the angle
         # get_ND_params should have caught pathological cases, so we can
         # just use the average of the slopes
@@ -818,112 +882,150 @@ class CorObsData(ObsData):
         self._ND_angle = np.degrees(np.arctan(np.average(self.ND_params[0,:])))
         return self._ND_angle
 
-    # Might eventually want to make this part of a property system
-    # https://docs.python.org/3/library/functions.html#property
-    # PEP8 suggests I would name ND_params _ND_params and go from there
+    @property
+    def obj_to_ND(self):
+        """Returns perpendicular distance of obj center to center of ND filter
+        """
+        if self._obj_to_ND is not None or self.isflat:
+            return self._obj_to_ND
+        
+        # https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
+        # http://mathworld.wolfram.com/Point-LineDistance2-Dimensional.html
+        # has a better factor
+        imshape = self.unbinned(self.HDUList[0].data.shape)
+        m = np.average(self.ND_params[0,:])
+        b = np.average(self.ND_params[1,:])
+        x1 = 1100; x2 = 1200
+        # The line is actually going vertically, so X in is the C
+        # convention of along a column.  Also remember our X coordinate
+        # is relative to the center of the image
+        y1 = m * (x1 - imshape[0]/2)  + b
+        y2 = m * (x2 - imshape[0]/2)  + b
+        x0 = self.obj_center[0]
+        y0 = self.obj_center[1]
+        d = np.abs((x2 - x1) * (y1 - y0) - (x1 - x0) * (y2 - y1)) / ((x2 - x1)**2 + (y2 - y1)**2)**0.5
+        self._obj_to_ND = d
+        return self._obj_to_ND
+
     @property
     def ND_params(self):
         """Returns parameters which characterize the coronagraph ND filter, calculating if necessary"""
         if self._ND_params is not None:
             return self._ND_params
-        return self.calc_ND_params()
 
-    #ND_params.setter
-    #ef ND_params(self, ND_params):
-    #   if ND_params == 'recalc':
-    #       self.calc_ND_params()
-    #       return
-    #   if self._ND_params is not None:
-    #       log.warning('Overwriting existing ND_params')
-    #   self._ND_params = np.asarray(ND_params)
-
-    def calc_ND_params(self):
-        """Calculates parameters which characterize ND filter (currently 2 lines fit to edges)"""
-
+        # If we made it here, we need to do the heavy lifting of
+        # finding the ND filter in the image
         assert isinstance(self.HDUList, fits.HDUList)
 
-        # --> Trying a filter to get rid of cosmic ray hits in awkward places
-        self.HDUList[0].data = signal.medfilt(self.HDUList[0].data, kernel_size=3)
-        im = self.HDU_unbinned()
-        #im = self.HDUList[0].data
-        ##-> clipc = np.where(im > 5000)
-        ##-> im[clipc] = np.median(im)
+        ytop = self.SII_filt_crop[0,0]
+        ybot = self.SII_filt_crop[1,0]
 
+        # Trying a filter to get rid of cosmic ray hits in awkward
+        # places.  Do this only for section of CCD we will be working
+        # with, since it is our most time-consuming step
+        if not self.isflat:
+            im = self.HDUList[0].data
+            xtop = self.binned(self.ND_edges(ytop, self.default_ND_params))
+            xbot = self.binned(self.ND_edges(ybot, self.default_ND_params))
+            x0 = int(np.min(xtop) - self.search_margin / self._binning[1])
+            x1 = int(np.max(xtop) + self.search_margin / self._binning[1])
+            x0 = np.max((0, x0))
+            x1 = np.min((x1, im.shape[1]))
+            im[ytop:ybot, x0:x1] \
+                = signal.medfilt(im[ytop:ybot, x0:x1], \
+                                 kernel_size=3)
+        im = self.HDU_unbinned()
         h = self.HDUList[0].header
-        # See if we are a flat, in which case we should have high
-        # contrast and can have small step size.
-        # --> Plus we don't necessarily have a correct default_ND_params
-        #if h['IMAGETYP'] == 'FLAT':
-        #    # Note pythonic y dim is [0]
-        #    self.n_y_steps = int(im.shape[0]/10)
 
         # The general method is to take the absolute value of the
         # gradient along each row to spot the edges of the ND filter.
         # Because contrast can be low in the Jupiter images, we need
-        # to combine n_y_steps rows.  However, since the ND filter is
-        # tilted by ~20 degrees or so, combining rows washes out the
-        # edge of the ND filter.  So shift each row to a common center
-        # based on the default_ND_params.  Flats are high contrast, so
-        # we can use a slightly different algorithm for them and
-        # iterate to jump-start the process with them
+        # to combine n_y_steps rows.  However, since the ND filter can
+        # be tilted by ~20 degrees or so, combining rows washes out
+        # the edge of the ND filter.  So shift each row to a common
+        # center based on the default_ND_params.  Flats are high
+        # contrast, so we can use a slightly different algorithm for
+        # them and iterate to jump-start the process with them
 
         ND_edges = [] ; ypts = []
 
-        # Create yrange at y_bin intervals, chopping of the last one
-        # if it goes too far
-        y_bin = int(im.shape[0]/self.n_y_steps)
+        # Create yrange at y_bin intervals starting at ytop (low
+        # number in C fashion) and extending to ybot (high number),
+        # chopping of the last one if it goes too far
+        y_bin = int((ybot-ytop)/self.n_y_steps)
         #yrange = np.arange(0, im.shape[0], y_bin)
-        yrange = np.arange(350, 1900, y_bin)
-        if yrange[-1] + y_bin > im.shape[0]:
+        yrange = np.arange(ytop, ybot, y_bin)
+        if yrange[-1] + y_bin > ybot:
             yrange = yrange[0:-1]
         # picturing the image in C fashion, indexed from the top down,
-        # ytop is the top point from which we bin y_bin rows together
-        # --> remove me
-        #newim = im.copy()
-        for ytop in yrange:
-            # We will be referencing the measured points to the center of the bin
-            ycent = ytop+y_bin/2
-            # rowpt is each row in the ytop y_bin, which we need to
-            # shift to accumulate into a subim that is effectively in
-            # the rotated frame of default_ND_params
-            subim = np.zeros((y_bin, im.shape[1]))
-            for rowpt in np.arange(y_bin):
-                # determine how many columns we will shift each row by
-                # using the default_ND_params
-                if self.default_ND_params is None:
-                    this_ND_center = im.shape[1]/2.
-                else:
-                    this_ND_center = np.round(np.mean(self.ND_edges(rowpt+ytop, self.default_ND_params)))
-                cshift = int(this_ND_center - im.shape[1]/2.)
-                subim[rowpt, :] = np.roll(im[ytop+rowpt, :], -cshift)
+        # ypt_top is the top point from which we bin y_bin rows together
 
-            # --> remove me
-            #newim[ytop:ytop+y_bin, :] = subim
-            #subim = im[ytop:ytop+y_bin, :]
+        for ypt_top in yrange:
+            # We will be referencing the measured points to the center
+            # of the bin
+            ycent = ypt_top+y_bin/2
 
-            profile = np.sum(subim, 0)
-            if h['IMAGETYP'] == 'FLAT':
-                # Flats have a nice sharp onset and bottom of the
-                # filter.  Just doing d2 gets two peaks, so multiply
+            if self.default_ND_params is None:
+                # We have already made sure we are a flat at this
+                # point, so just run with it.  Flats are high
+                # contrast, low noise.  When we run this the first
+                # time around, features are rounded and shifted by the
+                # ND angle, but still detectable.
+
+                # We can chop off the edges of the smaller SII
+                # filters to prevent problems with detection of
+                # edges of those filters
+                bounds = self.SII_filt_crop[:,1]
+                profile = np.sum(im[ypt_top:ypt_top+y_bin, \
+                                    bounds[0]:bounds[1]], 0)
+                # Just doing d2 gets two peaks, so multiply
                 # by the original profile to kill the inner peaks
-                smoothed_profile = signal.savgol_filter(profile, self.x_filt_width, 3)
+                smoothed_profile \
+                    = signal.savgol_filter(profile, self.x_filt_width, 3)
                 d = np.gradient(smoothed_profile, 10)
                 d2 = np.gradient(d, 10)
                 s = np.abs(d2) * profile
             else:
+                # Non-flat case.  We want to morph the image by
+                # shifting each row by by the amount predicted by the
+                # default_ND_params.  This lines the edges of the ND
+                # filter up for easy spotting.  We will morph the
+                # image directly into a subim of just the right size
+                default_ND_width = self.default_ND_params[1,1] - \
+                                   self.default_ND_params[1,0]
+                subim_hw = int(default_ND_width/2 + self.search_margin)
+                subim = np.zeros((y_bin, 2*subim_hw))
+
+                # rowpt is each row in the ypt_top y_bin, which we need to
+                # shift to accumulate into a subim that is the morphed
+                # image.
+                for rowpt in np.arange(y_bin):
+                    # determine how many columns we will shift each row by
+                    # using the default_ND_params
+                    this_ND_center \
+                        = np.int(
+                            np.round(
+                                np.mean(
+                                    self.ND_edges(
+                                        rowpt+ypt_top,
+                                        self.default_ND_params))))
+                    subim[rowpt, :] \
+                        = im[ypt_top+rowpt, \
+                             this_ND_center-subim_hw: \
+                             this_ND_center+subim_hw]
+
+                profile = np.sum(subim, 0)
                 # This spots the sharp edge of the filter surprisingly
                 # well, though the resulting peaks are a little fat
                 # (see signal.find_peaks_cwt arguments, below)
                 smoothed_profile = signal.savgol_filter(profile, self.x_filt_width, 0)
                 d = np.gradient(smoothed_profile, 10)
                 s = np.abs(d)
-                
-            if self.plot_prof:
-                plt.plot(profile)
-                plt.show()
-            if self.plot_dprof:
-                plt.plot(s)
-                plt.show()
+                # To match the logic in the flat case, calculate
+                # bounds of the subim picturing that it is floating
+                # inside of the full image
+                bounds = im.shape[1]/2 + np.asarray((-subim_hw, subim_hw))
+                bounds = bounds.astype(int)
 
             # https://blog.ytotech.com/2015/11/01/findpeaks-in-python/
             # points out same problem I had with with cwt.  It is too
@@ -937,88 +1039,96 @@ class CorObsData(ObsData):
             # Need to change peak_idx into an array instead of a list for
             # indexing
             peak_idx = np.array(peak_idx)
-            # For flats, it is easy to spot the edge of the ND filter
-            if h['IMAGETYP'] == 'FLAT':
-                #bounds = (0,s.size)
-                # We can chop off the edges of the smaller SII filters
-                bounds = (512,2100)
-            else:
-                # now that we are shifting to line up on the
-                # centerline, bounds are easier to calculate
-                #bounds = self.ND_edges(ycent, self.default_ND_params) + np.asarray((-self.max_movement, self.max_movement))
-                if self.default_ND_params is None:
-                    raise ValueError('Set default_ND_params before attempting a run on a non-flat exposure')
-                tmp = np.asarray(self.default_ND_params)
-                # --> this needs to be tweaked for morph
-                default_ND_width = tmp[1,1] - tmp[1,0]
-                bounds = im.shape[1]/2 + np.asarray((-default_ND_width, default_ND_width))/2 + \
-                         np.asarray((-self.max_movement, self.max_movement))/2
-                bounds = bounds.astype(int)
 
-            #print(peak_idx)
-            #print(s[peak_idx])
-            goodc = np.where(np.logical_and(bounds[0] < peak_idx, \
-                                            peak_idx < bounds[1]))
-            peak_idx = peak_idx[goodc]
             # Give up if we don't find two clear edges
             if peak_idx.size < 2:
                 log.info('No clear two peaks inside bounds ' + str(bounds))
                 #plt.plot(s)
                 #plt.show()
                 continue
+
+            if self.default_ND_params is None:
+                # In the flat case where we are deriving ND_params for
+                # the first time, assume we have a set of good peaks,
+                # sort on peak size
+                sorted_idx = np.argsort(s[peak_idx])
+                # Unwrap
+                peak_idx = peak_idx[sorted_idx]
+
+                # Thow out if lower peak is too weak.  Use Carey Woodward's
+                # trick of estimating the noise on the continuum To avoid
+                # contamination, do this calc just over our desired interval
+                #ss = s[bounds[0]:bounds[1]]
+
+                #noise = np.std(ss[1:-1] - ss[0:-2])
+                noise = np.std(s[1:-1] - s[0:-2])
+                #print(noise)
+                if s[peak_idx[-2]] < noise:
+                    #print("Rejected -- not above noise threshold")
+                    continue
+                # Find top two and put back in index order
+                edge_idx = np.sort(peak_idx[-2:])
+                # Sanity check
+                de = edge_idx[1] - edge_idx[0]
+                if de < self.max_ND_width_range[0] or \
+                   de > self.max_ND_width_range[1]:
+                    continue
+
+                # Accumulate in tuples
+                ND_edges.append(edge_idx)
+                ypts.append(ycent)
+
+            else:
+                # In lower S/N case.  Compute all the permutations and
+                # combinations of peak differences so we can find the
+                # pair that is closest to our expected value
+                diff_arr = []
+                for ip in np.arange(peak_idx.size-1):
+                    for iop in np.arange(ip+1, peak_idx.size):
+                        diff_arr.append((ip, iop, peak_idx[iop] - peak_idx[ip]))
+                diff_arr = np.asarray(diff_arr)
+                closest = np.abs(diff_arr[:,2] - default_ND_width)
+                sorted_idx = np.argsort(closest)
+                edge_idx = peak_idx[diff_arr[sorted_idx[0], 0:2]]
+                # Sanity check
+                de = edge_idx[1] - edge_idx[0]
+                if de < self.max_ND_width_range[0] or \
+                   de > self.max_ND_width_range[1]:
+                    continue
+
+                # Accumulate in tuples
+                ND_edges.append(edge_idx)
+                ypts.append(ycent)
                 
-            # Assuming we have a set of good peaks, sort on peak size
-            sorted_idx = np.argsort(s[peak_idx])
-            # Unwrap
-            peak_idx = peak_idx[sorted_idx]
-            
-            # Thow out if lower peak is too weak.  Use Carey Woodward's
-            # trick of estimating the noise on the continuum To avoid
-            # contamination, do this calc just over our desired interval
-            ss = s[bounds[0]:bounds[1]]
-            
-            noise = np.std(ss[1:-1] - ss[0:-2])
-            #print(noise)
-            if s[peak_idx[-2]] < noise:
-                #print("Rejected -- not above noise threshold")
-                continue
-            
-            # Find top two and put back in index order
-            top_two = np.sort(peak_idx[-2:])
-            #print(peak_idx)
-            #print(s[peak_idx])
-            #print(top_two)
-            #print(s[top_two])
-            #plt.plot(s)
-            #plt.show()
 
-            # Accumulate in tuples
-            ND_edges.append(top_two)
-            ypts.append(ycent)
-            
+            if self.plot_prof:
+                plt.plot(profile)
+                plt.show()
+            if self.plot_dprof:
+                plt.plot(s)
+                plt.show()
 
-        # --> remove me
-        #plt.imshow(newim)
-        #plt.show()
-
-        ND_edges = np.asarray(ND_edges)
-        ypts = np.asarray(ypts)
-        if ND_edges.size < 2:
+        if len(ND_edges) < 2:
             if self.default_ND_params is None:
                 raise ValueError('Not able to find ND filter position')
             log.warning('Unable to improve filter position over initial guess')
-            self._ND_params = np.asarray(self.default_ND_params)
+            self._ND_params = self.default_ND_params
             return self._ND_params
+            
+        ND_edges = np.asarray(ND_edges) + bounds[0]
+        ypts = np.asarray(ypts)
         
         # Put the ND_edges back into the original orientation before
         # we cshifted them with default_ND_params
         if self.default_ND_params is not None:
-            self.default_ND_params = np.asarray(self.default_ND_params)
             es = []
-            for this_y in ypts:
-                es.append(self.default_ND_params[1,:] - im.shape[1]/2. + self.default_ND_params[0,:]*(this_y - im.shape[0]/2))
-            ND_edges =  ND_edges + es
+            for iy in np.arange(ypts.size):
+                this_default_ND_center = np.round(np.mean(self.ND_edges(ypts[iy], self.default_ND_params)))
+                cshift = int(this_default_ND_center - im.shape[1]/2.)
+                es.append(ND_edges[iy,:] + cshift)
 
+                #es.append(self.default_ND_params[1,:] - im.shape[1]/2. + self.default_ND_params[0,:]*(this_y - im.shape[0]/2))
+            ND_edges =  np.asarray(es)
 
         if self.plot_ND_edges:
             plt.plot(ypts, ND_edges)
@@ -1040,7 +1150,7 @@ class CorObsData(ObsData):
         dp = abs((ND_params[0,1] - ND_params[0,0]) * im.shape[0]/2)
         if dp > self.max_parallel_delta_pix:
             txt = 'ND filter edges are not parallel.  Edges are off by ' + str(dp) + ' pixels.'
-            print(txt)
+            #print(txt)
             #plt.plot(ypts, ND_edges)
             #plt.show()
             
@@ -1156,40 +1266,59 @@ def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10
 
     return (new_guide_dt, r[0], r[1])
 
-#log.setLevel('INFO')
-log.setLevel('WARNING')
+log.setLevel('INFO')
+#log.setLevel('WARNING')
 
-#O = CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0014_SII_on-band.fit', plot_prof=True, plot_dprof=True, plot_ND_edges=True)
-O = CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0028_moving_to_SII_on-band.fit', plot_prof=True, plot_dprof=True, plot_ND_edges=True)
+F = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit')#, plot_dprof=True, plot_ND_edges=True)
+default_ND_params = F.ND_params
+D.say(default_ND_params)
+F2 = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit', default_ND_params=default_ND_params)#, plot_prof=True, plot_dprof=True, plot_ND_edges=True)
+default_ND_params = F2.ND_params
+D.say(default_ND_params)
+F3 = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit', default_ND_params=default_ND_params)#, plot_prof=True, plot_dprof=True, plot_ND_edges=True)
+default_ND_params = F3.ND_params
+D.say(default_ND_params)
+O = CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0014_SII_on-band.fit', default_ND_params=default_ND_params) #plot_prof=True, plot_dprof=True, plot_ND_edges=True, 
+D.say(O.ND_params)
 D.say(O.obj_center)
 D.say(O.desired_center)
 D.say(O.obj_center - O.desired_center)
+D.say(O.obj_to_ND)
+O = CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0028_moving_to_SII_on-band.fit', default_ND_params=default_ND_params)#, plot_prof=True, plot_dprof=True, plot_ND_edges=True)
 D.say(O.ND_params)
+D.say(O.obj_center)
+D.say(O.desired_center)
+D.say(O.obj_center - O.desired_center)
+D.say(O.obj_to_ND)
 
 
-#start = time.time()
-#rawdir = '/data/io/IoIO/raw/2017-05-28'
-#raw_fnames = [os.path.join(rawdir, f)
-#              for f in os.listdir(rawdir) if os.path.isfile(os.path.join(rawdir, f))]
-#
-#for f in raw_fnames:
-#    D.say(f)
-#    try:
-#        O4 = CorObsData(f, n_y_steps=4)
-#        O8 = CorObsData(f, n_y_steps=8)
-#        O16 = CorObsData(f, n_y_steps=16)
-#        #D.say(O.obj_center - O.desired_center)
-#        D.say(O4.desired_center - O16.desired_center)
-#        D.say(O4.obj_center - O16.obj_center)
-#        D.say('4^---8>-----')
-#        D.say(O8.desired_center - O16.desired_center)
-#        D.say(O8.obj_center - O16.obj_center)
-#    except ValueError as e:
-#        log.error('Skipping: ' + str(e))
-#
-#    
-#end = time.time()
-#D.say(end - start)
+##start = time.time()
+##rawdir = '/data/io/IoIO/raw/2017-05-28'
+##raw_fnames = [os.path.join(rawdir, f)
+##              for f in os.listdir(rawdir) if os.path.isfile(os.path.join(rawdir, f))]
+##
+##for f in sorted(raw_fnames):
+##    D.say(f)
+##    try:
+##        O4 = CorObsData(f, n_y_steps=4, default_ND_params=default_ND_params)
+##        O8 = CorObsData(f, n_y_steps=8, default_ND_params=default_ND_params)
+##        O16 = CorObsData(f, n_y_steps=16, default_ND_params=default_ND_params)
+##        D.say(O8.obj_to_ND)
+##        dc4 = np.abs(O4.desired_center - O16.desired_center)
+##        dc8 = np.abs(O8.desired_center - O16.desired_center)
+##        #if (dc4 > 5).any() or (dc8 > 5).any():
+##        #D.say(O.obj_center - O.desired_center)
+##        print(O4.desired_center - O16.desired_center)
+##        print(O4.obj_center - O16.obj_center)
+##        print('4^---8>-----')
+##        print(O8.desired_center - O16.desired_center)
+##        print(O8.obj_center - O16.obj_center)
+##    except ValueError as e:
+##        log.error('Skipping: ' + str(e))
+##
+##    
+##end = time.time()
+##D.say('Elapsed time: ' + str(D.say(end - start)) + 's')
 
 #Na =   CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0007_Na_off-band.fit')
 #print(Na.obj_center)
