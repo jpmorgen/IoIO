@@ -1299,4 +1299,200 @@ the case where the background sky was very bright.
 
 Sun Dec 10 15:03:27 2017 EST  jpmorgen@snipe
 
-I think the ioio.py algorithm is shaping up pretty well.  Check it in
+I think the ioio.py algorithm is shaping up pretty well.  Did a little
+more streamlining and checked it in with an amendment.  I love git!
+
+Now the big test is to see if I can find an off-ND filter image.
+
+First of all, I can test some of my current logic with a flat
+
+I think the way to do that is to do a walk and see if I can find any
+
+Sun Dec 10 18:07:53 2017 EST  jpmorgen@snipe
+
+Looking like I am having trouble with my Jupiter in ND filter testing
+algorithm
+
+Mon Dec 11 09:21:20 2017 EST  jpmorgen@snipe
+
+Consider making ND_coords faster with some coordinate math
+/data/io/IoIO/raw/2017-05-20/Sky_Flat-0010_SII_on-band.fit
+((0.37978158134653572, 0.38067280430080175), (1286.5410005790682, 1286.2680292376658))
+
+Fixed that with some proper indexing!  Lists stack up in the first index
+
+O = CorObsData('/data/io/IoIO/raw/2017-04-18/IPT-0001_off-band.fit', default_ND_params = ((-0.07286433475733832, 1251.595679328457), (-0.068272558665046126, 1357.3942953038429)))
+  File "/home/jpmorgen/py/IoIO/ioio.py", line 1055, in ND_params
+    this_ND_center-subim_hw:this_ND_center+subim_hw]
+ValueError: could not broadcast input array from shape (0) into shape (1456)
+
+
+
+/data/io/IoIO/raw/2017-04-15/IPT-0017_on-band.fit
+[ 1104.69385143  1273.05462992]
+WARNING: Large dist: 18 [unknown]
+
+/data/io/IoIO/raw/2017-04-15/IPT-0027_off-band.fit
+[ 1114.43688405  1251.88337244]
+WARNING: Large dist: 40 [unknown]
+(reasonable center)
+
+/data/io/IoIO/raw/2017-04-20/Filter_sequence-0001_10s_Na_on-band.fit
+/usr/lib/python3/dist-packages/scipy/signal/_peak_finding.py:412: RuntimeWarning: divide by zero encountered in double_scalars
+  snr = abs(cwt[line[0][0], line[1][0]] / noises[line[1][0]])
+
+Good example of a complete lack of signal to detect ND filter and a
+star that doesn't saturate
+
+I want to create a routine that derives the default_ND_params for
+a particular directory.  Should that be in CorObsData?  I don't think
+so.  It is a separate utility that needs to be in the module and uses
+CorObsData.  Hey!  It could be an object itself.  Hmm.  That is a
+little awkward.  It is basically just an ndarray, so I am not sure I
+need to be all that sacred about it.  If I had some larger object that
+kept track of many CorObjs, I might do it as an object with property,
+but that doesn't stop me from making it a simple method in the ioio module
+
+--> Might want to test to see if ND in default par has any signal
+    before trying to look for one
+
+got ND filter, but missed star
+/data/io/IoIO/raw/2017-04-20/Filter_sequence-0001_1s_open.fit
+WARNING: Jupiter outside of ND filter?  obj_ND metric expected > 5000 calculated =  [unknown]
+
+<fixed algorithm>
+
+Bad!!!  ND filter problem?  Need wider margin?
+/data/io/IoIO/raw/2017-05-27/IPT-0007_on-band.fit
+[ 1059.67224866  1349.63286885]
+WARNING: Large dist: 60 [unknown]
+
+<found better flats>
+
+--> Star image, not even close, metric must have been off
+/data/io/IoIO/raw/2017-04-21/Filter_sequence-0001_1s_open.fit
+[ 1144.33194632  1216.89788347]
+WARNING: Large dist: 72 [unknown]
+
+Mon Dec 11 19:53:54 2017 EST  jpmorgen@snipe
+
+While I am getting more things to look into on that front, start to
+look into the MaxIM/ACP side of things.
+
+Based on behavior noted in the logs, it looks like in order to use the
+guider on a non-siderial object, I need to define a SUP.UserActions.
+That apparently operates on that Count level.  But I don't want to be
+launching a big Python script all the time, which is why the
+invitation to replace a large section of AcquireImages.js.  It would
+behoove me to copy as much of Bob's code as I can to get the basics
+set up, but I did the Python because there is just way too much
+sophistication for that to be done in .js.
+
+/data/PSIScope/observing/AcquireImages.js line 1774 is where he starts
+the autoguider.  I may opt to just do it with my own code, since I
+think he checks lots of other thigns, though I could try it either
+way.  It would get the error graphs onto the the website.
+
+Either way, once the guider is started, the next most important thing
+for my code to do is command MaxIm to take pictures and watch them
+come in to get the obj_center and desired_center.  Those *_centers go
+on a stack that helps move the guide box or stop the guider and
+totally move the telescope.  I guess the later makes it clear that I
+should probably not have ACP handle the guider.
+
+
+Note AcquireImages.js line 1806 + things above that got orbTrackRealRates
+                       if(orbTrackRealRates)
+                            SUP.SetTrackOffset(Tc.RARate, Tc.DecRate);      // Complier assures scope can do tracking
+
+Since he is doing those calculations, it might be nice to have a user .js
+script do them.  But I think I should be able to have access to all of
+those objects, just like in MaxIm, which is beyond way cool!
+
+In any case, my script is going to be called when Jupiter is near the
+center
+
+Loop:
+    Preliminary exposure
+    Check close enough
+        break if so
+    Move to expected center
+
+Start guider
+Loop:
+    Preliminary exposure
+    Check if close enough
+        break if so
+	if too far warn & recenter with loop above
+    Move Jupiter with guide box
+
+Primay image loop
+Loop:
+    Desired filter image
+    Accumulate CorObsData
+    Keep Jupiter centered with guide box moves
+    if too far warn & recenter with loops above
+    Check if need flip (see line 2941 of AcquireImages.js, but I don't
+    think I have or need access to all of the functions that uses)
+
+The way Bob has it structured, AcquireImage() is designed for a single
+image, but I don't see why it could't be a very long image.  It is
+like going off and doing DAWNFLATS.
+
+ret = SUP.UserActions.AcquireImage(Pl, Tc, Is, imgFile + ".fts");   // Call with full name
+
+So the first thing I need to do is check to see if I can access the
+Pl, Tc, etc. objects from Python.  I kind of doubt it.  But I can
+write a .js that does the looping after preliminary set up in Python.
+The Python event catcher can do the guiding thing.
+
+http://solo.dc3.com/ar/RefDocs/HelpFiles/ACP81Help/scr-ovw.htm
+
+Says that Python should have it
+
+--> how are the user scripts interrupted by weather?  AcquireImages
+    doesn't seem to handle weather, so maybe that is done somewhere
+    else.
+
+Tue Dec 12 08:47:57 2017 EST  jpmorgen@snipe
+
+I think I am just going to need to work with a simulator on this.
+Consider setting puppy up as the completely independent simulator 
+
+I already have MaxIm.  It complains that my PinPoint license has
+expired.  Looks like I should get a full version of that
+
+scp "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/ACP/acp-811-setup.exe" jpmorgen@cpe-184-153-135-44.maine.res.rr.com:/data/io/IoIO/observing/ACP/
+
+scp "/cygdrive/c/Users/PLANETARY SCIENCE/Downloads/NOVAS(2.1.1)Setup.exe" jpmorgen@cpe-184-153-135-44.maine.res.rr.com:/data/io/IoIO/observing/ACP/
+
+Email from 04/26/2017 in Proposals/NSF folder gives download locations
+for DC3 products
+
+Oh, but I want to just install ACP and PinPoint comes along for the ride
+
+Or so it says.
+
+Getting USNO A2.0 catalog for snipe
+
+/data/USNO_A2.0/
+
+
+cd /data/USNO_A2.0/
+ftp ftp.nofs.navy.mil
+anonymous
+jpmorgen@psi.edu
+cd usnoa
+bin
+prompt noprompt
+mget *
+
+Seems to be stuck on readast.v10
+
+Seems to stick if I try to download the whole thing at once.  After a
+break, it goes OK.  Although I am trying to avoid it, possibly best to
+just get from IoIO1U1.
+
+rsync -auv  "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/From Dean/usno/" jpmorgen@cpe-184-153-135-44.maine.res.rr.com:/data/USNO_A2.0/
+
+

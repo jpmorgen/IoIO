@@ -417,7 +417,7 @@ class ObsData():
                 self._subframe_origin = np.asarray(self._subframe_origin)
             except:
                 log.warning('Could not read binning or subframe origin from image header.  Did you pass a valid MaxIm-recorded image and header?  Assuming binning = 1, subframe_origin = 0,0')
-                self._binning = (1,1)
+                self._binning = np.asarray((1,1))
                 self._subframe_origin = (0,0)
         self.HDUList = HDUList
         return self.HDUList
@@ -461,39 +461,6 @@ class ObsData():
         if self.HDUList.fileinfo is not None:
             self.HDUList.close()
             self._we_opened_file = None
-
-    def hist_of_im(self, im, readnoise):
-        """Returns histogram of image and index into centers of bins.  
-Uses readnoise (default = 5 e- RMS) to define bin widths"""
-        if not readnoise:
-            readnoise = 5
-        # Code from west_aux.py, maskgen.
-
-        # Histogram bin size should be related to readnoise
-        hrange = (im.min(), im.max())
-        nbins = int((hrange[1] - hrange[0]) / readnoise)
-        hist, edges = np.histogram(im, bins=nbins,
-                                   range=hrange, density=True)
-        # Convert edges of histogram bins to centers
-        centers = (edges[0:-1] + edges[1:])/2
-        #plt.plot(centers, hist)
-        #plt.show()
-    
-        return (hist, centers)
-
-    def back_level(self, im, **kwargs):
-        # Use the histogram technique to spot the bias level of the image.
-        # The coronagraph creates a margin of un-illuminated pixels on the
-        # CCD.  These are great for estimating the bias and scattered
-        # light for spontanous subtraction.  The ND filter provides a
-        # similar peak after bias subutraction (or, rather, it is the
-        # second such peak)
-        # --> This is very specific to the coronagraph.  Consider porting first peak find from IDL
-        # Pass on readnoise, if supplied
-        im_hist, im_hist_centers = self.hist_of_im(im, kwargs)
-        im_peak_idx = signal.find_peaks_cwt(im_hist, np.arange(10, 50))
-        return im_hist_centers[im_peak_idx[0]]
-        #im -= im_hist_centers[im_peak_idx[0]]
 
     def iter_linfit(self, x, y, max_resid=None):
         """Performs least squares linear fit iteratively to discard bad points
@@ -543,6 +510,39 @@ Uses readnoise (default = 5 e- RMS) to define bin widths"""
         return coefs
     
         
+    def hist_of_im(self, im, readnoise):
+        """Returns histogram of image and index into centers of bins.  
+Uses readnoise (default = 5 e- RMS) to define bin widths
+        """
+        if not readnoise:
+            readnoise = 5
+        # Code from west_aux.py, maskgen.
+
+        # Histogram bin size should be related to readnoise
+        hrange = (im.min(), im.max())
+        nbins = int((hrange[1] - hrange[0]) / readnoise)
+        hist, edges = np.histogram(im, bins=nbins,
+                                   range=hrange, density=True)
+        # Convert edges of histogram bins to centers
+        centers = (edges[0:-1] + edges[1:])/2
+        #plt.plot(centers, hist)
+        #plt.show()
+        return (hist, centers)
+
+    def back_level(self, im, **kwargs):
+        # Use the histogram technique to spot the bias level of the image.
+        # The coronagraph creates a margin of un-illuminated pixels on the
+        # CCD.  These are great for estimating the bias and scattered
+        # light for spontanous subtraction.  The ND filter provides a
+        # similar peak after bias subutraction (or, rather, it is the
+        # second such peak)
+        # --> This is very specific to the coronagraph.  Consider porting first peak find from IDL
+        # Pass on readnoise, if supplied
+        im_hist, im_hist_centers = self.hist_of_im(im, kwargs)
+        im_peak_idx = signal.find_peaks_cwt(im_hist, np.arange(10, 50))
+        return im_hist_centers[im_peak_idx[0]]
+        #im -= im_hist_centers[im_peak_idx[0]]
+
     def imshow(self, im=None):
         if im is None:
             im = self.HDUList[0].data
@@ -597,6 +597,7 @@ class CorObsData(ObsData):
                  max_fit_delta_pix=25, # Thowing out point in 1 line fit
                  max_parallel_delta_pix=50, # Find 2 lines inconsistent
                  max_ND_width_range=[80,400], # jump-starting flats & sanity check others
+                 biasnoise=20, # std of a typical bias image
                  plot_prof=False,
                  plot_dprof=False,
                  plot_ND_edges=False):
@@ -648,6 +649,7 @@ class CorObsData(ObsData):
         self.max_fit_delta_pix =      max_fit_delta_pix      
         self.max_parallel_delta_pix = max_parallel_delta_pix
         self.max_ND_width_range	    = max_ND_width_range
+        self.biasnoise		    = biasnoise
         self.plot_prof		    = plot_prof 
         self.plot_dprof             = plot_dprof
         self.plot_ND_edges	    = plot_ND_edges
@@ -661,6 +663,8 @@ class CorObsData(ObsData):
         # of the lines is the Y center of the unbinned, full-frame
         # chip
         self._ND_params = None
+        # These are the coordinates into the ND filter
+        self._ND_coords = None
         # Angle is the (average) angle of the lines, useful for cases
         # where the filter is rotated significantly off of 90 degrees
         # (which is where I will run it frequently)
@@ -738,19 +742,19 @@ class CorObsData(ObsData):
         im = self.HDU_unbinned()
         im = im - self.back_level(im)
         
-        # Check to see if Jupiter is sticking out significantly from
-        # behind the ND filter, in which case we are better off just using
-        # the center of mass of the image and calling that good enough
-        #print(np.sum(im))
-        # --> This may need some improvement
-        #if np.sum(im) > 1E9:
-        #    log.warning('Jupiter outside of ND filter')
-        #    y_x = np.asarray(ndimage.measurements.center_of_mass(im))
-        #    self._obj_center = y_x
-        #    return self._obj_center
-        
         # Get the coordinates of the ND filter
         NDc = self.ND_coords
+
+        # Filter ND coords for ones that are at least 5 std of the
+        # bias noise above the median.  Calculate a fresh median for
+        # the ND filter just in case it is different than the median
+        # of the image as a whole (which is now 0 -- see above).  We
+        # can't use the std of the ND filter, since it is too biased
+        # by Jupiter when it is there.
+        NDmed = np.median(im[NDc])
+        boostc = np.where(im[NDc] > (NDmed + 5*self.biasnoise))
+        boost_NDc0 = np.asarray(NDc[0])[boostc]
+        boost_NDc1 = np.asarray(NDc[1])[boostc]
 
         # Come up with a metric for when Jupiter is in the ND filter.
         # Below is my scratch work        
@@ -760,33 +764,34 @@ class CorObsData(ObsData):
         # Rj/plate # Jupiter pixel radius
         # array([ 31.50943396,  18.74213836])
         # 
-        # np.pi * (Rj/plate)**2 # Jupiter area
+        # np.pi * (Rj/plate)**2 # Jupiter area in pix**2
         # array([ 3119.11276312,  1103.54018437])
+        #
+        # Jupiter is generally better than 1000
         # 
-        # np.pi * (Rj/plate)**2 * 5 # Jupiter 5 sigma
-        # array([ 15595.56381559,   5517.70092183])
+        # np.pi * (Rj/plate)**2 * 1000 
+        # array([ 3119112.76311733,  1103540.18436529])
+        
+        obj_ND_metric = np.sum(im[boost_NDc0, boost_NDc1])
+        if obj_ND_metric < 1E6:
+            log.warning('Jupiter outside of ND filter?  obj_ND metric > 1E6  expected.  Actual = ' + str(obj_ND_metric))
+            # Outside the ND filter, Jupiter should be saturating.  To
+            # make the center of mass calc more accurate, just set
+            # everything that is not getting toward saturation to 0
+            im[np.where(im < 40000)] = 0
 
-        med_ND = np.median(im[NDc])
-        std_ND = np.std(im[NDc])
-        obj_ND_sigma = np.sum(im[NDc] - med_ND) / (std_ND * len(NDc))
-
-        if obj_ND_sigma < 5000:
-            log.warning('Jupiter outside of ND filter')
-            med = np.median(im)
-            # Outside the ND filter, Jupiter should be saturating, but
-            # be conservative about how many pixels
-            if np.sum(im - med) < 65000 * 250:
+            # 25 worked for a star, have yet to find Jupiter totally
+            # off ND filter
+            # if np.sum(im) < 65000 * 25:
+            if np.sum(im) < 65000 * 250:
                 raise ValueError('Jupiter not found in image')
             # If we made it here, Jupiter is outside the ND filter,
             # but shining bright enough to be found
+            # --> only look for very bright pixels
             y_x = np.asarray(ndimage.measurements.center_of_mass(im))
             self._obj_center = y_x
             return self._obj_center
-            
-        # Filter ND coords for ones that are at least 1 std above the median
-        boostc = np.where(im[NDc] > (np.median(im[NDc]) + np.std(im[NDc])))
-        boost_NDc0 = np.asarray(NDc[0])[boostc]
-        boost_NDc1 = np.asarray(NDc[1])[boostc]
+
         # Here is where we boost what is sure to be Jupiter, if Jupiter is
         # in the ND filter
         im[boost_NDc0, boost_NDc1] *= 1000
@@ -796,6 +801,7 @@ class CorObsData(ObsData):
         #plt.imshow(im)
         #plt.show()
         #return (y_x[::-1], ND_center)
+
         # Stay in Pythonic y, x coords
         self._obj_center = np.asarray(y_x)
         return self._obj_center
@@ -826,12 +832,19 @@ class CorObsData(ObsData):
     @property
     def ND_coords(self):
         """Returns tuple of coordinates of ND filter"""
+        if self._ND_coords is not None:
+            return self._ND_coords
+
+        # --> consider making this faster with coordinate math
+
         # Work with unbinned image
         im = self.HDU_unbinned()
         
         xs = [] ; ys = []
         for iy in np.arange(0, im.shape[0]):
-            bounds = self.ND_params[1,:] + self.ND_params[0,:]*(iy - im.shape[0]/2) + np.asarray((self.edge_mask, -self.edge_mask))
+            bounds = (self.ND_params[1,:]
+                      + self.ND_params[0,:]*(iy - im.shape[0]/2)
+                      + np.asarray((self.edge_mask, -self.edge_mask)))
             bounds = bounds.astype(int)
             for ix in np.arange(bounds[0], bounds[1]):
                 xs.append(ix)
@@ -845,8 +858,9 @@ class CorObsData(ObsData):
         if np.any(badidx[0]):
             raise ValueError('X dimension of image is smaller than position of ND filter!  Subimaging/binning mismatch?')
 
+        self._ND_coords = (ys, xs)
         # NOTE C order and the fact that this is a tuple of tuples
-        return (ys, xs)
+        return self._ND_coords
 
     def ND_edges(self, y, external_ND_params=None):
         """Returns unbinned x coords of ND filter edges at given unbinned y coordinate(s)"""
@@ -903,7 +917,8 @@ class CorObsData(ObsData):
         y2 = m * (x2 - imshape[0]/2)  + b
         x0 = self.obj_center[0]
         y0 = self.obj_center[1]
-        d = np.abs((x2 - x1) * (y1 - y0) - (x1 - x0) * (y2 - y1)) / ((x2 - x1)**2 + (y2 - y1)**2)**0.5
+        d = (np.abs((x2 - x1) * (y1 - y0) - (x1 - x0) * (y2 - y1))
+             / ((x2 - x1)**2 + (y2 - y1)**2)**0.5)
         self._obj_to_ND = d
         return self._obj_to_ND
 
@@ -932,7 +947,7 @@ class CorObsData(ObsData):
             x0 = np.max((0, x0))
             x1 = np.min((x1, im.shape[1]))
             im[ytop:ybot, x0:x1] \
-                = signal.medfilt(im[ytop:ybot, x0:x1], \
+                = signal.medfilt(im[ytop:ybot, x0:x1], 
                                  kernel_size=3)
         im = self.HDU_unbinned()
         h = self.HDUList[0].header
@@ -976,8 +991,9 @@ class CorObsData(ObsData):
                 # filters to prevent problems with detection of
                 # edges of those filters
                 bounds = self.SII_filt_crop[:,1]
-                profile = np.sum(im[ypt_top:ypt_top+y_bin, \
-                                    bounds[0]:bounds[1]], 0)
+                profile = np.sum(im[ypt_top:ypt_top+y_bin,
+                                    bounds[0]:bounds[1]],
+                                 0)
                 # Just doing d2 gets two peaks, so multiply
                 # by the original profile to kill the inner peaks
                 smoothed_profile \
@@ -991,8 +1007,8 @@ class CorObsData(ObsData):
                 # default_ND_params.  This lines the edges of the ND
                 # filter up for easy spotting.  We will morph the
                 # image directly into a subim of just the right size
-                default_ND_width = self.default_ND_params[1,1] - \
-                                   self.default_ND_params[1,0]
+                default_ND_width = (self.default_ND_params[1,1]
+                                    - self.default_ND_params[1,0])
                 subim_hw = int(default_ND_width/2 + self.search_margin)
                 subim = np.zeros((y_bin, 2*subim_hw))
 
@@ -1010,15 +1026,15 @@ class CorObsData(ObsData):
                                         rowpt+ypt_top,
                                         self.default_ND_params))))
                     subim[rowpt, :] \
-                        = im[ypt_top+rowpt, \
-                             this_ND_center-subim_hw: \
-                             this_ND_center+subim_hw]
+                        = im[ypt_top+rowpt, 
+                             this_ND_center-subim_hw:this_ND_center+subim_hw]
 
                 profile = np.sum(subim, 0)
                 # This spots the sharp edge of the filter surprisingly
                 # well, though the resulting peaks are a little fat
                 # (see signal.find_peaks_cwt arguments, below)
-                smoothed_profile = signal.savgol_filter(profile, self.x_filt_width, 0)
+                smoothed_profile \
+                    = signal.savgol_filter(profile, self.x_filt_width, 0)
                 d = np.gradient(smoothed_profile, 10)
                 s = np.abs(d)
                 # To match the logic in the flat case, calculate
@@ -1033,8 +1049,8 @@ class CorObsData(ObsData):
             # and just take the two largest ones
             #peak_idx = signal.find_peaks_cwt(s, np.arange(5, 20), min_snr=2)
             #peak_idx = signal.find_peaks_cwt(s, np.arange(2, 80), min_snr=2)
-            peak_idx = signal.find_peaks_cwt(s, \
-                                             self.cwt_width_arange, \
+            peak_idx = signal.find_peaks_cwt(s,
+                                             self.cwt_width_arange,
                                              min_snr=self.cwt_min_snr)
             # Need to change peak_idx into an array instead of a list for
             # indexing
@@ -1070,8 +1086,8 @@ class CorObsData(ObsData):
                 edge_idx = np.sort(peak_idx[-2:])
                 # Sanity check
                 de = edge_idx[1] - edge_idx[0]
-                if de < self.max_ND_width_range[0] or \
-                   de > self.max_ND_width_range[1]:
+                if (de < self.max_ND_width_range[0]
+                    or de > self.max_ND_width_range[1]):
                     continue
 
                 # Accumulate in tuples
@@ -1085,15 +1101,16 @@ class CorObsData(ObsData):
                 diff_arr = []
                 for ip in np.arange(peak_idx.size-1):
                     for iop in np.arange(ip+1, peak_idx.size):
-                        diff_arr.append((ip, iop, peak_idx[iop] - peak_idx[ip]))
+                        diff_arr.append((ip,
+                                         iop, peak_idx[iop] - peak_idx[ip]))
                 diff_arr = np.asarray(diff_arr)
                 closest = np.abs(diff_arr[:,2] - default_ND_width)
                 sorted_idx = np.argsort(closest)
                 edge_idx = peak_idx[diff_arr[sorted_idx[0], 0:2]]
                 # Sanity check
                 de = edge_idx[1] - edge_idx[0]
-                if de < self.max_ND_width_range[0] or \
-                   de > self.max_ND_width_range[1]:
+                if (de < self.max_ND_width_range[0]
+                    or de > self.max_ND_width_range[1]):
                     continue
 
                 # Accumulate in tuples
@@ -1123,7 +1140,11 @@ class CorObsData(ObsData):
         if self.default_ND_params is not None:
             es = []
             for iy in np.arange(ypts.size):
-                this_default_ND_center = np.round(np.mean(self.ND_edges(ypts[iy], self.default_ND_params)))
+                this_default_ND_center\
+                    = np.round(
+                        np.mean(
+                            self.ND_edges(
+                                ypts[iy], self.default_ND_params)))
                 cshift = int(this_default_ND_center - im.shape[1]/2.)
                 es.append(ND_edges[iy,:] + cshift)
 
@@ -1137,8 +1158,10 @@ class CorObsData(ObsData):
 
         # Try an iterative approach to fitting lines to the ND_edges
         ND_edges = np.asarray(ND_edges)
-        ND_params0 = self.iter_linfit(ypts-im.shape[0]/2, ND_edges[:,0], self.max_fit_delta_pix)
-        ND_params1 = self.iter_linfit(ypts-im.shape[0]/2, ND_edges[:,1], self.max_fit_delta_pix)
+        ND_params0 = self.iter_linfit(ypts-im.shape[0]/2, ND_edges[:,0],
+                                      self.max_fit_delta_pix)
+        ND_params1 = self.iter_linfit(ypts-im.shape[0]/2, ND_edges[:,1],
+                                      self.max_fit_delta_pix)
         # Note when np.polyfit is given 2 vectors, the coefs
         # come out in columns, one per vector, as expected in C.
         ND_params = np.transpose(np.asarray((ND_params0, ND_params1)))
@@ -1205,6 +1228,49 @@ class CorObsData(ObsData):
 
     # Code above was provided by Daniel R. Morgenthaler, May 2017
 
+def get_default_ND_params(dir=None, maxcount=10):
+    """Derive default_ND_params from up to maxcount flats in dir
+    """
+    if dir is None:
+        raise ValueError("Specify directory to search for flats and derive default_ND_params")
+
+    files = [f for f in os.listdir(dir) if os.path.isfile(os.path.join(dir, f))]
+
+    flats = []
+    for f in sorted(files):
+        if 'flat' in f.lower():
+            flats.append(os.path.join(dir, f))
+
+    # Create default_ND_params out of the flats in this dir.
+    ND_params_list = []
+    # Just do 10 flats
+    for fcount, f in enumerate(flats):
+        try:
+            # Iterate to get independent default_ND_params for
+            # each flat
+            default_ND_params = None
+            for i in np.arange(3):
+                F = CorObsData(f, default_ND_params=default_ND_params)
+                default_ND_params = F.ND_params
+        except ValueError as e:
+            log.error('Skipping: ' + str(e))
+            continue
+        ND_params_list.append(default_ND_params)
+        if fcount >= maxcount:
+            break
+    if len(ND_params_list) == 0:
+        raise ValueError('No good flats found in ' + dir)
+
+    # If we made it here, we have a decent list of ND_params.  Now
+    # take the median to create a really nice default_ND_params
+    ND_params_array = np.asarray(ND_params_list)
+    default_ND_params \
+        = ((np.median(ND_params_array[:, 0, 0]),
+            np.median(ND_params_array[:, 0, 1])),
+           (np.median(ND_params_array[:, 1, 0]),
+            np.median(ND_params_array[:, 1, 1])))
+    return np.asarray(default_ND_params)
+
         
 
 def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10, guide_dx=0, guide_dy=0, last_guide=None, aggressiveness=0.5, target_c = np.asarray((1297, 1100))):
@@ -1269,56 +1335,178 @@ def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10
 log.setLevel('INFO')
 #log.setLevel('WARNING')
 
-F = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit')#, plot_dprof=True, plot_ND_edges=True)
-default_ND_params = F.ND_params
-D.say(default_ND_params)
-F2 = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit', default_ND_params=default_ND_params)#, plot_prof=True, plot_dprof=True, plot_ND_edges=True)
-default_ND_params = F2.ND_params
-D.say(default_ND_params)
-F3 = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit', default_ND_params=default_ND_params)#, plot_prof=True, plot_dprof=True, plot_ND_edges=True)
-default_ND_params = F3.ND_params
-D.say(default_ND_params)
-O = CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0014_SII_on-band.fit', default_ND_params=default_ND_params) #plot_prof=True, plot_dprof=True, plot_ND_edges=True, 
-D.say(O.ND_params)
-D.say(O.obj_center)
-D.say(O.desired_center)
-D.say(O.obj_center - O.desired_center)
-D.say(O.obj_to_ND)
-O = CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0028_moving_to_SII_on-band.fit', default_ND_params=default_ND_params)#, plot_prof=True, plot_dprof=True, plot_ND_edges=True)
-D.say(O.ND_params)
-D.say(O.obj_center)
-D.say(O.desired_center)
-D.say(O.obj_center - O.desired_center)
-D.say(O.obj_to_ND)
+#F = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit')#, plot_dprof=True, plot_ND_edges=True)
+#default_ND_params = F.ND_params
+#D.say(default_ND_params)
+#F2 = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit', default_ND_params=default_ND_params)#, plot_prof=True, plot_dprof=True, plot_ND_edges=True)
+#default_ND_params = F2.ND_params
+#D.say(default_ND_params)
+#F3 = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit', default_ND_params=default_ND_params)#, plot_prof=True, plot_dprof=True, plot_ND_edges=True)
+#default_ND_params = F3.ND_params
+#D.say(default_ND_params)
+#D.say(F3.obj_center)
+#O = CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0014_SII_on-band.fit', default_ND_params=default_ND_params) #plot_prof=True, plot_dprof=True, plot_ND_edges=True, 
+#D.say(O.ND_params)
+#D.say(O.obj_center)
+#D.say(O.desired_center)
+#D.say(O.obj_center - O.desired_center)
+#D.say(O.obj_to_ND)
+#O = CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0028_moving_to_SII_on-band.fit', default_ND_params=default_ND_params)#, plot_prof=True, plot_dprof=True, plot_ND_edges=True)
+#D.say(O.ND_params)
+#D.say(O.obj_center)
+#D.say(O.desired_center)
+#D.say(O.obj_center - O.desired_center)
+#D.say(O.obj_to_ND)
 
 
-##start = time.time()
-##rawdir = '/data/io/IoIO/raw/2017-05-28'
-##raw_fnames = [os.path.join(rawdir, f)
-##              for f in os.listdir(rawdir) if os.path.isfile(os.path.join(rawdir, f))]
-##
-##for f in sorted(raw_fnames):
-##    D.say(f)
-##    try:
-##        O4 = CorObsData(f, n_y_steps=4, default_ND_params=default_ND_params)
-##        O8 = CorObsData(f, n_y_steps=8, default_ND_params=default_ND_params)
-##        O16 = CorObsData(f, n_y_steps=16, default_ND_params=default_ND_params)
-##        D.say(O8.obj_to_ND)
-##        dc4 = np.abs(O4.desired_center - O16.desired_center)
-##        dc8 = np.abs(O8.desired_center - O16.desired_center)
-##        #if (dc4 > 5).any() or (dc8 > 5).any():
-##        #D.say(O.obj_center - O.desired_center)
-##        print(O4.desired_center - O16.desired_center)
-##        print(O4.obj_center - O16.obj_center)
-##        print('4^---8>-----')
-##        print(O8.desired_center - O16.desired_center)
-##        print(O8.obj_center - O16.obj_center)
-##    except ValueError as e:
-##        log.error('Skipping: ' + str(e))
-##
-##    
-##end = time.time()
-##D.say('Elapsed time: ' + str(D.say(end - start)) + 's')
+#start = time.time()
+#rawdir = '/data/io/IoIO/raw/2017-05-28'
+#raw_fnames = [os.path.join(rawdir, f)
+#              for f in os.listdir(rawdir) if os.path.isfile(os.path.join(rawdir, f))]
+#
+#for f in sorted(raw_fnames):
+#    D.say(f)
+#    try:
+#        O = CorObsData(f, default_ND_params=default_ND_params)
+#        if O.obj_to_ND > 10:
+#            D.say('Large dist: ' + str(int(O.obj_to_ND)))
+#    except ValueError as e:
+#        log.error('Skipping: ' + str(e))
+#
+#    
+#end = time.time()
+#D.say('Elapsed time: ' + str(D.say(end - start)) + 's')
+
+
+#start = time.time()
+#rawdir = '/data/io/IoIO/raw/2017-05-28'
+#raw_fnames = [os.path.join(rawdir, f)
+#              for f in os.listdir(rawdir) if os.path.isfile(os.path.join(rawdir, f))]
+#
+#for f in sorted(raw_fnames):
+#    D.say(f)
+#    try:
+#        O4 = CorObsData(f, n_y_steps=4, default_ND_params=default_ND_params)
+#        O8 = CorObsData(f, n_y_steps=8, default_ND_params=default_ND_params)
+#        O16 = CorObsData(f, n_y_steps=16, default_ND_params=default_ND_params)
+#        D.say(O8.obj_to_ND)
+#        dc4 = np.abs(O4.desired_center - O16.desired_center)
+#        dc8 = np.abs(O8.desired_center - O16.desired_center)
+#        #if (dc4 > 5).any() or (dc8 > 5).any():
+#        #D.say(O.obj_center - O.desired_center)
+#        print(O4.desired_center - O16.desired_center)
+#        print(O4.obj_center - O16.obj_center)
+#        print('4^---8>-----')
+#        print(O8.desired_center - O16.desired_center)
+#        print(O8.obj_center - O16.obj_center)
+#    except ValueError as e:
+#        log.error('Skipping: ' + str(e))
+#
+#    
+#end = time.time()
+#D.say('Elapsed time: ' + str(D.say(end - start)) + 's')
+
+#O = CorObsData('/data/io/IoIO/raw/2017-04-18/IPT-0001_off-band.fit', default_ND_params = ((-0.07286433475733832, -0.068272558665046126), (1251.595679328457, 1357.3942953038429)))
+#D.say(O.obj_center)
+
+#default_ND_params = get_default_ND_params('/data/io/IoIO/raw/2017-05-22')
+#D.say(default_ND_params)
+#O = CorObsData('/data/io/IoIO/raw/2017-05-27/IPT-0007_on-band.fit',
+#               default_ND_params=default_ND_params,
+#               plot_prof=True, plot_dprof=True, plot_ND_edges=True)
+#D.say(O.ND_params)
+#D.say(O.obj_center)
+#D.say(O.desired_center)
+
+### start = time.time()
+### # We have some files recorded before there were flats, so get ready to
+### # loop back for them
+### skipped_dirs = []
+### 
+### # list date directory one level deep
+### totalcount = 0
+### rawdir = '/data/io/IoIO/raw'
+### dirs = [os.path.join(rawdir, d)
+###         for d in os.listdir(rawdir) if os.path.isdir(os.path.join(rawdir, d))]
+### for d in sorted(dirs):
+###     D.say(d)
+###     # Collect file names
+###     files = [f for f in os.listdir(d) if os.path.isfile(os.path.join(d, f))]
+### 
+###     flats = []
+###     objs = []
+###     for f in sorted(files):
+###         if 'flat' in f.lower():
+###             flats.append(os.path.join(d, f))
+###         elif 'bias' in f.lower():
+###             pass 
+###         elif 'dark' in f.lower():
+###             pass
+###         else:
+###             objs.append(os.path.join(d, f))
+### 
+###     # Create default_ND_params out of the flats in this dir.
+###     ND_params_list = []
+###     persistent_default_ND_params = None
+###     # Just do 10 flats
+###     for fcount, f in enumerate(flats):
+###         D.say(f)
+###         try:
+###             # Iterate to get independent default_ND_params for
+###             # each flat
+###             default_ND_params = None
+###             for i in np.arange(3):
+###                 F = CorObsData(f, default_ND_params=default_ND_params)
+###                 default_ND_params = F.ND_params
+###         except ValueError as e:
+###             log.error('Skipping: ' + str(e))
+###             continue
+###         ND_params_list.append(default_ND_params)
+###         totalcount += 1
+###         if fcount >= 10:
+###             break
+###     # If we have not successfully fit flats, use the previous
+###     # night's results, if available
+###     if len(ND_params_list) == 0:
+###         if persistent_default_ND_params is not None:
+###             default_ND_params = persistent_default_ND_params
+###         else:
+###             # Dir before any flats were taken.  Save it for later
+###             skipped_dirs.append(d)
+###             continue
+### 
+###     # If we made it here, we have a decent list of ND_params.  Now
+###     # take the median to create a really nice default_ND_params
+###     ND_params_array = np.asarray(ND_params_list)
+###     default_ND_params \
+###         = ((np.median(ND_params_array[:, 0, 0]),
+###             np.median(ND_params_array[:, 0, 1])),
+###            (np.median(ND_params_array[:, 1, 0]),
+###             np.median(ND_params_array[:, 1, 1])))
+###     
+###     D.say(default_ND_params)
+### 
+###     # Now go on to the Jupiter observations
+###     for f in sorted(objs):
+###         D.say(f)
+###         try:
+###             O = CorObsData(f, default_ND_params=default_ND_params)
+###             D.say(O.obj_center)
+###             if O.obj_to_ND > 10:
+###                 log.warning('Large dist: ' + str(int(O.obj_to_ND)))
+###         except KeyboardInterrupt:
+###             # Allow C-C to interrupt
+###             raise
+###         except: Exception as e:
+###             log.error('Skipping: ' + str(e))
+###         totalcount += 1
+###     #break
+###     
+### end = time.time()
+### D.say('Elapsed time: ' + str(end - start) + 's for ' +
+###       str(totalcount) + ' files')
+### D.say('Average time per file: ' + str(totalcount / (end - start)))
+
 
 #Na =   CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0007_Na_off-band.fit')
 #print(Na.obj_center)
@@ -1328,7 +1516,7 @@ D.say(O.obj_to_ND)
 #print(Na.get_ND_params())
 #print(Na.ND_params)
 #print(Na.ND_angle)
-#Na.ND_params = (((3.75447820e-01,  3.87551301e-01), \
+#Na.ND_params = (((3.75447820e-01,  3.87551301e-01), 
 #                 (1.18163633e+03,   1.42002571e+03)))
 #Na.ND_params = ('recalc')
 
