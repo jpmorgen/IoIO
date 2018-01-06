@@ -1,12 +1,15 @@
+#!/usr/bin/python3
+if False:
+    import pythoncom
 
 #from jpm_fns import display
 # for testing
-import os
 import define as D
-import time
-
+import importlib
 
 import sys
+import os
+import time
 import numpy as np
 from astropy import log
 from astropy import units as u
@@ -15,327 +18,427 @@ from astropy.time import Time, TimeDelta
 import matplotlib.pyplot as plt
 from scipy import signal, ndimage
 
-##!## # These are needed for MaxImData
-##!## import win32com.client
-##!## import time
-##!## 
-##!## 
-##!## # So we have two things here to keep track of.  The 4 parameters that
-##!## # characterize the ND filter and the coordinates of the edges of the
-##!## # filter at a particular Y value.  Maybe the pos method could return
-##!## # either one, depending on whether or not a y coordinate is
-##!## # specified.  In that case, what I have as pos now should be
-##!## # measure_pos, or something.
-##!## 
-##!## 
-##!## #Daniel
-##!## if True:
-##!##     class MakeList():
-##!##         def __init__(self, list_, item, makelist=True):
-##!##             if makelist is True:
-##!##                 list_=[]
-##!##         def append(self, item):
-##!##             list_.append(item)
-##!## #Daniel
-##!## 
-##!## 
-##!## class MaxImData():
-##!##     """Stores data related to controlling MaxIm DL via ActiveX/COM events.
-##!## 
-##!##     Notes: 
-##!## 
-##!##     MaxIm camera, guide camera, and telescope must be set up properly
-##!##     first (e.g. you have used the setup for interactive observations).
-##!##     Even so, the first time this is run, keep an eye out for MaxIm
-##!##     dialogs, as this program will hang until they are answered.  To
-##!##     fix this, a wathdog timer would need to be used.
-##!## 
-##!##     Technical note for downstreeam object use: we don't have access to
-##!##     the MaxIm CCDCamera.ImageArray, but we do have access to similar
-##!##     information (and FITS keys) in the Document object.  The CCDCamera
-##!##     object is linked to the actual last image read, where the Document
-##!##     object is linked to the currently active window.  This means the
-##!##     calling routine could potentially expect the last image read in
-##!##     but instead get the image currently under focus by the user.  The
-##!##     solution to this is to (carefully) use notify events to interrupt
-##!##     MaxIm precisely when the event you expect happens (e.g. exposure
-##!##     or guide image acuired).  Then you are sure the Document object
-##!##     has the info you expect.  Beware that while you have control,
-##!##     MaxIm is stuck and back things may happen, like the guider might
-##!##     get lost, etc.  If your program is going to take a long time to
-##!##     work with the information it just got, figure out a way to do so
-##!##     asynchronously
-##!## 
-##!##     """
-##!## 
-##!##     def __init__(self):
-##!##         # Create containers for all of the objects that can be
-##!##         # returned by MaxIm.  We'll only populate them when we need
-##!##         # them.  Some of these we may never use or write code for
-##!##         self.Application = None
-##!##         self.CCDCamera = None
-##!##         self.Document = None
-##!##         
-##!##         # There is no convenient way to get the FITS header from MaxIm
-##!##         # unless we write the file and read it in.  Instead allow for
-##!##         # getting a selection of FITS keys to pass around in a
-##!##         # standard astropy fits HDUList
-##!##         self.FITS_keys = None
-##!##         self.HDUList = None
-##!##         self.required_FITS_keys = ('DATE-OBS', 'EXPTIME', 'EXPOSURE', 'XBINNING', 'YBINNING', 'XORGSUBF', 'YORGSUBF', 'FILTER', 'IMAGETYP', 'OBJECT')
-##!## 
-##!##         # Maxim doesn't expose the results of this menu item from the
-##!##         # Guider Settings Advanced tab in the object.  It's for
-##!##         # 'scopes that let you push both RA and DEC buttons at once
-##!##         # for guider movement
-##!##         self.simultaneous_guide_corrections = True
-##!##         # We can use the CCDCamera.GuiderMaxMove[XY] property for an
-##!##         # indication of how long it is safe to press the guider
-##!##         # movement buttons
-##!##         self.guider_max_move_multiplier = 20
-##!## 
-##!##         # The conversion between guider button push time and guider
-##!##         # pixels is stored in the CCDCamera.Guider[XY]Speed
-##!##         # properties.  Plate scales in arcsec/pix are not, though they
-##!##         # can be greped out of FITS headers. 
-##!## 
-##!##         # Main camera plate solve, binned 2x2:
-##!##         # RA 12h 55m 33.6s,  Dec +03° 27' 42.6"
-##!##         # Pos Angle +04° 34.7', FL 1178.9 mm, 1.59"/Pixel
-##!##         self.main_plate = 1.59/2 # arcsec/pix
-##!##         self.main_angle = 4.578333333333333 # CCW from N on east side of pier
-##!## 
-##!##         # Guider (Binned 1x1)
-##!##         # RA 07h 39m 08.9s,  Dec +34° 34' 59.0"
-##!##         # Pos Angle +178° 09.5', FL 401.2 mm, 4.42"/Pixel
-##!##         self.guider_plate = 4.42
-##!##         self.guider_angle = 178+9.5/60 - 180
-##!## 
-##!##         # This is a function that returns two vectors, the current
-##!##         # center of the object in the main camera and the desired center 
-##!##         #self.get_object_center = None
-##!## 
-##!##     def getApplication(self):
-##!##         if self.Application is not None:
-##!##             return True
-##!##         try:
-##!##             self.Application = win32com.client.Dispatch("MaxIm.Application")
-##!##         except:
-##!##             raise EnvironmentError('Error creating MaxIM application object.  Is MaxIM installed?')
-##!##         # Catch any other weird errors
-##!##         return isinstance(self.Application, win32com.client.CDispatch)
-##!##         
-##!##     def getCCDCamera(self):
-##!##         if self.CCDCamera is not None:
-##!##             return True
-##!##         try:
-##!##             self.CCDCamera = win32com.client.Dispatch("MaxIm.CCDCamera")
-##!##         except:
-##!##             raise EnvironmentError('Error creating CCDCamera object.  Is there a CCD Camera set up in MaxIm?')
-##!##         # Catch any other weird errors
-##!##         return isinstance(self.CCDCamera, win32com.client.CDispatch)
-##!## 
-##!##     def getDocument(self):
-##!##         """Gets the document object of the current window"""
-##!##         # The CurrentDocument object gets refreshed when new images
-##!##         # are taken, so all we need is to make sure we are connected
-##!##         # to begin with
-##!##         if self.Document is not None:
-##!##             return True
-##!##         self.getApplication()
-##!##         try:
-##!##             self.Document = self.Application.CurrentDocument
-##!##         except:
-##!##             raise EnvironmentError('Error retrieving document object')
-##!##         # Catch any other weird errors
-##!##         return isinstance(self.Document, win32com.client.CDispatch)
-##!## 
-##!##     def connect(self):
-##!##         """Link to telescope, CCD camera(s), filter wheels, etc."""
-##!##         self.getApplication()
-##!##         self.Application.TelescopeConnected = True
-##!##         if self.Application.TelescopeConnected == False:
-##!##             raise EnvironmentError('Link to telescope failed.  Is the power on to the mount?')
-##!##         self.getCCDCamera()
-##!##         self.CCDCamera.LinkEnabled = True
-##!##         if self.CCDCamera.LinkEnabled == False:
-##!##             raise EnvironmentError('Link to camera hardware failed.  Is the power on to the CCD (including any connection hardware such as USB hubs)?')
-##!## 
-##!##     def guider_move(self, ddec_dra, dec=None):
-##!##         """Moves the telescope using guider slews.  ddec_dra is a tuple with
-##!##         values in arcsec.  NOTE ORDER OF COORDINATES: Y, X to conform
-##!##         to C ordering of FITS images"""
-##!##         self.connect()
-##!##         if dec is None:
-##!##             dec = self.CCDCamera.GuiderDeclination
-##!##         ddec = ddec_dra[0]
-##!##         dra = ddec_dra[1]
-##!##         # Change to rectangular tangential coordinates for small deltas
-##!##         dra = dra*np.cos(np.radians(dec))
-##!##         # The guider motion is calibrated in pixels per second, with
-##!##         # the guider angle applied separately.  We are just moving in
-##!##         # RA and DEC, so we don't need to worry about the guider angle
-##!##         dpix = np.asarray((dra, ddec)) / self.guider_plate
-##!##         # Multiply by speed, which is in pix/sec
-##!##         dt = dpix / np.asarray((self.CCDCamera.GuiderXSpeed, self.CCDCamera.GuiderYSpeed))
-##!##         
-##!##         # Do a sanity check to make sure we are not moving too much
-##!##         max_t = (self.guider_max_move_multiplier *
-##!##                  np.asarray((self.CCDCamera.GuiderMaxMoveX, 
-##!##                              self.CCDCamera.GuiderMaxMoveY)))
-##!##             
-##!##         if np.any(np.abs(dt) > max_t):
-##!##             #print(str((dra, ddec)))
-##!##             #print(str(np.abs(dt)))
-##!##             log.warning('requested move of ' + str((dra, ddec)) + ' arcsec translates into move times of ' + str(np.abs(dt)) + ' seconds.  Limiting move in one or more axes to max t of ' + str(max_t))
-##!##             dt = np.minimum(max_t, abs(dt)) * np.sign(dt)
-##!##             
-##!##         log.info('Seconds to move guider in DEC and RA: ' + str(dt))
-##!##         if dt[0] > 0:
-##!##             RA_success = self.CCDCamera.GuiderMove(0, dt[0])
-##!##         elif dt[0] < 0:
-##!##             RA_success = self.CCDCamera.GuiderMove(1, -dt[0])
-##!##         else:
-##!##             # No need to move
-##!##             RA_success = True
-##!##         # Wait until move completes if we can't push RA and DEC
-##!##         # buttons simultaneously
-##!##         while not self.simultaneous_guide_corrections and self.CCDCamera.GuiderMoving:
-##!##                 time.sleep(0.1)
-##!##         if dt[1] > 0:
-##!##             DEC_success = self.CCDCamera.GuiderMove(2, dt[1])
-##!##         elif dt[1] < 0:
-##!##             DEC_success = self.CCDCamera.GuiderMove(3, -dt[1])
-##!##         else:
-##!##             # No need to move
-##!##             DEC_success = True
-##!##         while self.CCDCamera.GuiderMoving:
-##!##             time.sleep(0.1)
-##!##         return RA_success and DEC_success
-##!## 
-##!##     def rot(self, vec, theta):
-##!##         """Rotates vector counterclockwise by theta degrees IN A
-##!##         TRANSPOSED COORDINATE SYSTEM Y,X"""
-##!##         # This is just a standard rotation through theta on X, Y, but
-##!##         # when we transpose, theta gets inverted
-##!##         theta = -np.radians(theta)
-##!##         c, s = np.cos(theta), np.sin(theta)
-##!##         #print(vec)
-##!##         #print(theta, c, s)
-##!##         M = np.matrix([[c, -s], [s, c]])
-##!##         rotated = np.asarray(np.dot(M, vec))
-##!##         #print(rotated)
-##!##         return np.squeeze(rotated)
-##!## 
-##!##     def calc_main_move(self, current_pos, desired_center=None):
-##!##         """Returns vector [ddec, dra] in arcsec to move scope to
-##!##         center object at current_pos, where the current_pos and
-##!##         desired_centers are vectors expressed in pixels on the main
-##!##         camera in the astropy FITS Pythonic order Y, X"""
-##!## 
-##!##         self.connect()
-##!##         if desired_center is None:
-##!##             # --> WARNING!  This uses the current CCD image, not the
-##!##             # --> Document object
-##!##             desired_center = \
-##!##             np.asarray((self.CCDCamera.StartY + self.CCDCamera.NumY, 
-##!##                         self.CCDCamera.StartX + self.CCDCamera.NumX)) / 2.
-##!##         dpix = np.asarray(desired_center) - np.asarray(current_pos)
-##!##         dpix = self.rot(dpix, self.main_angle)
-##!##         return dpix * self.main_plate
-##!## 
-##!##     def get_keys(self):
-##!##         """Gets list of self.required_FITS_keys from current image"""
-##!##         self.FITS_keys = []
-##!##         for k in self.required_FITS_keys:
-##!##             self.FITS_keys.append((k, self.Document.GetFITSKey(k)))
-##!##         
-##!##     # --> Not sure if FITS files get written by MaxIm before or after
-##!##     # --> they become Document property after a fresh read.  Could use
-##!##     # --> CCDCamera version, but this keeps it consistent
-##!##     def set_keys(self, keylist):
-##!##         """Write desired keys to current image FITS header"""
-##!##         if not getDocument():
-##!##             log.warning('Cannot get Document object, no FITS keys set')
-##!##             return None
-##!##         if self.HDUList is None:
-##!##             log.warning('Asked to set_keys, but no HDUList is empty')
-##!##             return None
-##!##             
-##!##         try:
-##!##             h = self.HDUList[0].header
-##!##             for k in keylist:
-##!##                 if h.get(k):
-##!##                     # Not sure how to get documentation part written
-##!##                     self.Document.SetFITSKey(k, h[k])
-##!##         except:
-##!##             log.warning('Problem setting keys: ', sys.exc_info()[0])
-##!##             return None
-##!##             
-##!## 
-##!##     def get_im(self):
-##!##         """Puts current MaxIm image (the image with focus) into a FITS HDUList.  If an exposure is being taken or there is no image, the im array is set equal to None"""
-##!##         self.connect()
-##!##         # Clear out HDUList in case we fail
-##!##         self.HDUList = None
-##!##         if not self.CCDCamera.ImageReady:
-##!##             log.info('CCD Camera image is not ready')
-##!##             return None
-##!##         # For some reason, we can't get at the image array or its FITS
-##!##         # header through CCDCamera.ImageArray, but we can through
-##!##         # Document.ImageArray
-##!##         if not self.getDocument():
-##!##             log.info('There is no open image')
-##!##             return None
-##!##         
-##!##         # Make sure we have an array to work with
-##!##         c_im = self.Document.ImageArray
-##!##         if c_im is None:
-##!##             log.info('There is no image array')
-##!##             return None
-##!##         # Create a basic FITS image out of this and copy in the FITS
-##!##         # keywords we want
-##!## 
-##!##         # TRANSPOSE ALERT.  Document.ImageArray returns a tuple of
-##!##         # tuples shaped just how you would want it for X, Y.  Since
-##!##         # Python is written in C, this is stored in memory in in "C
-##!##         # order," which is the transpose of how they were intended to
-##!##         # be written into a FITS file.  Since all the FITS stuff
-##!##         # assumes that we are reading/writing FORTRAN-ordered arrays
-##!##         # bytes from/to a C language, we need to transpose our array
-##!##         # here so that the FITS stuff has the bytes in the order it
-##!##         # expects.  This seems less prone to generating bugs than
-##!##         # making users remember what state of transpose they are in
-##!##         # when dealing with arrays generated here vs. data read in
-##!##         # from disk for debugging routines.  This is also faster than
-##!##         # writing to disk and re-reading, since the ndarray order='F'
-##!##         # doesn't actually do any movement of data in memory, it just
-##!##         # tells numpy how to interpret the order of indices.
-##!##         c_im = np.asarray(c_im)
-##!##         adata = c_im.flatten()#order='K')# already in C order in memory
-##!##         # The [::-1] reverses the indices
-##!##         adata = np.ndarray(shape=c_im.shape[::-1],
-##!##                            buffer=adata, order='F')
-##!##         
-##!##         hdu = fits.PrimaryHDU(adata)
-##!##         self.get_keys()
-##!##         for k in self.FITS_keys:
-##!##             hdu.header[k[0]] = k[1]
-##!##         self.HDUList = fits.HDUList(hdu)
-##!##         return self.HDUList
-##!## 
-##!##     ## --> This is in the wrong place in terms of abstraction 
-##!##     #def center_object(self):
-##!##     #    if self.get_im() is None:
-##!##     #        log.warning('No image')
-##!##     #        return None
-##!##     #    #self.guider_move(self.calc_main_move(self.get_object_center_pix()))
-##!##     #    #obj_c = get_jupiter_center(self.HDUList)
-##!##     #    obj_c = self.ObsData.obj_center(self.HDUList)
-##!##     #    log.info('object center = ', obj_c)
-##!##     #    self.guider_move(self.calc_main_move(obj_c))
+# Keep our Windows code conveniently in the same module
+if sys.platform == 'win32':
+    # These are needed for MaxImData
+    import win32com.client
+
+    default_exptime = 1
+    default_filt = 1
+    default_cent_tol = 10   # Pixels
+
+    #Daniel
+    if True:
+        class MakeList():
+            def __init__(self, list_, item, makelist=True):
+                if makelist is True:
+                    list_=[]
+            def append(self, item):
+                list_.append(item)
+    #Daniel
+    
+    
+    class MaxImData():
+        """Stores data related to controlling MaxIm DL via ActiveX/COM events.
+    
+        Notes: 
+    
+        MaxIm camera, guide camera, and telescope must be set up properly
+        first (e.g. you have used the setup for interactive observations).
+        Even so, the first time this is run, keep an eye out for MaxIm
+        dialogs, as this program will hang until they are answered.  To
+        fix this, a wathdog timer would need to be used.
+    
+        Technical note for downstreeam object use: we don't have access to
+        the MaxIm CCDCamera.ImageArray, but we do have access to similar
+        information (and FITS keys) in the Document object.  The CCDCamera
+        object is linked to the actual last image read, where the Document
+        object is linked to the currently active window.  This means the
+        calling routine could potentially expect the last image read in
+        but instead get the image currently under focus by the user.  The
+        solution to this is to (carefully) use notify events to interrupt
+        MaxIm precisely when the event you expect happens (e.g. exposure
+        or guide image acuired).  Then you are sure the Document object
+        has the info you expect.  Beware that while you have control,
+        MaxIm is stuck and back things may happen, like the guider might
+        get lost, etc.  If your program is going to take a long time to
+        work with the information it just got, figure out a way to do so
+        asynchronously
+    
+        """
+    
+        def __init__(self):
+            # Create containers for all of the objects that can be
+            # returned by MaxIm.  We'll only populate them when we need
+            # them.  Some of these we may never use or write code for
+            self.Application = None
+            self.CCDCamera = None
+            self.Document = None
+            
+            # There is no convenient way to get the FITS header from MaxIm
+            # unless we write the file and read it in.  Instead allow for
+            # getting a selection of FITS keys to pass around in a
+            # standard astropy fits HDUList
+            self.FITS_keys = None
+            self.HDUList = None
+            self.required_FITS_keys = ('DATE-OBS', 'EXPTIME', 'EXPOSURE', 'XBINNING', 'YBINNING', 'XORGSUBF', 'YORGSUBF', 'FILTER', 'IMAGETYP', 'OBJECT')
+    
+            # Maxim doesn't expose the results of this menu item from the
+            # Guider Settings Advanced tab in the object.  It's for
+            # 'scopes that let you push both RA and DEC buttons at once
+            # for guider movement
+            self.simultaneous_guide_corrections = True
+            # We can use the CCDCamera.GuiderMaxMove[XY] property for an
+            # indication of how long it is safe to press the guider
+            # movement buttons
+            self.guider_max_move_multiplier = 20
+    
+            # The conversion between guider button push time and guider
+            # pixels is stored in the CCDCamera.Guider[XY]Speed
+            # properties.  Plate scales in arcsec/pix are not, though they
+            # can be greped out of FITS headers. 
+    
+            # Main camera plate solve, binned 2x2:
+            # RA 12h 55m 33.6s,  Dec +03° 27' 42.6"
+            # Pos Angle +04° 34.7', FL 1178.9 mm, 1.59"/Pixel
+            self.main_plate = 1.59/2 # arcsec/pix
+            self.main_angle = 4.578333333333333 # CCW from N on east side of pier
+    
+            # Guider (Binned 1x1)
+            # RA 07h 39m 08.9s,  Dec +34° 34' 59.0"
+            # Pos Angle +178° 09.5', FL 401.2 mm, 4.42"/Pixel
+            self.guider_plate = 4.42
+            self.guider_angle = 178+9.5/60 - 180
+    
+            # This is a function that returns two vectors, the current
+            # center of the object in the main camera and the desired center 
+            #self.get_object_center = None
+    
+        def getApplication(self):
+            if self.Application is not None:
+                return True
+            try:
+                self.Application = win32com.client.Dispatch("MaxIm.Application")
+            except:
+                raise EnvironmentError('Error creating MaxIM application object.  Is MaxIM installed?')
+            # Catch any other weird errors
+            return isinstance(self.Application, win32com.client.CDispatch)
+            
+        def getCCDCamera(self):
+            if self.CCDCamera is not None:
+                return True
+            try:
+                self.CCDCamera = win32com.client.Dispatch("MaxIm.CCDCamera")
+            except:
+                raise EnvironmentError('Error creating CCDCamera object.  Is there a CCD Camera set up in MaxIm?')
+            # Catch any other weird errors
+            return isinstance(self.CCDCamera, win32com.client.CDispatch)
+    
+        def getDocument(self):
+            """Gets the document object of the current window"""
+            # The CurrentDocument object gets refreshed when new images
+            # are taken, so all we need is to make sure we are connected
+            # to begin with
+            if self.Document is not None:
+                return True
+            self.getApplication()
+            try:
+                self.Document = self.Application.CurrentDocument
+            except:
+                raise EnvironmentError('Error retrieving document object')
+            # Catch any other weird errors
+            return isinstance(self.Document, win32com.client.CDispatch)
+    
+        def connect(self):
+            """Link to telescope, CCD camera(s), filter wheels, etc."""
+            self.getApplication()
+            self.Application.TelescopeConnected = True
+            if self.Application.TelescopeConnected == False:
+                raise EnvironmentError('Link to telescope failed.  Is the power on to the mount?')
+            self.getCCDCamera()
+            self.CCDCamera.LinkEnabled = True
+            if self.CCDCamera.LinkEnabled == False:
+                raise EnvironmentError('Link to camera hardware failed.  Is the power on to the CCD (including any connection hardware such as USB hubs)?')
+    
+        def guider_move(self, ddec_dra, dec=None):
+            """Moves the telescope using guider slews.  ddec_dra is a tuple with
+            values in arcsec.  NOTE ORDER OF COORDINATES: Y, X to conform
+            to C ordering of FITS images"""
+            self.connect()
+            if dec is None:
+                dec = self.CCDCamera.GuiderDeclination
+            ddec = ddec_dra[0]
+            dra = ddec_dra[1]
+            # Change to rectangular tangential coordinates for small deltas
+            dra = dra*np.cos(np.radians(dec))
+            # The guider motion is calibrated in pixels per second, with
+            # the guider angle applied separately.  We are just moving in
+            # RA and DEC, so we don't need to worry about the guider angle
+            dpix = np.asarray((dra, ddec)) / self.guider_plate
+            # Multiply by speed, which is in pix/sec
+            dt = dpix / np.asarray((self.CCDCamera.GuiderXSpeed, self.CCDCamera.GuiderYSpeed))
+            
+            # Do a sanity check to make sure we are not moving too much
+            max_t = (self.guider_max_move_multiplier *
+                     np.asarray((self.CCDCamera.GuiderMaxMoveX, 
+                                 self.CCDCamera.GuiderMaxMoveY)))
+                
+            if np.any(np.abs(dt) > max_t):
+                #print(str((dra, ddec)))
+                #print(str(np.abs(dt)))
+                log.warning('requested move of ' + str((dra, ddec)) + ' arcsec translates into move times of ' + str(np.abs(dt)) + ' seconds.  Limiting move in one or more axes to max t of ' + str(max_t))
+                dt = np.minimum(max_t, abs(dt)) * np.sign(dt)
+                
+            log.info('Seconds to move guider in DEC and RA: ' + str(dt))
+            if dt[0] > 0:
+                RA_success = self.CCDCamera.GuiderMove(0, dt[0])
+            elif dt[0] < 0:
+                RA_success = self.CCDCamera.GuiderMove(1, -dt[0])
+            else:
+                # No need to move
+                RA_success = True
+            # Wait until move completes if we can't push RA and DEC
+            # buttons simultaneously
+            while not self.simultaneous_guide_corrections and self.CCDCamera.GuiderMoving:
+                    time.sleep(0.1)
+            if dt[1] > 0:
+                DEC_success = self.CCDCamera.GuiderMove(2, dt[1])
+            elif dt[1] < 0:
+                DEC_success = self.CCDCamera.GuiderMove(3, -dt[1])
+            else:
+                # No need to move
+                DEC_success = True
+            while self.CCDCamera.GuiderMoving:
+                time.sleep(0.1)
+            return RA_success and DEC_success
+    
+        def rot(self, vec, theta):
+            """Rotates vector counterclockwise by theta degrees IN A
+            TRANSPOSED COORDINATE SYSTEM Y,X"""
+            # This is just a standard rotation through theta on X, Y, but
+            # when we transpose, theta gets inverted
+            theta = -np.radians(theta)
+            c, s = np.cos(theta), np.sin(theta)
+            #print(vec)
+            #print(theta, c, s)
+            M = np.matrix([[c, -s], [s, c]])
+            rotated = np.asarray(np.dot(M, vec))
+            #print(rotated)
+            return np.squeeze(rotated)
+    
+        def calc_main_move(self, current_pos, desired_center=None):
+            """Returns vector [ddec, dra] in arcsec to move scope to
+            center object at current_pos, where the current_pos and
+            desired_centers are vectors expressed in pixels on the main
+            camera in the astropy FITS Pythonic order Y, X"""
+    
+            self.connect()
+            if desired_center is None:
+                # --> WARNING!  This uses the current CCD image, not the
+                # --> Document object
+                desired_center = \
+                np.asarray((self.CCDCamera.StartY + self.CCDCamera.NumY, 
+                            self.CCDCamera.StartX + self.CCDCamera.NumX)) / 2.
+            dpix = np.asarray(desired_center) - np.asarray(current_pos)
+            dpix = self.rot(dpix, self.main_angle)
+            return dpix * self.main_plate
+    
+        def get_keys(self):
+            """Gets list of self.required_FITS_keys from current image"""
+            self.FITS_keys = []
+            for k in self.required_FITS_keys:
+                self.FITS_keys.append((k, self.Document.GetFITSKey(k)))
+            
+        # --> Not sure if FITS files get written by MaxIm before or after
+        # --> they become Document property after a fresh read.  Could use
+        # --> CCDCamera version, but this keeps it consistent
+        def set_keys(self, keylist):
+            """Write desired keys to current image FITS header"""
+            if not getDocument():
+                log.warning('Cannot get Document object, no FITS keys set')
+                return None
+            if self.HDUList is None:
+                log.warning('Asked to set_keys, but no HDUList is empty')
+                return None
+                
+            try:
+                h = self.HDUList[0].header
+                for k in keylist:
+                    if h.get(k):
+                        # Not sure how to get documentation part written
+                        self.Document.SetFITSKey(k, h[k])
+            except:
+                log.warning('Problem setting keys: ', sys.exc_info()[0])
+                return None
+                
+    
+        def get_im(self):
+            """Puts current MaxIm image (the image with focus) into a FITS HDUList.  If an exposure is being taken or there is no image, the im array is set equal to None"""
+            self.connect()
+            # Clear out HDUList in case we fail
+            self.HDUList = None
+            if not self.CCDCamera.ImageReady:
+                log.info('CCD Camera image is not ready')
+                return None
+            # For some reason, we can't get at the image array or its FITS
+            # header through CCDCamera.ImageArray, but we can through
+            # Document.ImageArray
+            if not self.getDocument():
+                log.info('There is no open image')
+                return None
+            
+            # Make sure we have an array to work with
+            c_im = self.Document.ImageArray
+            if c_im is None:
+                log.info('There is no image array')
+                return None
+            # Create a basic FITS image out of this and copy in the FITS
+            # keywords we want
+    
+            # TRANSPOSE ALERT.  Document.ImageArray returns a tuple of
+            # tuples shaped just how you would want it for X, Y.  Since
+            # Python is written in C, this is stored in memory in in "C
+            # order," which is the transpose of how they were intended to
+            # be written into a FITS file.  Since all the FITS stuff
+            # assumes that we are reading/writing FORTRAN-ordered arrays
+            # bytes from/to a C language, we need to transpose our array
+            # here so that the FITS stuff has the bytes in the order it
+            # expects.  This seems less prone to generating bugs than
+            # making users remember what state of transpose they are in
+            # when dealing with arrays generated here vs. data read in
+            # from disk for debugging routines.  This is also faster than
+            # writing to disk and re-reading, since the ndarray order='F'
+            # doesn't actually do any movement of data in memory, it just
+            # tells numpy how to interpret the order of indices.
+            c_im = np.asarray(c_im)
+            adata = c_im.flatten()#order='K')# already in C order in memory
+            # The [::-1] reverses the indices
+            adata = np.ndarray(shape=c_im.shape[::-1],
+                               buffer=adata, order='F')
+            
+            hdu = fits.PrimaryHDU(adata)
+            self.get_keys()
+            for k in self.FITS_keys:
+                hdu.header[k[0]] = k[1]
+            self.HDUList = fits.HDUList(hdu)
+            return self.HDUList
+
+        def take_im(self, exptime=default_exptime, filt=default_filt):
+            """Uses MaxIm to record an image
+            """
+            self.connect()
+            self.CCDCamera.Expose(exptime, 1, filt)
+            # This is potentially a place for a coroutine
+            time.sleep(exptime)
+            # --> Need to set some sort of timeout
+            while not self.CCDCamera.ImageReady:
+                time.sleep(0.1)
+            return(self.get_im())
+
+    class PrecisionGuide():
+        """Class containing all methods and properties for PrecisionGuide package
+
+    Parameters
+    ----------
+    ObsClassName : str
+        (Sub)class name of ObsData which will contain code that calculates 
+        obj_center and desired_center coordinates.  Default: ObsData
+    
+    ObsClassModule : str
+        Module (.py file) containing ObsClass definition.  
+        Default: current file
+        """
+        def __init__(
+                self,
+                ObsClassName='ObsData', # Default to plain ObsData
+                # Default to finding ObsData subclass in current file
+                ObsClassModule=None):
+            if ObsClassModule is None:
+                # Windows adds the full path as in
+                # C:\\asdiasodj\\asdads\\etc LINUX does not, but they
+                # both add the .py, which importlib does not want
+                ObsClassModule = __file__.split('\\')[-1]
+                ObsClassModule = ObsClassModule.split('.py')[0]
+            self.MD = MaxImData()
+            self.ObsDataClass \
+                = getattr(importlib.import_module(ObsClassModule),
+                          ObsClassName)
+    
+        def center(self, HDUList_im_fname_ObsData_or_obj_center=None,
+                   desired_center=None):
+            """Move the object to desired_center using guider
+            slews, where object position and desired center will be
+            calculated using ObsData if raw coords not provided
+
+            """
+            if HDUList_im_fname_ObsData_or_obj_center is None:
+                # Take an image with the default exposure time and filter
+                HDUList_im_fname_ObsData_or_obj_center = self.MD.take_im()
+                #raise ValueError('No HDUList_im_fname_ObsData_or_obj_center provided')
+            if (isinstance(HDUList_im_fname_ObsData_or_obj_center,
+                           fits.HDUList)
+                or isinstance(HDUList_im_fname_ObsData_or_obj_center,
+                              np.ndarray)
+                or isinstance(HDUList_im_fname_ObsData_or_obj_center, str)):
+                # The ObsClass base class takes care of reading all of these
+                O = self.ObsDataClass(HDUList_im_fname_ObsData_or_obj_center)
+                obj_center = O.obj_center
+                desired_center = O.desired_center
+            elif issubclass(HDUList_im_fname_ObsData_or_obj_center, ObsData):
+                obj_center = HDUList_im_fname_ObsData_or_obj_center.obj_center
+                desired_center \
+                    = HDUList_im_fname_ObsData_or_obj_center.desired_center
+            else:
+                obj_center = HDUList_im_fname_ObsData_or_obj_center
+            
+            self.MD.guider_move(
+                self.MD.calc_main_move(obj_center, desired_center))
+
+        def center_loop(self,
+                        exptime=default_exptime,
+                        filt=default_filt,
+                        tolerance=default_cent_tol,
+                        max_tries=3):
+            """Loop max_tries times, taking exposures and moving the telescope with guider slews to center the object
+            """
+            tries = 0
+            while True:
+                tries += 1
+                HDUList = self.MD.take_im(exptime, filt)
+                O = self.ObsDataClass(HDUList)
+                if (np.linalg.norm(O.obj_center - O.desired_center)
+                    < tolerance):
+                    return True
+                if tries >= max_tries:
+                    log.error('Failed to center target to ' + str(tolerance) + ' pixels after ' + str(tries) + ' tries')
+                    return False
+                self.center(O)
+            # We should never get here
+            assert False
+
+        ## --> This is in the wrong place in terms of abstraction 
+        #def center_object(self):
+        #    if self.get_im() is None:
+        #        log.warning('No image')
+        #        return None
+        #    #self.guider_move(self.calc_main_move(self.get_object_center_pix()))
+        #    #obj_c = get_jupiter_center(self.HDUList)
+        #    obj_c = self.ObsData.obj_center(self.HDUList)
+        #    log.info('object center = ', obj_c)
+        #    self.guider_move(self.calc_main_move(obj_c))
+
+        # Used pythoncom.CreateGuid() to generate this Fired up a
+        # Python command line from cmd prompt in Windows.  The
+        # followining helped:
+        # https://www.pythonstudio.us/introduction-2/implementing-com-objects-in-python.html
+        # http://timgolden.me.uk/pywin32-docs/contents.html
+        # import pythoncom
+        # print pythoncom.CreateGuid()
+        # {3E09C890-40C9-4326-A75D-AEF3BF0E099F}
 
 
+
+# These are shared definitions between Windows and Linux
 class ObsData():
     """Base class for observations, enabling object centering, etc.
 
@@ -577,13 +680,11 @@ Uses readnoise (default = 5 e- RMS) to define bin widths
         return self._desired_center
 
 class CorObsData(ObsData):
-    """Object for containing coronagraph image data used for centering Jupiter"""
-
+    """Object for containing coronagraph image data used for centering Jupiter
+    """
     # This is for jump-starting the ND_params calculation with flats.
     # Be generous in case the angle is very large.  If it is still
     # hard to get a good ND solution, use more n_y_steps
-    
-
     def __init__(self,
                  HDUList_im_or_fname=None,
                  default_ND_params=None,
@@ -779,6 +880,7 @@ class CorObsData(ObsData):
             # make the center of mass calc more accurate, just set
             # everything that is not getting toward saturation to 0
             im[np.where(im < 40000)] = 0
+            D.say('sum >=40000 ' + str(np.sum(im)))
 
             # 25 worked for a star, have yet to find Jupiter totally
             # off ND filter
@@ -1271,7 +1373,97 @@ def get_default_ND_params(dir=None, maxcount=10):
             np.median(ND_params_array[:, 1, 1])))
     return np.asarray(default_ND_params)
 
+def process_tree(rawdir='/data/io/IoIO/raw'):
+    start = time.time()
+    # We have some files recorded before there were flats, so get ready to
+    # loop back for them
+    skipped_dirs = []
+    
+    # list date directory one level deep
+    totalcount = 0
+    totaltime = 0
+    dirs = [os.path.join(rawdir, d)
+            for d in os.listdir(rawdir) if os.path.isdir(os.path.join(rawdir, d))]
+    persistent_default_ND_params = None
+    for d in sorted(dirs):
+        D.say(d)
+        try:
+            default_ND_params = get_default_ND_params(d)
+        except KeyboardInterrupt:
+            # Allow C-C to interrupt
+            raise
+        except Exception as e:
+            log.error('Problem with flats: ' + str(e))
+            if persistent_default_ND_params is not None:
+                default_ND_params = persistent_default_ND_params
         
+        result = process_dir(d, default_ND_params=default_ND_params)
+        print(result)
+        totalcount += result[0]
+        totaltime += result[1]
+        
+    end = time.time()
+    D.say('Total elapsed time: ' + str(end - start) + 's')
+    D.say(str(totalcount) + ' obj files took ' + str(totaltime) + 's')
+    D.say('Average time per file: ' + str(totalcount / totaltime) + 's')
+
+
+def process_dir(dir=None, default_ND_params=None):
+    if default_ND_params is None:
+        try:
+            default_ND_params = get_default_ND_params(dir)
+        except KeyboardInterrupt:
+            # Allow C-C to interrupt
+            raise
+        except Exception as e:
+            raise ValueError('Problem with flats in ' + dir + ': '  + str(e))
+            
+            if persistent_default_ND_params is not None:
+                default_ND_params = persistent_default_ND_params
+
+    # Collect file names
+    files = [f for f in os.listdir(dir) if os.path.isfile(os.path.join(dir, f))]
+
+    objs = []
+    for f in sorted(files):
+        if 'flat' in f.lower():
+            pass
+        elif 'bias' in f.lower():
+            pass 
+        elif 'dark' in f.lower():
+            pass
+        else:
+            objs.append(os.path.join(dir, f))
+
+        start = time.time()
+
+    count = 0
+    for count, f in enumerate(objs):
+        D.say(f)
+        try:
+            O = CorObsData(f, default_ND_params=default_ND_params)
+            D.say(O.obj_center)
+            if O.obj_to_ND > 30:
+                log.warning('Large dist: ' + str(int(O.obj_to_ND)))
+        except KeyboardInterrupt:
+            # Allow C-C to interrupt
+            raise
+        except Exception as e:
+            log.error('Skipping: ' + str(e))
+
+    elapsed = time.time() - start
+        
+    return((count, elapsed, count/elapsed))
+
+class test_independent():
+    def __init__(self):
+        self.loop_state = True
+    def loop(self, interval=2):
+        while self.loop_state:
+            D.say('Before sleep')
+            time.sleep(interval)
+            D.say('After sleep')
+            yield
 
 def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10, guide_dx=0, guide_dy=0, last_guide=None, aggressiveness=0.5, target_c = np.asarray((1297, 1100))):
     """ Calculate offset guider values given pixel and times"""
@@ -1418,94 +1610,10 @@ log.setLevel('INFO')
 #D.say(O.obj_center)
 #D.say(O.desired_center)
 
-### start = time.time()
-### # We have some files recorded before there were flats, so get ready to
-### # loop back for them
-### skipped_dirs = []
-### 
-### # list date directory one level deep
-### totalcount = 0
-### rawdir = '/data/io/IoIO/raw'
-### dirs = [os.path.join(rawdir, d)
-###         for d in os.listdir(rawdir) if os.path.isdir(os.path.join(rawdir, d))]
-### for d in sorted(dirs):
-###     D.say(d)
-###     # Collect file names
-###     files = [f for f in os.listdir(d) if os.path.isfile(os.path.join(d, f))]
-### 
-###     flats = []
-###     objs = []
-###     for f in sorted(files):
-###         if 'flat' in f.lower():
-###             flats.append(os.path.join(d, f))
-###         elif 'bias' in f.lower():
-###             pass 
-###         elif 'dark' in f.lower():
-###             pass
-###         else:
-###             objs.append(os.path.join(d, f))
-### 
-###     # Create default_ND_params out of the flats in this dir.
-###     ND_params_list = []
-###     persistent_default_ND_params = None
-###     # Just do 10 flats
-###     for fcount, f in enumerate(flats):
-###         D.say(f)
-###         try:
-###             # Iterate to get independent default_ND_params for
-###             # each flat
-###             default_ND_params = None
-###             for i in np.arange(3):
-###                 F = CorObsData(f, default_ND_params=default_ND_params)
-###                 default_ND_params = F.ND_params
-###         except ValueError as e:
-###             log.error('Skipping: ' + str(e))
-###             continue
-###         ND_params_list.append(default_ND_params)
-###         totalcount += 1
-###         if fcount >= 10:
-###             break
-###     # If we have not successfully fit flats, use the previous
-###     # night's results, if available
-###     if len(ND_params_list) == 0:
-###         if persistent_default_ND_params is not None:
-###             default_ND_params = persistent_default_ND_params
-###         else:
-###             # Dir before any flats were taken.  Save it for later
-###             skipped_dirs.append(d)
-###             continue
-### 
-###     # If we made it here, we have a decent list of ND_params.  Now
-###     # take the median to create a really nice default_ND_params
-###     ND_params_array = np.asarray(ND_params_list)
-###     default_ND_params \
-###         = ((np.median(ND_params_array[:, 0, 0]),
-###             np.median(ND_params_array[:, 0, 1])),
-###            (np.median(ND_params_array[:, 1, 0]),
-###             np.median(ND_params_array[:, 1, 1])))
-###     
-###     D.say(default_ND_params)
-### 
-###     # Now go on to the Jupiter observations
-###     for f in sorted(objs):
-###         D.say(f)
-###         try:
-###             O = CorObsData(f, default_ND_params=default_ND_params)
-###             D.say(O.obj_center)
-###             if O.obj_to_ND > 10:
-###                 log.warning('Large dist: ' + str(int(O.obj_to_ND)))
-###         except KeyboardInterrupt:
-###             # Allow C-C to interrupt
-###             raise
-###         except: Exception as e:
-###             log.error('Skipping: ' + str(e))
-###         totalcount += 1
-###     #break
-###     
-### end = time.time()
-### D.say('Elapsed time: ' + str(end - start) + 's for ' +
-###       str(totalcount) + ' files')
-### D.say('Average time per file: ' + str(totalcount / (end - start)))
+#print(process_dir('/data/io/IoIO/raw/2017-04-26',
+#                  default_ND_params=get_default_ND_params(
+#                      '/data/io/IoIO/raw/2017-04-24')))
+
 
 
 #Na =   CorObsData('/data/io/IoIO/raw/2017-05-28/Na_IPT-0007_Na_off-band.fit')
@@ -1540,9 +1648,28 @@ log.setLevel('INFO')
 #ND=NDData('//snipe/data/io/IoIO/raw/2017-05-29/Sky_Flat-0001_Na_off-band.fit')
 #print(ND.get_ND_params())
 if __name__ == "__main__":
-    flat = CorObsData('/Users/jpmorgen/byted/xfr/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
+    P = PrecisionGuide() # defaults should be good
+    #P.center('//snipe/data/io/IoIO/raw/2017-05-28/Na_IPT-0007_Na_off-band.fit')
+    #P.center()
+    print(P.center_loop())
+    time.sleep(20)
+
+    #print(__file__)
+    ##ObsDataClass = getattr(importlib.import_module('ioio'), 'CorObsData')
+    #cur_file = __file__.split('.py')[0]
+    #ObsDataClass = getattr(importlib.import_module(cur_file), 'CorObsData')
+    #F = ObsDataClass('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit') #, plot_dprof=True, plot_ND_edges=True)
+    #default_ND_params = F.ND_params
+    #D.say(default_ND_params)
+
+    #flat = CorObsData('//SNIPE/data/io/IoIO/raw/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
+    #O = CorObsData('//SNIPE/data/io/IoIO/raw/2017-05-28/Na_IPT-0010_SII_on-band.fit', default_ND_params=flat.ND_params)
+    #D.say(O.obj_center)
+        
+    #process_dir('//SNIPE/data/io/IoIO/raw/2017-05-28/', default_ND_params=flat.ND_params)
+    #flat = CorObsData('/Users/jpmorgen/byted/xfr/2017-05-28/Sky_Flat-0002_Na_off-band.fit')
     #flat.imshow()
-    flat.get_ND_params()
+    #flat.get_ND_params()
 #     # Start MaxIm
 #     print('Getting MaxImData object...')
 #     M = MaxImData()

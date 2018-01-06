@@ -1369,7 +1369,7 @@ WARNING: Large dist: 60 [unknown]
 
 <found better flats>
 
---> Star image, not even close, metric must have been off
+Star image, not even close, metric must have been off
 /data/io/IoIO/raw/2017-04-21/Filter_sequence-0001_1s_open.fit
 [ 1144.33194632  1216.89788347]
 WARNING: Large dist: 72 [unknown]
@@ -1410,30 +1410,54 @@ script do them.  But I think I should be able to have access to all of
 those objects, just like in MaxIm, which is beyond way cool!
 
 In any case, my script is going to be called when Jupiter is near the
-center
+center <see below for argument that I can do this one image at a time>
 
-Loop:
-    Preliminary exposure
-    Check close enough
-        break if so
-    Move to expected center
+Check if need flip (see line 2941 of AcquireImages.js), --> add time
+for first alignment if not guiding and/or tracking
 
-Start guider
-Loop:
-    Preliminary exposure
-    Check if close enough
-        break if so
-	if too far warn & recenter with loop above
-    Move Jupiter with guide box
+If not guiding and/or tracking (first entry)
+    Loop:
+        Preliminary exposure (R-band)
+        Check close enough
+            break if so
+        Move to expected center
 
-Primay image loop
-Loop:
-    Desired filter image
-    Accumulate CorObsData
-    Keep Jupiter centered with guide box moves
-    if too far warn & recenter with loops above
-    Check if need flip (see line 2941 of AcquireImages.js, but I don't
-    think I have or need access to all of the functions that uses)
+    Start guider
+    Loop:
+        Preliminary exposure (R-band)
+        Check if close enough
+            break if so
+    	if too far warn & recenter with loop above
+        Move Jupiter with guide box (separate Loop)
+
+    else:
+        Take Requested filter image
+	<Possibly with ImageEnd()>
+        Process image with CorObsData
+	Accumulate CorObsData
+	If not too far off
+	    Generate guide box rate + send to guide box mover section of code
+	else:
+	    warn
+	    If way too far off:
+	        Turn guider off & return OK to trigger loop to recenter
+                and initialize guider
+	    else:
+	        Use Start Guider loop
+
+
+Guide box mover
+    Initialize when guider initialized -- remember initial guide box
+    position
+    
+    Accept rates
+
+    Independent Loop:
+        Move guide box according to rates
+	
+    Fail if getting close to camera edge
+    Fail if Jupiter fades
+    --> Add script fail to shut down
 
 The way Bob has it structured, AcquireImage() is designed for a single
 image, but I don't see why it could't be a very long image.  It is
@@ -1495,4 +1519,499 @@ just get from IoIO1U1.
 
 rsync -auv  "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/From Dean/usno/" jpmorgen@cpe-184-153-135-44.maine.res.rr.com:/data/USNO_A2.0/
 
+Interesting.  250kb/s from PSI, 1Mbs from observatory
+
+some stars that showed up as Jupiter
+/data/io/IoIO/raw/2017-04-26/Filter_sequence-0003_10s_Na_off-band.fit
+
+Hey, that looks like Jupiter!
+
+Install FocusMax 3.8.0.20, which comes with the focuser software
+
+turn on AutoFocus on ACP restart, now that I have FocusMax installed
+
+Choose Simulator ASCOM Focuser Driver.
+
+Having a little trouble with the simulated focus because the MaxIm
+star is too dim and it doesn't respond to exposure time changes.  But
+I can lower the minimum flux requirement to 10k.
+
+That worked.
+
+Wed Dec 13 13:29:49 2017 EST  jpmorgen@snipe
+
+Playing with weather simulator, which is a separate app.  Needed a
+kick start to get that working, but after second try, did what I
+expected.
+
+Back working on
+
+/data/io/IoIO/raw/2017-04-26
+
+This is a great directory because it has some stars that are saturated
+and Jupiter!
+
+Saturated star
+/data/io/IoIO/raw/2017-04-26/Filter_sequence-0002_10s_SII_off-band.fit
+sum >=40000 397222.621745
+Only 9.93055 pixels, which is just a star
+
+Others have sum >=40000 0.0 because of setting pixels to 0
+
+'HIP62757'
+/data/io/IoIO/raw/2017-04-26/Filter_sequence-0002_1s_open.fit
+sum >=40000 6768073.49695
+169.201825
+
+No OBJECT, which suggests its Jupiter + it looks like it too!
+/data/io/IoIO/raw/2017-04-26/Filter_sequence-0003_10s_Na_off-band.fit
+sum >=40000 203992874.26
+5099.8218565
+
+In my code I have 65000* 250 pixels
+16250000 = 16E6.
+
+Actual Jupiter image was 203E6.  Bright star 6.7E6
+
+I think I am pretty good.
+
+Check centers.  Within a pixel!
+
+/data/io/IoIO/raw/2017-04-26/Filter_sequence-0003_10s_Na_on-band.fit
+sum >=40000 155408846.013
+155.40884601300002E6
+Within 4 pixels
+
+OK.  Together with the fact that this runs in 0.5s suggests that I am
+ready to roll!
+
+Wed Dec 13 13:53:39 2017 EST  jpmorgen@snipe
+
+OK, back to the ACP simulator stuff.  Before I add user scripts, I
+should make sure that a basic plan works
+
+#DOMEOPEN
+
+#Filter   R, [SII] on-band, Na on-band, [SII] off-band, Na off-band
+#Binning  1,   		 1,          1,              1,           1
+#Count    1,   		 1, 	     1,		     1,		  1
+#Interval 0.5,		 0.5,	     0.5,	     0.5,	  0.5
+
+test_meridian	17:00	00:00
+
+#SHUTDOWN
+
+Worked fine
+
+Thu Dec 14 09:11:32 2017 EST  jpmorgen@snipe
+
+At some point, I need to decide when to merge this stuff back to
+IoIO.notebk.  For now continue thought here.
+
+Camera not connected so I can't check, but I seem to recall that I did
+exposures in 1-hour chunks.  Io's orbital period is 42.45930686
+hours.  Sampling it during its ortbial period 10 times seems fine if
+orbital period is all that is going on.  But since I am able to
+resolve structure close to the moon which might be affected by the
+torus, having more frequent sampling would make sense.  The torus ansa
+itself changes on 15 minute time scales.  Changes at Io could be even
+more frequent
+
+1m Na off-band
+5m Na on-band
+9
+5m [SII] on-band
+1m [SII] off-band
+
+For a total of about 60 minutes of observing time per cycle.  I could
+have this be chopped up in a different way if I want.
+
+Looking at logic in /data/PSIScope/observing/AcquireImages.js and find
+that the AcquireImage user action continues back to the Count loop so all of
+the logic below there is skipped, which includes messing with the
+guider and it looks like tracking too.  So in my user action script, I
+need to take care of all of that.  But to give me flexibility of
+messing with exposures at the Scheduler level, I should probably have
+my script just handle things one at a time after launching the Python
+background job.
+
+Ah, the code above the AcquireImage user action is not all that
+extensive, but does include autofocus and reslew.  This means that
+Jupiter might spontaneously end up in the wrong place sometimes if I
+use the Count loop and the autofocus periodic or adaptive features.
+
+The alternative is just using an hour-long (or however long)
+"exposure" in scheduler and handle all of the exposure looping in
+there.  Given that I want to, that sounds reasonable.  But think for a
+miniute how it might work with the independent Python job.  Given that
+it is only looking at the images as they are taken from MaxIm and has
+no control over the initiation of the images, I don't see it working
+to do guider stop, telescope move, reinitialize.  That has to be
+handled by the code asking MaxIm to take an image.  But I would need
+to have some code asking for the image anyway.
+
+OK, so it looks like a question of overhead.  I could use the
+individual image stream from ACP/Scheduler and do a pre-image every
+time, which would be a waste, but would get me in line.  I could live
+with up to a 5-minute exposure lost each hour after a focus.  That
+might be more time lost to find itself.
+
+Hey, there is a flag that gets set when the autofocus stuff is done.
+That is what I was looking for!  It is AG (auto guider) and Orbital
+Tracking
+
+--> hmm.  Not sure I want to use his autoguiding stuff
+
+This is how I would turn it on and off
+SUP.AutoGuide(true);
+SUP.AutoGuide(false);
+
+This is how I test --> not sure which is best
+SUP.Guiding
+SUP.GuiderRunning
+
+Other indication:
+var orbTrackRealRates = (Tc.OrbTrack && (Tc.RARate !== 0 || Tc.DecRate !== 0));
+
+This is how I would set it
+
+if(orbTrackRealRates)
+    SUP.SetTrackOffset(Tc.RARate, Tc.DecRate);      // Complier assures scope can do tracking
+
+But not sure if that has the real test.
+
+Anyway, I can get to that when I need to.  It definitly looks like my
+first-level user action can use something like these to test to see if
+it is the first time it has been entered and go through the necessary
+logic loops above (search for Loop:)  Amend that
+
+Hmm.  So where am I going to have my event loop for moving the guide
+box?  That has been the hard thing.  I guess to start with I could
+just skip that part and do periodic recenters when the distance gets
+too large.  But what I really want is that process to be running in
+the background to help MaxIm keep the object in the primary mirror
+centered.
+
+To do that I would need to learn how to launch a separate process and
+pass messages to and from it.  At the most basic level, all those
+messages need to be are the _rates_ in RA and DEC that I want to move
+the guide box.  The process would then generate a string of the
+appropriate MaxIm object commands to move the guide box.  It would
+also need to have some way to know when it got to the edge
+
+OK, back to the scheduler aspect.  I might be able to have the
+Jupiter plan include a calibration star.  That would be where it gets
+the right autofocus HFD.
+
+Work in PSIScope.notebk on getting scheduler up and running for more
+objects.
+
+Sun Dec 17 15:22:07 2017 EST  jpmorgen@snipe
+
+Ack!  Scheduler doesn't like the Foster Systems roof controller.
+Sigh.
+
+Anyway, I can get by with ACP until I resolve that issue.  Go back to
+getting my Python code to run on Windows & with ACP or MaxIm or
+however I do this. 
+
+Ah, I remember why I wanted to have it running in the background: it
+takes a long time to load all of the modules it needs.
+
+This was a little complicated because I have Daniel's thing, but as
+long as I put it in the same directory (as a link), it loaded OK.
+First time I launched it, it took a minute.  Second time was more like
+10s, but that extended back to 30s or so after another try.
+
+Individual files in a process_dir take about 1s, as expected on a
+slower computer.
+
+
+https://www.pythonstudio.us/introduction-2/implementing-com-objects-in-python.html
+
+Hey, it looks like I can create a python server!
+
+import pythoncom
+
+etc.  Whew!  It looks like I can get what I want in both directions.
+
+If I end up using TakePicture to take the image, I might want to use
+the ImageEnd() user action.  Or I can just do everything myself in
+AcquireImage, which might be a little cleaner
+
+Sun Dec 17 20:47:07 2017 EST  jpmorgen@snipe
+
+http://solo.dc3.com/ar/RefDocs/HelpFiles/ACP81Help/scr-wsc.htm
+
+This shows how I can create some WSC that lay around and do things I
+want.  I think that is what the pytonstudio.us stuff is giving me in Python
+
+Mon Dec 18 19:32:11 2017 EST  jpmorgen@snipe
+
+So at some point, I am going to want to separate the Windows-specific
+stuff from the CorObsData stuff.  I am finding thanks to Daniel's work,
+that as long as the import is in the same directory as the original
+script, it works just fine.  Plus I could probably figure out how to
+make it work other ways.
+
+So to start off with, I want to enable the WSC components in ACP.  No,
+actually, I think I want to make sure the simulator works OK first.
+Oh, I already did that with simulate.txt plan.
+
+OK, set up WSC JS version
+
+Tue Dec 19 09:02:53 2017 EST  jpmorgen@snipe
+
+Did a test object in ioio.py which shows that an object with a wait
+loop is not an independent thing.
+
+So I need to create an independent program for both the guide box
+mover and the CorObsData component.
+
+Along those lines, I need to start thinking about what to call the
+components of the [Python] program that are going to be collecting the
+CoObsData and calculating guide box rates.
+
+--> Check to see if FITS headers are persistent, otherwise make a list
+    of keys I want to extract and have be permanent
+
+The guide box move code should be simple enough for a js program.
+that program has to run continuously and accept events
+
+But I don't know if I want to bother learning how to do that, since I
+am going to need to learn how to make one in Python anyway for the
+
+I am sensing that I can make ioio.py have some arguments to main that
+launch the various servers/clients that I want.  Otherwise, I just
+import it and use the objects for reductions (or reductions will be
+other arguments to main)
+
+I have a MaxImData class definition that I will need in my guide box
+mover, but the mover itself should not be in the cclass definition: it
+instantiates a class member.
+
+I wonder if I could have everything in one event loop, so the guide
+box mover doesn't have to be a separate thing + can share property.
+That seems to keep things a little more simple.  But I could
+potentially split them out within the module if I need to.
+
+OK, so what to call this.  We are making a server for precision
+centering and dealing with differential flexure.  The fact that
+Jupiter is involved is secondary
+
+So there is basically one entry point: precision_center
+
+Back to the guider loop.  I don't see how I can get around the fact
+that I need a background process.  Looking into sched event
+scheduler.  Still seems to block or need to be re-called.
+
+Circuits is an event driven module
+
+--> It may be that the server allows the loop to go on independent of
+    other calls!  That would mean I would use the COM service to
+    connect to my own server!
+    
+Tue Dec 19 14:47:06 2017 EST  jpmorgen@snipe
+
+Hmm.  Doing some simple tests with HelloCom and HelloClient and find
+that the COM object is instantiated on a per-client basis.  In other
+words, dispatching the server starts its own instantiation of it.  I
+have a feeling that what I am asking it to do is rather complex....
+
+It might be that I can instantiate an object and store it as a global
+variable in the place Bob gives me.
+
+Looking into asyncio
+
+Looking into ASCOM driver video https://youtu.be/XVlrDyIBd5I further
+and find that the persistent state is maintained via the arduino board
+not in the object.
+
+Looking more at
+http://timgolden.me.uk/pywin32-docs/html/com/win32com/HTML/QuickStartServerCom.html
+
+_com_interfaces_
+
+https://msdn.microsoft.com/en-us/library/windows/desktop/ms686618(v=vs.85).aspx
+
+Ah Ha!  Persistent Object Interfaces
+
+But there is not much by way of actual examples + it is not clear if
+this is implemented in Python.
+
+Fundamentally, if I have a process that I run separately that reads a
+file with the rates, that would be sufficient.  The file could have a
+control flag built in that would latch off when the MaxImDL guider
+turns off.  It would work for me to do this in the ioio.py and have
+the instantiation of it be a command line option.
+
+Actually, the more politically correct way might be to have it serve
+up COM object that does the interface!  Note that I have to run the
+.py file once to register, but it is not clear if that goes across
+boots
+
+--> Check that object registration is persistent.  May be related to
+    having MaxIm start once before all COM hooks are active and is
+    likely so
+
+--> Figure out where this goes possibly /cygdrive/c/Program Files (x86)/ACP Obs Control/Scripts/
+
+OK, now that I think I know the limitations of the COM system, go back
+to rethink the whole thing.
+
+I basically want two things that are running all the time, or at least
+persistent in memory.  The guide box mover is the one that has to
+click continuously.  The rest of the code in ioio.py I just want to
+sit there, ready to call.
+
+I could make ioio.py an active X COM object with a set of exposed
+methods for doing things that are called by AcquireImage.  If I make
+the object a global variable, it is persistent as I want it.  I
+probably wouldn't need too many exposed methods: append_obs
+
+It would be Most Elegant if I could have guidebox_mover be an event
+loop controlled within that object.
+
+Ah. I see that what I really want is a coroutine, since that can go
+along with yields
+
+Maybe what I want is concurrent
+https://docs.python.org/3/library/concurrent.futures.html#concurrent.futures.Future
+
+That still seems like the executors are separate processes.  The
+coroutine has the example of being all one blob.  --> I could
+potentially do it that way if I am not picky about how often the
+GuideBoxMover gets called.  I just need to know it will be called
+often enough
+
+This just seems more trouble than it is worth
+
+Really what I want is inter-process communication (IPC)
+https://docs.python.org/3/library/ipc.html
+
+mmap might be a way to keep this in memory
+
+Wed Dec 20 10:20:47 2017 EST  jpmorgen@snipe
+
+Looking into JSON and finding that I might be able to share a StringIO
+object?  Maybe not.  I can't share objects across the processes
+
+https://docs.python.org/3/library/json.html
+
+JSON produces str not bytes, so that might not be the best choice for
+mmap.
+
+mmap seems really primitive in that it needs the size of the file and
+stuff like that.
+
+Probably a good idea to start with the regular old file first
+
+Hey, they give me the child process example I am looking for!  Well,
+that is on an OS that I would rather be working on....
+
+So back to a JSON written to a regular file read by the
+
+Thu Dec 21 13:20:20 2017 EST  jpmorgen@snipe
+
+https://stackoverflow.com/questions/9708902/in-practice-what-are-the-main-uses-for-the-new-yield-from-syntax-in-python-3
+
+and
+
+https://docs.python.org/3/library/asyncio-subprocess.html
+
+http://dabeaz.com/coroutines/Coroutines.pdf
+
+So I think the idea is that I am going to have a generator talk to the
+pipe
+
+But https://stackoverflow.com/questions/1196074/how-to-start-a-background-process-in-python
+
+suggests that Popen without a pipe is the right way.  I would then
+need to talk to it via a file
+
+Thu Dec 21 17:36:16 2017 EST  jpmorgen@snipe
+
+ioio.calc_main_move is what I want when Iwant to center the object.  I
+have something commented out called center_object that does that.
+That would be a public method in my AcuireImage user action
+
+--> I still need to write the thing that does the guide box rates.
+    But those are looking like they will be a tuple or np.array in y,x order.
+
+So CCDCamera.GuiderMoveStar is what I want to eventually plug into.
+It can do fractional pixels, so I can do this as often as I want but
+should limit bandwidth.
+
+I like the idea of letting GuideBoxMover decide the rate at which it
+will poll
+
+Sun Dec 24 14:07:39 2017 EST  jpmorgen@snipe
+
+At some point I will want to add the complication of flexure.
+Ideally that would be done as a separate process that looks at the
+scope position, calulates the rate and feeds that to the GuideBoxCommander
+
+Hmm.  On Windows, getting an error that a Python file is not a valid
+Win32 applicaiton.
+
+<sigh> because python defaults to python 2.7, I can't use the same
+command on windows and Debian
+
+I can consider doing an update alternatives on snipe....
+
+Did that (see snipe.notebk) and things work more smoothly across
+platforms
+
+Now think about where I am going to put the centering command.  I have
+the MaxImData object, which needs to be persistent for connecting
+continuously to MaxIm.  So in that loop code, I need to instantiate it
+and keep it around.
+
+That suggests that I need to make a controller object
+
+ObsData, MaxImData.  ObsControl?  PrecisionCenter?  PrecisionGuide?
+ObsGuide?
+
+This one object is going to have property that keeps track of the
+accumulation of ObsData and has methods to control the initial
+centering and guide box mover.
+
+Sun Dec 24 20:13:20 2017 EST  jpmorgen@snipe
+
+OK, I have written PrecisionGuide.center.  How can I test it?
+
+P = PrecisionGuide() # defaults should be good
+P.center('//snipe/data/io/IoIO/raw/2017-05-28/Na_IPT-0007_Na_off-band.fit')
+
+After a bit of struggle, seems to have worked!  At least in info message
+
+Now that connects to MaxIm's telescope and I think I got it to work on
+the real thing before.
+
+One thing I could potentially do is just record a pre-image in R
+before every image and do a move & then return "true" to move on.
+
+Mon Dec 25 17:23:29 2017 EST  jpmorgen@snipe
+
+So if PrecisionGuide.center doesn't have an input, maybe I should have
+it take one!
+
+So that means I am going to need to learn how to record images with
+MaxIm.  And handle the filters.
+
+Fri Dec 29 14:03:11 2017 EST  jpmorgen@byted
+
+It looks like I don't have Python for the laptop?  No, I do, but
+somehow .py files are not associated.
+
+Sat Dec 30 14:05:53 2017 EST  jpmorgen@byted
+
+Got python properly registered on the laptop.  Really slow to bring
+MaxIm up and do P.center(), but it does seem to work!
+
+OK, so now I think I might be ready to implement the loops above for
+centering and guiding.  As I plan that, I also need to look at the ACP
+side of things.
+
+Sat Jan 06 16:40:07 2018 EST  jpmorgen@snipe
 
