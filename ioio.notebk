@@ -1416,6 +1416,7 @@ Check if need flip (see line 2941 of AcquireImages.js), --> add time
 for first alignment if not guiding and/or tracking
 
 If not guiding and/or tracking (first entry)
+def center_loop
     Loop:
         Preliminary exposure (R-band)
         Check close enough
@@ -2015,3 +2016,113 @@ side of things.
 
 Sat Jan 06 16:40:07 2018 EST  jpmorgen@snipe
 
+Ack.  I am getting messed up by the importlib stuff when I try to do
+isinstance because Python is super literal about where the
+module/class comes from.
+
+https://stackoverflow.com/questions/4821104/python-dynamic-instantiation-from-string-name-of-a-class-in-dynamically-imported
+
+https://stackoverflow.com/questions/3061/calling-a-function-of-a-module-by-using-its-name-a-string
+
+So the idea is that getattr uses the formal import.  But the locals
+and globals
+
+Sun Jan 07 19:57:48 2018 EST  jpmorgen@snipe
+
+https://docs.python.org/3.6/howto/argparse.html#id1
+
+That is all well and good and I can even do the func coolness, but it
+goes back to whether or not the arguments are specified
+
+--> Getting command line to work in Windows
+https://stackoverflow.com/questions/29540541/executable-python-script-not-take-sys-argv-in-windows
+
+Tue Jan 09 12:00:43 2018 EST  jpmorgen@byted
+
+Put that as a note in ioio.py.  Will need documentation
+
+Need to work on
+
+Integration with ACP UserActions <not on laptop>
+Guide box rate calculation system
+GuideBoxMover system
+
+I have GuideBoxMover and GuideBoxCommander.  What is missing is
+whatever takes the sequence of ObsDatas and analyses it to produce
+GuideBoxCommands.  That could be GuideBoxCommander
+
+Reading from def center_loop above and wondering if I should separate
+some tasks or combine them.  start_guider looks like something I am
+going to need to do.  Do I have it do a center_loop or should
+I assume center_loop is done first?  I could have it do the center
+loop and raise any errors itself.
+
+Fri Jan 12 11:55:07 2018 EST  jpmorgen@byted
+
+Thinking more about start guider.  Having it separate means I can do
+what I want to position the object where I want it
+
+there is a maxim CCDCamera.GuiderRunning property, but that only tells
+if the guider is running already
+
+CCDCamera.GuiderTrack ( Duration )
+
+is what I want to turn it on, where duration is the exxposure time
+(need to think about that)
+
+but before I do that I need to set the position of the guide start
+
+CCDCamera.GuiderAutoSelectStar [= Boolean]
+
+Does that to the brightest star in the FOV.  I of course want that
+for Jupiter and generally for sideral targets, but when I am going to
+be doing non-sideral guiding, I am going to want to override, or
+something like that to pick a star off to one side so it can move a bit
+
+GuiderSetStarPosition is needed if this AutoSelect is False
+
+The PrecisionGuide.acquire_image is going to need to take (all?) the
+parameter that ACP shoves at it.
+
+Or do I want one that just has regular parameters I can pass from a
+script instead of ACP.  Maybe I need two, since I was thinking of
+having one do ACP's take_image and one just do it by itself.
+
+I think I can leave it to run-time, since Bob makes available the
+Util, etc., objects.  I can pass them in, defaulting to None.  If they
+are there, that could be a signal I want them to be used.
+
+Fri Jan 12 16:20:17 2018 MST  jpmorgen@byted
+
+Thiniking GuideBoxController might eventually be a separate process
+that receives input from PrecisionGuide.GuideBoxAdjuster, which just
+runs once per image, and separate processes of TrackRateAdjuster and
+DifferentialFlexAdjuster.  GuideBoxController would have each of these
+objects registered in it with file-oriented (or better) communications
+which tweak the ultimate rate at which GuideBoxController commands
+GuideBoxMover to move the guide box.
+
+Hmm.  GuideBoxAdjuster could be its own object with the property of
+the ObsDataList.  I could have one for each filter, but I was thinking
+I would figure out how to combine them.  
+
+Maybe it would make more sense to have the GuideBoxAdjuster make the
+list of ObsDatas
+
+Mon Jan 15 11:17:16 2018 MST  jpmorgen@byted
+
+Tried to use at telescope!  Got as far as getting an ND_params from a
+flat, but was too hard to get it into PrecisionGuide.center
+
+--> Think about how to get ND_params into PrecisionGuide
+
+Mon Jan 15 11:51:32 2018 MST  jpmorgen@byted
+
+For a standard ObsData, PrecisionGuide.center is easy.  What I want is
+some way to get parameters in by hand.  So rather than having the
+ObsData class be a parameter, I should probably just have made a
+subclass.
+
+But really I just need arguments to the ObsData class.
+
+WHat can **kwargs do for me?  IT is a dictionary of keywords
