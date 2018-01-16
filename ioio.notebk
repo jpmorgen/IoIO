@@ -2125,4 +2125,21 @@ subclass.
 
 But really I just need arguments to the ObsData class.
 
-WHat can **kwargs do for me?  IT is a dictionary of keywords
+What can **kwargs do for me?  It is a dictionary of keywords
+
+OK, I think I implemented that.  But now how to pass that in from the
+command line?  I might want to do a * after something like --ObsDataArgs
+
+--> think about making an emulator of MaxImData for Linux
+
+Hmm.  Not sure if the **kwargs is really going to work with argparse.
+I basically need to just know what the arguments are going to be
+
+OK, should now be able to do
+
+ioio.py --ND_param_dir "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\data\2018-01-16"
+
+Mon Jan 15 20:10:30 2018 MST  jpmorgen@byted
+
+Ack!  Passing **kwargs only works once.  Once the keywords have been
+stuffed into a dictionary,  they are a positional parameter

@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 from scipy import signal, ndimage
 
 run_level_default_ND_params \
-    = ((  2.33003277e-01,   2.36542641e-01)
+    = ((  2.33003277e-01,   2.36542641e-01), 
        (  1.26129140e+03,   1.36960502e+03))
 
 # These are shared definitions between Windows and Linux
@@ -1454,7 +1454,8 @@ if sys.platform == 'win32':
         def __init__(
                 self,
                 ObsClassName=None, 
-                ObsClassModule=None):
+                ObsClassModule=None,
+                **ObsClassArgs): # args to use to instantiate ObsClassName
             self.MD = MaxImData()
             if ObsClassName is None:
                 # Default to plain ObsData
@@ -1475,11 +1476,20 @@ if sys.platform == 'win32':
                 self.ObsDataClass \
                     = getattr(importlib.import_module(ObsClassModule),
                               ObsClassName)
+            self.ObsClassArgs = ObsClassArgs
             self.guider_commanded_running = None
             self.ObsDataList = []
     
+        def create_ObsData(self, arg, **ObsClassArgs):
+            if ObsClassArgs != {}:
+                return self.ObsDataClass(arg, **ObsClassArgs)
+            elif self.ObsClassArgs != {}:
+                return self.ObsDataClass(arg, **self.ObsClassArgs)
+            else:
+                return self.ObsDataClass(arg)
+
         def center(self, HDUList_im_fname_ObsData_or_obj_center=None,
-                   desired_center=None):
+                   desired_center=None, **ObsClassArgs):
             """Move the object to desired_center using guider slews.  Takes an
             image with default filter and exposure time if necessary
 
@@ -1494,14 +1504,12 @@ if sys.platform == 'win32':
                               np.ndarray)
                 or isinstance(HDUList_im_fname_ObsData_or_obj_center, str)):
                 # The ObsClass base class takes care of reading all of these
-                O = self.ObsDataClass(HDUList_im_fname_ObsData_or_obj_center)
+                O = self.create_ObsData(HDUList_im_fname_ObsData_or_obj_center,
+                                        **ObsClassArgs)
                 obj_center = O.obj_center
                 desired_center = O.desired_center
             elif isinstance(HDUList_im_fname_ObsData_or_obj_center,
                             ObsData):
-                # I am having a heck of a time getting this to work
-                # the way I want, with ObsData, not self.ObsDataClass.
-                # It may be that I am getting a little tricky with things
                 obj_center \
                     = HDUList_im_fname_ObsData_or_obj_center.obj_center
                 desired_center \
@@ -1516,14 +1524,15 @@ if sys.platform == 'win32':
                         exptime=default_exptime,
                         filt=default_filt,
                         tolerance=default_cent_tol,
-                        max_tries=3):
+                        max_tries=3,
+                        **ObsClassArgs):
             """Loop max_tries times, taking exposures and moving the telescope with guider slews to center the object
             """
             tries = 0
             while True:
                 tries += 1
                 HDUList = self.MD.take_im(exptime, filt)
-                O = self.ObsDataClass(HDUList)
+                O = self.create_ObsData(HDUList, **ObsClassArgs)
                 if (np.linalg.norm(O.obj_center - O.desired_center)
                     < tolerance):
                     return True
@@ -1563,7 +1572,12 @@ if sys.platform == 'win32':
         # For now, use the defaults tailored for IoIO.  It may be oto
         # complex to get thing in as parameters, in which case this
         # would be overridden
-        def acquire_image(self, exptime, filt, fname, ACP_obj=None):
+        def acquire_image(self,
+                          exptime,
+                          filt,
+                          fname,
+                          ACP_obj=None,
+                          **ObsClassArgs):
             if (self.guider_commanded_running
                 and not self.MD.CCDCamera.GuiderRunning):
                 log.warning('Guider was turned off, will turn back on, but may be cloudy or have other problems interfering with guiding')
@@ -1576,7 +1590,7 @@ if sys.platform == 'win32':
             if ACP_obj:
                 # Eventually we would read the file from the disk
                 # Consider using ACP's TakePicture
-                O = self.ObsDataClass(fname)
+                O = self.create_ObsData(fname, **ObsClassArgs)
             else:
                 HDUList = self.MD.take_im(exptime, filt)
                 # Write image to disk right away in case something goes wrong
@@ -1585,7 +1599,7 @@ if sys.platform == 'win32':
                 # Use the version of our image in HDUList for
                 # processing so we don't have to read it off the disk
                 # again
-                O = self.ObsDataClass(HDUList)
+                O = self.create_ObsData(HDUList, **ObsClassArgs)
             self.GuideBoxAdjuster(O)
 
         def GuideBoxAdjuster(self, O):
@@ -1739,7 +1753,15 @@ log.setLevel('INFO')
 def cmd_center(args):
     if sys.platform != 'win32':
         raise EnvironmentError('Can only control camera and telescope from Windows platform')
-    P = PrecisionGuide(args.ObsClassName, args.ObsClassModule) # other defaults should be good
+    default_ND_params = None
+    if args.ND_params is not None:
+        default_ND_params = get_default_ND_params(args.ND_params, args.maxcount)
+        P = PrecisionGuide(args.ObsClassName,
+                           args.ObsClassModule,
+                           default_ND_params=default_ND_params) # other defaults should be good
+    else:
+        P = PrecisionGuide(args.ObsClassName,
+                           args.ObsClassModule) # other defaults should be good
     P.center_loop()
 
 def cmd_get_default_ND_params(args):
@@ -1763,7 +1785,12 @@ if __name__ == "__main__":
     center_parser.add_argument(
         '--ObsClassName', help='ObsData class name')
     center_parser.add_argument(
-        '--ObsModuleName', help='ObsData class module file name')
+        '--ObsClassModule', help='ObsData class module file name')
+    # This is specific to the coronagraph
+    center_parser.add_argument(
+        '--ND_params', help='Derive default_ND_params from flats in this directory')
+    center_parser.add_argument(
+        '--maxcount', help='maximum number of flats to process -- median of parameters returned')
     center_parser.set_defaults(func=cmd_center)
 
     ND_params_parser = subparsers.add_parser(
