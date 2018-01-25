@@ -2142,4 +2142,189 @@ ioio.py --ND_param_dir "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\data\2018-01-16"
 Mon Jan 15 20:10:30 2018 MST  jpmorgen@byted
 
 Ack!  Passing **kwargs only works once.  Once the keywords have been
-stuffed into a dictionary,  they are a positional parameter
+stuffed into a dictionary, they are a positional parameter [ah, I need
+to pass them again as **kwargs, which puts them back into keyword
+args]
+
+--> ! script disconnects camera!
+
+Fri Jan 19 08:08:11 2018 MST  jpmorgen@byted
+
+So it looks like I need to do some work with the WCS keywords in order
+to control guider slews properly
+
+--> check to see where guider rate is set in APCC & if guider rates are
+    different because of rectangular pixels in guider
+
+--> I can do a sanity check with what it in MaxIm
+
+--> guidebox move is going to need to know about rectangular pixels.
+    Maybe guidebox move command should be expressed in arcsec
+
+
+Indeed, I think having the WCS transformations from main camera pixels
+to delta arcsec.  Guider move is going to be in delta arcsec which
+needs to be translated into delta pix
+
+--> should print be a function or a procedure?
+--> a function
+
+--> return is just a statement but can be a function
+
+--> BASIC
+
+Fri Jan 19 19:12:54 2018 EST  jpmorgen@byted
+
+So I have been struggling with what to do with all of the command line
+parameters that would get added by people's different modules.
+Fundamentally what needs to happen is that a bunch more
+center_parser.add_argument calls need to be made.  So center_parser
+could be an object that gets passed around to the modules that add to
+it.  So there could be some registration system.  It could be part of
+CorObsData, but it really doesn't fit there.  It would need a
+component that would add to the center_parser and the general parser
+too.  And to the cmd_center
+
+Mon Jan 22 08:20:19 2018 EST  jpmorgen@snipe
+
+--> anti-stiction in DEC
+
+Ack!  I think I have a bad pin point solution in the guider
+
+--> get another guider plate solve
+
+OK, PIERSIDE is what I want and not FLIPSTAT
+
+I will want to have the MaxImData connect to the telescope itself,
+since the MaxIm properties don't do all the work I need
+
+FLIPSTAT should be '' or FLIP/MIRROR
+
+In any case, for some reason it is not being used
+
+--> I need to figure out what telescope object is being used
+
+--> get guider rates
+
+Guider rate is a setting on the Rate settings menu in APCC
+http://www.ascom-standards.org/Help/Developer/html/P_ASCOM_DriverAccess_Telescope_GuideRateDeclination.htm
+
+<sigh> so just like all ASCOM components, I have to separately specify
+the equipment
+
+AstroPhysicsV2.Telescope
+
+Before I forget, tweak the run_level_default_ND_params
+
+ioio.py ND_params '/data/io/IoIO/raw/2018-01-22'
+    = [[  3.63686271e-01,   3.68675375e-01],
+       [  1.28303305e+03,   1.39479846e+03]]
+
+Now I would like to use that.  Difficult logic in the __init__.  I
+think that I might have to use run_level_default_ND_params in the
+invocation of 
+
+Mon Jan 22 17:16:46 2018 EST  jpmorgen@snipe
+
+--> Hey, ACP doesn't like to have MaxIm connected to the telescope, so
+    maybe I should avoid doing that too, if possible
+
+So how invovled do I want to get with the MaxIm stuff for the
+telescope?
+
+Auto Scope Dec would presumably need the scope connected to MaxIm.
+But ASCOM direct might sort of do that.
+
+Looking at the behavior of MaxIm, unless I am connected to the
+telescope, Auto Scope Dec and Auto Pier flip are grayed out + Pier
+Flip is active
+
+Bob has SUP.AutoGuide(true) to turn on his own autoguiding algorithm.
+I suppose I could use that.  Ugg.  That means I need to determine if I
+am in his stuff or not.  Alternately, I can connect and disconnect
+MaxIm to the telescope when I get out of my stuff.
+
+No, I could potentially keep disconnected from the scope in MaxIm and
+copy all that in myself.....
+
+So what is the best way to get run_level_default_ND_params?  That
+happens in populate_obj, when we would have otherwise thown an error.
+
+Tue Jan 23 11:22:08 2018 EST  jpmorgen@snipe
+
+So I think the astrometry files should be done in a similar way.  Got
+those in with host specific paths
+
+I think I want to have a separate astrometry routine that gives me
+what I want.
+
+--> AlignmentModes will be in that tweak
+CanPulseGuide?
+SideOfPier
+
+<Sigh> I am not sure if pierEast pierWest is going to give me what I
+need.  But looking at the PinPoint solutions, I see the CDELT* are
+_both_ of opposite sign on pier flip.  Ah.  The trick is that the RA
+axis goes in the opposite direction!
+
+ a = np.array([[1, 2], [3, 4]])
+ a[:,::-1]
+array([[2, 1],
+       [4, 3]])
+
+Hey, I can use Ellipsis, or ... to skip to the last index, which helps
+ensure program works if just one tuple is given
+
+ a = np.array([[1, 2], [3, 4]])
+ a[...,::-1]
+
+Wed Jan 24 07:57:05 2018 EST  jpmorgen@snipe
+
+OK, so I may want to rename guider_move in MaxImData
+
+Looking at ASCOM standard to see if there is a matching name, no, I
+did it with guider_move, since that matched MaxIm!
+
+http://www.ascom-standards.org/Help/Developer/html/P_ASCOM_DriverAccess_Telescope_GuideRateDeclination.htm
+
+PIERSIDE =EAST/WESTin hdr
+SideOfPier =pierEast pierWest in ASCOM
+
+So guider_move takes a ddec_dra pair
+
+--> remember to set DEC in MaxIm guiding property
+
+OK, I have center working with pixels.  But what if I can get it in
+world coordinates?  That would require a special ObsData that used
+PinPoint.
+
+Hey, I could probably squeeze that in by reading the HDUList[0].header
+in the ObsData.
+
+I can standardize on having the ObsData provide pixels for obj_center
+and desired_center and do the transformations on the fly as needed.
+
+Hmm  What if I want to pass an astrometry to center?  It can be
+authoritative or approximate
+
+Ack.  I was zealous in saving memory and deleted HDUList_im_or_fname
+from ObsData.  I still want the header around, if possible.
+
+I guess that means I want to have self.header around
+
+OK, took care of that, hopefully without inducing bugs
+
+Now I need to think about flow.  I have scope_wcs, which returns an
+HDUList (should just be a header) that
+
+test del withhout copy in ObsData
+
+https://stackoverflow.com/questions/22069727/python-garbage-collector-behavior-on-compound-objects
+
+suggests I don't need to do the copy, since individual objects have
+individual reference counts even if they are within a compound object
+
+--> consider using a sequence of plate solves to get the filter
+    offsets
+
+scope_fname_HDUList_or_header
