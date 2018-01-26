@@ -2328,3 +2328,69 @@ individual reference counts even if they are within a compound object
     offsets
 
 scope_fname_HDUList_or_header
+
+Fri Jan 26 06:55:15 2018 EST  jpmorgen@snipe
+
+Working on ioio.py
+
+--> enumeration of Telescope. AlignmentMode Property
+
+--> not getting astrometry of guider right
+
+reversing RA helped, but rates are way too high
+
+push north button, Jupiter moves down
+on east of pier, push west, Jupiter moves right
+
+upper left resulted in dra_ddec
+
+[ 0.15581682  0.08760853]
+
+lower right
+
+[-0.1570902  -0.07768477]
+
+and that after the RA axis flip (still on ease side of pier)
+
+KIt is almost like we are off by a factor of 2
+
+Jupiter (star) in upper left moving -20, +34
+
+Hmm.  Factor of 2 on guider rate did it!  Oops, that was to absolute
+center of image
+
+Oops, was using standard center!  Wow!  That worked!
+
+ioio.py center --ObsClassName CorObsData
+
+Works too!
+
+Pier flip.  Jupiter is near meridian, but I should be able to track
+past the meridian for a bit + I can go to Vega if worse comes to worse
+
+Hmm.  Now it is totally not working try center again.
+
+Moved it farther away.  But sky is super bright
+
+Whew.  What a pain.  Lets see if we can break it down into some constituents
+
+Fri Jan 26 11:51:56 2018 EST  jpmorgen@snipe
+
+Ah HA!  I think I found the factor of 2!  It is the binning!
+
+Fri Jan 26 13:24:57 2018 EST  jpmorgen@snipe
+
+Working on understanding rates
+
+Scope actual rates
+0.004178075
+0.004178075
+Rates calculated from guider
+0.00536077057072
+0.00401567330861
+
+Actually not too bad!
+
+Fri Jan 26 15:28:20 2018 EST  jpmorgen@snipe
+
+Whew!  Finally got the 
