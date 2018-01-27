@@ -2393,4 +2393,21 @@ Actually not too bad!
 
 Fri Jan 26 15:28:20 2018 EST  jpmorgen@snipe
 
-Whew!  Finally got the 
+Whew!  Finally got the thing to work on the east side of the pier
+
+Sat Jan 27 05:21:04 2018 EST  jpmorgen@snipe
+
+Works on west side of pier!
+
+I still have the residual E/W flip I am not sure is correct.  Delta RA
+is relative to what positive RA is, which is negative X in the sense
+that east is left when you look at the sky and east is positive RA.
+Noted that in the code.
+
+Now that centering is working, the next step is to work on guiding,
+since I think I am going to need to turn that on and off myself
+
+CCDCamera.GuiderCalState == 2 may be a nice thing to assert to make
+sure the guider is calibrated, though I am not sure if that is on a
+per launch basis
+

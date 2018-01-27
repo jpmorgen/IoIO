@@ -1151,8 +1151,8 @@ if sys.platform == 'win32':
     # --> these are things that eventually I would want to store in a
     # --> configuration file
     # --> CHANGE ME BACK TO 1s and filter 0
-    default_exptime = 0.7
-    default_filt = 1
+    default_exptime = 1
+    default_filt = 0
     default_cent_tol = 10   # Pixels
     default_guider_exptime = 1
 
@@ -1246,6 +1246,7 @@ if sys.platform == 'win32':
             #self.get_object_center = None
     
         def getDeviceInterface(self):
+            """THIS DOES NOT WORK.  I guess name space is handle another way"""
             if self.DeviceInterface is not None:
                 return True
             try:
@@ -1412,14 +1413,14 @@ if sys.platform == 'win32':
                 # other side of a GEM pier.  In that case, both RA and DEC
                 # are reversed
                 # --> Having trouble getting ASCOM to give me access to namesspace
-                # self.DeviceInterface.AlignmentModes.algGermanPolar
+                # self.DeviceInterface.AlignmentModes.algGermanPolar 2
                 if (self.Telescope.AlignmentMode == 2
                     and
-                    ((header['PIERSIDE'] == 'EAST'
-                      and self.Telescope.SideOfPier == 0#self.Telescope.pierWest
+                    ((header['PIERSIDE'] == 'EAST' # and sideofpier = 0
+                      and self.Telescope.SideOfPier == 0 #self.DeviceInterface.pierWest
                       or
-                      header['PIERSIDE'] == 'WEST'
-                      and self.Telescope.SideOfPier == 1))):#self.Telescope.pierEast))):
+                      header['PIERSIDE'] == 'WEST' # and sideofpier=1
+                      and self.Telescope.SideOfPier == 1))): #self.Telescope.pierEast))):
                     pier_flip_sign = -1
                 else:
                     pier_flip_sign = 1
@@ -1572,9 +1573,6 @@ if sys.platform == 'win32':
             if self.Telescope.CanSetGuideRates:
                 ra_rate = self.Telescope.GuideRateRightAscension
                 dec_rate = self.Telescope.GuideRateDeclination
-                D.say('Scope actual rates')
-                D.say(ra_rate)
-                D.say(dec_rate)
             else:
                 # Grep the rates out of the MaxIm calibration and our
                 # guide scope astrometry
@@ -1615,13 +1613,8 @@ if sys.platform == 'win32':
                 guider_dra_ddec = w_coords[1, :] - w_coords[0, :]
                 ra_rate = np.abs(guider_dra_ddec[0]/dt)
                 dec_rate = np.abs(guider_dra_ddec[1]/dt)
-                D.say('Rates calculated from guider')
-                D.say(ra_rate)
-                D.say(dec_rate)
             # Change to rectangular tangential coordinates for small deltas
-            D.say(dra_ddec)
             dra_ddec[0] = dra_ddec[0]*np.cos(np.radians(dec))
-            D.say(dra_ddec)
             dt = dra_ddec/np.asarray((ra_rate, dec_rate))
             
             ## The guider motion is calibrated in pixels per second, with
@@ -1640,13 +1633,17 @@ if sys.platform == 'win32':
                 log.warning('requested move of ' + str(dra_ddec) + ' arcsec translates into move times of ' + str(np.abs(dt)) + ' seconds.  Limiting move in one or more axes to max t of ' + str(max_t))
                 dt = np.minimum(max_t, abs(dt)) * np.sign(dt)
                 
-            # --> Do I have E/W mixed up?
-            dt[0] = -dt[0]
+            # MaxIm documents guider moves in +/- X and Y rather than
+            # delta RA and DEC, which is actually what we are
+            # commanding the mount to do.  This is confusing because
+            # +RA is to the east (stars that haven't transited the
+            # meridian yet) and, more confusingly, east is to the left
+            # when looking at the sky with north up
             log.info('Seconds to move guider in RA and DEC: ' + str(dt))
             if dt[0] > 0:
-                RA_success = self.CCDCamera.GuiderMove(0, dt[0])
+                RA_success = self.CCDCamera.GuiderMove(1, dt[0])
             elif dt[0] < 0:
-                RA_success = self.CCDCamera.GuiderMove(1, -dt[0])
+                RA_success = self.CCDCamera.GuiderMove(0, -dt[0])
             else:
                 # No need to move
                 RA_success = True
@@ -1952,7 +1949,7 @@ if sys.platform == 'win32':
             if obj_center is None or desired_center is None:
                 raise ValueError('Invalid HDUList_im_fname_ObsData_or_obj_center or a problem establishing desired_center from current CCD image (or something else...)')
             
-            log.info('pixel coordinates of obj_center and desired_center: ' + repr((obj_center, desired_center)))
+            log.info('pixel coordinates (X, Y)of obj_center and desired_center: ' + repr((obj_center[::-1], desired_center[::-1])))
             wcoords = self.MD.scope_wcs((obj_center, desired_center),
                                         to_world=True,
                                         astrometry=astrometry_from,
@@ -1970,7 +1967,6 @@ if sys.platform == 'win32':
             """
             tries = 0
             while True:
-                tries += 1
                 HDUList = self.MD.take_im(exptime, filt)
                 O = self.create_ObsData(HDUList, **ObsClassArgs)
                 if (np.linalg.norm(O.obj_center - O.desired_center)
@@ -1980,6 +1976,7 @@ if sys.platform == 'win32':
                     log.error('Failed to center target to ' + str(tolerance) + ' pixels after ' + str(tries) + ' tries')
                     return False
                 self.center(O)
+                tries += 1
             # We should never get here
             assert False
 
