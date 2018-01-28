@@ -2411,3 +2411,59 @@ CCDCamera.GuiderCalState == 2 may be a nice thing to assert to make
 sure the guider is calibrated, though I am not sure if that is on a
 per launch basis
 
+--> desired center is not right when Jupiter is off the ND filter.
+    See R-band_off_ND_filter
+
+C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts>ioio.py center --ObsClassName CorObsData
+INFO: Setting default_ND_params from run_level_default_ND_params[[  3.63686271e-01   3.68675375e-01]
+ [  1.28303305e+03   1.39479846e+03]] [__main__]
+INFO: pixel coordinates (X, Y) of obj_center and desired_center: (array([ 1355.45544679,  1130.19268443]), array([ 1330.70602846,  1100.        ])) [__main__]
+WARNING: FITSFixedWarning: RADECSYS= 'FK5 ' / Equatorial coordinate system
+the RADECSYS keyword is deprecated, use RADESYSa. [astropy.wcs.wcs]
+INFO: Seconds to move guider in RA and DEC: [-1.252552   -1.58959738] [__main__]
+INFO: Setting default_ND_params from run_level_default_ND_params[[  3.63686271e-01   3.68675375e-01]
+ [  1.28303305e+03   1.39479846e+03]] [__main__]
+INFO: pixel coordinates (X, Y) of obj_center and desired_center: (array([ 1356.57265208,  1129.56084018]), array([ 1331.59988387,  1100.        ])) [__main__]
+INFO: Seconds to move guider in RA and DEC: [-1.26475488 -1.55706983] [__main__]
+INFO: Setting default_ND_params from run_level_default_ND_params[[  3.63686271e-01   3.68675375e-01]
+ [  1.28303305e+03   1.39479846e+03]] [__main__]
+INFO: pixel coordinates (X, Y) of obj_center and desired_center: (array([ 1363.30603524,  1089.87094489]), array([ 1332.07164868,  1100.        ])) [__main__]
+INFO: Seconds to move guider in RA and DEC: [-1.62873262  0.49398182] [__main__]
+INFO: Setting default_ND_params from run_level_default_ND_params[[  3.63686271e-01   3.68675375e-01]
+ [  1.28303305e+03   1.39479846e+03]] [__main__]
+ERROR: Failed to center target to 10 pixels after 3 tries [__main__]
+
+Center is clearly over at X = 1500 or so
+
+--> would be good to have a brightest star algorithm
+
+--> Ah Ha!  I think the cooler was off, which messed with my absolute
+    algorithm for Jupiter not in ND filter
+
+
+Sun Jan 28 06:21:50 2018 EST  jpmorgen@snipe
+
+Consider making my own module for ASCOM name space
+
+Sun Jan 28 06:45:30 2018 EST  jpmorgen@snipe
+
+--> So I am having two problems.  The pier flip logic is not working
+and CorObsData is not finding the center of Jupiter reliably
+
+Centered nicely on Procyon while on east side of pier (looking west).
+Ah, I think the problem is AstroPhysics might define east and west
+differently, which continues to confuse me.  But getting run-away
+
+So confusing thing is that PinPoint solution clearly shows flip in
+both X and Y axes when doing CDELT and friends.  That reflects that
+the telecsope tube is physically rotated through 180 degrees on pier
+flip.  But what happens to the axes?
+
+--> Ah, when through the pole, the sense of the DEC axis gets flipped,
+    so it happens to match the flipped sense of the DEC direction on
+    the CCD.  But RA doesn't.
+
+OK, so where to implement this?
+
+<sigh> The way I implemented this with absolute coordinates, I think I
+need to 

@@ -1147,6 +1147,7 @@ def guide_calc(x1, y1, fits_t1=None, x2=None, y2=None, fits_t2=None, guide_dt=10
 if sys.platform == 'win32':
     # These are needed for MaxImData
     import win32com.client
+    import ASCOM_namespace as ASCOM
 
     # --> these are things that eventually I would want to store in a
     # --> configuration file
@@ -1220,333 +1221,6 @@ if sys.platform == 'win32':
             # indication of how long it is safe to press the guider
             # movement buttons
             self.guider_max_move_multiplier = 20
-
-    
-            # --> This will be refined
-            # The conversion between guider button push time and guider
-            # pixels is stored in the CCDCamera.Guider[XY]Speed
-            # properties.  Plate scales in arcsec/pix are not, though they
-            # can be greped out of FITS headers. 
-    
-            # Main camera plate solve, binned 2x2:
-            # RA 23h 54m 56.8s,  Dec +77° 54' 16.2"
-            # Pos Angle +182° 53.2', FL 1200.3 mm, 1.56"/Pixel
-            # not sure if this is correct
-            self.main_plate = 1.56/2 # arcsec/pix
-            self.main_angle = 180 - 182 + 53.2/60 # CCW from N on east side of pier
-    
-            # Guider (Binned 1x1)
-            # RA 04h 22m 39.7s,  Dec +25° 38' 15.5"
-            # Pos Angle +358° 22.2', FL 400.9 mm, 4.42"/Pixel
-            self.guider_plate = 4.43
-            self.guider_angle = 358+22.2/60
-    
-            # This is a function that returns two vectors, the current
-            # center of the object in the main camera and the desired center 
-            #self.get_object_center = None
-    
-        def getDeviceInterface(self):
-            """THIS DOES NOT WORK.  I guess name space is handle another way"""
-            if self.DeviceInterface is not None:
-                return True
-            try:
-                self.DeviceInterface = win32com.client.Dispatch('ASCOM.DeviceInterface')
-            except:
-                raise EnvironmentError('Error instantiating ASCOM DeviceInterface.  Is ASCOM installed?')
-            # Catch any other weird errors
-            assert isinstance(self.DeviceInterface, win32com.client.CDispatch)
-            
-        def getTelescope(self):
-            if self.Telescope is not None:
-                return True
-            #self.getDeviceInterface()
-            try:
-                self.Telescope = win32com.client.Dispatch(default_telescope)
-            except:
-                raise EnvironmentError('Error instantiating telescope control object ' + default_telescope + '.  Is the telescope on and installed?')
-            # Catch any other weird errors
-            assert isinstance(self.Telescope, win32com.client.CDispatch)
-            
-        def getApplication(self):
-            if self.Application is not None:
-                return True
-            try:
-                self.Application = win32com.client.Dispatch("MaxIm.Application")
-            except:
-                raise EnvironmentError('Error creating MaxIM application object.  Is MaxIM installed?')
-            # Catch any other weird errors
-            assert isinstance(self.Application, win32com.client.CDispatch)
-
-        def getCCDCamera(self):
-            if self.CCDCamera is not None:
-                return True
-            try:
-                self.CCDCamera = win32com.client.Dispatch("MaxIm.CCDCamera")
-            except:
-                raise EnvironmentError('Error creating CCDCamera object.  Is there a CCD Camera set up in MaxIm?')
-            # Catch any other weird errors
-            assert isinstance(self.CCDCamera, win32com.client.CDispatch)
-    
-        def getDocument(self):
-            """Gets the document object of the current window"""
-            # The CurrentDocument object gets refreshed when new images
-            # are taken, so all we need is to make sure we are connected
-            # to begin with
-            if self.Document is not None:
-                return True
-            self.getApplication()
-            try:
-                self.Document = self.Application.CurrentDocument
-            except:
-                raise EnvironmentError('Error retrieving document object')
-            # Catch any other weird errors
-            assert isinstance(self.Document, win32com.client.CDispatch)
-    
-        def connect(self):
-            """Link to telescope, CCD camera(s), filter wheels, etc."""
-
-            # MaxIm can connect to the telescope and use things like
-            # pier side to automatically adjust guiding calculations,
-            # but it doesn't make the telescope pier side available to
-            # the user.  That means we need to connect separately for
-            # our calculations.  Furthermore, ACP doesn't like to have
-            # MaxIm connected to the telescope while guiding (except
-            # through the ASCOM guide ports or relays), so we need to
-            # do everything out-of-band
-            self.getTelescope()
-            self.Telescope.Connected = True
-            if self.Telescope.Connected == False:
-                raise EnvironmentError('Link to telescope failed.  Is the power on to the mount?')
-            self.getApplication()
-            ## --> ACP doesn't like MaxIm being connected to the
-            ## --> telescope.  We will have to use the property of
-            ## --> telecsope and copy over to appropriate places in
-            ## --> MaxIm, as if we were operating by hand
-            #self.Application.TelescopeConnected = True
-            #if self.Application.TelescopeConnected == False:
-            #    raise EnvironmentError('MaxIm link to telescope failed.  Is the power on to the mount?')
-            self.getCCDCamera()
-            self.CCDCamera.LinkEnabled = True
-            if self.CCDCamera.LinkEnabled == False:
-                raise EnvironmentError('Link to camera hardware failed.  Is the power on to the CCD (including any connection hardware such as USB hubs)?')
-
-        def scope_wcs(self,
-                      coords_in,
-                      to_world=False,
-                      to_pix=False,
-                      astrometry=None,
-                      absolute=False):
-            """Computes WCS coordinate transformations to/from UNBINNED PIXELS, using scope coordinates if necessary
-
-            Parameters
-            ----------
-            coords_in : tuple-like array
-                (List of) coordinates to transform.  Pixel coordinates
-                are in Y, X order, UNBINNED.  World coordinates are in
-                RA, DEC order 
-            to_world : Boolean
-                perform pix to world transformation
-            to_pix : Boolean
-                perform world to pix transformation
-            astrometry : scope name, filename, HDUList, or FITS header 
-                Input method for providing an HDUList with WCS
-                parameters appropriate for the CCD being used (mainly
-                CDELT*).  If scope name provided ("main" or "guide"),
-                the appropriate run level default file will be used.
-                Can also be a FITS filename or HDUList object.
-                Default: "main."  If astrometry image was taken with
-                binned pixels, the header keys will be adjusted so the
-                WCS transformations will be to/from unbinned pixels
-            """
-            coords_in = np.asarray(coords_in)
-            if coords_in.shape[-1] != 2:
-                raise ValueError('coordinates must be specified in pairs')
-            if to_world + to_pix != 1:
-                raise ValueError('Specify one of to_world or to_pix')
-            # Set up our default HDUList
-            if astrometry is None:
-                astrometry = 'main'
-            if isinstance(astrometry, str):
-                if astrometry.lower() == 'main':
-                    astrometry = run_level_main_astrometry
-                elif astrometry.lower() == 'guide':
-                    astrometry = run_level_guide_astrometry
-                if not os.path.isfile(astrometry):
-                    raise ValueError(astrometry + ' file not found')
-                # If we made it here, we have a file to open to get
-                # our astrometry from.  Opening it puts the header
-                # into a dictionary we can access at any time
-                astrometry = fits.open(astrometry)
-                we_opened_file = True
-            if isinstance(astrometry, fits.HDUList):
-                header = astrometry[0].header
-                we_opened_file = False
-            elif isinstance(astrometry, fits.Header):
-                header = astrometry
-                pass
-            else:
-                raise ValueError('astrometry must be a string, FITS HDUList, or FITS header')
-            if we_opened_file:
-                astrometry.close()
-            if header.get('CTYPE1') is None:
-                raise ValueError('astrometry header does not contain a FITS header with valid WCS keys.')
-
-            if not absolute:
-                # NOTE: If we were passed a header, this will
-                # overwrite its CRVAL keys.  But we are unlikely to be
-                # passed a header in the non-absolute case
-                # Connects to scope and MaxIm
-                self.connect()
-                try:
-                    RA = self.Telescope.RightAscension
-                    DEC = self.Telescope.Declination
-                except:
-                    # If, for some reason the telescope doesn't report
-                    # its RA and DEC, we can use the DEC reported by
-                    # the user in the Scope Dec. box of the Guide tab,
-                    # since DEC is really all we care about for the
-                    # cosine effect in calculating deltas
-                    RA = 0
-                    DEC = self.CCDCamera.GuiderDeclination
-                    log.warning('Telescope is not reporting RA and/or DEC.  Setting RA = ' + str(RA) + ' and DEC = ' + str(DEC) + ', which was read from the Scope Dec. box of the Guide tab.')
-                # Check to see if our astrometry image was taken on the
-                # other side of a GEM pier.  In that case, both RA and DEC
-                # are reversed
-                # --> Having trouble getting ASCOM to give me access to namesspace
-                # self.DeviceInterface.AlignmentModes.algGermanPolar 2
-                if (self.Telescope.AlignmentMode == 2
-                    and
-                    ((header['PIERSIDE'] == 'EAST' # and sideofpier = 0
-                      and self.Telescope.SideOfPier == 0 #self.DeviceInterface.pierWest
-                      or
-                      header['PIERSIDE'] == 'WEST' # and sideofpier=1
-                      and self.Telescope.SideOfPier == 1))): #self.Telescope.pierEast))):
-                    pier_flip_sign = -1
-                else:
-                    pier_flip_sign = 1
-    
-                # Make sure RA is on correct axis
-                if 'RA' in header['CTYPE1']:
-                    header['CRVAL1'] = RA / 24*60 * pier_flip_sign
-                    header['CRVAL2'] = DEC * pier_flip_sign
-                elif 'DEC' in header['CTYPE1']:
-                    header['CRVAL2'] = RA / 24*60 * pier_flip_sign
-                    header['CRVAL1'] = DEC * pier_flip_sign
-            # Our header now has the pointing direction we want Now
-            # fix binning and subframing.  More pixels to the center,
-            # but they are smaller
-            header['CRPIX1'] = header['XBINNING'] * header['CRPIX1'] + header['XORGSUBF']
-            header['CRPIX2'] = header['YBINNING'] * header['CRPIX2'] + header['YORGSUBF']
-            header['CDELT1'] /= header['XBINNING']
-            header['CDELT2'] /= header['YBINNING']
-            header['CD1_1']  /= header['XBINNING']
-            header['CD1_2']  /= header['YBINNING']
-            header['CD2_1']  /= header['XBINNING']
-            header['CD2_2']  /= header['YBINNING']
-            # Do our desired transformations, only the WCS parts, not
-            # distortions, since I haven't mucked with those parameters
-            w = wcs.WCS(header)
-            if to_world:
-                # Our pix coords are in Y, X order.  Transpose using
-                # negative striding.  Use the Ellipsis trick to get
-                # to the last coordinate, which is, in a row major
-                # language, where the coordinate into the pairs
-                # resides (would be in the first coordinate in a
-                # column major language)
-                # https://stackoverflow.com/questions/12116830/numpy-slice-of-arbitrary-dimensions
-                coords = coords_in[..., ::-1]
-                # Decide to leave in RA DEC, since we are no longer in
-                # our image when we are RA and DEC
-                # The 0 is because we number our pixels from 0, unlike
-                # FORTRAN which does so from 1
-
-                # ACK!  The WCS package is not smart about checking
-                # for single tuple input, so I have to <sigh>
-                if coords.size == 2:
-                    return w.wcs_pix2world(coords[0], coords[1], 0)
-                else:
-                    return w.wcs_pix2world(coords, 0)
-            if to_pix:
-                pix = w.wcs_world2pix(coords_in, 0)
-                # Put out pix back into Y, X order, UNBINNED
-                return pix[..., ::-1]
-
-        #def scope_pix2world(self,
-        #                    pix, # Y, X due to transpose of images
-        #                    astrometry=None,
-        #                    absolute=False):
-        #    """Uses current scope position to handle WCS transformations."
-        #    """
-        #    # Set up our default scope
-        #    if astrometry is None:
-        #        astrometry = 'main'
-        #    if isinstance(astrometry, str):
-        #        if astrometry.lower() == 'main':
-        #            astrometry = run_level_main_astrometry
-        #        elif astrometry.lower() == 'guide':
-        #            astrometry = run_level_guide_astrometry
-        #        elif os.path.isfile(astrometry):
-        #            pass
-        #        else:
-        #            raise ValueError(astrometry + ' file not found or not a recognized scope ("main" or "guide")')
-        #        # If we made it here, we have a file to open to get
-        #        # our astrometry from
-        #        HDUList = fits.open(astrometry)
-        #    else:
-        #        HDUList = astrometry
-        #
-        #    # Transpose Y,X our pix using negative striding and Ellipsis trick
-        #    # https://stackoverflow.com/questions/12116830/numpy-slice-of-arbitrary-dimensions
-        #    pix = np.asarray(pix)
-        #    # C ordering means row major -- rows are the first
-        #    pix = pix[..., ::-1]
-        #
-        #    if absolute == True:
-        #        h = HDUList[0].header
-        #    elif absolute == False:
-        #        # Use the telescope's pointing
-        #        # Make a copy of the header so we don't confuse future calls that use this and think the 
-        #    else:
-        #        raise ValueError('Invalid value for "absolute" parameter (True of False')
-        #            
-        #        # Now do our coordinate transformation
-        #    w = wcs.WCS(h)
-        #     # The origin of our pix arrays is 0 because we are in a
-        #     # C-based language
-        #    world = w.wcs_pix2world(pix, 0)
-        #    # Don't transpose, just stay in RA and DEC
-        #    return world
-        #
-        #def dpix2dworld(self,
-        #                current_pos,
-        #                desired_center=None,
-        #                astrometry=None,
-        #                use_FITS_center=None):
-        #    """Uses current scope position to handle WCS transformations."
-        #    """
-        #    # Set up our default scope
-        #    if astrometry is None:
-        #        astrometry = 'main'
-        #    if isinstance(astrometry, str):
-        #        if astrometry.lower() == 'main':
-        #            astrometry = run_level_main_astrometry
-        #        elif astrometry.lower() == 'guide':
-        #            astrometry = run_level_guide_astrometry
-        #        elif os.path.isfile(astrometry):
-        #            pass
-        #        else:
-        #            raise ValueError(astrometry + ' file not found or not a recognized scope ("main" or "guide")')
-        #        # If we made it here, we have a file to open to get
-        #        # our astrometry from
-        #        HDUList = fits.open(astrometry)
-        #    else:
-        #        HDUList = astrometry
-        #    
-        #    # Now muck with our WCS 
-            
-
-            
-
 
         def guider_move(self,
                         dra_ddec,
@@ -1662,6 +1336,147 @@ if sys.platform == 'win32':
                 time.sleep(0.1)
             return RA_success and DEC_success
     
+        def scope_wcs(self,
+                      coords_in,
+                      to_world=False,
+                      to_pix=False,
+                      astrometry=None,
+                      absolute=False):
+            """Computes WCS coordinate transformations to/from UNBINNED PIXELS, using scope coordinates if necessary
+
+            Parameters
+            ----------
+            coords_in : tuple-like array
+                (List of) coordinates to transform.  Pixel coordinates
+                are in Y, X order, UNBINNED.  World coordinates are in
+                RA, DEC order 
+            to_world : Boolean
+                perform pix to world transformation
+            to_pix : Boolean
+                perform world to pix transformation
+            astrometry : scope name, filename, HDUList, or FITS header 
+                Input method for providing an HDUList with WCS
+                parameters appropriate for the CCD being used (mainly
+                CDELT*).  If scope name provided ("main" or "guide"),
+                the appropriate run level default file will be used.
+                Can also be a FITS filename or HDUList object.
+                Default: "main."  If astrometry image was taken with
+                binned pixels, the header keys will be adjusted so the
+                WCS transformations will be to/from unbinned pixels
+            """
+            coords_in = np.asarray(coords_in)
+            if coords_in.shape[-1] != 2:
+                raise ValueError('coordinates must be specified in pairs')
+            if to_world + to_pix != 1:
+                raise ValueError('Specify one of to_world or to_pix')
+            # Set up our default HDUList
+            if astrometry is None:
+                astrometry = 'main'
+            if isinstance(astrometry, str):
+                if astrometry.lower() == 'main':
+                    astrometry = run_level_main_astrometry
+                elif astrometry.lower() == 'guide':
+                    astrometry = run_level_guide_astrometry
+                if not os.path.isfile(astrometry):
+                    raise ValueError(astrometry + ' file not found')
+                # If we made it here, we have a file to open to get
+                # our astrometry from.  Opening it puts the header
+                # into a dictionary we can access at any time
+                astrometry = fits.open(astrometry)
+                we_opened_file = True
+            if isinstance(astrometry, fits.HDUList):
+                header = astrometry[0].header
+                we_opened_file = False
+            elif isinstance(astrometry, fits.Header):
+                header = astrometry
+                pass
+            else:
+                raise ValueError('astrometry must be a string, FITS HDUList, or FITS header')
+            if we_opened_file:
+                astrometry.close()
+            if header.get('CTYPE1') is None:
+                raise ValueError('astrometry header does not contain a FITS header with valid WCS keys.')
+
+            if not absolute:
+                # NOTE: If we were passed a header, this will
+                # overwrite its CRVAL keys.  But we are unlikely to be
+                # passed a header in the non-absolute case
+                # Connects to scope and MaxIm
+                self.connect()
+                try:
+                    RA = self.Telescope.RightAscension
+                    DEC = self.Telescope.Declination
+                except:
+                    # If, for some reason the telescope doesn't report
+                    # its RA and DEC, we can use the DEC reported by
+                    # the user in the Scope Dec. box of the Guide tab,
+                    # since DEC is really all we care about for the
+                    # cosine effect in calculating deltas
+                    RA = 0
+                    DEC = self.CCDCamera.GuiderDeclination
+                    log.warning('Telescope is not reporting RA and/or DEC.  Setting RA = ' + str(RA) + ' and DEC = ' + str(DEC) + ', which was read from the Scope Dec. box of the Guide tab.')
+                # Check to see if our astrometry image was taken on the
+                # other side of a GEM pier.  In that case, both RA and DEC
+                # are reversed
+                # --> Having trouble getting ASCOM to give me access to namesspace
+                # self.DeviceInterface.AlignmentModes.algGermanPolar 2
+                if (self.Telescope.AlignmentMode == ASCOM.algGermanPolar
+                    and
+                    ((header['PIERSIDE'] == 'EAST' # and sideofpier = 1
+                      and self.Telescope.SideOfPier == ASCOM.pierWest
+                      or
+                      header['PIERSIDE'] == 'WEST' # and sideofpier=0
+                      and self.Telescope.SideOfPier == ASCOM.pierEast))):
+                    pier_flip_sign = -1
+                else:
+                    pier_flip_sign = 1
+                log.info('pier_flip_sign= ' + str(pier_flip_sign))
+    
+                # Make sure RA is on correct axis
+                if 'RA' in header['CTYPE1']:
+                    header['CRVAL1'] = RA / 24*60 * pier_flip_sign
+                    header['CRVAL2'] = DEC * pier_flip_sign
+                elif 'DEC' in header['CTYPE1']:
+                    header['CRVAL2'] = RA / 24*60 * pier_flip_sign
+                    header['CRVAL1'] = DEC * pier_flip_sign
+            # Our header now has the pointing direction we want Now
+            # fix binning and subframing.  More pixels to the center,
+            # but they are smaller
+            header['CRPIX1'] = header['XBINNING'] * header['CRPIX1'] + header['XORGSUBF']
+            header['CRPIX2'] = header['YBINNING'] * header['CRPIX2'] + header['YORGSUBF']
+            header['CDELT1'] /= header['XBINNING']
+            header['CDELT2'] /= header['YBINNING']
+            header['CD1_1']  /= header['XBINNING']
+            header['CD1_2']  /= header['YBINNING']
+            header['CD2_1']  /= header['XBINNING']
+            header['CD2_2']  /= header['YBINNING']
+            # Do our desired transformations, only the WCS parts, not
+            # distortions, since I haven't mucked with those parameters
+            w = wcs.WCS(header)
+            if to_world:
+                # Our pix coords are in Y, X order.  Transpose using
+                # negative striding.  Use the Ellipsis trick to get
+                # to the last coordinate, which is, in a row major
+                # language, where the coordinate into the pairs
+                # resides (would be in the first coordinate in a
+                # column major language)
+                # https://stackoverflow.com/questions/12116830/numpy-slice-of-arbitrary-dimensions
+                coords = coords_in[..., ::-1]
+                # Decide to leave in RA DEC, since we are no longer in
+                # our image when we are RA and DEC
+                # The 0 is because we number our pixels from 0, unlike
+                # FORTRAN which does so from 1
+
+                # ACK!  The WCS package is not smart about checking
+                # for single tuple input, so I have to <sigh>
+                if coords.size == 2:
+                    return w.wcs_pix2world(coords[0], coords[1], 0)
+                else:
+                    return w.wcs_pix2world(coords, 0)
+            if to_pix:
+                pix = w.wcs_world2pix(coords_in, 0)
+                # Put out pix back into Y, X order, UNBINNED
+                return pix[..., ::-1]
 
         def rot(self, vec, theta):
             """Rotates vector counterclockwise by theta degrees"""
@@ -1672,55 +1487,19 @@ if sys.platform == 'win32':
             rotated = np.asarray(np.dot(M, vec))
             return np.squeeze(rotated)
     
-        def calc_main_move(self, current_pos, desired_center=None):
-            """Returns vector [ddec, dra] in arcsec to move scope to center
-            object at current_pos, where the current_pos and
-            desired_centers are vectors expressed in pixels on the
-            main camera in the astropy FITS Pythonic order Y, X.  Uses
-            pier flip state to calculate proper N/S direction
-
+        def take_im(self, exptime=default_exptime, filt=default_filt):
+            """Uses MaxIm to record an image
             """
-    
             self.connect()
-            if desired_center is None:
-                # --> WARNING!  This uses the current CCD image, not the
-                # --> Document object
-                desired_center = \
-                np.asarray((self.CCDCamera.StartY + self.CCDCamera.NumY, 
-                            self.CCDCamera.StartX + self.CCDCamera.NumX)) / 2.
-            dpix = np.asarray(desired_center) - np.asarray(current_pos)
-            # --> Somewhere in here I am going to need to read the
-            # --> pier flip from the telescope and do proper
-            # --> transformations
-            dpix = self.rot(dpix, self.main_angle)
-            return dpix * self.main_plate
-    
-        def get_keys(self):
-            """Gets list of self.required_FITS_keys from current image"""
-            self.FITS_keys = []
-            for k in self.required_FITS_keys:
-                self.FITS_keys.append((k, self.Document.GetFITSKey(k)))
-            
-        # --> Not sure if FITS files get written by MaxIm before or after
-        # --> they become Document property after a fresh read.  Could use
-        # --> CCDCamera version, but this keeps it consistent
-        def set_keys(self, keylist):
-            """Write desired keys to current image FITS header"""
-            self.getDocument()
-            if self.HDUList is None:
-                log.warning('Asked to set_keys, but no HDUList is empty')
-                return None
-            try:
-                h = self.HDUList[0].header
-                for k in keylist:
-                    if h.get(k):
-                        # Not sure how to get documentation part written
-                        self.Document.SetFITSKey(k, h[k])
-            except:
-                log.warning('Problem setting keys: ', sys.exc_info()[0])
-                return None
-                
-    
+            # Take a light (1) exposure
+            self.CCDCamera.Expose(exptime, 1, filt)
+            # This is potentially a place for a coroutine
+            time.sleep(exptime)
+            # --> Need to set some sort of timeout
+            while not self.CCDCamera.ImageReady:
+                time.sleep(0.1)
+            return(self.get_im())
+
         def get_im(self):
             """Puts current MaxIm image (the image with focus) into a FITS HDUList.  If an exposure is being taken or there is no image, the im array is set equal to None"""
             self.connect()
@@ -1768,19 +1547,116 @@ if sys.platform == 'win32':
             self.HDUList = fits.HDUList(hdu)
             return self.HDUList
 
-        def take_im(self, exptime=default_exptime, filt=default_filt):
-            """Uses MaxIm to record an image
-            """
-            self.connect()
-            # Take a light (1) exposure
-            self.CCDCamera.Expose(exptime, 1, filt)
-            # This is potentially a place for a coroutine
-            time.sleep(exptime)
-            # --> Need to set some sort of timeout
-            while not self.CCDCamera.ImageReady:
-                time.sleep(0.1)
-            return(self.get_im())
+        def get_keys(self):
+            """Gets list of self.required_FITS_keys from current image"""
+            self.FITS_keys = []
+            for k in self.required_FITS_keys:
+                self.FITS_keys.append((k, self.Document.GetFITSKey(k)))
+            
+        # --> Not sure if FITS files get written by MaxIm before or after
+        # --> they become Document property after a fresh read.  Could use
+        # --> CCDCamera version, but this keeps it consistent
+        def set_keys(self, keylist):
+            """Write desired keys to current image FITS header"""
+            self.getDocument()
+            if self.HDUList is None:
+                log.warning('Asked to set_keys, but no HDUList is empty')
+                return None
+            try:
+                h = self.HDUList[0].header
+                for k in keylist:
+                    if h.get(k):
+                        # Not sure how to get documentation part written
+                        self.Document.SetFITSKey(k, h[k])
+            except:
+                log.warning('Problem setting keys: ', sys.exc_info()[0])
+                return None
+                
+        def connect(self):
+            """Link to telescope, CCD camera(s), filter wheels, etc."""
 
+            # MaxIm can connect to the telescope and use things like
+            # pier side to automatically adjust guiding calculations,
+            # but it doesn't make the telescope pier side available to
+            # the user.  That means we need to connect separately for
+            # our calculations.  Furthermore, ACP doesn't like to have
+            # MaxIm connected to the telescope while guiding (except
+            # through the ASCOM guide ports or relays), so we need to
+            # do everything out-of-band
+            self.getTelescope()
+            self.Telescope.Connected = True
+            if self.Telescope.Connected == False:
+                raise EnvironmentError('Link to telescope failed.  Is the power on to the mount?')
+            self.getApplication()
+            ## --> ACP doesn't like MaxIm being connected to the
+            ## --> telescope.  We will have to use the property of
+            ## --> telecsope and copy over to appropriate places in
+            ## --> MaxIm, as if we were operating by hand
+            #self.Application.TelescopeConnected = True
+            #if self.Application.TelescopeConnected == False:
+            #    raise EnvironmentError('MaxIm link to telescope failed.  Is the power on to the mount?')
+            self.getCCDCamera()
+            self.CCDCamera.LinkEnabled = True
+            if self.CCDCamera.LinkEnabled == False:
+                raise EnvironmentError('Link to camera hardware failed.  Is the power on to the CCD (including any connection hardware such as USB hubs)?')
+
+        def getDeviceInterface(self):
+            """THIS DOES NOT WORK.  I guess name space is handle another way"""
+            if self.DeviceInterface is not None:
+                return True
+            try:
+                self.DeviceInterface = win32com.client.Dispatch('ASCOM.DeviceInterface')
+            except:
+                raise EnvironmentError('Error instantiating ASCOM DeviceInterface.  Is ASCOM installed? -- No, the real problem is the DeviceInterface thing is some sort of namespace include/import which I have not figured out how to get access to the way I plug into COM')
+            # Catch any other weird errors
+            assert isinstance(self.DeviceInterface, win32com.client.CDispatch)
+            
+        def getTelescope(self):
+            if self.Telescope is not None:
+                return True
+            #self.getDeviceInterface()
+            try:
+                self.Telescope = win32com.client.Dispatch(default_telescope)
+            except:
+                raise EnvironmentError('Error instantiating telescope control object ' + default_telescope + '.  Is the telescope on and installed?')
+            # Catch any other weird errors
+            assert isinstance(self.Telescope, win32com.client.CDispatch)
+            
+        def getApplication(self):
+            if self.Application is not None:
+                return True
+            try:
+                self.Application = win32com.client.Dispatch("MaxIm.Application")
+            except:
+                raise EnvironmentError('Error creating MaxIM application object.  Is MaxIM installed?')
+            # Catch any other weird errors
+            assert isinstance(self.Application, win32com.client.CDispatch)
+
+        def getCCDCamera(self):
+            if self.CCDCamera is not None:
+                return True
+            try:
+                self.CCDCamera = win32com.client.Dispatch("MaxIm.CCDCamera")
+            except:
+                raise EnvironmentError('Error creating CCDCamera object.  Is there a CCD Camera set up in MaxIm?')
+            # Catch any other weird errors
+            assert isinstance(self.CCDCamera, win32com.client.CDispatch)
+    
+        def getDocument(self):
+            """Gets the document object of the current window"""
+            # The CurrentDocument object gets refreshed when new images
+            # are taken, so all we need is to make sure we are connected
+            # to begin with
+            if self.Document is not None:
+                return True
+            self.getApplication()
+            try:
+                self.Document = self.Application.CurrentDocument
+            except:
+                raise EnvironmentError('Error retrieving document object')
+            # Catch any other weird errors
+            assert isinstance(self.Document, win32com.client.CDispatch)
+     
     class PrecisionGuide():
         """Class containing PrecisionGuide package
 
@@ -1930,31 +1806,16 @@ if sys.platform == 'win32':
                     astrometry_from = None
                     absolute = False
 
-                
-
-                #telescope_wcs(scaling_astrometry)
-                #
-                #w = wcs.WCS(input.header)
-                #pcoord = np.asarray((obj_center, desired_center))
-                ## Here is where we need to transpose our Y X
-                ## pixels to the X Y expected in the FITS header
-                ## Thanks to lead on Ellipsis from
-                ## https://stackoverflow.com/questions/12116830/numpy-slice-of-arbitrary-dimensions
-                ## C ordering means row major -- rows are the first
-                #pcoord = pcoord[..., ::-1]
-                #wcoord = w.wcs_pix2world(pcoord, 0)
-                #else:
-                    
-            
             if obj_center is None or desired_center is None:
                 raise ValueError('Invalid HDUList_im_fname_ObsData_or_obj_center or a problem establishing desired_center from current CCD image (or something else...)')
             
-            log.info('pixel coordinates (X, Y)of obj_center and desired_center: ' + repr((obj_center[::-1], desired_center[::-1])))
+            # --> Might want to change these to log.debug
+            log.info('pixel coordinates (X, Y) of obj_center and desired_center: ' + repr((obj_center[::-1], desired_center[::-1])))
             wcoords = self.MD.scope_wcs((obj_center, desired_center),
                                         to_world=True,
                                         astrometry=astrometry_from,
                                         absolute=absolute)
-            log.info('world coordinates of obj_center and desired_center: ' + repr(wcoords))
+            log.debug('world coordinates of obj_center and desired_center: ' + repr(wcoords))
             self.MD.guider_move(wcoords[1,:] - wcoords[0,:])
 
         def center_loop(self,
@@ -2045,17 +1906,6 @@ if sys.platform == 'win32':
 
             if self.ObsDataList.len == 0:
                 return
-
-        ## --> This is in the wrong place in terms of abstraction 
-        #def center_object(self):
-        #    if self.get_im() is None:
-        #        log.warning('No image')
-        #        return None
-        #    #self.guider_move(self.calc_main_move(self.get_object_center_pix()))
-        #    #obj_c = get_jupiter_center(self.HDUList)
-        #    obj_c = self.ObsData.obj_center(self.HDUList)
-        #    log.info('object center = ', obj_c)
-        #    self.guider_move(self.calc_main_move(obj_c))
 
         # Used pythoncom.CreateGuid() to generate this Fired up a
         # Python command line from cmd prompt in Windows.  The
