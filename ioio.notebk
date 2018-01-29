@@ -2466,4 +2466,165 @@ flip.  But what happens to the axes?
 OK, so where to implement this?
 
 <sigh> The way I implemented this with absolute coordinates, I think I
-need to 
+need to do the flip in both places, since +DEC is in the wrong
+direction
+
+
+--> Now wait a minute.  In scope_wcs, I do the pier flip to get the
+scaling astrometry correct, but I don't do it to get the pier side of
+the actual observation correct
+
+So I lined things up when pierEast was in effect, which is presumably
+why that worked correctly on that side
+
+--> I think I need to get the flip into guider_move
+
+--> CCDCamera.GuiderMove might have flipped X axis for me!
+--> Check autoflip if scope connected
+
+Sun Jan 28 12:11:21 2018 EST  jpmorgen@snipe
+
+Reading Autoguider Calibration section of MaxIm manual.  It says
+calibraitons are in +/- X and +/-Y, implying that X, Y buttons are
+real mount directions
+GuiderAutoPierFlip when scope connected
+GuiderReverseX when scope not connected
+
+There is no property for the Pier Flip check box, though it may be
+reflected in GuiderReverseX.  Documentation implies that
+GuiderReverseX could re-reverse a Pier Flipped state.
+
+From the looks of it, MaxIm is set up to just fiddle with the buttons
+until it works, not have a systematic replacement of a GoTo mount interface.
+
+
+
+  And even more confusingly, MaxIm can flip X
+            # for a GEM if the appropriate check box(es) are checked.
+            # And the worst yet, MaxIm does not tell us what kind of
+            # mount it is connected to, since it can guide just by
+            # having the camera connected to the guide buttons on the
+            # mount paddle
+
+? Guider motor control box options on Guider Settings Advanced tab
+aren't anywhere in property.
+
+--> This means that I am going to have to separately keep track of the
+    guider orientation and pier flip options
+
+So GuiderAutoPierFlip is a method that is going to deal with this.  It
+will return a tuple indicating if thigns are flipped.
+
+Ack!  My astrometry is not going to know about PIERSIDE unless it was
+taken from a GoTo scope.  This is starting to be pretty impossible to
+accomodate a nonGoTo scope
+
+--> Bob says something about calibrating guider when mount is on east side
+
+Ah, but I can use the astrometry? .... No, I don't know what state the
+mount was in when it was calibrated.  Based on the pier collision last
+year, it is clear that MaxIm keeps track of that, at least for "Point
+telescope here"
+
+Ah, I can tell what side the calibration was done on because I have an
+absolute guider calibration and the angle
+
+So guider calibration is done +X, -X, +Y, -Y
+
+Right now, the calibration is (+3.407, -3.384) at -178.4 deg
+
+I know the
+CD1_1   =   1.16034386481E-003
+CD2_2   =   1.18245542821E-003
+PIERSIDE= 'WEST    '
+
+I guess what I want is a method that takes the guide_astormetry and
+CCDCamera.Guider* info and returns ra rates and pier side on which
+
+I might want to make my guider dictionary a separate object.  [No,
+just make it part of the object, filled after connect]
+
+Mon Jan 29 07:09:05 2018 EST  jpmorgen@snipe
+
+--> Check to see the various states of the
+self.Application.TelescopeConnected whether or not guider is on
+
+Do some work to see why the R-band Jupiter off ND filter didn't work
+
+O = CorObsData('/data/io/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit', plot_dprof=True, plot_ND_edges=True)
+
+suspect it is because there is too much flux on ND filter
+
+Mon Jan 29 09:29:12 2018 EST  jpmorgen@snipe
+
+Got errors out, but Y reversed
+
+CRVAL2 is wrong [fixed]
+
+Sensing a circular argument with guider_cal_pier_side [nope]
+
+number of significant pixels 9457074.77866 = 9E6
+
+Well, after all that, Jupiter is going in the wrong direction
+
+So my flip state is depending on the guider astrometry file, which it
+should not
+
+Guider west:
+Guider X is +
+dp = 120,135
+sides = 0, 0
+flip state 1 1
+
+Guider east
+dp = -117, -138
+sides = 0 1
+flip state = -1 1
+
+Fixed problem with west because was doing product, when both change
+(always results in 1) and checking for pier_flip as boolean, not == 1
+
+But now I am still going in the wrong direction
+
+--> Check that guider cal changes numbers with changed sides.  Was
+    calibrated on side 1 = west.  I am on east now.  Numbers are 
+    search back on "Right now, the calibration is"
+
+West side, the calibration was (+3.407, -3.384) at -178.4 deg
+East side, the calibration is  (+3.405, -3.205) at 0.825 deg
+
+plus x went to the right, plus Y went up
+
+So indeed, the calibration depends on the pier side
+Calculated RA rate is now the second of these
+(0.004178075, 0.0050202733987532609).
+
+Am I forgetting cos DEC?  Yes.  That makes the calculated RA rate
+closer.
+
+Now that I am calibrated on the east and doing astrometry on the east,
+my pier flip state is 1 1, suggesting that this should work!  Indeed,
+got there on the first try!  Then proceeded to get lost since I am not
+doing CorObsData, but the directions are correct.
+
+Review: calibrate with scope on west, (looking east), got pier flip
+state wrong on west side of meridian (scope on east looking west)
+ASSUMING that MaxIm keeps track of what side it was calibrated on.
+
+Hmm.  There is another thing going on here.  The rates are the same
+sign but the angle is different.  Well, I think that means MaxIm did
+the conversion into pixel coordinates from motion, like I expected it did.
+
+Hmm.  Maybe it is wrong to not take the angle into consideration when
+doing the pier side?  No, I am getting the right answer there.
+
+All signs are pointing to MaxIm calling east of pier, looking west,
+"flipped"
+
+OK, another thing I have to look at: what does MaxIm really mean by X
+and Y?  Fundamentally there are RA and DEC motors.  X and Y are what
+line up along those 
+
+Ack!  I am still getting it wrong!
+
+What if I simplified it

@@ -33,8 +33,9 @@ elif socket.gethostname() == "IoIO1U1":
 
 run_level_main_astrometry = os.path.join(
     raw_data_root, '2018-01-18/PinPointSolutionEastofPier.fit')
-run_level_guide_astrometry = os.path.join(
-    raw_data_root, '2018-01-24/GuiderPinPointSolutionEastofPier.fit')
+run_level_guider_astrometry = os.path.join(
+    raw_data_root, '2018-01-24/GuiderPinPointSolutionWestofPier.fit')
+    #raw_data_root, '2018-01-24/GuiderPinPointSolutionEastofPier.fit')
 
 run_level_default_ND_params \
     = [[  3.63686271e-01,   3.68675375e-01],
@@ -146,8 +147,8 @@ class ObsData():
         return np.asarray((coords - self._subframe_origin) / self._binning)
         
     def HDU_unbinned(self):
-        '''Unbin primary HDU image
-        '''
+        """Unbin primary HDU image
+        """
         a = self.HDUList[0].data
         # Don't bother if we are already unbinned
         if np.sum(self._binning) == 2:
@@ -278,7 +279,7 @@ Uses readnoise (default = 5 e- RMS) to define bin widths
         im = signal.medfilt(im, kernel_size=3)
         im_center = np.unravel_index(np.argmax(im), im.shape)
         # Pretty-print our object center before we unbin
-        log.info('Object center (X, Y) = ' + str(im_center[::-1]))
+        log.debug('Object center (X, Y; binned) = ' + str(im_center[::-1]))
         self._obj_center = self.unbinned(im_center)
         return self._obj_center
 
@@ -455,6 +456,20 @@ class CorObsData(ObsData):
         
         # Work with unbinned image
         im = self.HDU_unbinned()
+
+        # Establish some metrics to see if Jupiter is on or off the ND
+        # filter.  Easiest one is number of saturated pixels
+        # /data/io/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit gives
+        # 4090 of these.  Calculation below suggests 1000 should be a
+        # good minimum number of saturated pixels (assuming no
+        # additional scattered light).  A star off the ND filter
+        # /data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit
+        # gives 124 num_sat
+        satc = np.where(im > 60000)
+        num_sat = len(satc[0])
+        log.debug('Number of saturated pixels in image: ' + str(num_sat))
+
+        # Work another way to see if the ND filter has a low flux
         im = im - self.back_level(im)
         
         # Get the coordinates of the ND filter
@@ -487,17 +502,18 @@ class CorObsData(ObsData):
         # np.pi * (Rj/plate)**2 * 1000 
         # array([ 3119112.76311733,  1103540.18436529])
         
-        obj_ND_metric = np.sum(im[boost_NDc0, boost_NDc1])
-        if obj_ND_metric < 1E6:
-            log.warning('Jupiter outside of ND filter?  obj_ND metric > 1E6  expected.  Actual = ' + str(obj_ND_metric))
+        sum_on_ND_filter = np.sum(im[boost_NDc0, boost_NDc1])
+        log.debug('sum of significant pixels on ND filter = ' + str(sum_on_ND_filter))
+        if num_sat > 1000 or sum_on_ND_filter < 1E6:
+            log.warning('Jupiter outside of ND filter?')
             # Outside the ND filter, Jupiter should be saturating.  To
             # make the center of mass calc more accurate, just set
             # everything that is not getting toward saturation to 0
             im[np.where(im < 40000)] = 0
             D.say('sum >=40000 ' + str(np.sum(im)))
 
-            # 25 worked for a star, have yet to find Jupiter totally
-            # off ND filter
+            # 25 worked for a star, 250 should be conservative for
+            # Jupiter (see above calcs)
             # if np.sum(im) < 65000 * 25:
             if np.sum(im) < 65000 * 250:
                 raise ValueError('Jupiter not found in image')
@@ -1151,9 +1167,9 @@ if sys.platform == 'win32':
 
     # --> these are things that eventually I would want to store in a
     # --> configuration file
-    # --> CHANGE ME BACK TO 1s and filter 0
-    default_exptime = 1
-    default_filt = 0
+    # --> CHANGE ME BACK TO 1s and filter 0 (0.7s, filter 1 works for day)
+    default_exptime = 0.7
+    default_filt = 1
     default_cent_tol = 10   # Pixels
     default_guider_exptime = 1
 
@@ -1200,6 +1216,21 @@ if sys.platform == 'win32':
         def __init__(self,
                      main_astrometry=None,
                      guider_astrometry=None):
+            self.main_astrometry = main_astrometry
+            self.guider_astrometry = guider_astrometry
+            # --> Eventually this might be some first-time init to
+            # record the images and run PinPoint on them
+            if self.main_astrometry is None:
+                self.main_astrometry = run_level_main_astrometry
+            if self.guider_astrometry is None:
+                self.guider_astrometry = run_level_guider_astrometry
+            # Mount & guider information --> some of this might
+            # eventually be tracked by this application in cases where
+            # it is not available from the mount
+            self.alignment_mode = None
+            self.guider_cal_pier_side = None
+            self.guide_rates = None # degrees/s
+
             # Create containers for all of the objects that can be
             # returned by MaxIm.  We'll only populate them when we need
             # them.  Some of these we may never use or write code for
@@ -1207,7 +1238,10 @@ if sys.platform == 'win32':
             self.CCDCamera = None
             self.Document = None
             self.Telescope = None
-            self.DeviceInterface = None # ASCOM enumerations
+            self.telescope_connectable = None
+            # ASCOM enumerations -- not working the way I want, so
+            # importing ASCOM_namespace
+            self.DeviceInterface = None
             
             # There is no convenient way to get the FITS header from MaxIm
             # unless we write the file and read it in.  Instead allow for
@@ -1221,11 +1255,157 @@ if sys.platform == 'win32':
             # indication of how long it is safe to press the guider
             # movement buttons
             self.guider_max_move_multiplier = 20
+            self.connect()
+            self.populate_obj()
 
+        def connect(self):
+            """Link to telescope, CCD camera(s), filter wheels, etc."""
+
+            # MaxIm can connect to the telescope and use things like
+            # pier side to automatically adjust guiding calculations,
+            # but it doesn't make the telescope pier side available to
+            # the user.  That means we need to connect separately for
+            # our calculations.  Furthermore, ACP doesn't like to have
+            # MaxIm connected to the telescope while guiding (except
+            # through the ASCOM guide ports or relays), so we need to
+            # do everything out-of-band
+            self.getTelescope()
+            if self.telescope_connectable:
+                self.Telescope.Connected = True
+                if self.Telescope.Connected == False:
+                    raise EnvironmentError('Link to telescope failed.  Is the power on to the mount?')
+            self.getApplication()
+            ## --> ACP doesn't like MaxIm being connected to the
+            ## --> telescope.  We will have to use the property of
+            ## --> telecsope and copy over to appropriate places in
+            ## --> MaxIm, as if we were operating by hand
+            #self.Application.TelescopeConnected = True
+            #if self.Application.TelescopeConnected == False:
+            #    raise EnvironmentError('MaxIm link to telescope failed.  Is the power on to the mount?')
+            self.getCCDCamera()
+            self.CCDCamera.LinkEnabled = True
+            if self.CCDCamera.LinkEnabled == False:
+                raise EnvironmentError('Link to camera hardware failed.  Is the power on to the CCD (including any connection hardware such as USB hubs)?')
+
+        def populate_obj(self, guider_astrometry=None):
+            """Called by connect() to fill our object property with useful info"""
+
+            # Fill our object with things we know
+            if self.telescope_connectable:
+                self.alignment_mode = self.Telescope.AlignmentMode
+            else:
+                # --> Eventually this warning might go away
+                log.error("Mount is not connected -- did you specify one in setup [currently the software source code]?  If you have a German equatorial mount (GEM), this software will likely not work properly upon pier flips [because code has not yet been written to let you specify the mode of your telescope on the fly].  Other mount types will work OK, but you should keep track of the Scope Dec. box in MaxIm's Guide tab.")
+
+            # Calculate guider rates based on astrometry and
+            # guider calibration.  Possibly we could be called
+            # again with a different astrometry
+            if guider_astrometry is None:
+                guider_astrometry = self.guider_astrometry
+            # We want to get the center of the CCD, which means we
+            # need to dig into the FITS header
+            if isinstance(guider_astrometry, str):
+                HDUList = fits.open(guider_astrometry)
+                astrometry = HDUList[0].header
+                HDUList.close()
+            # Create a vector that is as long as we are willing to
+            # move in each axis.  The origin of the vector is
+            # reference point of the CCD (typically the center)
+            # Work in unbinned pixels
+            x0 = astrometry['XBINNING'] * astrometry['CRPIX1'] + astrometry['XORGSUBF']
+            y0 = astrometry['YBINNING'] * astrometry['CRPIX2'] + astrometry['YORGSUBF']
+            dt = (self.guider_max_move_multiplier
+                  * self.CCDCamera.GuiderMaxMoveX)
+            dx = (self.CCDCamera.GuiderXSpeed * dt
+                  / np.cos(np.radians(astrometry['CRVAL1'])))
+            dy = self.CCDCamera.GuiderYSpeed * dt
+            # GuiderAngle is measured CCW from N according to
+            # http://acp.dc3.com/RotatedGuiding.pdf I think this
+            # means I need to rotate my vector CW to have a simple
+            # translation between RA and DEC after my astrometric
+            # transformation
+            ang_ccw = self.CCDCamera.GuiderAngle
+            vec = self.rot((dx, dy), -ang_ccw)
+            #--> try CW & it is a litle worse -- camera angle is
+            #-178, so hard to tell
+            #vec = self.rot((dx, dy), ang_ccw)
+            x1 = x0 + vec[0]
+            y1 = y0 + vec[1]
+            # Transpose, since we are in pix
+            w_coords = self.scope_wcs(((y0, x0), (y1, x1)),
+                                      to_world=True,
+                                      astrometry=guider_astrometry,
+                                      absolute=True)
+            dra_ddec = w_coords[1, :] - w_coords[0, :]
+            self.calculated_guide_rates = np.abs(dra_ddec/dt)
+            if not self.telescope_connectable:
+                self.guide_rates = self.calculated_guide_rates
+            else:
+                # Always assume telescope reported guide rates are
+                # correct, but warn if guider rates are off by 10%
+                self.guide_rates \
+                    = np.asarray((self.Telescope.GuideRateRightAscension,
+                                  self.Telescope.GuideRateDeclination))
+                if (np.abs(self.calculated_guide_rates[0]
+                          - self.Telescope.GuideRateRightAscension)
+                    > 0.1 * self.Telescope.GuideRateRightAscension):
+                    log.warning('Calculated RA guide rate is off by more than 10% (scope reported, calculated): ' + str((self.Telescope.GuideRateRightAscension, self.calculated_guide_rates[0])) + '.  Have you specified the correct guider astrometery image?  Have you changed the guide rates changed since calibrating the guider?  Assuming reported telescope guide rates are correct.')
+                if (np.abs(self.calculated_guide_rates[1]
+                          - self.Telescope.GuideRateDeclination)
+                    > 0.1 * self.Telescope.GuideRateDeclination):
+                    log.warning('Calculated DEC guide rate is off by more than 10% (scope reported, calculated): ' + str((self.Telescope.GuideRateDeclination, self.calculated_guide_rates[1])) + '.  Have you specified the correct guider astrometery image?  Have you changed the guide rates changed since calibrating the guider?  Assuming reported telescope guide rates are correct.')
+                
+                    
+
+            # Now run the calculation the other way, not taking
+            # out the guider angle, to determine the pier side
+            # when calibration took place
+            ra0 = astrometry['CRVAL1']
+            dec0 = astrometry['CRVAL2']
+            dra_ddec = self.guide_rates * dt
+            ra1 = ra0 + dra_ddec[0]
+            dec1 = dec0 + dra_ddec[1]
+            p_coords = self.scope_wcs((ra1, dec1),
+                                      to_pix=True,
+                                      astrometry=guider_astrometry,
+                                      absolute=True)
+            # remember transpose
+            dp = p_coords[::-1] - np.asarray((x0, y0))
+
+            # Calculate our axis flip RELATIVE to guider astrometry.
+            # Note that only one axis is needed, since both flip in
+            # the astrometric sense (only RA flips in the motion
+            # sense, assuming DEC motor commanded consistently in the
+            # same direction)
+            if np.sign(dp[0] / self.CCDCamera.GuiderXSpeed) == 1:
+                if self.alignment_mode == ASCOM.algGermanPolar:
+                    if astrometry['PIERSIDE'] == 'EAST':
+                        self.guider_cal_pier_side = ASCOM.pierEast
+                    elif astrometry['PIERSIDE'] == 'WEST':
+                        self.guider_cal_pier_side = ASCOM.pierWest
+            else:
+                if self.alignment_mode != ASCOM.algGermanPolar:
+                    log.error('German equatorial mount (GEM) pier flip detected between guider astrometry data and guider calibration but mount is currently not reporting alignment mode ' + str(self.alignment_mode) + '.  Did you change your equipment?')
+                    # Set our alignment mode, just in case we find
+                    # it useful, but this is a fortuitous catch,
+                    # since clibration and astrometry could have
+                    # been recorded on the same side of the pier.
+                    # --> Ultimately some interface would be
+                    # needed to track mount type and flip state if
+                    # not reported
+                    #self.alignment_mode = ASCOM.algGermanPolar
+                if astrometry['PIERSIDE'] == 'EAST':
+                    self.guider_cal_pier_side = ASCOM.pierWest
+                elif astrometry['PIERSIDE'] == 'WEST':
+                    self.guider_cal_pier_side = ASCOM.pierEast
+                else:
+                    # --> interface would want to possibly record this
+                    log.error('German equatorial mount (GEM) pier flip detected between guider astrometry data and guider calibration but mount not reporting PIERSIDE in guider astrometry file.  Was this file recorded with MaxIm?  Was the mount properly configured through an ASCOM driver when the calibration took place?')
+                        
         def guider_move(self,
                         dra_ddec,
                         dec=None,
-                        guide_astrometry=None):
+                        guider_astrometry=None):
             """Moves the telescope using guider slews.
 
     Parameters
@@ -1233,7 +1413,6 @@ if sys.platform == 'win32':
     dra_ddec : tuple-like array
             delta move in RA and DEC in DEGREES
 """
-            self.connect()
             if dec is None:
                 try:
                     dec = self.Telescope.Declination
@@ -1243,99 +1422,131 @@ if sys.platform == 'win32':
                     if not self.Application.TelescopeConnected:
                         log.warning("Could not read scope declination directly from scope or MaxIm's connection to the scope.  Using value from MaxIm Scope Dec dialog box in Guide tab of Camera Control, which the user has to enter by hand")
                     dec = self.CCDCamera.GuiderDeclination
-            # Now get the guide rates, which are in deg/sec
-            if self.Telescope.CanSetGuideRates:
-                ra_rate = self.Telescope.GuideRateRightAscension
-                dec_rate = self.Telescope.GuideRateDeclination
-            else:
-                # Grep the rates out of the MaxIm calibration and our
-                # guide scope astrometry
-                if guide_astrometry is None:
-                    guide_astrometry = run_level_guide_astrometry
-                # We want to get the center of the CCD, which means we
-                # need to dig into the FITS header
-                if isinstance(guide_astrometry, str):
-                    HDUList = fits.open(guide_astrometry)
-                    astrometry = HDUList[0].header
-                    HDUList.close()
-                # Create a vector that is as long as we are willing to
-                # move in each axis.  The origin of the vector is
-                # reference point of the CCD (typically the center)
-                # Work in unbinned pixels
-                x0 = astrometry['XBINNING'] * astrometry['CRPIX1'] + astrometry['XORGSUBF']
-                y0 = astrometry['YBINNING'] * astrometry['CRPIX2'] + astrometry['YORGSUBF']
-                dt = (self.guider_max_move_multiplier
-                      * self.CCDCamera.GuiderMaxMoveX)
-                dx = self.CCDCamera.GuiderXSpeed * dt
-                dy = self.CCDCamera.GuiderYSpeed * dt
-                # GuiderAngle is measured CCW from N according to
-                # http://acp.dc3.com/RotatedGuiding.pdf I think this
-                # means I need to rotate my vector CW to have a simple
-                # translation between RA and DEC after my astrometric
-                # transformation
-                ang_ccw = self.CCDCamera.GuiderAngle
-                vec = self.rot((dx, dy), -ang_ccw)
-                #--> try CW & it is a litle worse -- camera angle is
-                #-178, so hard to tell
-                #vec = self.rot((dx, dy), ang_ccw)
-                x1 = x0 + vec[0]
-                y1 = y0 + vec[1]
-                # Transpose, since we are in pix
-                w_coords = self.scope_wcs(((y0, x0), (y1, x1)),
-                                          to_world=True,
-                                          astrometry=guide_astrometry)
-                guider_dra_ddec = w_coords[1, :] - w_coords[0, :]
-                ra_rate = np.abs(guider_dra_ddec[0]/dt)
-                dec_rate = np.abs(guider_dra_ddec[1]/dt)
+
             # Change to rectangular tangential coordinates for small deltas
             dra_ddec[0] = dra_ddec[0]*np.cos(np.radians(dec))
-            dt = dra_ddec/np.asarray((ra_rate, dec_rate))
-            
-            ## The guider motion is calibrated in pixels per second, with
-            ## the guider angle applied separately.  We are just moving in
-            ## RA and DEC, so we don't need to worry about the guider angle
-            #dpix = np.asarray((dra, ddec)) / self.guider_plate
-            ## Multiply by speed, which is in pix/sec
-            #dt = dpix / np.asarray((self.CCDCamera.GuiderXSpeed, self.CCDCamera.GuiderYSpeed))
+            # Use our rates to change to time to press E/W, N/S, where
+            # E is the + RA direction
+            dt = dra_ddec/self.guide_rates
             
             # Do a sanity check to make sure we are not moving too much
             max_t = (self.guider_max_move_multiplier *
                      np.asarray((self.CCDCamera.GuiderMaxMoveX, 
                                  self.CCDCamera.GuiderMaxMoveY)))
-                
             if np.any(np.abs(dt) > max_t):
                 log.warning('requested move of ' + str(dra_ddec) + ' arcsec translates into move times of ' + str(np.abs(dt)) + ' seconds.  Limiting move in one or more axes to max t of ' + str(max_t))
                 dt = np.minimum(max_t, abs(dt)) * np.sign(dt)
                 
-            # MaxIm documents guider moves in +/- X and Y rather than
-            # delta RA and DEC, which is actually what we are
-            # commanding the mount to do.  This is confusing because
-            # +RA is to the east (stars that haven't transited the
-            # meridian yet) and, more confusingly, east is to the left
-            # when looking at the sky with north up
             log.info('Seconds to move guider in RA and DEC: ' + str(dt))
+
+            # Keep track of whether or not MaxIm is flipping any
+            # coordinates for us and flip them back, since we know our
+            # dRA and dDEC in the absolute sense.  
+            dt[0] *= self.MaxIm_pier_flip_state()
+
             if dt[0] > 0:
-                RA_success = self.CCDCamera.GuiderMove(1, dt[0])
+                # East is positive RA.  Based on extensive
+                # experiments, MaxIm seems to assume +X is east
+                RA_success = self.CCDCamera.GuiderMove(ASCOM.gdPlusX, dt[0])
             elif dt[0] < 0:
-                RA_success = self.CCDCamera.GuiderMove(0, -dt[0])
+                RA_success = self.CCDCamera.GuiderMove(ASCOM.gdMinusX, -dt[0])
             else:
                 # No need to move
                 RA_success = True
+            if not RA_success:
+                raise EnvironmentError('RA guide slew command failed')
             # MaxIm seems to be able to press RA and DEC buttons
             # simultaneously, but we can't!
             while self.CCDCamera.GuiderMoving:
                 time.sleep(0.1)
             if dt[1] > 0:
-                DEC_success = self.CCDCamera.GuiderMove(2, dt[1])
+                DEC_success = self.CCDCamera.GuiderMove(ASCOM.gdPlusY, dt[1])
             elif dt[1] < 0:
-                DEC_success = self.CCDCamera.GuiderMove(3, -dt[1])
+                DEC_success = self.CCDCamera.GuiderMove(ASCOM.gdMinusY, -dt[1])
             else:
                 # No need to move
                 DEC_success = True
+            if not DEC_success:
+                raise EnvironmentError('DEC guide slew command failed')
             while self.CCDCamera.GuiderMoving:
                 time.sleep(0.1)
-            return RA_success and DEC_success
-    
+                
+        def MaxIm_pier_flip_state(self):
+            """Return 1 for non-flipped, -1 for flipped"""
+            # Using GuiderAutoPierFlip or the interactive PierFlip
+            # box, MaxIm can conveniently cast X and Y of the guider
+            # image in the correct sense for the FOV of the guide
+            # camera across pier flips.  This is confusing when we
+            # know our absolute directions and just want to control
+            # the mount through the guide ports on the camera (or
+            # other MaxIm connection to the mount).  Ultimately, MaxIm
+            # only reverses the sense of the RA motor commands.  The
+            # question MaxIm cares about is which direction do those
+            # correspond to in the guider image.  We can safely igmore
+            # the guider image
+            flip = 1
+            if not self.telescope_connectable:
+                # MaxIm does not make the contents of its Pier Flip
+                # check box on the Camera Control Guide tab accessible
+                # to scripting, so we would have to collect that
+                # information and give it to MaxIm in the form of
+                # self.CCDCamera.GuiderReverseX et al.  -->
+                # Eventually, we might be able to have a user
+                # interface which helps with this, but for now, we
+                # need to have a telescope that connects.  Don't raise
+                # any warnings, since populate_obj has been wordy
+                # enough
+                pass
+
+            # Here I did some experiments and found that MaxIm knows
+            # what side of the pier the guider was calibrated on and
+            # uses that to establish calibration in any pier flip
+            # state.  The only question is: does MaxIm know where the
+            # telescope is?  Since ACP does not want MaxIm connected
+            # to the telescope, this answer will vary.  Return flip =
+            # -1 when MaxIm is sure to be flipping the sense of the RA
+            # axis
+            if (self.alignment_mode == ASCOM.algGermanPolar
+                and self.Application.TelescopeConnected
+                and self.CCDCamera.GuiderAutoPierFlip
+                and self.Telescope.SideOfPier == ASCOM.pierEast):
+                flip = -1
+
+
+            #    # Check to see what axis we are flipping on
+            #    a = self.CCDCamera.GuiderAngle
+            #    if (45 < a and a < 135
+            #        or 225 < a and a < 315):
+            #        # flip Y
+            #        axis_flip = (1, -1)
+            #    else:
+            #        # flip X
+            #        axis_flip = (-1, 1)
+            #    # Check to see if MaxIm is flipping for us, which is
+            #    # the usual case for convenient guiding, assuming
+            #    # MaxIm is fully in charge of the telescope.  I did
+            #    # some careful experiments with the guider astrometry
+            #    # to convince myself that MaxIm knows which side of
+            #    # the pier it calibrated itself on & takes that into
+            #    # consideration as it is guiding.  Furthermore, it
+            #    # considers a scope on the west side, looking east as
+            #    # in the non-flipped state.  Once the object crosses
+            #    # the meridian, the mount flips and MaxIm reverses the
+            #    # sense of the appro
+            #    print('telescope pier side, guider cal pier side: ', self.Telescope.SideOfPier, self.guider_cal_pier_side)
+            #    if (self.Application.TelescopeConnected
+            #        and self.CCDCamera.GuiderAutoPierFlip
+            #        and self.Telescope.SideOfPier != self.guider_cal_pier_side):
+            #        flip = np.asarray(axis_flip)
+            #
+            ## MaxIm has the ability to force guider calibration reversals
+            #if self.CCDCamera.GuiderReverseX:
+            #    flip[0] = -1
+            #if self.CCDCamera.GuiderReverseY:
+            #    flip[1] = -1
+
+            return flip
+
         def scope_wcs(self,
                       coords_in,
                       to_world=False,
@@ -1374,9 +1585,9 @@ if sys.platform == 'win32':
                 astrometry = 'main'
             if isinstance(astrometry, str):
                 if astrometry.lower() == 'main':
-                    astrometry = run_level_main_astrometry
+                    astrometry = self.main_astrometry
                 elif astrometry.lower() == 'guide':
-                    astrometry = run_level_guide_astrometry
+                    astrometry = self.guider_astrometry
                 if not os.path.isfile(astrometry):
                     raise ValueError(astrometry + ' file not found')
                 # If we made it here, we have a file to open to get
@@ -1402,7 +1613,6 @@ if sys.platform == 'win32':
                 # overwrite its CRVAL keys.  But we are unlikely to be
                 # passed a header in the non-absolute case
                 # Connects to scope and MaxIm
-                self.connect()
                 try:
                     RA = self.Telescope.RightAscension
                     DEC = self.Telescope.Declination
@@ -1415,33 +1625,38 @@ if sys.platform == 'win32':
                     RA = 0
                     DEC = self.CCDCamera.GuiderDeclination
                     log.warning('Telescope is not reporting RA and/or DEC.  Setting RA = ' + str(RA) + ' and DEC = ' + str(DEC) + ', which was read from the Scope Dec. box of the Guide tab.')
-                # Check to see if our astrometry image was taken on the
-                # other side of a GEM pier.  In that case, both RA and DEC
-                # are reversed
-                # --> Having trouble getting ASCOM to give me access to namesspace
-                # self.DeviceInterface.AlignmentModes.algGermanPolar 2
-                if (self.Telescope.AlignmentMode == ASCOM.algGermanPolar
-                    and
-                    ((header['PIERSIDE'] == 'EAST' # and sideofpier = 1
-                      and self.Telescope.SideOfPier == ASCOM.pierWest
-                      or
-                      header['PIERSIDE'] == 'WEST' # and sideofpier=0
-                      and self.Telescope.SideOfPier == ASCOM.pierEast))):
-                    pier_flip_sign = -1
-                else:
-                    pier_flip_sign = 1
-                log.info('pier_flip_sign= ' + str(pier_flip_sign))
+                # Check to see if our astrometry image was taken on
+                # the other side of a GEM pier.  In that case, both RA
+                # and DEC are reversed in the astrometry.  For scope
+                # motion, the sense of DEC reverses when through the
+                # pole, which is why only RA changes when looking at
+                # guider images
+                pier_flip_sign = 1
+                try:
+                    if (self.Telescope.AlignmentMode == ASCOM.algGermanPolar
+                        and
+                        ((header['PIERSIDE'] == 'EAST'
+                          and self.Telescope.SideOfPier == ASCOM.pierWest
+                          or
+                          header['PIERSIDE'] == 'WEST'
+                          and self.Telescope.SideOfPier == ASCOM.pierEast))):
+                        pier_flip_sign = -1
+                except:
+                    log.warning('Check of telescope type or PIERSIDE FITS keyword failed.  Unable to determine if telescope is a German Equatorial in flipped state.')
+
+                #log.info('pier_flip_sign= ' + str(pier_flip_sign))
     
-                # Make sure RA is on correct axis
+                # Make sure RA is on correct axis and in the correct units
                 if 'RA' in header['CTYPE1']:
-                    header['CRVAL1'] = RA / 24*60 * pier_flip_sign
+                    header['CRVAL1'] = RA / 24*360 * pier_flip_sign
                     header['CRVAL2'] = DEC * pier_flip_sign
                 elif 'DEC' in header['CTYPE1']:
-                    header['CRVAL2'] = RA / 24*60 * pier_flip_sign
+                    header['CRVAL2'] = RA / 24*360 * pier_flip_sign
                     header['CRVAL1'] = DEC * pier_flip_sign
-            # Our header now has the pointing direction we want Now
-            # fix binning and subframing.  More pixels to the center,
-            # but they are smaller
+            # Our astrometry header now has the pointing direction we
+            # want on the same side of the pier as our current
+            # telecsope.  Now fix binning and subframing.  More pixels
+            # to the center, but they are smaller
             header['CRPIX1'] = header['XBINNING'] * header['CRPIX1'] + header['XORGSUBF']
             header['CRPIX2'] = header['YBINNING'] * header['CRPIX2'] + header['YORGSUBF']
             header['CDELT1'] /= header['XBINNING']
@@ -1474,7 +1689,11 @@ if sys.platform == 'win32':
                 else:
                     return w.wcs_pix2world(coords, 0)
             if to_pix:
-                pix = w.wcs_world2pix(coords_in, 0)
+                if coords_in.size == 2:
+                    pix = np.asarray(
+                        w.wcs_world2pix(coords_in[0], coords_in[1], 0))
+                else:
+                    pix = w.wcs_world2pix(coords_in, 0)
                 # Put out pix back into Y, X order, UNBINNED
                 return pix[..., ::-1]
 
@@ -1490,7 +1709,6 @@ if sys.platform == 'win32':
         def take_im(self, exptime=default_exptime, filt=default_filt):
             """Uses MaxIm to record an image
             """
-            self.connect()
             # Take a light (1) exposure
             self.CCDCamera.Expose(exptime, 1, filt)
             # This is potentially a place for a coroutine
@@ -1502,7 +1720,6 @@ if sys.platform == 'win32':
 
         def get_im(self):
             """Puts current MaxIm image (the image with focus) into a FITS HDUList.  If an exposure is being taken or there is no image, the im array is set equal to None"""
-            self.connect()
             # Clear out HDUList in case we fail
             self.HDUList = None
             if not self.CCDCamera.ImageReady:
@@ -1572,36 +1789,8 @@ if sys.platform == 'win32':
                 log.warning('Problem setting keys: ', sys.exc_info()[0])
                 return None
                 
-        def connect(self):
-            """Link to telescope, CCD camera(s), filter wheels, etc."""
-
-            # MaxIm can connect to the telescope and use things like
-            # pier side to automatically adjust guiding calculations,
-            # but it doesn't make the telescope pier side available to
-            # the user.  That means we need to connect separately for
-            # our calculations.  Furthermore, ACP doesn't like to have
-            # MaxIm connected to the telescope while guiding (except
-            # through the ASCOM guide ports or relays), so we need to
-            # do everything out-of-band
-            self.getTelescope()
-            self.Telescope.Connected = True
-            if self.Telescope.Connected == False:
-                raise EnvironmentError('Link to telescope failed.  Is the power on to the mount?')
-            self.getApplication()
-            ## --> ACP doesn't like MaxIm being connected to the
-            ## --> telescope.  We will have to use the property of
-            ## --> telecsope and copy over to appropriate places in
-            ## --> MaxIm, as if we were operating by hand
-            #self.Application.TelescopeConnected = True
-            #if self.Application.TelescopeConnected == False:
-            #    raise EnvironmentError('MaxIm link to telescope failed.  Is the power on to the mount?')
-            self.getCCDCamera()
-            self.CCDCamera.LinkEnabled = True
-            if self.CCDCamera.LinkEnabled == False:
-                raise EnvironmentError('Link to camera hardware failed.  Is the power on to the CCD (including any connection hardware such as USB hubs)?')
-
         def getDeviceInterface(self):
-            """THIS DOES NOT WORK.  I guess name space is handle another way"""
+            """THIS DOES NOT WORK.  I guess name space is handled another way, poassibly at the source code level.  I am importing ASCOM_namespace to handle this"""
             if self.DeviceInterface is not None:
                 return True
             try:
@@ -1613,14 +1802,19 @@ if sys.platform == 'win32':
             
         def getTelescope(self):
             if self.Telescope is not None:
-                return True
-            #self.getDeviceInterface()
+                return
             try:
+                # --> This will keep trying as we do things, in case
+                # people have turned on the telescope
                 self.Telescope = win32com.client.Dispatch(default_telescope)
+                self.telescope_connectable = True
             except:
-                raise EnvironmentError('Error instantiating telescope control object ' + default_telescope + '.  Is the telescope on and installed?')
+                log.warning('Not able to connect to telescope.  Some features like auto pier flip for German equatorial mounts (GEMs) and automatic declination compensation for RA motions will not be available.')
+                self.telescope_connectable = False
+
+                #raise EnvironmentError('Error instantiating telescope control object ' + default_telescope + '.  Is the telescope on and installed?')
             # Catch any other weird errors
-            assert isinstance(self.Telescope, win32com.client.CDispatch)
+            #assert isinstance(self.Telescope, win32com.client.CDispatch)
             
         def getApplication(self):
             if self.Application is not None:
@@ -1657,6 +1851,7 @@ if sys.platform == 'win32':
             # Catch any other weird errors
             assert isinstance(self.Document, win32com.client.CDispatch)
      
+
     class PrecisionGuide():
         """Class containing PrecisionGuide package
 
@@ -1809,8 +2004,7 @@ if sys.platform == 'win32':
             if obj_center is None or desired_center is None:
                 raise ValueError('Invalid HDUList_im_fname_ObsData_or_obj_center or a problem establishing desired_center from current CCD image (or something else...)')
             
-            # --> Might want to change these to log.debug
-            log.info('pixel coordinates (X, Y) of obj_center and desired_center: ' + repr((obj_center[::-1], desired_center[::-1])))
+            log.debug('pixel coordinates (X, Y) of obj_center and desired_center: ' + repr((obj_center[::-1], desired_center[::-1])))
             wcoords = self.MD.scope_wcs((obj_center, desired_center),
                                         to_world=True,
                                         astrometry=astrometry_from,
@@ -1917,8 +2111,20 @@ if sys.platform == 'win32':
         # {3E09C890-40C9-4326-A75D-AEF3BF0E099F}
 
 
-log.setLevel('INFO')
+log.setLevel('DEBUG')
+#log.setLevel('INFO')
 #log.setLevel('WARNING')
+
+#O = CorObsData('/data/io/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit')#, plot_dprof=True, plot_ND_edges=True)
+#D.say(O.obj_center[::-1])
+#D.say(O.desired_center[::-1])
+#
+#
+#F = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit')#, plot_dprof=True, plot_ND_edges=True)
+#default_ND_params = F.ND_params
+#O = CorObsData('/data/io/IoIO/raw/2017-04-20/Filter_sequence-0001_1s_open.fit', default_ND_params=default_ND_params)
+#D.say(O.obj_center[::-1])
+#D.say(O.desired_center[::-1])
 
 #F = CorObsData('/data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit')#, plot_dprof=True, plot_ND_edges=True)
 #default_ND_params = F.ND_params
