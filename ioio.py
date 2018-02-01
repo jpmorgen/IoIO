@@ -509,8 +509,10 @@ class CorObsData(ObsData):
             # Outside the ND filter, Jupiter should be saturating.  To
             # make the center of mass calc more accurate, just set
             # everything that is not getting toward saturation to 0
+            # --> Might want to fine-tune or remove this so bright
             im[np.where(im < 40000)] = 0
-            D.say('sum >=40000 ' + str(np.sum(im)))
+            
+            log.debug('Approx number of saturating pixels ' + str(np.sum(im)/65000))
 
             # 25 worked for a star, 250 should be conservative for
             # Jupiter (see above calcs)
@@ -536,6 +538,7 @@ class CorObsData(ObsData):
 
         # Stay in Pythonic y, x coords
         self._obj_center = np.asarray(y_x)
+        log.debug('Object center (X, Y; binned) = ' + str(self.binned(self._obj_center)[::-1]))
         return self._obj_center
 
     @property
@@ -664,6 +667,7 @@ class CorObsData(ObsData):
         # finding the ND filter in the image
         assert isinstance(self.HDUList, fits.HDUList)
 
+        # These are unbinned coordinates
         ytop = self.SII_filt_crop[0,0]
         ybot = self.SII_filt_crop[1,0]
 
@@ -1168,9 +1172,9 @@ if sys.platform == 'win32':
     # --> these are things that eventually I would want to store in a
     # --> configuration file
     # --> CHANGE ME BACK TO 1s and filter 0 (0.7s, filter 1 works for day)
-    default_exptime = 0.7
-    default_filt = 1
-    default_cent_tol = 10   # Pixels
+    default_exptime = 1
+    default_filt = 0
+    default_cent_tol = 3   # Pixels
     default_guider_exptime = 1
 
     #Daniel
@@ -1316,8 +1320,8 @@ if sys.platform == 'win32':
             y0 = astrometry['YBINNING'] * astrometry['CRPIX2'] + astrometry['YORGSUBF']
             dt = (self.guider_max_move_multiplier
                   * self.CCDCamera.GuiderMaxMoveX)
-            dx = (self.CCDCamera.GuiderXSpeed * dt
-                  / np.cos(np.radians(astrometry['CRVAL1'])))
+            dx = (self.CCDCamera.GuiderXSpeed * dt)
+                  #/ np.cos(np.radians(astrometry['CRVAL2'])))
             dy = self.CCDCamera.GuiderYSpeed * dt
             # GuiderAngle is measured CCW from N according to
             # http://acp.dc3.com/RotatedGuiding.pdf I think this
@@ -1408,11 +1412,11 @@ if sys.platform == 'win32':
                         guider_astrometry=None):
             """Moves the telescope using guider slews.
 
-    Parameters
-    ----------
-    dra_ddec : tuple-like array
+            Parameters
+            ----------
+            dra_ddec : tuple-like array
             delta move in RA and DEC in DEGREES
-"""
+            """
             if dec is None:
                 try:
                     dec = self.Telescope.Declination
@@ -1789,6 +1793,66 @@ if sys.platform == 'win32':
                 log.warning('Problem setting keys: ', sys.exc_info()[0])
                 return None
                 
+        def start_guider(self, exptime=None, filter=None, star_position=None):
+            """Start guider
+
+            Parameters
+            ----------
+            exptime : float or None
+            Exposure time to use
+
+            """
+            exptime, auto_star_selected \
+                = self.get_guider_exposure(exptime=exptime,
+                                           filter=filter)
+            if self.CCDCamera.GuiderAutoSelectStar:
+                # Take an exposure to get MaxIm to calculate the guide
+                # star postion
+                self.CCDCamera.GuiderExpose(float(exptime))
+                # --> Consider checking for timout here
+                while self.CCDCamera.GuiderRunning:
+                    time.sleep(0.1)
+            else:
+                if star_position is None:
+                    raise ValueError('Specify star position or set MaxIm to auto select the guide star')
+            if not self.CCDCamera.GuiderTrack(float(exptime)):
+                raise EnvironmentError('Attempt to start guiding failed.  Guider configured correctly?')
+            self.guider_commanded_running = True
+
+        def stop_guider(self):
+            if self.CCDCamera.GuiderRunning:
+                self.CCDCamera.GuiderStop
+                if self.CCDCamera.GuiderRunning:
+                    raise EnvironmentError('Failed to stop guider')
+                self.guider_commanded_running = False
+
+        # This will record and analyze guider images and determine the
+        # best exposure time to yse
+        def get_guider_exposure(self, exptime=None, filter=None):
+            """Returns tuple (exptime, star_auto_selected) since
+            taking an image with GuiderAutoSelectStar will select the
+            star"""
+            if filter is not None:
+                try:
+                    # --> Do some checking of length of filter, or
+                    # --> maybe have a routine that cycles through the
+                    # --> guider filter list, since this will bomb
+                    # --> with a filter list right now
+                    self.CCDCamera.GuiderFilter = filter
+                except:
+                    raise EnvironmentError('error setting filter to ' + str(filter) + '.  Are you using a valid filter integer?  Is the filter wheel set up for the guider?')
+            if exptime is None:
+                log.warning('Code not written yet to get auto exposure, just using default_guider_exptime')
+                exptime = default_guider_exptime
+                # Here we would do some exposing to figure out what the optimal 
+            # --> Eventually write the code that will take the image
+            # and figure out what filter to use
+            return (exptime, False)
+
+        # This is going to need to take a guider picture
+        def set_guider_star_position(self):
+            raise ValueError('Code not written yet.  Use GuiderAutoSelectStar for now')
+
         def getDeviceInterface(self):
             """THIS DOES NOT WORK.  I guess name space is handled another way, poassibly at the source code level.  I am importing ASCOM_namespace to handle this"""
             if self.DeviceInterface is not None:
@@ -2035,33 +2099,8 @@ if sys.platform == 'win32':
             # We should never get here
             assert False
 
-        # This will record and analyze guider images and determine the
-        # best exposure time to yse
-        def get_guider_exposure(self):
-            return default_guider_exptime
 
-        # This is going to need to take a guider picture
-        def set_guider_star_position(self):
-            raise ValueError('Code not written yet.  Use GuiderAutoSelectStar for now')
-
-        def start_guider(self, exptime=None):
-            if exptime is None:
-                exptime = self.get_guider_exposure()
-            if not self.MD.CCDCamera.GuiderAutoSelectStar:
-                self.set_guider_star_position
-            if not self.MD.CCDCamera.GuiderTrack(exptime):
-                raise EnvironmentError('Attempt to start guiding failed.  Guider configured correctly?')
-            self.guider_commanded_running = True
-
-        def stop_guider(self):
-            if self.MD.CCDCamera.GuiderRunning:
-                self.MD.CCDCamera.GuiderStop
-                if self.MD.CCDCamera.GuiderRunning:
-                    raise EnvironmentError('Failed to stop guider')
-                self.guider_commanded_running = False
-
-
-        # For now, use the defaults tailored for IoIO.  It may be oto
+        # For now, use the defaults tailored for IoIO.  It may be too
         # complex to get thing in as parameters, in which case this
         # would be overridden
         def acquire_image(self,
@@ -2075,7 +2114,7 @@ if sys.platform == 'win32':
                 log.warning('Guider was turned off, will turn back on, but may be cloudy or have other problems interfering with guiding')
             if not self.MD.CCDCamera.GuiderRunning:
                 self.center_loop()
-                self.start_guider()
+                self.MD.start_guider()
             # Here might be where we make the choice to use ACP's
             # TakePicture or record it ourselves based on whether or
             # not ACP's objects are present
@@ -2114,6 +2153,10 @@ if sys.platform == 'win32':
 log.setLevel('DEBUG')
 #log.setLevel('INFO')
 #log.setLevel('WARNING')
+
+#O = CorObsData('/data/io/IoIO/raw/2018-01-31/Problem_R-band.fit')#, plot_dprof=True, plot_ND_edges=True)
+#D.say(O.obj_center[::-1])
+#D.say(O.desired_center[::-1])
 
 #O = CorObsData('/data/io/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit')#, plot_dprof=True, plot_ND_edges=True)
 #D.say(O.obj_center[::-1])
@@ -2257,6 +2300,12 @@ def cmd_center(args):
                            args.ObsClassModule) # other defaults should be good
     P.center_loop()
 
+def cmd_guide(args):
+    if sys.platform != 'win32':
+        raise EnvironmentError('Can only control camera and telescope from Windows platform')
+    MD = MaxImData()
+    MD.start_guider(exptime=args.exptime, filter=args.filter)
+
 def cmd_get_default_ND_params(args):
     print(get_default_ND_params(args.dir, args.maxcount))
 
@@ -2273,19 +2322,37 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest='one of the subcommands in {}', help='sub-command help')
     subparsers.required = True
 
+    guide_parser =  subparsers.add_parser(
+        'guide', help='Start guider (usually used after center)')
+    guide_parser.add_argument(
+        '--exptime', help='Exposure time to use for guider')
+    guide_parser.add_argument(
+        '--filter', help='Guider filter (e.g., 0)) or filter search sequence (e.g., "(0,1,2,3)" for auto exposure calculations (start with most transparent filter first')    
+    guide_parser.set_defaults(func=cmd_guide)
+
     center_parser = subparsers.add_parser(
         'center', help='Record image and center object')
     center_parser.add_argument(
         '--ObsClassName', help='ObsData class name')
     center_parser.add_argument(
         '--ObsClassModule', help='ObsData class module file name')
-    # This is specific to the coronagraph
+    # These are specific to the coronagraph --> thinking I might be
+    # able to pass package-specific arguments to subclass init in a
+    # clever way by capturing the rest of the command line in one
+    # argument and then parsing it in init
     center_parser.add_argument(
         '--ND_params', help='Derive default_ND_params from flats in this directory')
     center_parser.add_argument(
         '--maxcount', help='maximum number of flats to process -- median of parameters returned')
     center_parser.set_defaults(func=cmd_center)
 
+    GuideBox_parser = subparsers.add_parser(
+        'GuideBoxMover', help='Start guide box mover process')
+    GuideBox_parser.set_defaults(func=GuideBoxMover)
+
+
+
+    # --> This eventually goes just with ioio.py
     ND_params_parser = subparsers.add_parser(
         'ND_params', help='Get ND_params from flats in a directory')
     ND_params_parser.add_argument(
@@ -2294,10 +2361,6 @@ if __name__ == "__main__":
         'maxcount', nargs='?', default=None,
         help='maximum number of flats to process -- median of parameters returned')
     ND_params_parser.set_defaults(func=cmd_get_default_ND_params)
-
-    GuideBox_parser = subparsers.add_parser(
-        'GuideBoxMover', help='Start guide box mover process')
-    GuideBox_parser.set_defaults(func=GuideBoxMover)
 
     args = parser.parse_args()
     # This check for func is not needed if I make subparsers.required = True

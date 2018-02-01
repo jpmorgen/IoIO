@@ -2628,3 +2628,52 @@ line up along those
 Ack!  I am still getting it wrong!
 
 What if I simplified it
+
+Tue Jan 30 10:06:37 2018 EST  jpmorgen@snipe
+
+Well, got it to work (some juxtaposition with IoIo.notebk)
+
+Wed Jan 31 06:47:42 2018 EST  jpmorgen@snipe
+
+--> error on unbinned array.  Saved to Problem-R-band
+
+  File "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\ioio.py", line 442, in populate_obj
+    self.ND_params
+  File "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\ioio.py", line 764, in ND_params
+    this_ND_center-subim_hw:this_ND_center+subim_hw]
+IndexError: index 350 is out of bounds for axis 0 with size 32
+
+Hmm.  Did not repeat.  Worrisome.
+
+subim_hw should be consistent and indeed that is not the axis that is
+casuing problems.  It is y_bin.  Ah Ha.  That sounds like a begin-end
+problem.  Checked for slicing bug and that doesn't seem right
+
+y_top = 32
+y_bot = 132
+y_bin = 10
+yrange=np.arange(y_top, y_bot, y_bin)
+print(yrange[-1])
+if yrange[-1] + y_bin > y_bot:
+    yrange = yrange[0:-1]
+
+print(yrange[-1])
+print('Sequence')
+for ypt_top in yrange:
+    for rowpt in np.arange(y_bin):
+        print(ypt_top+rowpt)
+
+<sigh> not finding a hole in my logic.
+
+Hey, what I want is
+
+np.linspace(y_top, y_bot, 8, endpoint=False, retstep=True)
+(array([  32. ,   44.5,   57. ,   69.5,   82. ,   94.5,  107. ,  119.5]), 12.5)
+
+No, it is a pain to deal with the integer
+
+--> Probably because I touched the guider image or something
+
+--> I might want to have a general "take exposure and then wait"
+    routine, since I am having to do that a bit
+
