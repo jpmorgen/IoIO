@@ -2677,3 +2677,27 @@ No, it is a pain to deal with the integer
 --> I might want to have a general "take exposure and then wait"
     routine, since I am having to do that a bit
 
+Thu Feb 01 13:41:22 2018 EST  jpmorgen@snipe
+
+I have a take_im for the main camera.  That does CCDCamera.Expose()
+--> consider making it also do guider optionally
+
+now I want to do a center with guider.  But at the MaxIm level, this
+is move_with_guide_box
+
+Thinking about expanding scope_wcs to include delta pixels and/or RE/DEC
+
+--> how is move_with_guide_box going to be called?  Do I need to
+    calculate dra*cos(dec), or is that going to be in it already?
+    Ultimately, I am going to have a dpix from the main imager
+
+--> deal with guide star fading
+
+Hey, I can completely reuse the PrecisionGuide center logic for
+center_with_guider
+
+Might consider putting it into center_loop too
+
+ioio.py center --ObsClassName CorObsData
+ioio.py guide
+ioio.py center --ObsClassName CorObsData

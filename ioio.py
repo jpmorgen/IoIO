@@ -1234,6 +1234,10 @@ if sys.platform == 'win32':
             self.alignment_mode = None
             self.guider_cal_pier_side = None
             self.guide_rates = None # degrees/s
+            self.guider_exptime = None
+
+            # Don't move the guide box too fast
+            self.guide_box_steps_per_pix = 3
 
             # Create containers for all of the objects that can be
             # returned by MaxIm.  We'll only populate them when we need
@@ -1406,6 +1410,79 @@ if sys.platform == 'win32':
                     # --> interface would want to possibly record this
                     log.error('German equatorial mount (GEM) pier flip detected between guider astrometry data and guider calibration but mount not reporting PIERSIDE in guider astrometry file.  Was this file recorded with MaxIm?  Was the mount properly configured through an ASCOM driver when the calibration took place?')
                         
+        def move_with_guide_box(self,
+                                dra_ddec,
+                                dec=None,
+                                guider_astrometry=None):
+            """Moves the telescope by moving the guide box.  Guide box position is moved gradually relative to instantaneous guide box position, resulting in a delta move relative to any other guide box motion
+
+            Parameters
+            ----------
+            dra_ddec : tuple-like array
+            delta move in RA and DEC in DEGREES
+            guider_astrometry : filename, HDUList, or FITS header 
+                Input method for providing an HDUList with WCS
+                parameters appropriate for the guider (mainly
+                CDELT*).  Defaults to guider_astrometry property 
+            """
+            # --> Don't bother checking to see if we have commanded 
+            if not self.CCDCamera.GuiderRunning:
+                log.error('Guider not running, move not performed')
+            if dec is None:
+                try:
+                    dec = self.Telescope.Declination
+                except:
+                    # If the user is using this apart from ACP, they
+                    # might have the scope connected through MaxIm
+                    if not self.Application.TelescopeConnected:
+                        log.warning("Could not read scope declination directly from scope or MaxIm's connection to the scope.  Using value from MaxIm Scope Dec dialog box in Guide tab of Camera Control, which the user has to enter by hand")
+                    dec = self.CCDCamera.GuiderDeclination
+
+            # --> Is this the right thing to do here?  Say no for now,
+            # since I will probably deriving dra_ddec with astrometry.
+            # Change to rectangular tangential coordinates for small deltas
+            #dra_ddec[0] = dra_ddec[0]*np.cos(np.radians(dec))
+
+            # Get the rough RA and DEC of our current ("old") guide box
+            # position
+            op_coords = (self.GuiderXStarPosition, self.GuiderYStarPosition)
+            w_coords = self.scope_wcs(op_coords,
+                                      to_world=True,
+                                      astrometry=guider_astrometry)
+            p_coords = self.scope_wcs(w_coords + dra_ddec,
+                                      to_pix=True,
+                                      astrometry=guider_astrometry)
+            dp_coords = p_coords - op_coords
+            # Calculate the length in pixels of our move and the unit
+            # vector in that direction
+            norm_dp = np.linalg.norm(dp_coords)
+            uv = dp_coords / norm_dp
+            
+            # Move the guide box slowly.  Assume 1 pixel is OK to move
+            if norm_dp < 1:
+                num_steps = 1
+            else:
+                # Guard against guide_box_steps_per_pix < 1
+                num_steps = min((1,
+                                 int(self.guide_box_steps_per_pix * norm_dp)))
+
+            for dnorm in np.linspace(0, norm_dp, num_steps):
+                # Just in case someone else is commanding the guide
+                # box to move, use its instantaneous position as the
+                # starting point of our move
+                op_coords = (self.GuiderXStarPosition, self.GuiderYStarPosition)
+                tp_coords = op_coords + dnorm * uv
+                CCDCamera.GuiderSetStarPosition(tp_coords[0], tp_coords[1])
+                # Give it an extra cycle to make sure it has stuck
+                # (though even this might be too short)
+                for i in range(num_steps+1):
+                    sleep(self.guider_exptime)
+                    if not self.CCDCamera.GuiderRunning:
+                        log.error('Guider stopped running while performing move')
+                        return False
+                return True
+                    
+
         def guider_move(self,
                         dra_ddec,
                         dec=None,
@@ -1417,6 +1494,9 @@ if sys.platform == 'win32':
             dra_ddec : tuple-like array
             delta move in RA and DEC in DEGREES
             """
+            if self.CCDCamera.GuiderRunning:
+                log.warning('Guider was running, turning off')
+                self.GuiderStop
             if dec is None:
                 try:
                     dec = self.Telescope.Declination
@@ -1710,7 +1790,12 @@ if sys.platform == 'win32':
             rotated = np.asarray(np.dot(M, vec))
             return np.squeeze(rotated)
     
-        def take_im(self, exptime=default_exptime, filt=default_filt):
+        # Take im is Bob Denny's nomenclature
+        def take_im(self,
+                    exptime=default_exptime,
+                    filt=default_filt,
+                    camera=None,
+                    light=None):
             """Uses MaxIm to record an image
             """
             # Take a light (1) exposure
@@ -1802,13 +1887,23 @@ if sys.platform == 'win32':
             Exposure time to use
 
             """
-            exptime, auto_star_selected \
+            if (self.CCDCamera.GuiderRunning
+                and self.guider_commanded_running):
+                return
+            if (self.CCDCamera.GuiderRunning
+                and not self.guider_commanded_running):
+                log.warning('Guider was running, restarting')
+                # --> May or may not want to propagate existing
+                # --> exposure time stuff
+                self.stop_guider()
+
+            self.guider_exptime, auto_star_selected \
                 = self.get_guider_exposure(exptime=exptime,
                                            filter=filter)
-            if self.CCDCamera.GuiderAutoSelectStar:
+            if not auto_star_selected and self.CCDCamera.GuiderAutoSelectStar:
                 # Take an exposure to get MaxIm to calculate the guide
                 # star postion
-                self.CCDCamera.GuiderExpose(float(exptime))
+                self.CCDCamera.GuiderExpose(self.guider_exptime)
                 # --> Consider checking for timout here
                 while self.CCDCamera.GuiderRunning:
                     time.sleep(0.1)
@@ -1820,14 +1915,16 @@ if sys.platform == 'win32':
             self.guider_commanded_running = True
 
         def stop_guider(self):
+            self.guider_commanded_running = False
             if self.CCDCamera.GuiderRunning:
                 self.CCDCamera.GuiderStop
                 if self.CCDCamera.GuiderRunning:
                     raise EnvironmentError('Failed to stop guider')
-                self.guider_commanded_running = False
 
-        # This will record and analyze guider images and determine the
-        # best exposure time to yse
+        # This will eventually record and analyze guider images and
+        # determine the best exposure time to use --> consider
+        # combining all image recording to take_im with a camera
+        # provided
         def get_guider_exposure(self, exptime=None, filter=None):
             """Returns tuple (exptime, star_auto_selected) since
             taking an image with GuiderAutoSelectStar will select the
@@ -1955,17 +2052,8 @@ if sys.platform == 'win32':
                     = getattr(importlib.import_module(ObsClassModule),
                               ObsClassName)
             self.ObsClassArgs = ObsClassArgs
-            self.guider_commanded_running = None
             self.ObsDataList = []
     
-        def create_ObsData(self, arg, **ObsClassArgs):
-            if ObsClassArgs != {}:
-                return self.ObsDataClass(arg, **ObsClassArgs)
-            elif self.ObsClassArgs != {}:
-                return self.ObsDataClass(arg, **self.ObsClassArgs)
-            else:
-                return self.ObsDataClass(arg)
-
         def center(self,
                    HDUList_im_fname_ObsData_or_obj_center=None,
                    desired_center=None,
@@ -1973,9 +2061,10 @@ if sys.platform == 'win32':
                    scaling_astrometry=None,
                    ignore_ObsData_astrometry=False,
                    **ObsClassArgs):
-            """Move the object to desired_center using guider slews.
-                   Takes an image with default filter and exposure
-                   time if necessary
+            """Move the object to desired_center using guider slews OR
+                   guide box moves, if the guider is running.  Takes
+                   an image with default  filter and exposure time if
+                   necessary
             Parameters
             ----------
             HDUList_im_fname_ObsData_or_obj_center : see name for types
@@ -2069,12 +2158,18 @@ if sys.platform == 'win32':
                 raise ValueError('Invalid HDUList_im_fname_ObsData_or_obj_center or a problem establishing desired_center from current CCD image (or something else...)')
             
             log.debug('pixel coordinates (X, Y) of obj_center and desired_center: ' + repr((obj_center[::-1], desired_center[::-1])))
-            wcoords = self.MD.scope_wcs((obj_center, desired_center),
-                                        to_world=True,
-                                        astrometry=astrometry_from,
-                                        absolute=absolute)
-            log.debug('world coordinates of obj_center and desired_center: ' + repr(wcoords))
-            self.MD.guider_move(wcoords[1,:] - wcoords[0,:])
+            w_coords = self.MD.scope_wcs((obj_center, desired_center),
+                                         to_world=True,
+                                         astrometry=astrometry_from,
+                                         absolute=absolute)
+            log.debug('world coordinates of obj_center and desired_center: ' + repr(w_coords))
+
+            dw_coords = w_coords[1,:] - w_coords[0,:]
+            
+            if self.MD.CCDCamera.GuiderRunning:
+                self.MD.move_with_guide_box(dw_coords)
+            else:
+                self.MD.guider_move(dw_coords)
 
         def center_loop(self,
                         exptime=default_exptime,
@@ -2099,7 +2194,6 @@ if sys.platform == 'win32':
             # We should never get here
             assert False
 
-
         # For now, use the defaults tailored for IoIO.  It may be too
         # complex to get thing in as parameters, in which case this
         # would be overridden
@@ -2109,7 +2203,7 @@ if sys.platform == 'win32':
                           fname,
                           ACP_obj=None,
                           **ObsClassArgs):
-            if (self.guider_commanded_running
+            if (self.MD.guider_commanded_running
                 and not self.MD.CCDCamera.GuiderRunning):
                 log.warning('Guider was turned off, will turn back on, but may be cloudy or have other problems interfering with guiding')
             if not self.MD.CCDCamera.GuiderRunning:
@@ -2132,6 +2226,14 @@ if sys.platform == 'win32':
                 # again
                 O = self.create_ObsData(HDUList, **ObsClassArgs)
             self.GuideBoxAdjuster(O)
+
+        def create_ObsData(self, arg, **ObsClassArgs):
+            if ObsClassArgs != {}:
+                return self.ObsDataClass(arg, **ObsClassArgs)
+            elif self.ObsClassArgs != {}:
+                return self.ObsDataClass(arg, **self.ObsClassArgs)
+            else:
+                return self.ObsDataClass(arg)
 
         def GuideBoxAdjuster(self, O):
             assert isinstance(O, ObsData)
