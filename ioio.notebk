@@ -2701,3 +2701,49 @@ Might consider putting it into center_loop too
 ioio.py center --ObsClassName CorObsData
 ioio.py guide
 ioio.py center --ObsClassName CorObsData
+
+guider.exptime is not defined unless we start the guider
+
+Might want to have an occational message that I am moving with the
+guide box
+
+Moved guide box to 296, 244.8 and counting, but main image hasn't
+moved a bit
+
+--> read time for guider
+
+Might have been offset file causing the problem
+
+--> Autoguider image on top & gave array error.  Think of way to make
+    sure correct docuiment is selected
+
+Am I going to have to stop the guider to change the coordinate?
+Indeed.  <sigh>  So this is not going to work as advertised, or I
+am doing it wrong
+
+Advertised move while tracking, but it is not doing that
+
+NO!  The problem was I was using GuiderSetStarPosition instead of
+GuiderMoveStar
+
+No, I *was* using GuiderMoveStar.
+
+OK, so there are a couple of things here that look like show
+stoppers. (1) GuiderMoveStar doesn't and (2) the Documents system is
+messed up
+
+(2) --> Might be able to take care of with DOcument next and checking
+for document name of Autoguider Image
+
+
+Work more with GuiderMoveStar
+
+OK, simple case worked
+
+Oops, induced a pier flip with telecsope move
+
+--> Should I apply pier flip logic to move with
+
+FLip and see if problem goes away
+
+Definitely going up when should go down.  Might even be 90 

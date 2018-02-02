@@ -1172,8 +1172,8 @@ if sys.platform == 'win32':
     # --> these are things that eventually I would want to store in a
     # --> configuration file
     # --> CHANGE ME BACK TO 1s and filter 0 (0.7s, filter 1 works for day)
-    default_exptime = 1
-    default_filt = 0
+    default_exptime = 0.7
+    default_filt = 1
     default_cent_tol = 3   # Pixels
     default_guider_exptime = 1
 
@@ -1235,7 +1235,8 @@ if sys.platform == 'win32':
             self.guider_cal_pier_side = None
             self.guide_rates = None # degrees/s
             self.guider_exptime = None
-
+            self.guider_commanded_running = None
+            
             # Don't move the guide box too fast
             self.guide_box_steps_per_pix = 3
 
@@ -1425,33 +1426,38 @@ if sys.platform == 'win32':
                 parameters appropriate for the guider (mainly
                 CDELT*).  Defaults to guider_astrometry property 
             """
+            if guider_astrometry is None:
+                guider_astrometry = self.guider_astrometry
             # --> Don't bother checking to see if we have commanded 
             if not self.CCDCamera.GuiderRunning:
                 log.error('Guider not running, move not performed')
-            if dec is None:
-                try:
-                    dec = self.Telescope.Declination
-                except:
-                    # If the user is using this apart from ACP, they
-                    # might have the scope connected through MaxIm
-                    if not self.Application.TelescopeConnected:
-                        log.warning("Could not read scope declination directly from scope or MaxIm's connection to the scope.  Using value from MaxIm Scope Dec dialog box in Guide tab of Camera Control, which the user has to enter by hand")
-                    dec = self.CCDCamera.GuiderDeclination
 
             # --> Is this the right thing to do here?  Say no for now,
             # since I will probably deriving dra_ddec with astrometry.
+            #if dec is None:
+            #    try:
+            #        dec = self.Telescope.Declination
+            #    except:
+            #        # If the user is using this apart from ACP, they
+            #        # might have the scope connected through MaxIm
+            #        if not self.Application.TelescopeConnected:
+            #            log.warning("Could not read scope declination directly from scope or MaxIm's connection to the scope.  Using value from MaxIm Scope Dec dialog box in Guide tab of Camera Control, which the user has to enter by hand")
+            #            dec = self.CCDCamera.GuiderDeclination
             # Change to rectangular tangential coordinates for small deltas
             #dra_ddec[0] = dra_ddec[0]*np.cos(np.radians(dec))
 
             # Get the rough RA and DEC of our current ("old") guide box
             # position
-            op_coords = (self.GuiderXStarPosition, self.GuiderYStarPosition)
+            op_coords = (self.CCDCamera.GuiderXStarPosition,
+                         self.CCDCamera.GuiderYStarPosition)
             w_coords = self.scope_wcs(op_coords,
                                       to_world=True,
                                       astrometry=guider_astrometry)
             p_coords = self.scope_wcs(w_coords + dra_ddec,
                                       to_pix=True,
                                       astrometry=guider_astrometry)
+            # There is some implicit type casting here since op_coords
+            # is a tuple, but p_coords is an np.array
             dp_coords = p_coords - op_coords
             # Calculate the length in pixels of our move and the unit
             # vector in that direction
@@ -1463,26 +1469,62 @@ if sys.platform == 'win32':
                 num_steps = 1
             else:
                 # Guard against guide_box_steps_per_pix < 1
-                num_steps = min((1,
+                num_steps = max((1,
                                  int(self.guide_box_steps_per_pix * norm_dp)))
+
+            log.debug('Number of steps: ' + str(num_steps))
+            log.debug('norm_dp: ' + str(norm_dp))
+            ## --> Do it simply first.  THIS WORKED!
+            #log.info('MaxIm thinks guider coords are: ' + str(op_coords))
+            #tp_coords = op_coords + dp_coords
+            #log.info('Setting to: ' + str(tp_coords))
+            #self.CCDCamera.GuiderMoveStar(tp_coords[0], tp_coords[1])
+            #np_coords = (self.CCDCamera.GuiderXStarPosition, self.CCDCamera.GuiderYStarPosition)
+            #log.info('MaxIm now thinks guider coords are: ' + str(np_coords))
+            ## --> done simple
 
             for dnorm in np.linspace(0, norm_dp, num_steps):
                 # Just in case someone else is commanding the guide
                 # box to move, use its instantaneous position as the
                 # starting point of our move
-                op_coords = (self.GuiderXStarPosition, self.GuiderYStarPosition)
+                #op_coords = np.asarray((self.CCDCamera.GuiderXStarPosition,
+                #                        self.CCDCamera.GuiderYStarPosition))
+                #self.stop_guider()
+                cp_coords = np.asarray((self.CCDCamera.GuiderXStarPosition,
+                                        self.CCDCamera.GuiderYStarPosition))
                 tp_coords = op_coords + dnorm * uv
-                CCDCamera.GuiderSetStarPosition(tp_coords[0], tp_coords[1])
-                # Give it an extra cycle to make sure it has stuck
-                # (though even this might be too short)
-                for i in range(num_steps+1):
-                    sleep(self.guider_exptime)
-                    if not self.CCDCamera.GuiderRunning:
-                        log.error('Guider stopped running while performing move')
-                        return False
-                return True
+                #log.info('MaxIm thinks guider coords are: ' + str(cp_coords))
+                log.info('Setting to: ' + str(tp_coords))
+                self.CCDCamera.GuiderMoveStar(tp_coords[0], tp_coords[1])
+                # --> Just checking
+                #self.CCDCamera.GuiderTrack(default_guider_exptime)
+                if self.check_guiding() is False:
+                    return False
+            
+            # Give it a few extra cycles to make sure it has stuck
+            # (though even this might be too short)
+            for i in range(self.guide_box_steps_per_pix):
+                if self.check_guiding() is False:
+                    return False
+            return True
                     
 
+        def check_guiding(self):
+            if self.guider_exptime is None:
+                # If we didn't start the guider, take a guess at its
+                # exposure time, since MaxIm doesn't give us that info
+                exptime = default_guider_exptime
+            else:
+                exptime = self.guider_exptime
+            # --> This needs to include the guide box read time or
+            # else loop which uses it gets guide box position confused
+            time.sleep(exptime*3)
+            if self.CCDCamera.GuiderRunning:
+                return True
+            else:
+                log.error('Guider stopped running while performing move')
+                return False
+            
         def guider_move(self,
                         dra_ddec,
                         dec=None,
@@ -1910,7 +1952,7 @@ if sys.platform == 'win32':
             else:
                 if star_position is None:
                     raise ValueError('Specify star position or set MaxIm to auto select the guide star')
-            if not self.CCDCamera.GuiderTrack(float(exptime)):
+            if not self.CCDCamera.GuiderTrack(self.guider_exptime):
                 raise EnvironmentError('Attempt to start guiding failed.  Guider configured correctly?')
             self.guider_commanded_running = True
 
@@ -1918,8 +1960,8 @@ if sys.platform == 'win32':
             self.guider_commanded_running = False
             if self.CCDCamera.GuiderRunning:
                 self.CCDCamera.GuiderStop
-                if self.CCDCamera.GuiderRunning:
-                    raise EnvironmentError('Failed to stop guider')
+                #if self.CCDCamera.GuiderRunning:
+                #    raise EnvironmentError('Failed to stop guider')
 
         # This will eventually record and analyze guider images and
         # determine the best exposure time to use --> consider
@@ -1939,7 +1981,7 @@ if sys.platform == 'win32':
                 except:
                     raise EnvironmentError('error setting filter to ' + str(filter) + '.  Are you using a valid filter integer?  Is the filter wheel set up for the guider?')
             if exptime is None:
-                log.warning('Code not written yet to get auto exposure, just using default_guider_exptime')
+                log.debug('Code not written yet to get auto exposure, just using default_guider_exptime')
                 exptime = default_guider_exptime
                 # Here we would do some exposing to figure out what the optimal 
             # --> Eventually write the code that will take the image
@@ -2002,6 +2044,10 @@ if sys.platform == 'win32':
             # The CurrentDocument object gets refreshed when new images
             # are taken, so all we need is to make sure we are connected
             # to begin with
+
+            # --> This fails when we start the guider because the
+            # guider image becomes the current document, but somehow
+            # the CCD image does not when we take that
             if self.Document is not None:
                 return True
             self.getApplication()
