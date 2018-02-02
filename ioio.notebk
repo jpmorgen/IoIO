@@ -2747,3 +2747,36 @@ Oops, induced a pier flip with telecsope move
 FLip and see if problem goes away
 
 Definitely going up when should go down.  Might even be 90 
+
+--> my start guider doesn't seem to be getting the right star.
+    Because I need to set CCDCamera.GuiderAutoSelectStar.  It doesn't
+    read it from a dialog box
+
+Direction is totally messed up!  Depends on where I am on CCD?
+
+Guider stuff might matter some, but still, the pixel calculation seems
+totally off
+
+In the lower right, seems to go totally wrong direction with +
+
+Try my tracking again.  398, 292 is what it came up with even after I
+set it to something else.  But it was sort of close.
+
+
+lower right got  +44, +45, which was in the right direction
+lower left gets +47 -51 flip signs (or transpose)
+upper left  -13, -41 transpose
+
+Correct transpose (I think)
+upper left 47, 33 (wrong way)
+upper right -41.93768271  21.16033724
+
+Where the upper right is definitely closer to the X axis.
+So I think that means I have a minus sign
+
+upper right very low 56 -8
+
+Next up is getting the guiding to be a little more gentle in an
+intelligent way.  But that is not absolutely necessary right now
+
+

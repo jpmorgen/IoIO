@@ -1426,12 +1426,12 @@ if sys.platform == 'win32':
                 parameters appropriate for the guider (mainly
                 CDELT*).  Defaults to guider_astrometry property 
             """
-            if guider_astrometry is None:
-                guider_astrometry = self.guider_astrometry
             # --> Don't bother checking to see if we have commanded 
             if not self.CCDCamera.GuiderRunning:
                 log.error('Guider not running, move not performed')
 
+            if guider_astrometry is None:
+                guider_astrometry = self.guider_astrometry
             # --> Is this the right thing to do here?  Say no for now,
             # since I will probably deriving dra_ddec with astrometry.
             #if dec is None:
@@ -1447,15 +1447,22 @@ if sys.platform == 'win32':
             #dra_ddec[0] = dra_ddec[0]*np.cos(np.radians(dec))
 
             # Get the rough RA and DEC of our current ("old") guide box
-            # position
-            op_coords = (self.CCDCamera.GuiderXStarPosition,
-                         self.CCDCamera.GuiderYStarPosition)
+            # position.  !!! Don't forget that pixel coordinates are
+            # in !!! TRANSPOSE !!!
+            op_coords = (self.CCDCamera.GuiderYStarPosition,
+                         self.CCDCamera.GuiderXStarPosition)
             w_coords = self.scope_wcs(op_coords,
                                       to_world=True,
                                       astrometry=guider_astrometry)
-            p_coords = self.scope_wcs(w_coords + dra_ddec,
+            # When moving the scope in a particular direction, the
+            # stars appear to move in the opposite direction.  Since
+            # we are guiding on one of those stars (or whatever), we
+            # have to move the guide box in the opposite direction
+            p_coords = self.scope_wcs(w_coords - dra_ddec,
                                       to_pix=True,
                                       astrometry=guider_astrometry)
+            # Now we are in pixel coordinates on the guider.
+            # Calculate how far we need to move.
             # There is some implicit type casting here since op_coords
             # is a tuple, but p_coords is an np.array
             dp_coords = p_coords - op_coords
@@ -1472,32 +1479,21 @@ if sys.platform == 'win32':
                 num_steps = max((1,
                                  int(self.guide_box_steps_per_pix * norm_dp)))
 
-            log.debug('Number of steps: ' + str(num_steps))
+            step_dp = dp_coords / num_steps
+            log.debug('total delta in guider pix (X, Y): ' + str(dp_coords[::-1]))
             log.debug('norm_dp: ' + str(norm_dp))
-            ## --> Do it simply first.  THIS WORKED!
-            #log.info('MaxIm thinks guider coords are: ' + str(op_coords))
-            #tp_coords = op_coords + dp_coords
-            #log.info('Setting to: ' + str(tp_coords))
-            #self.CCDCamera.GuiderMoveStar(tp_coords[0], tp_coords[1])
-            #np_coords = (self.CCDCamera.GuiderXStarPosition, self.CCDCamera.GuiderYStarPosition)
-            #log.info('MaxIm now thinks guider coords are: ' + str(np_coords))
-            ## --> done simple
-
-            for dnorm in np.linspace(0, norm_dp, num_steps):
+            log.debug('Number of steps: ' + str(num_steps))
+            log.debug('Delta per step (X, Y): ' + str(step_dp[::-1]))
+            for istep in range(num_steps):
                 # Just in case someone else is commanding the guide
                 # box to move, use its instantaneous position as the
-                # starting point of our move
-                #op_coords = np.asarray((self.CCDCamera.GuiderXStarPosition,
-                #                        self.CCDCamera.GuiderYStarPosition))
-                #self.stop_guider()
-                cp_coords = np.asarray((self.CCDCamera.GuiderXStarPosition,
-                                        self.CCDCamera.GuiderYStarPosition))
-                tp_coords = op_coords + dnorm * uv
-                #log.info('MaxIm thinks guider coords are: ' + str(cp_coords))
-                log.info('Setting to: ' + str(tp_coords))
-                self.CCDCamera.GuiderMoveStar(tp_coords[0], tp_coords[1])
-                # --> Just checking
-                #self.CCDCamera.GuiderTrack(default_guider_exptime)
+                # starting point of our move !!! TRANSPOSE !!!
+                cp_coords = np.asarray((self.CCDCamera.GuiderYStarPosition,
+                                        self.CCDCamera.GuiderXStarPosition))
+                tp_coords = cp_coords + step_dp
+                log.info('Setting to: ' + str(tp_coords[::-1]))
+                # !!! TRANSPOSE !!!
+                self.CCDCamera.GuiderMoveStar(tp_coords[1], tp_coords[0])
                 if self.check_guiding() is False:
                     return False
             
@@ -1510,6 +1506,10 @@ if sys.platform == 'win32':
                     
 
         def check_guiding(self):
+            # --> the guider doesn't turn off when the star fades
+            # --> This algorithm could use improvement with respect to
+            # slowing itself down by looking at the guide errors, but
+            # it works for now
             if self.guider_exptime is None:
                 # If we didn't start the guider, take a guess at its
                 # exposure time, since MaxIm doesn't give us that info
@@ -1539,18 +1539,21 @@ if sys.platform == 'win32':
             if self.CCDCamera.GuiderRunning:
                 log.warning('Guider was running, turning off')
                 self.GuiderStop
-            if dec is None:
-                try:
-                    dec = self.Telescope.Declination
-                except:
-                    # If the user is using this apart from ACP, they
-                    # might have the scope connected through MaxIm
-                    if not self.Application.TelescopeConnected:
-                        log.warning("Could not read scope declination directly from scope or MaxIm's connection to the scope.  Using value from MaxIm Scope Dec dialog box in Guide tab of Camera Control, which the user has to enter by hand")
-                    dec = self.CCDCamera.GuiderDeclination
+            # I no longer think this is the right thing to do.  We are
+            # working in absolute coordinates now that we are using scope_wcs
+            #if dec is None:
+            #    try:
+            #        dec = self.Telescope.Declination
+            #    except:
+            #        # If the user is using this apart from ACP, they
+            #        # might have the scope connected through MaxIm
+            #        if not self.Application.TelescopeConnected:
+            #            log.warning("Could not read scope declination directly from scope or MaxIm's connection to the scope.  Using value from MaxIm Scope Dec dialog box in Guide tab of Camera Control, which the user has to enter by hand")
+            #        dec = self.CCDCamera.GuiderDeclination
+            #
+            ## Change to rectangular tangential coordinates for small deltas
+            #dra_ddec[0] = dra_ddec[0]*np.cos(np.radians(dec))
 
-            # Change to rectangular tangential coordinates for small deltas
-            dra_ddec[0] = dra_ddec[0]*np.cos(np.radians(dec))
             # Use our rates to change to time to press E/W, N/S, where
             # E is the + RA direction
             dt = dra_ddec/self.guide_rates
@@ -1791,6 +1794,11 @@ if sys.platform == 'win32':
             header['CD1_2']  /= header['YBINNING']
             header['CD2_1']  /= header['XBINNING']
             header['CD2_2']  /= header['YBINNING']
+            header['XORGSUBF'] = 0
+            header['YORGSUBF'] = 0
+            header['XBINNING'] = 1
+            header['YBINNING'] = 1
+            header['HISTORY'] = 'Modified CRPIX*, CD*, XORG*, and *BINNING keywords'
             # Do our desired transformations, only the WCS parts, not
             # distortions, since I haven't mucked with those parameters
             w = wcs.WCS(header)
@@ -1939,19 +1947,22 @@ if sys.platform == 'win32':
                 # --> exposure time stuff
                 self.stop_guider()
 
+            # GuiderAutoSelectStar is something we set for scripts to
+            # have Maxim do the star selection for us
+            if star_position is None:
+                self.CCDCamera.GuiderAutoSelectStar = True
+            else:
+                self.CCDCamera.GuiderAutoSelectStar = False
             self.guider_exptime, auto_star_selected \
                 = self.get_guider_exposure(exptime=exptime,
                                            filter=filter)
-            if not auto_star_selected and self.CCDCamera.GuiderAutoSelectStar:
+            if not auto_star_selected and star_position is None:
                 # Take an exposure to get MaxIm to calculate the guide
                 # star postion
                 self.CCDCamera.GuiderExpose(self.guider_exptime)
                 # --> Consider checking for timout here
                 while self.CCDCamera.GuiderRunning:
                     time.sleep(0.1)
-            else:
-                if star_position is None:
-                    raise ValueError('Specify star position or set MaxIm to auto select the guide star')
             if not self.CCDCamera.GuiderTrack(self.guider_exptime):
                 raise EnvironmentError('Attempt to start guiding failed.  Guider configured correctly?')
             self.guider_commanded_running = True
