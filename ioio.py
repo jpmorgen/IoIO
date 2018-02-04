@@ -518,7 +518,7 @@ class CorObsData(ObsData):
             # Jupiter (see above calcs)
             # if np.sum(im) < 65000 * 25:
             if np.sum(im) < 65000 * 250:
-                raise ValueError('Jupiter not found in image')
+                log.warning('Jupiter not found in image')
             # If we made it here, Jupiter is outside the ND filter,
             # but shining bright enough to be found
             # --> only look for very bright pixels
@@ -529,6 +529,9 @@ class CorObsData(ObsData):
         # Here is where we boost what is sure to be Jupiter, if Jupiter is
         # in the ND filter
         im[boost_NDc0, boost_NDc1] *= 1000
+        # Clean up any signal from clouds off the ND filter, which can
+        # mess up the center of mass calculation
+        im[np.where(im < 65000)] = 0
         y_x = ndimage.measurements.center_of_mass(im)
 
         #print(y_x[::-1])
@@ -1172,8 +1175,8 @@ if sys.platform == 'win32':
     # --> these are things that eventually I would want to store in a
     # --> configuration file
     # --> CHANGE ME BACK TO 1s and filter 0 (0.7s, filter 1 works for day)
-    default_exptime = 0.7
-    default_filt = 1
+    default_exptime = 1
+    default_filt = 0
     default_cent_tol = 3   # Pixels
     default_guider_exptime = 1
 
@@ -1239,6 +1242,9 @@ if sys.platform == 'win32':
             
             # Don't move the guide box too fast
             self.guide_box_steps_per_pix = 3
+            self.guider_settle_cycle = 3
+            self.guider_settle_tolerance = 2
+            self.loop_sleep_time = 0.2
 
             # Create containers for all of the objects that can be
             # returned by MaxIm.  We'll only populate them when we need
@@ -1504,6 +1510,55 @@ if sys.platform == 'win32':
                     return False
             return True
                     
+
+        def guider_settle(self):
+            """Wait for guider to settle"""
+            if not self.CCDCamera.GuiderRunning:
+                log.warning('Guider not running')
+                return
+            while (self.guider_cycle(self.guider_settle_cycle, norm=True)
+                   > self.guider_settle_tolerance):
+                time.sleep(self.loop_sleep_time)
+
+        def guider_cycle(self, n=1, norm=False):
+            """Returns average guider error (Y, X) after n guider cycles
+
+            Parameters
+            ----------
+            n : int like
+                Number of guider cycles.  Default = 1
+
+            norm : boolean
+                Return norm of guider error.  Default False
+
+
+            """
+            if not self.CCDCamera.GuiderRunning:
+                log.warning('Guider not running')
+                return None
+            last_norm = np.linalg.norm(
+                (self.CCDCamera.GuiderYError,
+                 self.CCDCamera.GuiderXError))
+            running_total = last_norm
+            for i in range(n):
+                while True:
+                    time.sleep(self.loop_sleep_time)
+                    this_norm = np.linalg.norm(
+                        (self.CCDCamera.GuiderYError,
+                         self.CCDCamera.GuiderXError))
+                    if last_norm != this_norm:
+                        # We have a new reading
+                        break
+                    # Keep looking for the new reading
+                    last_norm = this_norm
+                running_total += this_norm
+            if norm:
+                return this_norm/n
+            else:
+                return np.asarray((self.CCDCamera.GuiderYError,
+                                   self.CCDCamera.GuiderXError))
+
+
 
         def check_guiding(self):
             # --> the guider doesn't turn off when the star fades

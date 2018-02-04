@@ -2779,4 +2779,10 @@ upper right very low 56 -8
 Next up is getting the guiding to be a little more gentle in an
 intelligent way.  But that is not absolutely necessary right now
 
+Sat Feb 03 10:16:48 2018 EST  jpmorgen@snipe
 
+--> consider doing guider_settle and only triggering that when
+    commanded move is more than a threshold of arcsec
+
+Consider an all arcsec interface
+--> Would need to make a delta option in scope_wcs
