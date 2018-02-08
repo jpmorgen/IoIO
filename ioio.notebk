@@ -2786,3 +2786,199 @@ Sat Feb 03 10:16:48 2018 EST  jpmorgen@snipe
 
 Consider an all arcsec interface
 --> Would need to make a delta option in scope_wcs
+
+Sun Feb 04 08:46:44 2018 EST  jpmorgen@snipe
+
+For some reason scope is going the wrong way.  Oh, it is day.
+
+Sun Feb 04 17:32:02 2018 EST  jpmorgen@snipe
+
+Need to work with Document object more in MaxIm
+
+I really need to work with the Documents collection, not CurrentDocument
+
+Mon Feb 05 03:39:07 2018 EST  jpmorgen@snipe
+
+Worked!
+
+So now I need to give myself a series of exposures.  My original plan
+was to use events for this at the MaxIm level.
+
+
+Looks like I need to start with CCDCamera.EventMask.  Notify event is
+what I look at, I guess
+
+Ah, the events is how I could have done the guider stuff
+
+--> have to set EventMask first
+
+ceExposureCompleted
+
+is what I want
+
+So how do I handle events in Python?
+
+
+Threading might be a way to talk between my 
+https://docs.python.org/3/library/threading.html
+
+But MaxIm says I can use events just to avoid polling, which sounds
+like am optimization I can skip for now
+
+--> RMS coming back to fast on first guide
+Ah, might be before first exposure, so no error
+
+Mon Feb 05 14:10:19 2018 EST  jpmorgen@snipe
+
+Notify event is confusing.  Trying to figure it out.  I get that I
+have to set the Mask Bit value
+
+ioio.py MaxImCollector
+
+Hmm.  Events are a little tougher
+
+https://stackoverflow.com/questions/33208969/how-to-pass-arguments-to-win32com-event-handler
+
+But try simple case to see if it works
+
+https://vlasenkov.blogspot.ru/2017/03/python-win32com-multithreading.html
+
+Hmm.
+http://docs.activestate.com/activepython/3.4/pywin32/html/com/win32com/HTML/QuickStartClientCom.html
+
+This is getting quite complicated.
+
+All this to avoid generating some filename.
+
+So I can try this out with acquire_image and just feeding it images
+
+GuideBoxAdjuster is what I need to work on now.
+
+--> I can run it with a bunch of files to see what I come up with
+
+Note that arcsec/hour is a more common thing than guider pix per 10s.
+I am at
+
+0.020*4.42/10*3600
+31.824
+
+That is a sizable drift.
+
+Tue Feb 06 05:02:43 2018 EST  jpmorgen@snipe
+
+So we now have a list of times and dra_ddec.
+
+--> was thinking about separately controlling position vs nearness to
+    desired center, but stay simple for now.
+
+Hey, wait!  The delta of dra_ddec is my literal motion that I was
+thinking about separately controlling!  The instantanous dra_ddec gets
+factored in there if I want
+
+So do we want one guide box rate?  Ultimately, the guidebox will be
+moved at a particular rate for a particular amount of time & then
+that will change.  So we will need a history to match up with our
+object movements.  But some of guidebox motion may be due to 
+
+So we really have two things, the guide box motion due to differential
+flexure and guide box motion due to non-siderial guiding with a star.
+Right now, we are taking care of the former, which is just one
+component of the total.
+
+Current design has me writing this to a file & reading it with the
+GuideBoxMover
+
+I can use list.insert(0, element) to insert an element at the
+beginning, if I want to do that
+
+Or I can just do things in regular order and then reverse.  But the
+point is that we derive a new rate just by subtracting the measurement
+movement from the current movement
+
+OK, decide to stay in regular order.  Also figured out why image of
+Jupiter moves and not ND filter.  The field lens focuses the pupil of
+the telescope onto the camera lens.  When it moves/tips (which is
+equivalent to tiping the filter), the pupil moves, moving the apparent
+image of everything in the focal plane.  The ND filter is not imaged
+by the field lens onto the camera lens.  It is close enough to
+basically be part of it.  So movement of the field lens does not
+effect its apparent position in the focal plane.
+
+The upshot of this is that I really do need to keep track of the
+position of Jupiter for each filter.  I can build up a list of
+observed filters and dt and dra_ddec for each filter.  What data
+structure is best for that?
+
+Ultimately I want the filters to be in a list.  If I keep the same
+enumeration, I might be able to have a list of 
+
+Ah, I can use the index() method of the list and so have a parallel
+list of lists.
+
+What I would like would be a way to have dictionary...  No, figured
+out how to have a list comprehension grep it out for me
+
+--> now is when I need delta=True in scope_coords.  No, I actually may
+    not need w_coords in ObsData
+
+--> self.ObsDataList needs to be cleared when I restart the guider
+
+Hmm.  I have the logic down for stopping the motion of the object, but
+what do I do with the center?  Previously, I moved it during an
+exposure using a typical exposure length and the amount I wanted to
+move it.  Now I am wondering if the right thing to do is a
+move_with_guider.
+
+--> Do the move_with_guider and keep track of those deltas in
+    guide_box_flex_rates (or whatever I want to call it)
+
+Wed Feb 07 05:10:09 2018 EST  jpmorgen@snipe
+
+ioio.py from command line is now back to killing the camera when it
+exits.  This makes sense in a way, since we
+
+Somehow CCDCamera.LinkEnabled is being set to False when the object is killed.
+
+--> Consider handling it with a __del__ method? or with atexit?
+
+Or maybe I need to set it to False instead of violently exiting?
+
+Neither seems to work
+
+!! after disconnection and reconnecting FocusMax, seems to work OK
+--> That seems to be repeatable, but double-check all failure modes
+
+DATE-OBS is the start of the exposure
+
+So we can do the midpoint again.
+
+Hmm.  We have a phasing problem.
+
+An observation was taken before we knew about it.  We can potentially
+initialize our rates on first entry to 0.  The point is that we start
+an obs_center_rate a the beginning of an exposure (technically when we
+get our first response from GuideBoxMover).  The measurement of the
+center is done at the midpoint of the exposure.  At the end of the
+exposure, we calculate the rate for the next image.
+
+Lets think about the GuideBoxCommander for a minute.  Right now it
+does the subprocess opening.  That might be something I'd rather do in
+the __init__ method, with __del__ doing the p.terminate (though I am
+not sure if this is necesesary)
+
+I could have the units be in the same as HORIZONS    Units: ARCSECONDS PER HOUR
+
+So basically, I am ready to put the guide box rates into the
+PrecisionGuide object
+
+The more I think about it, the more I want to put every thing I need
+for PrecisionGuide into the ObsData
+
+Wed Feb 07 14:44:44 2018 EST  jpmorgen@snipe
+
+Making progress.  I have logic that will hopefully null out motion and
+have the Jupiter images cluster around the desired_center.
+
+--> Check if on-off subtraction works OK this way.  May need to keep
+    track of filter positions relative to each other and move them
+    into the center
