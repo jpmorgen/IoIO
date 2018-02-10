@@ -2982,3 +2982,151 @@ have the Jupiter images cluster around the desired_center.
 --> Check if on-off subtraction works OK this way.  May need to keep
     track of filter positions relative to each other and move them
     into the center
+
+--> consider making desired_center a little to the left of center
+
+Thu Feb 08 05:43:48 2018 EST  jpmorgen@snipe
+
+Wrote to the end of PrecisionGuide for now.  Now all I need to do is
+test it.  Critical Juno time right now
+
+On telescope tab, MaxIm reports "Pier flip" when scope is west of
+pier looking east.  This is opposite of what I assumed and means
+my initial east = -X was correct and my argument for what pier flip
+means was incorrect
+
+Changed sense of MaxImPierFlip and made -X = east + center still works
+(which uses guider_move)
+
+Next up is testing PrecisionGuide
+
+I basically need something like this: <start to write data_collector>
+
+Fri Feb 09 04:25:20 2018 EST  jpmorgen@snipe
+
+--> Need to think more about when I get bad measurements for Jupiter,
+    like it is too faint.  Considering quality flag
+
+--> getting NaN.  Save as Jupiter_NAN_coords.fit so I can think about
+    it.  Oops, that was because of wrong filter, but still....
+
+Back to logic of data_collector.  Ultmately, I am looking for one
+routine, I am currently calling it acquire_image, which checks to see
+if the closed-loop system is running, does the initial centering,
+turns on guider, takes and analyses the 
+
+--> Need a section of PrecisionGuide namespace for initial
+
+--> Might want a separate part of calc_flex_pix_rate for recentering
+    and turning the system on
+
+!!! Hey, since I am taking the data rather than passively swatching it
+    go by, I can enforce a uniform filter for centering !!!
+
+--> Add a filter selection logic and filter delay
+
+Wondering if it might be wise to have a self.lastO in precision guide
+so that I can effectively have a global return value from center_loop
+et al. when I need it.  Either that or I have something in ObsData
+that says that it was centered and to what tolerance!  No.
+
+--> Really want quality check in center
+
+Fri Feb 09 19:44:05 2018 EST  jpmorgen@snipe
+
+Checking things still work on Sirius just at sunset
+
+ioio.py center
+ioio.py guide --filter 3
+ioio.py center
+
+Still works OK
+
+ioio.py data_collector
+
+Fri Feb 09 23:21:17 2018 EST  jpmorgen@snipe
+
+Making progress
+
+--> Need to deal with time delta stuff
+
+Oops, was out of focus!
+
+What is arcsec/hour compared to what I was doing
+
+Guider plate scale is 4.42"/Pixel.  Was doing 0.020 in 10s
+
+0.020/10*4.22*3600
+30.383999999999997
+
+Ah Ha.  The delta moves are causing lots of problems
+
+getting a main dpix of .333 and a guider of 0.12
+.333/.12
+2.7750000000000004
+
+4.42/(1.59/2)
+5.559748427672956
+
+--> If I take away that factor of 2 binning that I know is there, I get
+the "right" answer
+
+--> Also a severe guider rate error.  That might be from dt being too small
+
+First main camera, with note about modifying
+
+ CDELT1  =   0.0002165594294585 /
+ CDELT1  =   0.0002165594294585 
+
+Second one is the same.  Note I might want to change the pixel size
+and NAXIS
+
+DEBUG: coords before: [-1.5 -0.5] [__main__]
+DEBUG: coords after: [ 1373.5  1099.5] [__main__]
+DEBUG: w_coords before: [array(-152.3409460713296), array(-11.838782685738101)] [__main__]
+DEBUG: w_coords after: [-0.00011274  0.0001062 ] [__main__]
+DEBUG: dra_ddec: [-0.00011274  0.0001062 ] [__main__]
+
+
+2018-02-10T07:52:42.661(UTC) [87.9055875228736, -195.2200697858324]
+
+np.asarray((87, 195))/(3600*4.22)*10
+array([ 0.05726698,  0.12835703])
+
+Hmm.  That is zooming.  I expect something like 30
+
+DEBUG: plate scale: [ 1.62339896  0.50977459] [__main__]
+DEBUG: plate scale: [ 0.6785298   0.86515492] [__main__]
+DEBUG: plate scale: [        inf  0.24989594] [__main__]
+DEBUG: plate scale: [ 0.92216446  0.65228332] [__main__]
+DEBUG: plate scale: [        inf -0.41227988] [__main__]
+DEBUG: plate scale: [ 0.36747519  0.70156471] [__main__]
+DEBUG: plate scale: [-2.38919199 -0.01123073] [__main__]
+
+<sigh> fundamentally, the delta algorithm is not working the way I expect.
+
+How does it work properly?  In populate_obj, I do it the same way,
+though I let the wcs stuff do its magic....
+
+Hey, I wonder if I am fighting MaxIm's guidebox mover!
+
+2018-02-10T09:35:04.747(UTC)---- GuideBoxMover Started ----- 
+2018-02-10T09:35:04.729(UTC) [0.0, 0.0]
+2018-02-10T09:35:43.929(UTC) [-31.935516179681695, -42.476564923871855]
+2018-02-10T09:36:22.757(UTC) [233.87095668683753, 20.21097317363958]
+2018-02-10T09:36:59.392(UTC) [-135.63725364278997, 86.19725434812861]
+2018-02-10T09:37:38.147(UTC) [-73.0761363093667, -42.426954765861794]
+
+I am also unstable
+
+--> Plate scale in RA is consistently high, as if I am missing a
+    cos(dec) or something
+
+DEBUG: plate scale: [ 0.84173601  0.77053104] [__main__]
+
+See IoIO.notebk.  Consider some measurement error estimates to help
+the process along.  Maybe just let it slide, measuring the rate and
+nulling that + only making a correction when we are beyond a certain
+threshold from the center or after the dispersion on our current
+location is low enough to be confident that our rates are good enough
+to reset their measurment after a one-time move

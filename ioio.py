@@ -41,7 +41,8 @@ run_level_guider_astrometry = os.path.join(
     #raw_data_root, '2018-01-24/GuiderPinPointSolutionEastofPier.fit')
 
 # --> I may improve this location or the technique of message passing
-guide_box_command_file = os.path.join(raw_data_root, 'GuideBoxCommand.txt')
+default_guide_box_command_file = os.path.join(raw_data_root, 'GuideBoxCommand.txt')
+default_guide_box_log_file = os.path.join(raw_data_root, 'GuideBoxLog.txt')
 
 run_level_default_ND_params \
     = [[  3.63686271e-01,   3.68675375e-01],
@@ -61,7 +62,8 @@ class ObsData():
 
     """
 
-    def __init__(self, HDUList_im_or_fname=None):
+    def __init__(self, HDUList_im_or_fname=None,
+                 desired_center=None):
         if HDUList_im_or_fname is None:
             raise ValueError('No HDUList_im_or_fname provided')
         # Set up our basic FITS image info
@@ -73,7 +75,13 @@ class ObsData():
         # This is the most basic observation data to be tracked.
         # These are in pixels
         self._obj_center = None
-        self._desired_center = None
+        self._desired_center = desired_center
+        # --> CHANGE ME BACK
+        #desired_center = (1150, 1150)
+        #self._desired_center = np.asarray(desired_center)
+        # 0 -- 10 scale indicating quality of obj_center and
+        # desired_center calculations
+        self.quality = 0
         ## --> I don't think I need these
         ## These are in world coordinates, to be calculated downstream,
         ## if necessary (e.g. by MaxImData.scope_wcs)
@@ -145,11 +153,11 @@ class ObsData():
             # Account for darktime, if available
             exptime = self.header.get('DARKTIME') 
             if exptime is None:
-                exptime = self.header('EXPTIME')
+                exptime = self.header['EXPTIME']
             # Use units to help with astropy.time calculations
             exptime *= u.s
-            self.TRateChange = Time(self.header['DATE-OBS'], format='fits')
-            self.Tmidpoint = self.TRateChange + exptime/2
+            self.Tmidpoint = (Time(self.header['DATE-OBS'], format='fits')
+                              + exptime/2)
             try:
                 # Note Astropy Pythonic transpose Y, X order
                 self._binning = (self.header['YBINNING'],
@@ -295,11 +303,11 @@ Uses readnoise (default = 5 e- RMS) to define bin widths
 
     @property
     def obj_center(self):
-        """Return center pixel coordinate of object, UNBINNED and in Y, X
-        order.  This particular version is a really crummy object
-        finder, since it will be confused by cosmic ray hits.  It is
-        up to the user to define an object center finder that suits
-        them, for instance one that uses PinPoint astrometry.
+        """Returns pixel coordinate of the brightests object in the image in
+        UNBINNED Y, X coordinates.  Does basic median filtering to get
+        rid of cosmic rays.  It is assumed this will be overridden
+        with better object finders, such as one that uses PinPoint
+        astrometry.
 
         """
     
@@ -312,18 +320,30 @@ Uses readnoise (default = 5 e- RMS) to define bin widths
         # Pretty-print our object center before we unbin
         log.debug('Object center (X, Y; binned) = ' + str(im_center[::-1]))
         self._obj_center = self.unbinned(im_center)
+        # Set quality just above the border, since we haven't done
+        # much work on this
+        self.quality = 6
         return self._obj_center
 
     @property
     def desired_center(self):
-        """Returns geometric center of image.
-        NOTE: The return order of indices is astropy FITS Pythonic: Y, X"""
+        """If desired_center hasn't been explicitly set, this returns the
+        geometric center of image.  NOTE: The return order of indices
+        is astropy FITS Pythonic: Y, X
+
+        """
         if self._desired_center is not None:
             return self._desired_center
         im = self.HDUList[0].data
         im_center = np.asarray(im.shape)/2
         self._desired_center = self.unbinned(im_center)
         return self._desired_center
+
+    # Allow user to move desired center around
+    @desired_center.setter
+    def desired_center(self, value):
+        self._desired_center = value
+    
 
     # --> I don't think I need these
     ## World coordinates may be calculated by of some subclasses.
@@ -508,6 +528,7 @@ class CorObsData(ObsData):
         self.desired_center
         self.obj_to_ND
 
+
     @property
     def obj_center(self):
         """Returns center pixel coords of Jupiter whether or not Jupiter is on ND filter.  Unbinned pixel coords are returned.  Use [Cor]Obs_Data.binned() to convert to binned pixels.
@@ -580,7 +601,10 @@ class CorObsData(ObsData):
             # Jupiter (see above calcs)
             # if np.sum(im) < 65000 * 25:
             if np.sum(im) < 65000 * 250:
-                log.warning('Jupiter not found in image')
+                self.quality = 4
+                log.warning('Jupiter (or suitably bright object) not found in image.  This object is unlikely to show up on the ND filter.  Seeting quality to ' + str(self.quality))
+            else:
+                self.quality = 6
             # If we made it here, Jupiter is outside the ND filter,
             # but shining bright enough to be found
             # --> only look for very bright pixels
@@ -604,6 +628,7 @@ class CorObsData(ObsData):
         # Stay in Pythonic y, x coords
         self._obj_center = np.asarray(y_x)
         log.debug('Object center (X, Y; binned) = ' + str(self.binned(self._obj_center)[::-1]))
+        self.quality = 6
         return self._obj_center
 
     @property
@@ -629,6 +654,11 @@ class CorObsData(ObsData):
         self._desired_center = desired_center
         return self._desired_center
         
+    #@desired_center.setter
+    # --> Consider making this able to put the object anywhere on the
+    # image (currently inherited) _and_ move it around relative to the
+    # ND filter
+
     @property
     def ND_coords(self):
         """Returns tuple of coordinates of ND filter"""
@@ -1237,9 +1267,9 @@ if sys.platform == 'win32':
     # --> these are things that eventually I would want to store in a
     # --> configuration file
     # --> CHANGE ME BACK TO 1s and filter 0 (0.7s, filter 1 works for day)
-    default_exptime = 1
+    default_exptime = 7
     default_filt = 0
-    default_cent_tol = 3   # Pixels
+    default_cent_tol = 5   # Pixels
     default_guider_exptime = 1
 
     #Daniel
@@ -1284,7 +1314,8 @@ if sys.platform == 'win32':
     
         def __init__(self,
                      main_astrometry=None,
-                     guider_astrometry=None):
+                     guider_astrometry=None,
+                     default_filt=default_filt):
             self.main_astrometry = main_astrometry
             self.guider_astrometry = guider_astrometry
             # --> Eventually this might be some first-time init to
@@ -1293,6 +1324,8 @@ if sys.platform == 'win32':
                 self.main_astrometry = run_level_main_astrometry
             if self.guider_astrometry is None:
                 self.guider_astrometry = run_level_guider_astrometry
+            self.default_filt = default_filt
+
             # Mount & guider information --> some of this might
             # eventually be tracked by this application in cases where
             # it is not available from the mount
@@ -1303,11 +1336,11 @@ if sys.platform == 'win32':
             self.guider_commanded_running = None
             
             # Don't move the guide box too fast
-            self.guide_box_steps_per_pix = 0.5
+            self.guide_box_steps_per_pix = 2
             self.guider_settle_cycle = 5
-            self.guider_settle_tolerance = 0.2
+            self.guider_settle_tolerance = 0.5
             self.loop_sleep_time = 0.2
-            self.guider_max_settle_time =  40 # seconds
+            self.guider_max_settle_time = 120 # seconds
             
             # Create containers for all of the objects that can be
             # returned by MaxIm.  We'll only populate them when we need
@@ -1336,11 +1369,95 @@ if sys.platform == 'win32':
             self.connect()
             self.populate_obj()
 
-        def __del__(self):
-            # Trying to keep camera from getting disconnected on exit
-            # --> What seems to work is having FocusMax recycled after
-            # this firsts connected (though not positive of that)
-            self.CCDCamera.LinkEnabled == True
+        #def __del__(self):
+        #    # Trying to keep camera from getting disconnected on exit
+        #    # --> What seems to work is having FocusMax recycled after
+        #    # this firsts connected (though not positive of that)
+        #    self.CCDCamera.LinkEnabled == True
+
+        # --> I think gencache might let me do what I want
+        def getDeviceInterface(self):
+            """THIS DOES NOT WORK.  I guess name space is handled another way, poassibly at the source code level.  I am importing ASCOM_namespace to handle this"""
+            if self.DeviceInterface is not None:
+                return True
+            try:
+                self.DeviceInterface = win32com.client.Dispatch('ASCOM.DeviceInterface')
+            except:
+                raise EnvironmentError('Error instantiating ASCOM DeviceInterface.  Is ASCOM installed? -- No, the real problem is the DeviceInterface thing is some sort of namespace include/import which I have not figured out how to get access to the way I plug into COM')
+            # Catch any other weird errors
+            assert isinstance(self.DeviceInterface, win32com.client.CDispatch)
+            
+        def getTelescope(self):
+            if self.Telescope is not None:
+                return
+            try:
+                # --> This will keep trying as we do things, in case
+                # people have turned on the telescope
+                self.Telescope = win32com.client.Dispatch(default_telescope)
+                self.telescope_connectable = True
+            except:
+                log.warning('Not able to connect to telescope.  Some features like auto pier flip for German equatorial mounts (GEMs) and automatic declination compensation for RA motions will not be available.')
+                self.telescope_connectable = False
+
+                #raise EnvironmentError('Error instantiating telescope control object ' + default_telescope + '.  Is the telescope on and installed?')
+            # Catch any other weird errors
+            #assert isinstance(self.Telescope, win32com.client.CDispatch)
+            
+        def getApplication(self):
+            if self.Application is not None:
+                return True
+            try:
+                self.Application = win32com.client.Dispatch("MaxIm.Application")
+            except:
+                raise EnvironmentError('Error creating MaxIM application object.  Is MaxIM installed?')
+            # Catch any other weird errors
+            assert isinstance(self.Application, win32com.client.CDispatch)
+
+        def getCCDCamera(self):
+            if self.CCDCamera is not None:
+                return True
+            try:
+                self.CCDCamera = win32com.client.Dispatch("MaxIm.CCDCamera")
+                #win32com.client.WithEvents(self.CCDCamera,
+                #                           self.CCDCameraEventHandler)
+            except:
+                raise EnvironmentError('Error creating CCDCamera object.  Is there a CCD Camera set up in MaxIm?')
+            # Catch any other weird errors
+            assert isinstance(self.CCDCamera, win32com.client.CDispatch)
+
+        # --> This is an event handler that doesn't work
+        class CCDCameraEventHandler():
+            #"""This hopefully magically receives the names of events from the client""" 
+            # https://vlasenkov.blogspot.ru/2017/03/python-win32com-multithreading.html
+            
+            def CCDCamera_Notify(self, event_code):
+                log.debug('Received event_code = ' + str(event_code))
+                
+
+        def getDocument(self):
+            """Gets the document object of the last CCD camera exposure"""
+            #"""Gets the document object of the current window"""
+            # The CurrentDocument object gets refreshed when new images
+            # are taken, so all we need is to make sure we are connected
+            # to begin with
+
+            # NOTE: the Application.CurrentDocument is not what we
+            # want, since that depends on which windows has focus.
+            if self.Document is not None:
+                return True
+            self.getCCDCamera()
+            try:
+                self.Document = self.CCDCamera.Document
+            except:
+                raise EnvironmentError('Error retrieving document object')
+            #self.getApplication()
+            #try:
+            #    self.Document = self.Application.CurrentDocument
+            #except:
+            #    raise EnvironmentError('Error retrieving document object')
+            # Catch any other weird errors
+            assert isinstance(self.Document, win32com.client.CDispatch)
+
         def connect(self):
             """Link to telescope, CCD camera(s), filter wheels, etc."""
 
@@ -1485,6 +1602,70 @@ if sys.platform == 'win32':
                     # --> interface would want to possibly record this
                     log.error('German equatorial mount (GEM) pier flip detected between guider astrometry data and guider calibration but mount not reporting PIERSIDE in guider astrometry file.  Was this file recorded with MaxIm?  Was the mount properly configured through an ASCOM driver when the calibration took place?')
                         
+        def guider_cycle(self, n=1):
+            """Returns RMS guider error magnitude after n guider cycles
+
+            Parameters
+            ----------
+            n : int like
+                Number of guider cycles.  Default = 1
+
+            norm : boolean
+                Return norm of guider error.  Default False
+
+
+            """
+            # --> This would be better with events
+            if not self.CCDCamera.GuiderRunning:
+                log.warning('Guider not running')
+                return None
+            this_norm = 0
+            last_norm = 0
+            running_sq = 0
+            for i in range(n):
+                while True:
+                    # Wait until MaxIm gets the first measurement.
+                    # eps is epsilon, a very small number.  Don't
+                    # forget to force the logic to get a measurement!
+                    this_norm = 0
+                    while this_norm < 1000 * np.finfo(np.float).eps:
+                        # --> this needs a timeout
+                        time.sleep(self.loop_sleep_time)
+                        this_norm = np.linalg.norm(
+                            (self.CCDCamera.GuiderYError,
+                             self.CCDCamera.GuiderXError))
+                    #log.debug('this_norm: ' + str(this_norm))
+                    #log.debug('last_norm: ' + str(last_norm)) 
+                    if (np.abs(last_norm - this_norm)
+                        > 1000 * np.finfo(np.float).eps):
+                        # We have a new reading.
+                        break
+                    # Keep looking for the new reading
+                    last_norm = this_norm
+                    #log.debug('last_norm after reassignment: ' + str(last_norm))
+                running_sq += this_norm**2
+                last_norm = this_norm
+            return (running_sq/n)**0.5
+
+        def guider_settle(self):
+            """Wait for guider to settle"""
+            if not self.CCDCamera.GuiderRunning:
+                log.warning('Guider not running')
+                return False
+            start = time.time()
+            now = start
+            rms = self.guider_settle_tolerance + 1
+            while (rms > self.guider_settle_tolerance
+                   and time.time() <= start + self.guider_max_settle_time):
+                rms = self.guider_cycle(self.guider_settle_cycle)
+                log.debug('guider RMS = ' + str(rms))
+                
+
+            if time.time() > start + self.guider_max_settle_time:
+                log.warning('Guider failed to settle after ' + str(self.guider_max_settle_time) + 's')
+                return False
+            return True
+
         def move_with_guide_box(self,
                                 dra_ddec,
                                 dec=None,
@@ -1554,9 +1735,11 @@ if sys.platform == 'win32':
                                  int(self.guide_box_steps_per_pix * norm_dp)))
 
             step_dp = dp_coords / num_steps
-            log.debug('total delta in guider pix (X, Y): ' + str(dp_coords[::-1]))
+            log.debug('move_with_guide_box: total delta in guider pix (X, Y): ' + str(dp_coords[::-1]))
             log.debug('norm_dp: ' + str(norm_dp))
             log.debug('Number of steps: ' + str(num_steps))
+            # --> This might be a good place to check if the number of
+            # steps is too great + it would be better to pop out of guiding
             log.debug('Delta per step (X, Y): ' + str(step_dp[::-1]))
             for istep in range(num_steps):
                 # Just in case someone else is commanding the guide
@@ -1565,11 +1748,10 @@ if sys.platform == 'win32':
                 cp_coords = np.asarray((self.CCDCamera.GuiderYStarPosition,
                                         self.CCDCamera.GuiderXStarPosition))
                 tp_coords = cp_coords + step_dp
-                log.info('Setting to: ' + str(tp_coords[::-1]))
+                log.debug('Setting to: ' + str(tp_coords[::-1]))
                 # !!! TRANSPOSE !!!
                 self.CCDCamera.GuiderMoveStar(tp_coords[1], tp_coords[0])
-                if self.guider_settle() is False:
-                    return False
+                return self.guider_settle()
             
             ## Give it a few extra cycles to make sure it has stuck
             ## (though even this might be too short)
@@ -1579,83 +1761,88 @@ if sys.platform == 'win32':
             return True
                     
 
-        def guider_settle(self):
-            """Wait for guider to settle"""
-            if not self.CCDCamera.GuiderRunning:
-                log.warning('Guider not running')
-                return False
-            start = time.time()
-            now = start
-            rms = self.guider_settle_tolerance + 1
-            while (rms > self.guider_settle_tolerance
-                   and time.time() <= start + self.guider_max_settle_time):
-                rms = self.guider_cycle(self.guider_settle_cycle)
-                log.debug('guider RMS = ' + str(rms))
-                
-
-            if time.time() > start + self.guider_max_settle_time:
-                log.warning('Guider failed to settle after ' + str(self.guider_max_settle_time) + 's')
-                return False
-            return True
-
-        def guider_cycle(self, n=1):
-            """Returns RMS guider error magnitude after n guider cycles
-
-            Parameters
-            ----------
-            n : int like
-                Number of guider cycles.  Default = 1
-
-            norm : boolean
-                Return norm of guider error.  Default False
-
-
-            """
-            # --> This would be better with events
-            if not self.CCDCamera.GuiderRunning:
-                log.warning('Guider not running')
-                return None
-            last_norm = 0
-            running_sq = 0
-            for i in range(n):
-                while True:
-                    # Wait until MaxIm gets the first measurement
-                    this_norm = 0
-                    while this_norm == 0:
-                        # --> this needs a timeout
-                        time.sleep(self.loop_sleep_time)
-                        this_norm = np.linalg.norm(
-                            (self.CCDCamera.GuiderYError,
-                             self.CCDCamera.GuiderXError))
-                    log.debug('this_norm: ' + str(this_norm))
-                    if last_norm != this_norm:
-                        # We have a new reading
-                        break
-                    # Keep looking for the new reading
-                    last_norm = this_norm
-                running_sq += this_norm**2
-            return (running_sq/n)**0.5
-
-        def check_guiding(self):
-            # --> the guider doesn't turn off when the star fades
-            # --> This algorithm could use improvement with respect to
-            # slowing itself down by looking at the guide errors, but
-            # it works for now
-            if self.guider_exptime is None:
-                # If we didn't start the guider, take a guess at its
-                # exposure time, since MaxIm doesn't give us that info
-                exptime = default_guider_exptime
-            else:
-                exptime = self.guider_exptime
-            # --> This needs to include the guide box read time or
-            # else loop which uses it gets guide box position confused
-            time.sleep(exptime*3)
-            if self.CCDCamera.GuiderRunning:
-                return True
-            else:
-                log.error('Guider stopped running while performing move')
-                return False
+        #def check_guiding(self):
+        #    # --> the guider doesn't turn off when the star fades
+        #    # --> This algorithm could use improvement with respect to
+        #    # slowing itself down by looking at the guide errors, but
+        #    # it works for now
+        #    if self.guider_exptime is None:
+        #        # If we didn't start the guider, take a guess at its
+        #        # exposure time, since MaxIm doesn't give us that info
+        #        exptime = default_guider_exptime
+        #    else:
+        #        exptime = self.guider_exptime
+        #    # --> This needs to include the guide box read time or
+        #    # else loop which uses it gets guide box position confused
+        #    time.sleep(exptime*3)
+        #    if self.CCDCamera.GuiderRunning:
+        #        return True
+        #    else:
+        #        log.error('Guider stopped running while performing move')
+        #        return False
             
+        def MaxIm_pier_flip_state(self):
+            """Return -1 if MaxIm is flipping the sense of the RA axis, 1 for non-flipped"""
+            # Using GuiderAutoPierFlip or the interactive PierFlip
+            # box, MaxIm can effectively cast the guider image in the
+            # correct sense for the FOV of the guide camera across
+            # pier flips.  Ultimately MaxIm does this by swapping the
+            # RA motor commands.  This is confusing when we know our
+            # absolute directions and just want to control the mount
+            # through the guide ports on the camera (or other MaxIm
+            # connection to the mount).  The purpose of this routine
+            # is to figure out if MaxIm is flipping the sense of the
+            # RA axis or not.
+            flip = 1
+            if not self.telescope_connectable:
+                # MaxIm does not make the contents of its Pier Flip
+                # check box on the Camera Control Guide tab accessible
+                # to scripting, so we would have to collect that
+                # information and give it to MaxIm in the form of
+                # self.CCDCamera.GuiderReverseX et al.  -->
+                # Eventually, we might be able to have a user
+                # interface which helps with this, but for now, we
+                # need to have a telescope that connects.  Don't raise
+                # any warnings, since populate_obj has been wordy
+                # enough
+                pass
+            # Here I did some experiments and found that MaxIm knows
+            # what side of the pier the guider was calibrated on and
+            # uses that to establish calibration in any pier flip
+            # state.  Note that as per ASCOM conventions, pierEast
+            # (scope on east side of pier looking west) is "normal"
+            # and pierWest (scope on west side of pier looking east),
+            # is "through the pole," or "flipped."  [Personally, I
+            # would define pier flip to be the state I am in after I
+            # cross the meridian, which is the opposite of this.]  The
+            # only question is: does MaxIm know where the telescope
+            # is?  Since ACP does not want MaxIm connected to the
+            # telescope, this answer will vary.  Return flip = -1 when
+            # MaxIm is sure to be flipping the sense of the RA axis.
+            if (self.alignment_mode == ASCOM.algGermanPolar
+                and self.Application.TelescopeConnected
+                and self.CCDCamera.GuiderAutoPierFlip
+                and self.Telescope.SideOfPier == ASCOM.pierWest):
+                flip = -1
+            # The Camera Control->Guide->Settings->Advanced->Guider
+            # Motor Control X and Y refer to connections to the
+            # guider, which people are free to hook up however they
+            # please to make their guiding experience pleasant (e.g.,
+            # align things on their CCD).  Generally X is for RA and Y
+            # for DEC, however, MaxIm doesn't really care, since it
+            # just calibrates that out.  The only time MaxIm cares is
+            # if you have a GEM, in which case it is nice to know
+            # which axis corresponds to RA so signals along that axis
+            # can be flipped on pier flip.  For non-standard wiring
+            # configurations, where guider X and Y outputs are not
+            # going to mount RA and DEC inputs, ASCOM_namespace.py is
+            # the right place to make changes, since that effectively
+            # rewires this program.  In other words, this rewiring
+            # needs to take place, but this is the wrong routine to do
+            # it, this routine just determines if MaxIm is reversing
+            # the sense of RA for a pier flip.
+            return flip
+
         def guider_move(self,
                         dra_ddec,
                         dec=None,
@@ -1705,11 +1892,10 @@ if sys.platform == 'win32':
             dt[0] *= self.MaxIm_pier_flip_state()
 
             if dt[0] > 0:
-                # East is positive RA.  Based on extensive
-                # experiments, MaxIm seems to assume +X is east
-                RA_success = self.CCDCamera.GuiderMove(ASCOM.gdPlusX, dt[0])
+                # East is positive RA, but east is left (-X) on the sky
+                RA_success = self.CCDCamera.GuiderMove(ASCOM.gdMinusX, dt[0])
             elif dt[0] < 0:
-                RA_success = self.CCDCamera.GuiderMove(ASCOM.gdMinusX, -dt[0])
+                RA_success = self.CCDCamera.GuiderMove(ASCOM.gdPlusX, -dt[0])
             else:
                 # No need to move
                 RA_success = True
@@ -1731,88 +1917,13 @@ if sys.platform == 'win32':
             while self.CCDCamera.GuiderMoving:
                 time.sleep(0.1)
                 
-        def MaxIm_pier_flip_state(self):
-            """Return 1 for non-flipped, -1 for flipped"""
-            # Using GuiderAutoPierFlip or the interactive PierFlip
-            # box, MaxIm can conveniently cast X and Y of the guider
-            # image in the correct sense for the FOV of the guide
-            # camera across pier flips.  This is confusing when we
-            # know our absolute directions and just want to control
-            # the mount through the guide ports on the camera (or
-            # other MaxIm connection to the mount).  Ultimately, MaxIm
-            # only reverses the sense of the RA motor commands.  The
-            # question MaxIm cares about is which direction do those
-            # correspond to in the guider image.  We can safely igmore
-            # the guider image
-            flip = 1
-            if not self.telescope_connectable:
-                # MaxIm does not make the contents of its Pier Flip
-                # check box on the Camera Control Guide tab accessible
-                # to scripting, so we would have to collect that
-                # information and give it to MaxIm in the form of
-                # self.CCDCamera.GuiderReverseX et al.  -->
-                # Eventually, we might be able to have a user
-                # interface which helps with this, but for now, we
-                # need to have a telescope that connects.  Don't raise
-                # any warnings, since populate_obj has been wordy
-                # enough
-                pass
-
-            # Here I did some experiments and found that MaxIm knows
-            # what side of the pier the guider was calibrated on and
-            # uses that to establish calibration in any pier flip
-            # state.  The only question is: does MaxIm know where the
-            # telescope is?  Since ACP does not want MaxIm connected
-            # to the telescope, this answer will vary.  Return flip =
-            # -1 when MaxIm is sure to be flipping the sense of the RA
-            # axis
-            if (self.alignment_mode == ASCOM.algGermanPolar
-                and self.Application.TelescopeConnected
-                and self.CCDCamera.GuiderAutoPierFlip
-                and self.Telescope.SideOfPier == ASCOM.pierEast):
-                flip = -1
-
-
-            #    # Check to see what axis we are flipping on
-            #    a = self.CCDCamera.GuiderAngle
-            #    if (45 < a and a < 135
-            #        or 225 < a and a < 315):
-            #        # flip Y
-            #        axis_flip = (1, -1)
-            #    else:
-            #        # flip X
-            #        axis_flip = (-1, 1)
-            #    # Check to see if MaxIm is flipping for us, which is
-            #    # the usual case for convenient guiding, assuming
-            #    # MaxIm is fully in charge of the telescope.  I did
-            #    # some careful experiments with the guider astrometry
-            #    # to convince myself that MaxIm knows which side of
-            #    # the pier it calibrated itself on & takes that into
-            #    # consideration as it is guiding.  Furthermore, it
-            #    # considers a scope on the west side, looking east as
-            #    # in the non-flipped state.  Once the object crosses
-            #    # the meridian, the mount flips and MaxIm reverses the
-            #    # sense of the appro
-            #    print('telescope pier side, guider cal pier side: ', self.Telescope.SideOfPier, self.guider_cal_pier_side)
-            #    if (self.Application.TelescopeConnected
-            #        and self.CCDCamera.GuiderAutoPierFlip
-            #        and self.Telescope.SideOfPier != self.guider_cal_pier_side):
-            #        flip = np.asarray(axis_flip)
-            #
-            ## MaxIm has the ability to force guider calibration reversals
-            #if self.CCDCamera.GuiderReverseX:
-            #    flip[0] = -1
-            #if self.CCDCamera.GuiderReverseY:
-            #    flip[1] = -1
-
-            return flip
-
         def scope_wcs(self,
                       coords_in,
                       to_world=False,
                       to_pix=False,
                       astrometry=None,
-                      absolute=False):
+                      absolute=False,
+                      delta=False):
             """Computes WCS coordinate transformations to/from UNBINNED PIXELS, using scope coordinates if necessary
 
             Parameters
@@ -1925,11 +2036,14 @@ if sys.platform == 'win32':
             header['CD1_2']  /= header['YBINNING']
             header['CD2_1']  /= header['XBINNING']
             header['CD2_2']  /= header['YBINNING']
+            # Put our binning and subframe to unbinned values so we
+            # don't tweak things again!
             header['XORGSUBF'] = 0
             header['YORGSUBF'] = 0
             header['XBINNING'] = 1
             header['YBINNING'] = 1
             header['HISTORY'] = 'Modified CRPIX*, CD*, XORG*, and *BINNING keywords'
+
             # Do our desired transformations, only the WCS parts, not
             # distortions, since I haven't mucked with those parameters
             w = wcs.WCS(header)
@@ -1942,6 +2056,12 @@ if sys.platform == 'win32':
                 # column major language)
                 # https://stackoverflow.com/questions/12116830/numpy-slice-of-arbitrary-dimensions
                 coords = coords_in[..., ::-1]
+                if delta:
+                    # We have left transpose space
+                    c0 = np.asarray((header['CRPIX1'], header['CRPIX2']))
+                    log.debug('coords before: ' + str(coords))
+                    coords += np.asarray((header['CRPIX1'], header['CRPIX2']))
+                    log.debug('coords after: ' + str(coords))
                 # Decide to leave in RA DEC, since we are no longer in
                 # our image when we are RA and DEC
                 # The 0 is because we number our pixels from 0, unlike
@@ -1950,15 +2070,34 @@ if sys.platform == 'win32':
                 # ACK!  The WCS package is not smart about checking
                 # for single tuple input, so I have to <sigh>
                 if coords.size == 2:
-                    return w.wcs_pix2world(coords[0], coords[1], 0)
+                    w_coords = w.wcs_pix2world(coords[0], coords[1], 0)
                 else:
-                    return w.wcs_pix2world(coords, 0)
+                    w_coords = w.wcs_pix2world(coords, 0)
+                if delta:
+                    w0_coords = w.wcs_pix2world(c0[0], c0[1], 0)
+                    log.debug('w_coords before: ' + str(w_coords))
+                    w_coords = (np.asarray(w_coords)
+                                - np.asarray(w0_coords))
+                    log.debug('w_coords after: ' + str(w_coords))
+                    # for debugging purposes
+                    coords -= c0
+                    log.debug('coords_in[..., ::-1]: ' + str(coords))
+                    log.debug('plate scale: ' +
+                              str(3600*w_coords/coords))
+                return w_coords
             if to_pix:
+                # --> This might need to be fixed
+                if delta:
+                    coords_in += np.asarray((header['CRVAL1'],
+                                             header['CRVAL2']))
                 if coords_in.size == 2:
                     pix = np.asarray(
                         w.wcs_world2pix(coords_in[0], coords_in[1], 0))
                 else:
                     pix = w.wcs_world2pix(coords_in, 0)
+                if delta:
+                    # Note we have yet to leave transpose space
+                    pix -= np.asarray((header['CRPIX1'], header['CRPIX2']))
                 # Put out pix back into Y, X order, UNBINNED
                 return pix[..., ::-1]
 
@@ -1971,78 +2110,12 @@ if sys.platform == 'win32':
             rotated = np.asarray(np.dot(M, vec))
             return np.squeeze(rotated)
     
-        # Take im is Bob Denny's nomenclature
-        def take_im(self,
-                    exptime=default_exptime,
-                    filt=default_filt,
-                    camera=None,
-                    light=None):
-            """Uses MaxIm to record an image
-            """
-            # Take a light (1) exposure
-            self.CCDCamera.Expose(exptime, 1, filt)
-            # This is potentially a place for a coroutine
-            time.sleep(exptime)
-            # --> Need to set some sort of timeout
-            while not self.CCDCamera.ImageReady:
-                time.sleep(0.1)
-            return(self.get_im())
-
-        def get_im(self):
-            """Puts current MaxIm image (the image with focus) into a FITS HDUList.  If an exposure is being taken or there is no image, the im array is set equal to None"""
-            # Clear out HDUList in case we fail
-            self.HDUList = None
-            if not self.CCDCamera.ImageReady:
-                raise EnvironmentError('CCD Camera image is not ready')
-            # For some reason, we can't get at the image array or its FITS
-            # header through CCDCamera.ImageArray, but we can through
-            # Document.ImageArray
-            self.getDocument()
-            
-            # Make sure we have an array to work with
-            c_im = self.Document.ImageArray
-            if c_im is None:
-                raise EnvironmentError('There is no image array')
-            # Create a basic FITS image out of this and copy in the FITS
-            # keywords we want
-    
-            # TRANSPOSE ALERT.  Document.ImageArray returns a tuple of
-            # tuples shaped just how you would want it for X, Y.  Since
-            # Python is written in C, this is stored in memory in in "C
-            # order," which is the transpose of how they were intended to
-            # be written into a FITS file.  Since all the FITS stuff
-            # assumes that we are reading/writing FORTRAN-ordered arrays
-            # bytes from/to a C language, we need to transpose our array
-            # here so that the FITS stuff has the bytes in the order it
-            # expects.  This seems less prone to generating bugs than
-            # making users remember what state of transpose they are in
-            # when dealing with arrays generated here vs. data read in
-            # from disk for debugging routines.  This is also faster than
-            # writing to disk and re-reading, since the ndarray order='F'
-            # doesn't actually do any movement of data in memory, it just
-            # tells numpy how to interpret the order of indices.
-            c_im = np.asarray(c_im)
-            adata = c_im.flatten()#order='K')# already in C order in memory
-            # The [::-1] reverses the indices
-            adata = np.ndarray(shape=c_im.shape[::-1],
-                               buffer=adata, order='F')
-            
-            hdu = fits.PrimaryHDU(adata)
-            self.get_keys()
-            for k in self.FITS_keys:
-                hdu.header[k[0]] = k[1]
-            self.HDUList = fits.HDUList(hdu)
-            return self.HDUList
-
         def get_keys(self):
             """Gets list of self.required_FITS_keys from current image"""
             self.FITS_keys = []
             for k in self.required_FITS_keys:
                 self.FITS_keys.append((k, self.Document.GetFITSKey(k)))
             
-        # --> Not sure if FITS files get written by MaxIm before or after
-        # --> they become Document property after a fresh read.  Could use
-        # --> CCDCamera version, but this keeps it consistent
         def set_keys(self, keylist):
             """Write desired keys to current image FITS header"""
             self.getDocument()
@@ -2058,7 +2131,36 @@ if sys.platform == 'win32':
             except:
                 log.warning('Problem setting keys: ', sys.exc_info()[0])
                 return None
-                
+
+        # This will eventually record and analyze guider images and
+        # determine the best exposure time to use --> consider
+        # combining all image recording to take_im with a camera
+        # provided
+        def get_guider_exposure(self, exptime=None, filter=None):
+            """Returns tuple (exptime, star_auto_selected) since
+            taking an image with GuiderAutoSelectStar will select the
+            star"""
+            if filter is not None:
+                try:
+                    # --> Do some checking of length of filter, or
+                    # --> maybe have a routine that cycles through the
+                    # --> guider filter list, since this will bomb
+                    # --> with a filter list right now
+                    self.CCDCamera.GuiderFilter = filter
+                except:
+                    raise EnvironmentError('error setting filter to ' + str(filter) + '.  Are you using a valid filter integer?  Is the filter wheel set up for the guider?')
+            if exptime is None:
+                log.debug('Code not written yet to get auto exposure, just using default_guider_exptime')
+                exptime = default_guider_exptime
+                # Here we would do some exposing to figure out what the optimal 
+            # --> Eventually write the code that will take the image
+            # and figure out what filter to use
+            return (exptime, False)
+
+        # This is going to need to take a guider picture
+        def set_guider_star_position(self):
+            raise ValueError('Code not written yet.  Use GuiderAutoSelectStar for now')
+
         def start_guider(self, exptime=None, filter=None, star_position=None):
             """Start guider
 
@@ -2109,118 +2211,73 @@ if sys.platform == 'win32':
                 #if self.CCDCamera.GuiderRunning:
                 #    raise EnvironmentError('Failed to stop guider')
 
-        # This will eventually record and analyze guider images and
-        # determine the best exposure time to use --> consider
-        # combining all image recording to take_im with a camera
-        # provided
-        def get_guider_exposure(self, exptime=None, filter=None):
-            """Returns tuple (exptime, star_auto_selected) since
-            taking an image with GuiderAutoSelectStar will select the
-            star"""
-            if filter is not None:
-                try:
-                    # --> Do some checking of length of filter, or
-                    # --> maybe have a routine that cycles through the
-                    # --> guider filter list, since this will bomb
-                    # --> with a filter list right now
-                    self.CCDCamera.GuiderFilter = filter
-                except:
-                    raise EnvironmentError('error setting filter to ' + str(filter) + '.  Are you using a valid filter integer?  Is the filter wheel set up for the guider?')
-            if exptime is None:
-                log.debug('Code not written yet to get auto exposure, just using default_guider_exptime')
-                exptime = default_guider_exptime
-                # Here we would do some exposing to figure out what the optimal 
-            # --> Eventually write the code that will take the image
-            # and figure out what filter to use
-            return (exptime, False)
-
-        # This is going to need to take a guider picture
-        def set_guider_star_position(self):
-            raise ValueError('Code not written yet.  Use GuiderAutoSelectStar for now')
-
-        def getDeviceInterface(self):
-            """THIS DOES NOT WORK.  I guess name space is handled another way, poassibly at the source code level.  I am importing ASCOM_namespace to handle this"""
-            if self.DeviceInterface is not None:
-                return True
-            try:
-                self.DeviceInterface = win32com.client.Dispatch('ASCOM.DeviceInterface')
-            except:
-                raise EnvironmentError('Error instantiating ASCOM DeviceInterface.  Is ASCOM installed? -- No, the real problem is the DeviceInterface thing is some sort of namespace include/import which I have not figured out how to get access to the way I plug into COM')
-            # Catch any other weird errors
-            assert isinstance(self.DeviceInterface, win32com.client.CDispatch)
+        def get_im(self):
+            """Puts current MaxIm image (the image with focus) into a FITS HDUList.  If an exposure is being taken or there is no image, the im array is set equal to None"""
+            # Clear out HDUList in case we fail
+            self.HDUList = None
+            if not self.CCDCamera.ImageReady:
+                raise EnvironmentError('CCD Camera image is not ready')
+            # For some reason, we can't get at the image array or its FITS
+            # header through CCDCamera.ImageArray, but we can through
+            # Document.ImageArray
+            self.getDocument()
             
-        def getTelescope(self):
-            if self.Telescope is not None:
-                return
-            try:
-                # --> This will keep trying as we do things, in case
-                # people have turned on the telescope
-                self.Telescope = win32com.client.Dispatch(default_telescope)
-                self.telescope_connectable = True
-            except:
-                log.warning('Not able to connect to telescope.  Some features like auto pier flip for German equatorial mounts (GEMs) and automatic declination compensation for RA motions will not be available.')
-                self.telescope_connectable = False
-
-                #raise EnvironmentError('Error instantiating telescope control object ' + default_telescope + '.  Is the telescope on and installed?')
-            # Catch any other weird errors
-            #assert isinstance(self.Telescope, win32com.client.CDispatch)
+            # Make sure we have an array to work with
+            c_im = self.Document.ImageArray
+            if c_im is None:
+                raise EnvironmentError('There is no image array')
+            # Create a basic FITS image out of this and copy in the FITS
+            # keywords we want
+    
+            # TRANSPOSE ALERT.  Document.ImageArray returns a tuple of
+            # tuples shaped just how you would want it for X, Y.  Since
+            # Python is written in C, this is stored in memory in in "C
+            # order," which is the transpose of how they were intended to
+            # be written into a FITS file.  Since all the FITS stuff
+            # assumes that we are reading/writing FORTRAN-ordered arrays
+            # bytes from/to a C language, we need to transpose our array
+            # here so that the FITS stuff has the bytes in the order it
+            # expects.  This seems less prone to generating bugs than
+            # making users remember what state of transpose they are in
+            # when dealing with arrays generated here vs. data read in
+            # from disk for debugging routines.  This is also faster than
+            # writing to disk and re-reading, since the ndarray order='F'
+            # doesn't actually do any movement of data in memory, it just
+            # tells numpy how to interpret the order of indices.
+            c_im = np.asarray(c_im)
+            adata = c_im.flatten()#order='K')# already in C order in memory
+            # The [::-1] reverses the indices
+            adata = np.ndarray(shape=c_im.shape[::-1],
+                               buffer=adata, order='F')
             
-        def getApplication(self):
-            if self.Application is not None:
-                return True
-            try:
-                self.Application = win32com.client.Dispatch("MaxIm.Application")
-            except:
-                raise EnvironmentError('Error creating MaxIM application object.  Is MaxIM installed?')
-            # Catch any other weird errors
-            assert isinstance(self.Application, win32com.client.CDispatch)
+            hdu = fits.PrimaryHDU(adata)
+            self.get_keys()
+            for k in self.FITS_keys:
+                hdu.header[k[0]] = k[1]
+            self.HDUList = fits.HDUList(hdu)
+            return self.HDUList
 
-        def getCCDCamera(self):
-            if self.CCDCamera is not None:
-                return True
-            try:
-                self.CCDCamera = win32com.client.Dispatch("MaxIm.CCDCamera")
-                #win32com.client.WithEvents(self.CCDCamera,
-                #                           self.CCDCameraEventHandler)
-            except:
-                raise EnvironmentError('Error creating CCDCamera object.  Is there a CCD Camera set up in MaxIm?')
-            # Catch any other weird errors
-            assert isinstance(self.CCDCamera, win32com.client.CDispatch)
-
-        class CCDCameraEventHandler():
-            #"""This hopefully magically receives the names of events from the client""" 
-            # https://vlasenkov.blogspot.ru/2017/03/python-win32com-multithreading.html
-            
-            def CCDCamera_Notify(self, event_code):
-                log.debug('Received event_code = ' + str(event_code))
+        # Take im is Bob Denny's nomenclature
+        def take_im(self,
+                    exptime=default_exptime,
+                    filt=None,
+                    binning=None,
+                    camera=None,
+                    light=None):
+            """Uses MaxIm to record an image
+            """
+            if filt is None:
+                filt = self.default_filt
+            # --> Add support for binning, camera, and non-light
+            # Take a light (1) exposure
+            self.CCDCamera.Expose(exptime, 1, filt)
+            # This is potentially a place for a coroutine
+            time.sleep(exptime)
+            # --> Need to set some sort of timeout
+            while not self.CCDCamera.ImageReady:
+                time.sleep(0.1)
+            return(self.get_im())
                 
-
-        def getDocument(self):
-            """Gets the document object of the last CCD camera exposure"""
-            #"""Gets the document object of the current window"""
-            # The CurrentDocument object gets refreshed when new images
-            # are taken, so all we need is to make sure we are connected
-            # to begin with
-
-            # --> This fails when we start the guider because the
-            # guider image becomes the current document, but somehow
-            # the CCD image does not when we take that
-            # --> Work with the Documents collection instead
-            # --> Wait.  Maybe I want the CCDCamera CurrentDocument!
-            if self.Document is not None:
-                return True
-            self.getCCDCamera()
-            try:
-                self.Document = self.CCDCamera.Document
-            except:
-                raise EnvironmentError('Error retrieving document object')
-            #self.getApplication()
-            #try:
-            #    self.Document = self.Application.CurrentDocument
-            #except:
-            #    raise EnvironmentError('Error retrieving document object')
-            # Catch any other weird errors
-            assert isinstance(self.Document, win32com.client.CDispatch)
      
 
     class PrecisionGuide():
@@ -2240,6 +2297,8 @@ if sys.platform == 'win32':
                 self,
                 ObsClassName=None, 
                 ObsClassModule=None,
+                guide_box_command_file=default_guide_box_command_file,
+                guide_box_log_file=default_guide_box_log_file,
                 **ObsClassArgs): # args to use to instantiate ObsClassName
             self.MD = MaxImData()
             if ObsClassName is None:
@@ -2262,15 +2321,28 @@ if sys.platform == 'win32':
                     = getattr(importlib.import_module(ObsClassModule),
                               ObsClassName)
             self.ObsClassArgs = ObsClassArgs
+            self.guide_box_command_file = guide_box_command_file
+            self.guide_box_log_file = guide_box_log_file
+
             self.ObsDataList = []
             self.flex_aggressiveness = 0.5
             # Used for spotting unusually high flex_pix rates
-            self.flex_pix_stdev_mult = 5
-            self.current_flex_pix_rate = np.asarray((0,0))
+            self.flex_pix_std_mult = 5
+            # This needs to be float
+            self.current_flex_pix_rate = np.zeros(2)
             self.current_flex_pix_TStart = Time.now()
+            self.last_delta_pix = np.zeros(2)
             # --> Current way to keep the guide box moving, may improve
-            self.GuideBoxMoverSubprocess = None
+            self._GuideBoxMoverSubprocess = None
             
+        def create_ObsData(self, arg, **ObsClassArgs):
+            if ObsClassArgs != {}:
+                return self.ObsDataClass(arg, **ObsClassArgs)
+            elif self.ObsClassArgs != {}:
+                return self.ObsDataClass(arg, **self.ObsClassArgs)
+            else:
+                return self.ObsDataClass(arg)
+
         def center(self,
                    HDUList_im_fname_ObsData_or_obj_center=None,
                    desired_center=None,
@@ -2352,6 +2424,9 @@ if sys.platform == 'win32':
                 # The ObsClass base class takes care of reading all of these
                 input = self.create_ObsData(input, **ObsClassArgs)
             if isinstance(input, ObsData):
+                if input.quality < 5:
+                    log.error('Quality of center estimate too low: ' + str(input.quality))
+                    return False
                 obj_center = input.obj_center
                 if desired_center is None:
                     # (Allows user to override desired center)
@@ -2393,72 +2468,107 @@ if sys.platform == 'win32':
                         filt=default_filt,
                         tolerance=default_cent_tol,
                         max_tries=3,
+                        start_GuideBoxMoving=False,
                         **ObsClassArgs):
-            """Loop max_tries times, taking exposures and moving the telescope with guider slews to center the object
+            """Loop max_tries times taking exposures and moving the telescope with guider slews or guide box moves to center the object
             """
             tries = 0
+            fails = 0
             while True:
                 HDUList = self.MD.take_im(exptime, filt)
                 O = self.create_ObsData(HDUList, **ObsClassArgs)
+                if O.quality < 5:
+                    log.warning('obj_center quality estimate is too low: ' +
+                                str(O.quality))
+                    fails += 1
+                    if fails > max_tries:
+                        log.error('Maximum number of tries exceeded to get a good center: ' + str(fails))
+                        return False
+                    continue
                 if (np.linalg.norm(O.obj_center - O.desired_center)
                     < tolerance):
-                    return True
+                    break
                 if tries >= max_tries:
                     log.error('Failed to center target to ' + str(tolerance) + ' pixels after ' + str(tries) + ' tries')
                     return False
                 self.center(O)
                 tries += 1
-            # We should never get here
-            assert False
+            # If we made it here, we have sucessfully centered
+            if start_GuideBoxMoving:
+                # If we were asked ot, go ahead and start our first
+                # flex_pix_rate point with the image we have on hand
+                return self.calc_flex_pix_rate(O)
+            return True
 
-        def MaxImCollector(self):
-            self.MD.CCDCamera.EventMask = 2
-            log.debug('MaxIm set to notify when main camera exposure complete')
-            #for i in range(3):
-            #    event = self.MD.CCDCamera.Notify
-            #    log.debug('Exposure ended: ' + str(event))
+        @property
+        def GuideBoxMoving(self):
+            if self._GuideBoxMoverSubprocess is None:
+                return False
+            assert isinstance(self._GuideBoxMoverSubprocess, subprocess.Popen)
+            return True
 
-        # For now, use the defaults tailored for IoIO.  It may be too
-        # complex to get thing in as parameters, in which case this
-        # would be overridden
-        def acquire_image(self,
-                          exptime,
-                          filt,
-                          fname,
-                          ACP_obj=None,
-                          **ObsClassArgs):
-            if (self.MD.guider_commanded_running
-                and not self.MD.CCDCamera.GuiderRunning):
-                log.warning('Guider was turned off, will turn back on, but may be cloudy or have other problems interfering with guiding')
-            if not self.MD.CCDCamera.GuiderRunning:
-                self.center_loop()
-                self.MD.start_guider()
-            self.center_loop()
-            # Here might be where we make the choice to use ACP's
-            # TakePicture or record it ourselves based on whether or
-            # not ACP's objects are present
-            if ACP_obj:
-                # Eventually we would read the file from the disk
-                # Consider using ACP's TakePicture
-                O = self.create_ObsData(fname, **ObsClassArgs)
+        @GuideBoxMoving.setter
+        def GuideBoxMoving(self, value=None):
+            if not isinstance(value, bool):
+                raise ValueError('Set GuideBoxMoving to True or False to start or stop GuideBoxMover')
+            if value and self._GuideBoxMoverSubprocess is None:
+                # --> I may need a better path to this
+                self._GuideBoxMoverSubprocess \
+                    = subprocess.Popen(['python',
+                                        'ioio.py',
+                                        'GuideBoxMover',
+                                        self.guide_box_command_file])
+                if not os.path.isfile(self.guide_box_log_file):
+                    # Pretty print a header for our rates log file
+                    # --> put more stuff in here!
+                    with open(self.guide_box_log_file, 'w') as l:
+                        l.write('Time      dra, ddec rates (arcsec/hour)\n')
+                with open(self.guide_box_log_file, 'a') as l:
+                    l.write(Time.now().fits + '---- GuideBoxMover Started ----- \n')
+            if not value and not self._GuideBoxMoverSubprocess is None:
+                self._GuideBoxMoverSubprocess.terminate()
+                with open(self.guide_box_log_file, 'a') as l:
+                    l.write(Time.now().fits + '---- GuideBoxMover Stopped ----- \n')
+
+        def GuideBoxCommander(self, pix_rate):
+            # Convert main camera pix_rate to dra_ddec_rate.  Start by
+            # making a vector 10 pixels long.  The conversion factor
+            # is effectively the time required for a move of 10 pixels
+            n_pix_rate = np.linalg.norm(pix_rate)
+            if n_pix_rate < 1000 * np.finfo(np.float).eps:
+                # This needs to be float
+                dra_ddec_rate = np.zeros(2)
             else:
-                HDUList = self.MD.take_im(exptime, filt)
-                # Write image to disk right away in case something goes wrong
-                if not self.MD.CCDCamera.SaveImage(fname):
-                    raise EnvironmentError('Failed to save file ' + fname)
-                # Use the version of our image in HDUList for
-                # processing so we don't have to read it off the disk
-                # again
-                O = self.create_ObsData(HDUList, **ObsClassArgs)
-            self.calc_flex_pix_rate(O)
-
-        def create_ObsData(self, arg, **ObsClassArgs):
-            if ObsClassArgs != {}:
-                return self.ObsDataClass(arg, **ObsClassArgs)
-            elif self.ObsClassArgs != {}:
-                return self.ObsDataClass(arg, **self.ObsClassArgs)
-            else:
-                return self.ObsDataClass(arg)
+                # Calculate time it would take to move 10 pixels
+                t_move = 10 / n_pix_rate
+                dpix = pix_rate * t_move
+                dra_ddec \
+                    = self.MD.scope_wcs(dpix,
+                                        to_world=True,
+                                        delta=True,
+                                        astrometry=self.MD.main_astrometry)
+                dra_ddec_rate = dra_ddec / t_move
+            # Convert from degrees/s to arcsec/hour
+            # degrees/s *3600 arcsec/degree * 3600 s/hr
+            dra_ddec_rate *= 3600.**2
+            rates_list = dra_ddec_rate.tolist()
+            json.dump(rates_list[::-1],
+                      open(self.guide_box_command_file, 'w'),
+                      separators=(',', ':'),
+                      sort_keys=True,
+                      indent=4)
+            self.current_flex_pix_rate = pix_rate
+            self.current_flex_pix_TStart = Time.now()
+            # Start our GuideBoxMover subprocess
+            self.GuideBoxMoving = True
+            log.info('Guide box rate: ' + self.current_flex_pix_TStart.fits + ' ' + str(rates_list))
+            with open(self.guide_box_log_file, 'a') as l:
+                # --> put more stuff in here!  Like HA, DEC, etc. to
+                # --> be able to make model from log file.  Consider
+                # --> dividing dra by DEC so rates are consistent with
+                # --> HORIZONs
+                l.write(self.current_flex_pix_TStart.fits + ' '
+                        + str(rates_list[::-1]) + '\n')
 
         def calc_flex_pix_rate(self, ObsData_or_fname):
             # We have to keep track of the position of our object on a
@@ -2491,11 +2601,18 @@ if sys.platform == 'win32':
             else:
                 O = ObsData_or_fname
             assert isinstance(O, ObsData)
+
+            if O.quality < 5:
+                log.warning('Skipping flex rate calculations because obj_center quality estimate is too low: ' + str(O.quality))
+                return False
+
             # Record the current_flex_pix_rate that was
             # operating while this exposure was being recorded
             # --> This assumes we are the only routine adjusting
             # self.current_flex_pix_rate
             O.flex_pix_rate = self.current_flex_pix_rate
+            O.TRateChange = self.current_flex_pix_TStart
+            O.delta_pix = self.last_delta_pix
             # --> I might not need these
             # Make sure we have world coordinates.  The FITS header
             # should have the telescope RA and DEC either from MaxIm
@@ -2505,9 +2622,9 @@ if sys.platform == 'win32':
             #if O.w_obj_center is None:
             #    w_coords = self.MD.scope_wcs((O.obj_center, O.desired_center),
             #                                 to_world=True,
-            #                                 astrometry=self.main_astrometry,
+            #                                 astrometry=self.MD.main_astrometry,
             #                                 absolute=True)
-            #    O.w_obs_center = w_coords[0,:]
+            #    O.w_obj_center = w_coords[0,:]
             #    O.w_desired_center = w_coords[1,:]
             self.ObsDataList.append(O)
 
@@ -2524,7 +2641,7 @@ if sys.platform == 'win32':
                 # the pixel rate we want to cancel our object motion.
                 # However, we are likely to be interleaving our
                 # measurements, so we need to account for telescope
-                # recentering and adjustments to the obs_center_rate
+                # recentering and adjustments to the obj_center_rate
                 # that the measurements through the other filters
                 # induced.  The basic idea is to recalculate the
                 # vector that leads from the old obj_center to the new
@@ -2546,31 +2663,46 @@ if sys.platform == 'win32':
                     # --> rate changed in GuideBoxMover
                     start_t = np.max(
                         (OThisFiltList[-2].Tmidpoint, O.TRateChange))
-                    dpix_other_filt \
-                        += (O.flex_pix_rate * (end_t - start_t)
-                            + O.delta_pix)
+                    # Here we pay the price of convenient FITS time
+                    # handling for units
+                    Odpix = (O.flex_pix_rate * u.pix/u.s * (end_t - start_t) 
+                             + O.delta_pix * u.pix)
+                    # FITS times are in JD, not seconds
+                    Odpix.decompose()
+                    log.debug('Odpix: ' + str(Odpix))
+                    dpix_other_filt += Odpix.value
                     end_t = start_t
                     if O == OThisFiltList[-2]:
                         # When we get back to the first measurement
                         # through our filter, we don't include its delta_pix
                         dpix_other_filt -= O.delta_pix
                         break
-                # Provisionally set our flex_pix_rate
-                self.ObsDataList[-1].flex_pix_rate \
+                    log.debug('dpix_other_filt: ' + str(dpix_other_filt))
+                # Provisionally set our flex_pix_rate.  Again, dt is
+                # in time units
+                dt = dt.to(u.s).value
+                log.debug('dt: ' + str(dt))
+                self.current_flex_pix_rate \
                     = (-1 * (dpix + dpix_other_filt) / dt
-                       * self.flex_aggressiveness))
-                # Do a sanity checks
+                       * self.flex_aggressiveness)
+                # Do sanity checks
                 if len(self.ObsDataList) > 5:
                     flex_pix_diff \
-                        = [np.linalg.norm(
-                            ObsDataList[-1].flex_pix_rate - O.flex_pix_rate)
-                           for O in self.ObsDataList[:-1]]
-                    noise = np.stdev(flex_pix_diff[1:] - flex_pix_diff[0:-1])
-                    if (flex_pix_diff[-1] > self.flex_pix_stdev_mult * noise):
+                        = np.asarray(
+                            [np.linalg.norm(
+                                self.ObsDataList[-1].flex_pix_rate
+                                - self.current_flex_pix_rate)
+                             for O in self.ObsDataList[:-1]])
+                    noise = np.std(flex_pix_diff[1:] - flex_pix_diff[0:-1])
+                    if (flex_pix_diff[-1] > self.flex_pix_std_mult * noise):
                         log.warning('Unusually large flex_pix_rate: ' + str(self.ObsDataList[-1].flex_pix_rate) + '.  Cutting flex_pix_rate down by 1/2')
-                        self.ObsDataList[-1].flex_pix_rate *= 0.5
-                self.GuideBoxCommander(self.ObsDataList[-1].flex_pix_rate)
-                
+                        self.current_flex_pix_rate *= 0.5
+
+            # --> Start the GuideBoxCommander/Mover system even if we
+            # have zero rate, since, at the moment, this is the only
+            # entry point for it.
+            self.GuideBoxCommander(self.current_flex_pix_rate)
+                        
             # Do a telecsope move using move_with_guide_box to correct
             # for not being at desired_center.  For now take the
             # center of gravity of the accumulated filter offsets as
@@ -2586,19 +2718,26 @@ if sys.platform == 'win32':
                     continue
                 flist.append(flist)
                 OUniqFiltList.append(O)
-            mean_center = np.mean(
-                np.asarray([O.obs_center for O in OUniqFiltList]))
+            # Calculate the mean center
+            running_total = np.zeros(2)
+            for O in OUniqFiltList:
+                running_total += O.obj_center
+            mean_center = running_total / len(OUniqFiltList)
+            log.debug('mean_center (X, Y): ' + str(mean_center[::-1]))
             dpix = self.ObsDataList[-1].desired_center - mean_center
-            self.ObsDataList[-1].delta_pix = dpix
+            log.debug('dpix (X, Y): ' + str(dpix[::-1]))
+            self.last_delta_pix = dpix
             # Make our scope adjustment --> Note that this assumes
             # real time measurement, so the scope is pointed in the
             # correct direction (at least DEC)
-            w_coords = self.MD.scope_wcs((mean_center,
-                                          self.ObsDataList[-1].desired_center),
+            dra_ddec = self.MD.scope_wcs(dpix,
                                          to_world=True,
-                                         astrometry=self.main_astrometry)
-            dra_ddec = w_coords[1, :] - w_coords[0, :]
-            self.move_with_guide_box(dra_ddec)
+                                         delta=True,
+                                         astrometry=self.MD.main_astrometry)
+            log.debug('dra_ddec: ' + str(dra_ddec))
+            self.MD.move_with_guide_box(dra_ddec)
+
+            return True
 
 
 
@@ -2613,7 +2752,7 @@ if sys.platform == 'win32':
             #        # when we recorded our first point, since we might
             #        # be the next measurement of any kind
             #        break
-            #    dpix_other_filt += gbfr['obs_center_rate'] * (last_t - this_t)
+            #    dpix_other_filt += gbfr['obj_center_rate'] * (last_t - this_t)
             #    last_t = this_t
             #
             #
@@ -2668,24 +2807,53 @@ if sys.platform == 'win32':
             #D.say('Guide box rates from flexion:')
             #D.say(flex_pix_rate)
 
-        def GuideBoxCommander(self, pix_rate):
-            # Convert main camera pix_rate to dra_ddec_rate
-            dra_ddec_rate = pix_rate
-            rates_list = self.dra_ddec_rate.tolist()
-            json.dump(rates_list,
-                      open(guide_box_command_file, 'w'),
-                      separators=(',', ':'),
-                      sort_keys=True,
-                      indent=4)
-            self.current_flex_pix_rate = pix_rate
-            self.current_flex_pix_TStart = Time.now()
+        def MaxImCollector(self):
+            self.MD.CCDCamera.EventMask = 2
+            log.debug('MaxIm set to notify when main camera exposure complete')
+            #for i in range(3):
+            #    event = self.MD.CCDCamera.Notify
+            #    log.debug('Exposure ended: ' + str(event))
 
-            if self.GuideBoxMoverSubprocess is None:
-                # --> I may need a better path to 
-                self.GuideBoxMoverSubprocess \
-                    = subprocess.Popen(['python', 'ioio.py GuideBoxMover'])
+        # For now, use the defaults tailored for IoIO.  It may be too
+        # complex to get thing in as parameters, in which case this
+        # would be overridden
+        def acquire_image(self,
+                          fname='Test.fits',
+                          exptime=default_exptime,
+                          filt=default_filt,
+                          binning=None,
+                          subarray=None,
+                          ACP_obj=None,
+                          **ObsClassArgs):
+            if not self.GuideBoxMoving or not self.MD.CCDCamera.GuiderRunning:
+                # We want to turn guiding and GuideBoxMoving back on
+                # if someone turned them off
+                if not self.MD.CCDCamera.GuiderRunning:
+                    # Center with guider slews
+                    self.center_loop()
+                    self.MD.start_guider()
+                # Center with guide box moves
+                if not self.center_loop(start_GuideBoxMoving=True):
+                    log.warning('GuideBoxMoving system not started')
+            # Here might be where we make the choice to use ACP's
+            # TakePicture or record it ourselves based on whether or
+            # not ACP's objects are present
+            if ACP_obj:
+                # Eventually we would read the file from the disk
+                # Consider using ACP's TakePicture
+                O = self.create_ObsData(fname, **ObsClassArgs)
+            else:
+                HDUList = self.MD.take_im(exptime, filt, binning)
+                # Write image to disk right away in case something goes wrong
+                if not self.MD.CCDCamera.SaveImage(fname):
+                    raise EnvironmentError('Failed to save file ' + fname)
+                log.debug('Saved file: ' + fname)
+                # Use the version of our image in HDUList for
+                # processing so we don't have to read it off the disk
+                # again
+                O = self.create_ObsData(HDUList, **ObsClassArgs)
+                self.calc_flex_pix_rate(O)
 
-    
         # Used pythoncom.CreateGuid() to generate this Fired up a
         # Python command line from cmd prompt in Windows.  The
         # followining helped:
@@ -2856,8 +3024,93 @@ def cmd_get_default_ND_params(args):
     print(get_default_ND_params(args.dir, args.maxcount))
 
 
+# --> Eventually, I would like this to accept input from other
+# --> sources, like a flexure model and ephemeris rates
 def GuideBoxMover(args):
-    pass
+    log.debug('Starting GuideBoxMover')
+    MD = MaxImData()
+    lastt = time.time()
+    while True:
+        with open(args.command_file, 'r') as com:
+            rates_list = json.loads(com.read())
+        # We recorded the rates in X, Y for readability
+        dra_ddec_rate = np.array(rates_list[::-1])
+        # Rates are in arcsec/hour.  We need degrees/s
+        dra_ddec_rate /= 3600**2
+        now = time.time()  
+        dt = now - lastt
+        if np.linalg.norm(dra_ddec_rate) * dt >= 1/3600:
+            log.debug('GuideBoxMover is moving the guidebox')
+            # Only move when we have a move of more than 1 arcsec
+            MD.move_with_guide_box(dra_ddec_rate * dt )
+            lastt = now
+        time.sleep(1)
+
+def uniq_fname(basename=None, directory=None, extension='.fits'):
+    if directory is None:
+        directory = '.'
+    if not os.path.isdir(directory):
+        os.mkdir(directory)
+    if basename is None:
+        basename = 'unique_fname'
+    fnum = 1
+    while True:
+        fname = os.path.join(directory,
+                             basename
+                             + '{num:03d}'.format(num=fnum)
+                             + extension)
+        if os.path.isfile(fname):
+            fnum += 1
+        else:
+            return fname
+
+def data_collector(args):
+    P = PrecisionGuide(args.ObsClassName,
+                       args.ObsClassModule) # other defaults should be good
+    d = args.dir
+    if d is None:
+        today = Time.now().fits.split('T')[0]
+        d = os.path.join(raw_data_root, today)
+    basename = args.basename
+    if basename is None:
+        basename = 'PrecisionGuideDataFile'
+    log.info('Starting with R')
+    P.acquire_image(uniq_fname(basename, d),
+                    exptime=2,
+                    filt=0)
+    while True:
+        #fname = uniq_fname(basename, d)
+        #log.debug('data_collector preparing to record ' + fname)
+        #P.acquire_image(fname,
+        #                exptime=7,
+        #                filt=0)
+        # was 0.7, filt 1 for mag 1 stars
+        # 0 = R
+        # 1 = [SII] on-band
+        # 2 = Na on-band
+        # 3 = [SII] off-band
+        # 4 = Na off-band
+
+        log.info('Collecting Na')
+        P.acquire_image(uniq_fname(basename, d),
+                        exptime=60,
+                        filt=4)
+        P.acquire_image(uniq_fname(basename, d),
+                        exptime=300,
+                        filt=2)
+        for i in range(5):
+            log.info('Collecting [SII]')
+            P.acquire_image(uniq_fname(basename, d),
+                            exptime=300,
+                            filt=1)
+            P.acquire_image(uniq_fname(basename, d),
+                            exptime=60,
+                            filt=3)
+            log.info('Collecting R')
+            P.acquire_image(uniq_fname(basename, d),
+                            exptime=2,
+                            filt=0)
+
 
 def MaxImCollector(args):
     P = PrecisionGuide()
@@ -2899,11 +3152,28 @@ if __name__ == "__main__":
 
     GuideBox_parser = subparsers.add_parser(
         'GuideBoxMover', help='Start guide box mover process')
+    GuideBox_parser.add_argument(
+        'command_file', help='Full path to file used to pass rates from GuideBoxCommander')
     GuideBox_parser.set_defaults(func=GuideBoxMover)
 
     Collector_parser = subparsers.add_parser(
         'MaxImCollector', help='Collect images from MaxIm  for precision guiding')
     Collector_parser.set_defaults(func=MaxImCollector)
+
+    data_collector_parser =  subparsers.add_parser(
+        'data_collector', help='Collect images in a file name sequence')
+    # --> Other things would need to be here to be useful, like
+    # --> potentially reading a file.  But that is ACP, so just keep
+    # --> this around for testing
+    data_collector_parser.add_argument(
+        '--dir', help='directory, default current date in YYYY-MM-DD format')
+    data_collector_parser.add_argument(
+        '--basename', help='base filename for files, default = PrecisionGuideDataFile')
+    data_collector_parser.add_argument(
+        '--ObsClassName', help='ObsData class name')
+    data_collector_parser.add_argument(
+        '--ObsClassModule', help='ObsData class module file name')
+    data_collector_parser.set_defaults(func=data_collector)
 
     # --> This eventually goes just with ioio.py
     ND_params_parser = subparsers.add_parser(
