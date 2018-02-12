@@ -3130,3 +3130,165 @@ nulling that + only making a correction when we are beyond a certain
 threshold from the center or after the dispersion on our current
 location is low enough to be confident that our rates are good enough
 to reset their measurment after a one-time move
+
+Sat Feb 10 16:13:45 2018 EST  jpmorgen@snipe
+
+Thinking more about errors and using them to trigger a correction.
+What I see when I do this myself is Jupiter moving a noticeable amount
+and then I apply a one-time correction to the rate, recenter and start
+over.
+
+Sources of error:
+
+. Ability to determine the center of the object.  Without a
+sophisticated algorithm, I can just estimate that at 1 pixel for now
+
+. Seeing.  If I have a short exposure compared to seeing motion time,
+I can be off by that amount.  Seeing is the spread in a long-term
+exposure assuming good guiding.  Seeing can also be related to the
+dispersion in the guider, assuming good tracking, though if the guider
+exposure is long, that will average out.
+
+. Guide box not in right place.  The is realted to the average error.
+I currently calculate RMS and have that be less than a critical value
+in order to minimize the average error
+
+Seeing and the center error add in quadrature, at least for exposures
+short compared to seeing motion.  Seeing variation can be up to 100
+Hz, but consider 1s as a reasonable limit
+
+--> I should separate things out so that run calc_pix_rate does just
+    that + doesn't run the GuideBoxCommander so that I can potentially
+    take its intermediate output on a list of files.
+
+Sat Feb 10 20:26:15 2018 EST  jpmorgen@snipe
+
+Need to come up with a formula that gets seeing error.  For large
+exposure time seeing error -> 0.  For times < 1s (or whatever I decide
+is the threshold, seeing starts to be important
+
+2/(1 + exptime)
+
+Can express seeing exposure time in terms of a frequency.  See code
+
+I also want to have some sort of weight based on the length of time
+between exposures, but maybe that will come out when I look at the
+whole graph.
+
+No, I want something for time ago so that really old data don't mess
+things up.  But I am not able to come up with that just yet.  Keep it
+simple for now and include all data
+
+OK, I got myself a rate from the polyfit.  Now how do I use it!  If I
+apply it right away, I do a rate change.  So I need to see if
+this_rate is significantly different than the previous one.
+Ultimately it is about motion.  I am building up a set of average
+exposure times, so I can talk about motion in one exposure.  I also
+have my desired_center_tolerance.  I also have the total amount of
+time I have been observing.
+
+I think time since last rate change might be best self.current_flex_pix_TStart
+
+ioio.py data_collector --ObsClassName CorObsData
+
+Seems to be working smoothly doing nothing when Sirius is just past
+meridian.  Make it busy!
+
+10 -0.100 +0.200
+
+Seems to be working at moving the total pixels at new rate numbers
+relative to previous!
+
+Well, I have a measurable shift, but didn't start the rate change soon
+enough.  self.center_tolerance would be a good metric!
+
+--> I have too many center tolerances.  Sort these out
+
+So there is the deadband I have tolerance for when I am centering by
+guider slews or guider moves
+
+--> I might need to check for small duration moves?
+
+INFO: Seconds to move guider in RA and DEC: [ 0.0005036   0.28759885] [__main__]
+Traceback (most recent call last):
+  File "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\ioio.py", line 3369, in <module>
+    args.func(args)
+  File "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\ioio.py", line 3229, in data_collector
+    filt=args.filt)
+  File "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\ioio.py", line 2982, in acquire_image
+    self.center_loop()
+  File "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\ioio.py", line 2525, in center_loop
+    self.center(O)
+  File "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\ioio.py", line 2493, in center
+    self.MD.guider_move(dw_coords)
+  File "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\ioio.py", line 1914, in guider_move
+    RA_success = self.CCDCamera.GuiderMove(ASCOM.gdMinusX, dt[0])
+  File "<COMObject MaxIm.CCDCamera>", line 2, in GuiderMove
+pywintypes.com_error: (-2147352567, 'Exception occurred.', (65535, 'MaxIm DL 6', 'Invalid duration', None, 0, 0), None)
+
+Was going up and to the right
+
+--> need a try around polyfit since it failed occasionally
+
+There is a weird loop going on that I don't understand with the guider
+<sigh> another logic error: need to keep long guide box slew logic in
+center, not in move_with_guide_box
+
+
+Sun Feb 11 05:25:43 2018 EST  jpmorgen@snipe
+
+--> Might think about another figure of merit for slope determination
+
+Sun Feb 11 12:42:21 2018 EST  jpmorgen@snipe
+
+Taking a minute to look at my logic.  acquire_image now acquires the
+image, no matter what, but warns if not guiding or precision guiding.
+Hmm.  It also shoves the image thorugh the system no matter what,
+which I may want to avoid voluntarily
+
+--> restructure logic
+
+make delta pix threshold from actual motion, 3*error
+
+As written calc_flex_pix_rate is more like "adjust rate and center."
+But I am still determining if I wnat to try to use the guider rate to
+move the image back to the center
+
+Focused on Vega
+
+Multiple instances of GuideBoxMover got started because it takes a
+while for that to happen
+
+play with log file on /cygdrive/c/Users/PLANETARY SCIENCE/.astropy/config/astropy.cfg
+
+--> think about reading command file on first entry to calc_... to get
+    the rate from the previous run 
+
+05:47:53   Position = 38785  Mean HFD =  4.57
+05:47:53   Temperature = 11.44
+
+Initial try left Sirius wandering off. Try -1.8 aggressiveness on off
+chance sign flip is the problem
+
+Seems to be much happier!
+
+After restart, which used the old rate, motion semed to be less, but
+since it is based on motion, not position, and it keeps zeroing the
+list, it still wanders off.  What is the best way to proceed?
+
+If I add in motion based on delta from center, that motion would be
+canceled out by my motion logic
+
+--> Not sure if GuideBoxMover should be checking for guider settling,
+    since that delays it + makes it unstable
+
+So the main question I have about guiding by error from the center is:
+what do I use for a rate?  MaxIm moves the telescope, so it doesn't
+matter how long it takes to get there.  I could use the maximum
+exposure again, but that might be too slow.
+
+Maybe I could have some logic that would test which direction I am
+going.  If toward the center, then I don't mess with that rate
+
+Alternately, we can look at where it is now and where we want it to be
++ the amount of time we have been going and use that to establish a rate
