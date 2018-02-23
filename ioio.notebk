@@ -3292,3 +3292,218 @@ going.  If toward the center, then I don't mess with that rate
 
 Alternately, we can look at where it is now and where we want it to be
 + the amount of time we have been going and use that to establish a rate
+
+How 'bout we consider a simple error based on our measurement that
+goes at a rate that is weighted
+
+dpix from desired_center/dt(longest exp)
+
+That is not working.  Though the rate is increasing, it is just going
+to lsow it down, not reverse it.
+
+So I need both a component to measure the rate, which I have + a
+component to do the recentering, which I don't.  If I kept track of
+the recenting rate separately, I could take it out of the motion rate
+when measuring the motion rate.  This is realted to what I was doing
+before but possibly not as floppy
+
+Before I do that, try a very short longest exposure (10s)
+
+That is working a little better, actually a lot bettter!  But still
+error based, with the target up and to the right.  I'll take it,
+though, since the motion is so exaggerated
+
+But I think I am confused as to sign.  What worked for sign here is
+having dra_ddec_rate in GuideBoxCommander come straight from pix_rate,
+no minus sign for what I though I needed to do for star motion on
+guide camera.  But I was also sending it -dpix/10, where dpix was
+obj_center - desired_center.  That is the actual motion I want it to
+do.  That is right because I take out the guide box opposite motion in
+move_with_guide_box.
+
+So this means I have a sign flip in my motion code.  Hmm.  Not seeing
+it.  slopes are dpix/dt.  Ah, but dpix in this sense is the
+progression of obj_centers, not necessarily relative to
+desired_center.  But still, it is the motion we want to null
+
+Motion converged to 
+2018-02-12T07:49:08.519(UTC) [2807.0785188547225, -1129.790736587323]
+
+Best I got to with old code was:
+
+2018-02-12T06:15:32.428(UTC) [225.10602712837584, -1027.4851575469136]
+
+But it was unstable and had the minus sign
+
+10 -0.100 +0.200
+--> putting back to Jupiter setting
+np.asarray((-0.100, +0.200))*(3600*4.22)/10
+array([-151.92,  303.84])
+
+Not even close to a real measurement and may suggest I have a
+transpose somewhere.  dpix = O.obj_center - O.desired_center should
+all be in proper transpose space
+
+Well, the error method works on a single filter, but I am still not
+sure about what to use for the denominator.  I guess the average time
+between exposures might work.
+
+Ah.  The center error method converges to something that is based on
+its error from the center.  If it stuck in a different place it might
+be a different value?
+
+np.asarray([-1129.790736587323, 2807.0785188547225]) / (np.asarray((-0.100, +0.200))*(3600*4.22)/10)
+array([ 7.43674787,  9.23867338])
+
+So that assumes there is a transpose somewhere + I get close to the
+factor of 10 I was using?...
+
+Well, go back to the rate, since ultimately that gave something closer
+to the right absolute number, though Jupiter didn't stick quite the
+way I wanted it to.
+
+So I have a way of measuring the rate that is reasonable.  I can also
+add a component of center correction that I can take out when I
+calculate the rate, or something like that.
+
+I wonder if I could use the 
+
+... ! Hey, I think I neglected to put in the previous rate when
+calculating the new rate on my flex_rate calculations.  So a
+combination of my logic might work
+
+Mon Feb 12 08:24:01 2018 EST  jpmorgen@snipe
+
+Consider having a routine that checks if new rates are significant
+
+Mon Feb 12 17:23:57 2018 EST  jpmorgen@snipe
+
+Working on weights for fitting.  The obvious is 1/obj_center_errs, but
+I also wanted to include time and number of rate change transitions.
+Rate change transitions 
+
+Rate changes are easy because they can be integer multiples.  Time
+could be expressed in exposure number the same way, or by a
+realtionship to the average deltaT
+
+Tue Feb 13 04:43:38 2018 EST  jpmorgen@snipe
+
+When we (re)center on a target, we are doing some slews that make the
+center come to a different place, which would mess up the sequence of
+obs_data.  So we should delete that.  There should be a single routine
+that handles this
+
+does **kwargs complain when there are extra args?  Yes.  But I can
+solve my underlying problem by preparing a MaxImData separately
+
+So when I am looking at an object, I want to keep adding to
+ObjDataList.  When I go to a new object or reset the telescope, the
+ObsDataList will likely become obselete, since it deals in the
+absolute pixel location.  The current_flex_pix_rate and GuideBoxMover,
+however, need not necessarily change if I am in the same general
+location on the sky.
+
+So reinitialize could have an option to keep the current_flex_pix_rate
+but not the current_centering_rate.
+
+So I could have an option in center to turn off the recentering rate.
+Turning off the centering rate should be a separate thing, like maybe
+with a property method.
+
+Maybe what I need is a property setter/getter system for
+flex_pix_rate.  I could potentially have a dictionary filled with
+items
+
+Wed Feb 14 10:34:31 2018 EST  jpmorgen@snipe
+
+Actually, a dictionary of dictionaries might be good to pass to
+GuideBoxMover so that I can pass parameters to the routines that are
+doing the tweaking of the individual compoenents of the total
+flex_pix_rate.  But if they tweak them with a time constant, that
+information own't be recorded back to the flex_pix_ratein the main
+routine unless I run those calculations in parallel.  Plus that
+defeats the ObsDataList model I have been using, since the time
+changes could be in the middle of an exposure.  But that is not the
+end of the world, since ultimately, I am just looking for the total
+amount the guide box moved in pixels.
+
+--> Do it the simple way first + if it works, figure out the best way
+    forward.  Might eventually go for an event loop or something like that.
+
+Sat Feb 17 10:32:57 2018 EST  jpmorgen@snipe
+
+Have some time to do a dry run on the rate adjustment using files.
+
+Note that the update_flex_pix_rate seems to all be independent of 
+
+on Puppy
+
+ioio.py test_flex '//snipe/data/io/IoIO/raw/2018-02-12' --ObsClassName CorObsData
+
+ioio.py test_flex r'\\SNIPE\data\io\IoIO\raw\2018-02-12' --ObsClassName CorObsData
+
+ioio.py test_flex r"\\SNIPE\data\io\IoIO\raw\2018-02-12" --ObsClassName CorObsData
+
+Mon Feb 19 09:36:40 2018 EST  jpmorgen@snipe
+
+None of the above work!
+
+Copy files to Desktop\data.  I am in Scripts.  No, I am at the top level
+
+ioio.py test_flex 'data'  --ObsClassName CorObsData
+
+ioio.py test_flex r'\Users\jpmorgen\Desktop\IoIO\data' --ObsClassName CorObsData
+
+ioio.py test_flex '/Users/jpmorgen/Desktop/IoIO/data' --ObsClassName CorObsData
+
+OK, this is apparently something with command line arguments or Puppy
+
+Try on IoIO1U1
+
+ioio.py test_flex '../data/2018-02-12' --ObsClassName CorObsData
+
+Same problem.
+
+Must be some sort of command line issue?
+
+Back on puppy.  Put in raw_data_root and just use subdirectory
+
+Ah!  Quotes!
+
+ioio.py test_flex 2018-02-12 --ObsClassName CorObsData
+
+Tue Feb 20 05:32:25 2018 EST  jpmorgen@snipe
+
+OK, that is working, but now I am seeing that I have inconsistent
+logic about whether or not to use the full ObsList or just
+OThisFiltList
+
+Tue Feb 20 19:44:32 2018 EST  jpmorgen@snipe
+
+Something funny is going on with the effective_obj_centers.
+Backward/forward?
+
+Ack!  It is time.  Trying to get the bleeding edge time at which the
+guidebox starts to move, I set the time to Time.now(), which is way
+out of sync with the files I am reading!
+
+So when do I want to have the effective rate change be for off-line
+processing?  I guess the shutter time of the current file
+
+Thu Feb 22 14:04:28 2018 EST  jpmorgen@snipe
+
+ioio.py data_collector
+
+Seems to be working, sort of.  The centering is the only thing that is
+doing anything, though.  It is working
+
+-3, 8 is latest DPIX.
+
+Seems to be going back up again.  The guidebox mover rate is larger
+than I can really move
+
+I wonder if the problem is that the centering is fighting the motion 
+
+Fri Feb 23 04:30:56 2018 EST  jpmorgen@snipe
+
+Well, in the wild, my algorithm totally did not work.
