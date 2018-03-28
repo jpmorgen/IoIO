@@ -33,7 +33,6 @@ elif socket.gethostname() == "puppy":
     # --> This doesn't work.  I need Unc?
     #raw_data_root = '//snipe/data/io/IoIO/raw'
     raw_data_root = r'\\snipe\data\io\IoIO\raw'
-    #default_telescope = 'ASCOM.Telescope.Simulator'
     default_telescope = 'ScopeSim.Telescope'
 elif socket.gethostname() == "IoIO1U1":
     raw_data_root = r'C:\Users\PLANETARY SCIENCE\Desktop\IoIO\data'
@@ -1267,7 +1266,7 @@ if sys.platform == 'win32':
     # --> configuration file
     # --> CHANGE ME BACK TO 1s(or 7s) and filter 0 (0.7s or 0.3 on
     # --> Vega filter 1 works for day) 
-    default_exptime = 7
+    default_exptime = 1
     default_filt = 0
     default_cent_tol = 5   # Pixels
     default_guider_exptime = 1 # chage back to 1 for night, 0.2 for day
@@ -1339,6 +1338,9 @@ if sys.platform == 'win32':
             self.guide_rates = None # degrees/s
             self.guider_exptime = None
             self.guider_commanded_running = None
+            # --> Eventually make this some sort of configurable
+            # --> thing, since not all filter wheels need it
+            self.main_filt_change_time = 10 # seconds it takes to guarantee filter change 
             
             # Don't move the guide box too fast
             self.guide_box_steps_per_pix = 2
@@ -1826,6 +1828,10 @@ if sys.platform == 'win32':
             # is?  Since ACP does not want MaxIm connected to the
             # telescope, this answer will vary.  Return flip = -1 when
             # MaxIm is sure to be flipping the sense of the RA axis.
+            # --> Looks like I can't make this robust: When telescope
+            # not connected, I have no idea if user clicked Pier Flip
+            # box, so I have to assume one state or another, since
+            # MaxIm WILL follow the state of that box when reversing the guider.
             if (self.alignment_mode == ASCOM.algGermanPolar
                 and self.Application.TelescopeConnected
                 and self.CCDCamera.GuiderAutoPierFlip
@@ -2278,6 +2284,11 @@ if sys.platform == 'win32':
                 exptime = default_exptime
             if filt is None:
                 filt = self.default_filt
+            # Set the filter separately, since some filter wheels need
+            # time to rotate
+            if self.CCDCamera.Filter != filt:
+                self.CCDCamera.Filter = filt
+                time.sleep(self.main_filt_change_time)
             # --> Add support for binning, camera, and non-light
             # --> Add support for a pause for the filter wheel
             # Take a light (1) exposure
@@ -2772,6 +2783,7 @@ if sys.platform == 'win32':
             # main camera.  We want that motion to stop, so we want to
             # apply the negative of that to telescope motion
             new_rate = -1 * slopes * self.flex_aggressiveness
+            D.say('NEW RATE before filter: ' + str(new_rate))
             # See if that new rate would result in a significantly
             # different current position over our average exposure
             if np.any(np.abs(new_rate - current_motion_rate)
@@ -3358,7 +3370,8 @@ if sys.platform == 'win32':
             # Now that we have populated our object, we can derive our
             # rates from the data
             new_motion_rate = self.pix_rate_to_freeze_motion()
-            new_centering_rate = self.pix_rate_to_center()
+            #new_centering_rate = self.pix_rate_to_center()
+            new_centering_rate = np.zeros(2)
             current_motion_rate = (self.current_flex_pix_rate -
                                    self.current_centering_rate)
             if (np.any(current_motion_rate != new_motion_rate)):
@@ -3382,7 +3395,7 @@ if sys.platform == 'win32':
             #    log.debug('Exposure ended: ' + str(event))
 
         # Mostly this just passes parameters through to
-        # MaxImData.acquire_image to take the image.  We need to have
+        # MaxImData.acquire_im to take the image.  We need to have
         # **ObsClassArgs so that images of different ObsClass type can
         # peacefully coexist in the set of precision guide stuff (-->
         # though if we go to a different object, we will probably need
@@ -3669,12 +3682,12 @@ def data_collector(args):
         # User could have had guider already on.  If not, center with
         # guider slews and start the guider
         log.debug('CENTERING WITH GUIDER SLEWS') 
-        P.center_loop()
+        P.center_loop(max_tries=5)
         log.debug('STARTING GUIDER') 
         P.MD.guider_start()
     # Center with guide box moves
-    log.debug('NOT CENTERING WITH GUIDE BOX MOVES WHILE DOING LARGE GUIDE RATE EXPERIMENT ') 
-    #P.center_loop()
+    #log.debug('NOT CENTERING WITH GUIDE BOX MOVES WHILE DOING LARGE GUIDE RATE EXPERIMENT ') 
+    P.center_loop()
     # Put ourselves in GuideBoxMoving mode (starts the GuideBoxMover subprocess)
     log.debug('STARTING GuideBoxMover')
     # --> this is a confusing name: mover/moving
@@ -3690,6 +3703,61 @@ def data_collector(args):
         time.sleep(7)
 
 
+#def IPT_Na_R(args):
+#    P = PrecisionGuide("CorObsData") # other defaults should be good
+#    d = args.dir
+#    if d is None:
+#        today = Time.now().fits.split('T')[0]
+#        d = os.path.join(raw_data_root, today)
+#    basename = args.basename
+#    if basename is None:
+#        basename = 'IPT_Na_R_'
+#    if not P.MD.CCDCamera.GuiderRunning:
+#        # User could have had guider already on.  If not, center with
+#        # guider slews and start the guider
+#        log.debug('CENTERING WITH GUIDER SLEWS') 
+#        P.center_loop()
+#        log.debug('STARTING GUIDER') 
+#        P.MD.guider_start()
+#    log.info('Starting with R')
+#    P.acquire_image(uniq_fname(basename, d),
+#                    exptime=2,
+#                    filt=0)
+#    
+#    # Jupiter observations
+#    while True:
+#        #fname = uniq_fname(basename, d)
+#        #log.debug('data_collector preparing to record ' + fname)
+#        #P.acquire_image(fname,
+#        #                exptime=7,
+#        #                filt=0)
+#        # was 0.7, filt 1 for mag 1 stars
+#        # 0 = R
+#        # 1 = [SII] on-band
+#        # 2 = Na on-band
+#        # 3 = [SII] off-band
+#        # 4 = Na off-band
+#
+#        log.info('Collecting Na')
+#        P.acquire_image(uniq_fname(basename, d),
+#                        exptime=60,
+#                        filt=4)
+#        P.acquire_image(uniq_fname(basename, d),
+#                        exptime=300,
+#                        filt=2)
+#        for i in range(5):
+#            log.info('Collecting [SII]')
+#            P.acquire_image(uniq_fname(basename, d),
+#                            exptime=300,
+#                            filt=1)
+#            P.acquire_image(uniq_fname(basename, d),
+#                            exptime=60,
+#                            filt=3)
+#            log.info('Collecting R')
+#            P.acquire_image(uniq_fname(basename, d),
+#                            exptime=2,
+#                            filt=0)
+
 def IPT_Na_R(args):
     P = PrecisionGuide("CorObsData") # other defaults should be good
     d = args.dir
@@ -3703,11 +3771,13 @@ def IPT_Na_R(args):
         # User could have had guider already on.  If not, center with
         # guider slews and start the guider
         log.debug('CENTERING WITH GUIDER SLEWS') 
-        P.center_loop()
+        P.center_loop(max_tries=5)
         log.debug('STARTING GUIDER') 
-        P.MD.guider_start()
+        P.MD.guider_start(filter=3)
+    log.debug('CENTERING WITH GUIDEBOX MOVES') 
+    P.center_loop()
     log.info('Starting with R')
-    P.acquire_image(uniq_fname(basename, d),
+    P.MD.acquire_im(uniq_fname(basename, d),
                     exptime=2,
                     filt=0)
     
@@ -3726,22 +3796,27 @@ def IPT_Na_R(args):
         # 4 = Na off-band
 
         log.info('Collecting Na')
-        P.acquire_image(uniq_fname(basename, d),
+        P.MD.acquire_im(uniq_fname(basename, d),
                         exptime=60,
                         filt=4)
-        P.acquire_image(uniq_fname(basename, d),
+        P.MD.acquire_im(uniq_fname(basename, d),
                         exptime=300,
                         filt=2)
+        log.debug('CENTERING WITH GUIDEBOX MOVES') 
+        P.center_loop()
+        
         for i in range(5):
             log.info('Collecting [SII]')
-            P.acquire_image(uniq_fname(basename, d),
+            P.MD.acquire_im(uniq_fname(basename, d),
                             exptime=300,
                             filt=1)
-            P.acquire_image(uniq_fname(basename, d),
+            P.MD.acquire_im(uniq_fname(basename, d),
                             exptime=60,
                             filt=3)
+            log.debug('CENTERING WITH GUIDEBOX MOVES') 
+            P.center_loop()
             log.info('Collecting R')
-            P.acquire_image(uniq_fname(basename, d),
+            P.MD.acquire_im(uniq_fname(basename, d),
                             exptime=2,
                             filt=0)
 
