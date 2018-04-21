@@ -1101,43 +1101,6 @@ def get_default_ND_params(dir='.', maxcount=None):
             np.median(ND_params_array[:, 1, 1])))
     return np.asarray(default_ND_params)
 
-def ND_params_tree(rawdir='/data/io/IoIO/raw'):
-    """Calculate ND_params for all observations in a directory tree
-    """
-    start = time.time()
-    # We have some files recorded before there were flats, so get ready to
-    # loop back for them
-    skipped_dirs = []
-    
-    # list date directory one level deep
-    totalcount = 0
-    totaltime = 0
-    dirs = [os.path.join(rawdir, d)
-            for d in os.listdir(rawdir) if os.path.isdir(os.path.join(rawdir, d))]
-    persistent_default_ND_params = None
-    for d in sorted(dirs):
-        D.say(d)
-        try:
-            default_ND_params = get_default_ND_params(d)
-        except KeyboardInterrupt:
-            # Allow C-C to interrupt
-            raise
-        except Exception as e:
-            log.error('Problem with flats: ' + str(e))
-            if persistent_default_ND_params is not None:
-                default_ND_params = persistent_default_ND_params
-        
-        result = ND_params_dir(d, default_ND_params=default_ND_params)
-        print(result)
-        totalcount += result[0]
-        totaltime += result[1]
-        
-    end = time.time()
-    D.say('Total elapsed time: ' + str(end - start) + 's')
-    D.say(str(totalcount) + ' obj files took ' + str(totaltime) + 's')
-    D.say('Average time per file: ' + str(totalcount / totaltime) + 's')
-
-
 def ND_params_dir(dir=None, default_ND_params=None):
     """Calculate ND_params for all observations in a directory
     """
@@ -1170,10 +1133,18 @@ def ND_params_dir(dir=None, default_ND_params=None):
         start = time.time()
 
     count = 0
+    torus_count = 0
+    Na_count = 0
     for count, f in enumerate(objs):
         D.say(f)
         try:
             O = CorObsData(f, default_ND_params=default_ND_params)
+            if O.header["EXPTIME"] == 300:
+                if O.header["FILTER"] == "[SII] 6731A 10A FWHM":
+                    torus_count += 1
+                if O.header["FILTER"] == "Na 5890A 10A FWHM":
+                    Na_count += 1
+                
             D.say(O.obj_center)
             if O.obj_to_ND > 30:
                 log.warning('Large dist: ' + str(int(O.obj_to_ND)))
@@ -1184,8 +1155,56 @@ def ND_params_dir(dir=None, default_ND_params=None):
             log.error('Skipping: ' + str(e))
 
     elapsed = time.time() - start
+
+
         
-    return((count, elapsed, count/elapsed))
+    return((count, torus_count, Na_count, elapsed, count/elapsed))
+
+def ND_params_tree(args):
+    """Calculate ND_params for all observations in a directory tree
+    """
+    start = time.time()
+    # We have some files recorded before there were flats, so get ready to
+    # loop back for them
+    skipped_dirs = []
+    
+    # list date directory one level deep
+    totalcount = 0
+    totaltorus = 0
+    totalNa = 0
+    totaltime = 0
+    dirs = [os.path.join(args.dir, d)
+            for d in os.listdir(args.dir) if os.path.isdir(os.path.join(args.dir, d))]
+    persistent_default_ND_params = None
+    for d in sorted(dirs):
+        D.say(d)
+        try:
+            default_ND_params = get_default_ND_params(d)
+        except KeyboardInterrupt:
+            # Allow C-C to interrupt
+            raise
+        except Exception as e:
+            log.warning('Problem with flats: ' + str(e))
+            if persistent_default_ND_params is None:
+                log.error('No flats have been processed yet!  Skipping directory')
+                continue
+            log.warning('Using previous value for default_ND_params')
+            default_ND_params = persistent_default_ND_params
+        
+        (count, torus_count, Na_count, elapsed, T_per_file) \
+            = ND_params_dir(d, default_ND_params=default_ND_params)
+        print(count, torus_count, Na_count, elapsed)
+        totalcount += count
+        totaltorus += torus_count
+        totalNa += Na_count
+        totaltime += elapsed
+    end = time.time()
+    D.say('Total elapsed time: ' + str(end - start) + 's')
+    D.say(str(totalcount) + ' obj files took ' + str(totaltime) + 's')
+    D.say('Average time per file: ' + str(totalcount / totaltime) + 's')
+    D.say('Total torus: ' + str(totaltorus))
+    D.say('Total Na: ' + str(totalNa))
+
 
 class test_independent():
     def __init__(self):
@@ -1749,6 +1768,7 @@ if sys.platform == 'win32':
             log.debug('move_with_guide_box: total guider dpix (X, Y): ' + str(dp_coords[::-1]))
             log.debug('norm_dp: ' + str(norm_dp))
             log.debug('Number of steps: ' + str(num_steps))
+            # --> Here is where I want to add logic to bomb 
             log.debug('Delta per step (X, Y): ' + str(step_dp[::-1]))
             for istep in range(num_steps):
                 # Just in case someone else is commanding the guide
@@ -2459,7 +2479,7 @@ if sys.platform == 'win32':
                             + '---- GuideBoxMover Stopped ----- \n')
 
         def GuideBoxCommander(self, pix_rate=np.zeros(2)):
-            """Input desired telescope motion rate in main camera pixels per sec, outputs command file for GuideBoxMover in degrees per second"""
+            """Input desired telescope motion rate in Y, X main camera pixels per sec, outputs command file for GuideBoxMover in degrees per second"""
             # We are the appropriate place to keep track of the
             # up-to-the minute current pix_rate and
             # current_flex_pix_TStart (see below)
@@ -2510,6 +2530,20 @@ if sys.platform == 'win32':
                 l.write(self.current_flex_pix_TStart.fits + ' '
                         + str(rates_list[::-1]) + '\n')
             return True
+
+        def diff_flex(self):
+            """-->Eventually this is going to read a map/model file and calculate the differential flexure to feed to GuideBoxCommander.  There may need to be an additional method for concatenation of this flex and the measured flexure.  THIS IS ONLY FOR JUPITER DEC RIGHT NOW"""
+            plate_ratio = 4.42/(1.59/2)
+            if (-40 < self.MD.Telescope.Declination
+                and self.MD.Telescope.Declination < +10
+                and self.MD.Telescope.Altitude < 30):
+                # Change from guider pixels per 10s to main camera pixels per s
+                dec_pix_rate = -0.020/10 * plate_ratio
+                # Note Pythonic transpose
+                return self.GuideBoxCommander(np.asarray((dec_pix_rate, 0)))
+            # For now, don't guess, though I could potentially put
+            # Mercury in here
+            return self.GuideBoxCommander(np.asarray((0, 0)))
 
         # --> I'll probably want a bunch of parameters for the exposure
         def center(self,
@@ -2630,6 +2664,7 @@ if sys.platform == 'win32':
             # are too large for a practical move_with_guide_box
             if self.MD.CCDCamera.GuiderRunning:
                 log.debug('CENTERING TARGET WITH GUIDEBOX MOVES')
+                # --> add logic to test for false return
                 self.MD.move_with_guide_box(dw_coords)
             else:
                 log.debug('CENTERING TARGET WITH GUIDER SLEWS')
@@ -3452,6 +3487,19 @@ log.setLevel('DEBUG')
 #log.setLevel('INFO')
 #log.setLevel('WARNING')
 
+# HDUList = fits.open('/data/io/IoIO/raw/2018-03-15/IPT_Na_R_060.fits')
+# O = CorObsData(HDUList)
+# print(O.obj_center[::-1])
+# HDUList[0].data = HDUList[0].data - O.back_level(HDUList[0].data)
+# O.imshow(HDUList[0].data)
+# 
+# FHDUList = fits.open('/data/io/IoIO/raw/2018-03-15/Sky_Flat-0004_SII_on-band.fit')
+# F = CorObsData(FHDUList)
+# FHDUList[0].data = FHDUList[0].data - F.back_level(FHDUList[0].data)
+
+
+
+
 #O = CorObsData('/data/io/IoIO/raw/2018-01-31/Problem_R-band.fit')#, plot_dprof=True, plot_ND_edges=True)
 #D.say(O.obj_center[::-1])
 #D.say(O.desired_center[::-1])
@@ -3613,6 +3661,9 @@ def cmd_get_default_ND_params(args):
 
 # --> Eventually, I would like this to accept input from other
 # --> sources, like a flexure model and ephemeris rates
+
+# --> This doesn't work when the file changes faster than it would do
+# --> a guidebox command
 def GuideBoxMover(args):
     log.debug('Starting GuideBoxMover')
     MD = MaxImData()
@@ -3685,19 +3736,25 @@ def data_collector(args):
         P.center_loop(max_tries=5)
         log.debug('STARTING GUIDER') 
         P.MD.guider_start()
+    log.debug('TURNING ON (PASSIVE) GUIDEBOX MOVER SYSTEM')
+    P.diff_flex()
     # Center with guide box moves
     #log.debug('NOT CENTERING WITH GUIDE BOX MOVES WHILE DOING LARGE GUIDE RATE EXPERIMENT ') 
+    log.debug('CENTERING WITH GUIDEBOX MOVES') 
     P.center_loop()
     # Put ourselves in GuideBoxMoving mode (starts the GuideBoxMover subprocess)
-    log.debug('STARTING GuideBoxMover')
+    #log.debug('STARTING GuideBoxMover')
     # --> this is a confusing name: mover/moving
-    P.GuideBoxMoving = True
+    #P.GuideBoxMoving = True
     while True:
         fname = uniq_fname(basename, d)
         log.debug('COLLECTING: ' + fname)
-        P.acquire_image(fname,
+        # --> change this back to P.acquire_image to test measurement system
+        P.MD.acquire_im(fname,
                         exptime=args.exptime,
                         filt=args.filt)
+        log.debug('UPDATING (PASSIVE) GUIDEBOX MOVER SYSTEM')
+        P.diff_flex()
         # --> Just for this could eventually do a sleep watchdog or
         # --> guider settle monitor....
         time.sleep(7)
@@ -3765,8 +3822,8 @@ def IPT_Na_R(args):
         today = Time.now().fits.split('T')[0]
         d = os.path.join(raw_data_root, today)
     basename = args.basename
-    if basename is None:
-        basename = 'IPT_Na_R_'
+    #if basename is None:
+    #    basename = 'IPT_Na_R_'
     if not P.MD.CCDCamera.GuiderRunning:
         # User could have had guider already on.  If not, center with
         # guider slews and start the guider
@@ -3774,10 +3831,12 @@ def IPT_Na_R(args):
         P.center_loop(max_tries=5)
         log.debug('STARTING GUIDER') 
         P.MD.guider_start(filter=3)
+    log.debug('TURNING ON GUIDEBOX MOVER SYSTEM')
+    P.diff_flex()
     log.debug('CENTERING WITH GUIDEBOX MOVES') 
     P.center_loop()
     log.info('Starting with R')
-    P.MD.acquire_im(uniq_fname(basename, d),
+    P.MD.acquire_im(uniq_fname('R_', d),
                     exptime=2,
                     filt=0)
     
@@ -3796,27 +3855,29 @@ def IPT_Na_R(args):
         # 4 = Na off-band
 
         log.info('Collecting Na')
-        P.MD.acquire_im(uniq_fname(basename, d),
+        P.MD.acquire_im(uniq_fname('Na_off-band_', d),
                         exptime=60,
                         filt=4)
-        P.MD.acquire_im(uniq_fname(basename, d),
+        P.MD.acquire_im(uniq_fname('Na_on-band_', d),
                         exptime=300,
                         filt=2)
         log.debug('CENTERING WITH GUIDEBOX MOVES') 
         P.center_loop()
         
-        for i in range(5):
+        for i in range(4):
+            P.diff_flex()
             log.info('Collecting [SII]')
-            P.MD.acquire_im(uniq_fname(basename, d),
+            P.MD.acquire_im(uniq_fname('SII_on-band_', d),
                             exptime=300,
                             filt=1)
-            P.MD.acquire_im(uniq_fname(basename, d),
+            P.MD.acquire_im(uniq_fname('SII_off-band_', d),
                             exptime=60,
                             filt=3)
+            P.diff_flex()
             log.debug('CENTERING WITH GUIDEBOX MOVES') 
             P.center_loop()
             log.info('Collecting R')
-            P.MD.acquire_im(uniq_fname(basename, d),
+            P.MD.acquire_im(uniq_fname('R_', d),
                             exptime=2,
                             filt=0)
 
@@ -3961,6 +4022,12 @@ if __name__ == "__main__":
     test_flex_parser.add_argument(
         '--ObsClassModule', help='ObsData class module file name')
     test_flex_parser.set_defaults(func=test_flex)
+
+    tree_parser =  subparsers.add_parser(
+        'ND_params_tree', help='Find ND_params for all files in a directory tree')
+    tree_parser.add_argument(
+        'dir', nargs='?', default=raw_data_root, help='root of directory tree')
+    tree_parser.set_defaults(func=ND_params_tree)
 
     args = parser.parse_args()
     # This check for func is not needed if I make subparsers.required = True

@@ -3507,3 +3507,150 @@ I wonder if the problem is that the centering is fighting the motion
 Fri Feb 23 04:30:56 2018 EST  jpmorgen@snipe
 
 Well, in the wild, my algorithm totally did not work.
+
+I need to go back to the drawing board about how to handle centering
+with multiple filters.
+
+I guess I need to keep track of which filter is which in the centering
+calculations as well and not make a move until I have multiple ones
+
+Sat Feb 24 08:35:27 2018 EST  jpmorgen@snipe
+
+When I changed the code the other day to take out the D.says I also
+broke the motion calculations?  No, there is still a motion rate, but
+I think it is induced from the centering rate
+
+Sat Feb 24 21:18:37 2018 EST  jpmorgen@snipe
+
+Changed IPT_Na_R to just center so that I can get decent data and some
+sleep.
+
+Sat Feb 24 22:02:11 2018 EST  jpmorgen@snipe
+
+So it loks like I am getting a good measurement on the new rate, but I
+am filtering out when I use it incorrectly.
+
+Sun Feb 25 03:39:53 2018 EST  jpmorgen@snipe
+
+What I really need is the error bar, which I think I get from the
+diagonal elements of the covariance matrix:
+
+di**2 = (covar(i,i))**0.5
+
+ioio.py guide --filter 3
+--> THIS CRASHED WHILE GUIDER WAS RUNNING
+
+Oops, but guider didn't!
+
+Tue Feb 27 07:28:56 2018 EST  jpmorgen@snipe
+
+The thing that bugs me amount the deadband is that I can be far away
+from center forever.  I would like to have some sort of elastic
+deadband that gets more insistent with times the object has been away
+from the center
+
+--> limit how short a move can be in regular centering
+
+Fri Mar 09 04:10:50 2018 EST  jpmorgen@snipe
+
+!  Looks like something is reversed in ioio.py!
+
+Ahh!  It is because the telescope was not connected and I had not
+--> Print warning if telecsope not connected
+
+--> No, I need to be able to do this without telescope connected.
+
+
+This migth be a good night to debug this, since my logic looks like it
+"should" work.  The real problem seems to have been that when I pushed
+the buttons, the telescope moved in the opposite direction, suggesting
+I never needed my pier flip logic in the first place.
+
+Well, I didn't have the pier flip box checked, yet the scope was in
+pier flip mode.  I told the guider to go + in RA and it went the wrong
+direction.  When I asked it to go + while the scope was connected, it
+went in the right direction (to the ri ght on the image).
+
+--> Looks like I might simply have to insist that the user not check
+    the Pier Flip box
+
+So I will need to apply the scope flip for MaxIm to guide properly
+
+--> had trouble starting guide when telescope not connected
+
+Fri Mar 09 08:57:02 2018 EST  jpmorgen@snipe
+
+So if the telescope is not connected, then I need to do my own pier
+flip logic and somehow tell MaxIm to flip while guiding.
+
+--> Questions for Bob
+
+. MaxIm observatory telescope not connected lead to problems in my
+software with guiding and pier flip when pierWest (east of meridian)
+
+. Filter offsets with MaxIM only or do they need to be duplicated in ACP?
+
+Fri Mar 16 07:54:36 2018 EDT  jpmorgen@snipe
+
+--> set binning on guider to what I want it, otherwise remains stuck
+    to previous value (e.g. from binned biases)
+
+--> Hey, when the quality is too low, consider upping the eposure time
+    automatically!  Cold also add eposure time argument to center command
+
+Tue Mar 27 21:02:43 2018 EDT  jpmorgen@snipe
+
+--> Think about quick and dirty telescospe rate implementation
+right now, GuideBoxCommander isn't in use
+
+Main camera pixels per second is what GuideBoxCommander wants.
+
+Currently I use 0.020 guider pixels per 10 s
+
+guider/main 
+4.42/(1.59/2)
+5.559748427672956
+
+So I can call the method that does this something like diff_flex.
+Ultimately, it is going to read a mapping file/model.
+
+Also, I would like to have it continually monitoring.  but to do that
+properly, I would need to have a separate background process
+
+
+Nu Hya/HIP52943 (Star)
+
+02:14:22   Position = 37889  Mean HFD =  3.83
+02:14:22   Temperature = 10.06
+
+--> could propagate guider filter and exptime to command line
+ or work on auto filter
+
+ioio.py data_collector --filt=1
+
+is pix_rate in transpose or not?  It is transposed.  And since I have
+a little camera angle, I can't get a perfect guide angle
+
+--> Need to figure out what to do when I want to change the guidebox
+    rate more rapidly than I move the guide box.
+
+--! When the C-c event times out connection to MaxIm and scope, MaxIm
+returns to the preset it was at when the connection was made.  This is
+where I get the magic change I have been seeing
+
+Thu Mar 29 06:33:43 2018 EDT  jpmorgen@snipe
+
+--> Get updated rates for near meridian from IoIO.notebook this AM
+
+Sat Mar 31 08:46:41 2018 EDT  jpmorgen@snipe
+
+--> Need to add logic to pop guider off to do large moves.  -->
+    Consider bringing center and center_loop inside of MaxImData
+
+Mon Apr 02 02:25:25 2018 EDT  jpmorgen@snipe
+
+--> Add logic to test for too may guidebox moves
+
+Sat Apr 14 04:09:33 2018 EDT  jpmorgen@byted
+
+--> Need to do T focussing in ioio.py
