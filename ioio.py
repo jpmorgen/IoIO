@@ -605,9 +605,20 @@ class CorObsData(ObsData):
                 self.quality = 6
             # If we made it here, Jupiter is outside the ND filter,
             # but shining bright enough to be found
-            # --> only look for very bright pixels
+            # --> Try iterative approach
+            ny, nx = im.shape
             y_x = np.asarray(ndimage.measurements.center_of_mass(im))
+            y = np.arange(ny) - y_x[0]
+            x = np.arange(nx) - y_x[1]
+            # input/output Cartesian direction by default
+            xx, yy = np.meshgrid(x, y)
+            rr = np.sqrt(xx**2 + yy**2)
+            im[np.where(rr > 200)] = 0
+            y_x = np.asarray(ndimage.measurements.center_of_mass(im))
+
             self._obj_center = y_x
+            log.debug('Object center (X, Y; binned) = ' +
+                      str(self.binned(self._obj_center)[::-1]))
             return self._obj_center
 
         # Here is where we boost what is sure to be Jupiter, if Jupiter is
@@ -1290,10 +1301,12 @@ if sys.platform == 'win32':
     default_cent_tol = 5   # Pixels
     default_guider_exptime = 1 # chage back to 1 for night, 0.2 for day
     run_level_main_astrometry = os.path.join(
-        raw_data_root, '2018-01-18/PinPointSolutionEastofPier.fit')
+        raw_data_root, '2018-04_Astrometry/PinPointSolutionEastofPier.fit')
     run_level_guider_astrometry = os.path.join(
-        raw_data_root, '2018-01-24/GuiderPinPointSolutionWestofPier.fit')
-    #raw_data_root, '2018-01-24/GuiderPinPointSolutionEastofPier.fit')
+        raw_data_root, '2018-04_Astrometry/GuiderPinPointSolutionWestofPier.fit')
+        #raw_data_root, '2018-01_Astrometry//GuiderPinPointSolutionEastofPier.fit')
+
+    horizon_limit = 8.1
 
     #Daniel
     if True:
@@ -1392,6 +1405,8 @@ if sys.platform == 'win32':
             # indication of how long it is safe to press the guider
             # movement buttons
             self.guider_max_move_multiplier = 20
+            self.horizon_limit_value = horizon_limit
+            self.max_guide_num_steps = 8
             self.connect()
             self.populate_obj()
 
@@ -1628,6 +1643,10 @@ if sys.platform == 'win32':
                     # --> interface would want to possibly record this
                     log.error('German equatorial mount (GEM) pier flip detected between guider astrometry data and guider calibration but mount not reporting PIERSIDE in guider astrometry file.  Was this file recorded with MaxIm?  Was the mount properly configured through an ASCOM driver when the calibration took place?')
                         
+        def horizon_limit(self):
+            return (not self.Telescope.Tracking
+                    or self.Telescope.Altitude < self.horizon_limit_value)
+
         def guider_cycle(self, n=1):
             """Returns average and RMS guider error magnitude after n guider cycles
 
@@ -1687,6 +1706,9 @@ if sys.platform == 'win32':
             while (rms > self.guider_settle_tolerance
                    and av > self.guider_settle_tolerance
                    and time.time() <= start + self.guider_max_settle_time):
+                if self.horizon_limit():
+                    log.debug('Horizon limit reached')
+                    return False
                 av, rms = self.guider_cycle(self.guider_settle_cycle)
                 log.debug('guider AV, RMS = ' + str((av, rms)))
             if time.time() > start + self.guider_max_settle_time:
@@ -1768,7 +1790,11 @@ if sys.platform == 'win32':
             log.debug('move_with_guide_box: total guider dpix (X, Y): ' + str(dp_coords[::-1]))
             log.debug('norm_dp: ' + str(norm_dp))
             log.debug('Number of steps: ' + str(num_steps))
-            # --> Here is where I want to add logic to bomb 
+            if num_steps > self.max_guide_num_steps:
+                # We can't do this, so just bomb with a False return
+                # and let the caller (usually center) handle it
+                log.error('Maximum number of steps (' + str(self.max_guide_num_steps) + ') exceeded: ' + str(num_steps))
+                return False
             log.debug('Delta per step (X, Y): ' + str(step_dp[::-1]))
             for istep in range(num_steps):
                 # Just in case someone else is commanding the guide
@@ -1780,6 +1806,9 @@ if sys.platform == 'win32':
                 log.debug('Setting to: ' + str(tp_coords[::-1]))
                 # !!! TRANSPOSE !!!
                 self.CCDCamera.GuiderMoveStar(tp_coords[1], tp_coords[0])
+                if self.horizon_limit():
+                    log.debug('Horizon limit reached')
+                    return False
                 self.guider_settle()
             
             ## Give it a few extra cycles to make sure it has stuck
@@ -2030,6 +2059,7 @@ if sys.platform == 'win32':
                     RA = 0
                     DEC = self.CCDCamera.GuiderDeclination
                     log.warning('Telescope is not reporting RA and/or DEC.  Setting RA = ' + str(RA) + ' and DEC = ' + str(DEC) + ', which was read from the Scope Dec. box of the Guide tab.')
+                # --> This might need to be just a regular pier flip for the current Telescope.SideOfPier == pierWest case (a standard pier flip)
                 # Check to see if our astrometry image was taken on
                 # the other side of a GEM pier.  In that case, both RA
                 # and DEC are reversed in the astrometry.  For scope
@@ -2552,6 +2582,7 @@ if sys.platform == 'win32':
                    current_astrometry=None,
                    scaling_astrometry=None,
                    ignore_ObsData_astrometry=False,
+                   recursive_count=0,
                    **ObsClassArgs):
             """Move the object to desired_center using guider slews OR
                    guide box moves, if the guider is running.  Takes
@@ -2589,6 +2620,10 @@ if sys.platform == 'win32':
                 present.  Default: False
 
             """
+            if self.horizon_limit():
+                log.debug('Horizon limit reached')
+                return False
+
             # save some typing
             input = HDUList_im_fname_ObsData_or_obj_center
             if input is None:
@@ -2660,15 +2695,28 @@ if sys.platform == 'win32':
             #log.debug('world coordinates of obj_center and desired_center: ' + repr(w_coords))
 
             dw_coords = w_coords[1,:] - w_coords[0,:]
-            # --> This would be the right place to check if the dw_coords
-            # are too large for a practical move_with_guide_box
             if self.MD.CCDCamera.GuiderRunning:
                 log.debug('CENTERING TARGET WITH GUIDEBOX MOVES')
-                # --> add logic to test for false return
-                self.MD.move_with_guide_box(dw_coords)
+                if not self.MD.move_with_guide_box(dw_coords):
+                    if recursive_count > 1:
+                        log.error('center: Failed to center target using guidebox moves after two tries')
+                        return False                        
+                    log.debug('TURNING GUIDER OFF AND CENTERING WITH GUIDER SLEWS')
+                    self.MD.guider_stop()
+                    self.MD.guider_move(dw_coords)
+                    # --> Need to add logic to capture guider stuff,
+                    # though filter should be the same.  It is just
+                    # the exposure time that I might want to have
+                    # carried over, though I will eventually figure
+                    # that out myself.
+                    log.debug('RESTARTING GUIDER AND CENTERING WITH GUIDEBOX MOVES')
+                    self.MD.guider_start()
+                    recursive_count += 1
+                    self.center(recursive_count=recursive_count)
             else:
                 log.debug('CENTERING TARGET WITH GUIDER SLEWS')
                 self.MD.guider_move(dw_coords)
+            return True
 
         def center_loop(self,
                         exptime=None,
@@ -2684,6 +2732,9 @@ if sys.platform == 'win32':
             tries = 0
             fails = 0
             while True:
+                if self.MD.horizon_limit():
+                    log.debug('Horizon limit reached')
+                    return False
                 log.debug('CENTER_LOOP TAKING EXPOSURE')
                 HDUList = self.MD.take_im(exptime, filt)
                 O = self.create_ObsData(HDUList, **ObsClassArgs)
@@ -2711,7 +2762,9 @@ if sys.platform == 'win32':
                               str(tolerance) + ' pixels after '
                               + str(tries) + ' tries')
                     return False
-                self.center(O)
+                if not self.center(O):
+                    log.error('center_loop: could not center target')
+                    return False
                 tries += 1
 
         def pix_rate_to_freeze_motion(self):
@@ -3697,7 +3750,8 @@ def GuideBoxMover(args):
             log.debug('GuideBoxMover dt(s) = ' + str(dt))
             log.debug('GuideBoxMover is moving the guidebox by ' +
                       str(dra_ddec_rate * dt*3600) + ' arcsec')
-            MD.move_with_guide_box(dra_ddec_rate * dt )
+            if not MD.move_with_guide_box(dra_ddec_rate * dt ):
+                log.error('GuideBoxMover MD.move_with_guide_box failed')
             lastt = now
 
 def uniq_fname(basename=None, directory=None, extension='.fits'):
@@ -3817,6 +3871,13 @@ def data_collector(args):
 
 def IPT_Na_R(args):
     P = PrecisionGuide("CorObsData") # other defaults should be good
+    while P.MD.horizon_limit():
+        if not P.MD.Telescope.Tracking:
+            log.error('Horizon limit reached')
+            return
+        # --> Should probably put some sort of message here and maybe
+        # --> a longer wait
+        time.sleep(5)
     d = args.dir
     if d is None:
         today = Time.now().fits.split('T')[0]
@@ -3835,6 +3896,9 @@ def IPT_Na_R(args):
     P.diff_flex()
     log.debug('CENTERING WITH GUIDEBOX MOVES') 
     P.center_loop()
+    if P.MD.horizon_limit():
+        log.debug('Horizon limit reached')
+        return
     log.info('Starting with R')
     P.MD.acquire_im(uniq_fname('R_', d),
                     exptime=2,
@@ -3854,28 +3918,49 @@ def IPT_Na_R(args):
         # 3 = [SII] off-band
         # 4 = Na off-band
 
+        if P.MD.horizon_limit():
+            log.debug('Horizon limit reached')
+            return
         log.info('Collecting Na')
         P.MD.acquire_im(uniq_fname('Na_off-band_', d),
                         exptime=60,
                         filt=4)
+        if P.MD.horizon_limit():
+            log.debug('Horizon limit reached')
+            return
         P.MD.acquire_im(uniq_fname('Na_on-band_', d),
                         exptime=300,
                         filt=2)
+        if P.MD.horizon_limit():
+            log.debug('Horizon limit reached')
+            return
         log.debug('CENTERING WITH GUIDEBOX MOVES') 
         P.center_loop()
         
         for i in range(4):
+            if P.MD.horizon_limit():
+                log.debug('Horizon limit reached')
+                return
             P.diff_flex()
             log.info('Collecting [SII]')
             P.MD.acquire_im(uniq_fname('SII_on-band_', d),
                             exptime=300,
                             filt=1)
+            if P.MD.horizon_limit():
+                log.debug('Horizon limit reached')
+                return
             P.MD.acquire_im(uniq_fname('SII_off-band_', d),
                             exptime=60,
                             filt=3)
+            if P.MD.horizon_limit():
+                log.debug('Horizon limit reached')
+                return
             P.diff_flex()
             log.debug('CENTERING WITH GUIDEBOX MOVES') 
             P.center_loop()
+            if P.MD.horizon_limit():
+                log.debug('Horizon limit reached')
+                return
             log.info('Collecting R')
             P.MD.acquire_im(uniq_fname('R_', d),
                             exptime=2,
@@ -4139,3 +4224,6 @@ if __name__ == "__main__":
 # #print(ND.get_ND_params())
 # 
 # #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit'))
+#O = CorObsData('/data/io/IoIO/raw/2018-05-05/R_010.fits')
+
+
