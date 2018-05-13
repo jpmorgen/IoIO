@@ -3654,3 +3654,94 @@ Mon Apr 02 02:25:25 2018 EDT  jpmorgen@snipe
 Sat Apr 14 04:09:33 2018 EDT  jpmorgen@byted
 
 --> Need to do T focussing in ioio.py
+
+Mon Apr 23 00:53:02 2018 EDT  jpmorgen@snipe
+
+--> East of pier is only one that works on main, west of pier is only
+    one that works on guide!
+
+guider_move: Standard pier flip sign (-1 for pierWest) on guider
+astrometry in scope_wcs would work
+
+center with guider slews: probably flipping twice, once in 
+--> Conisder fixing PIERSIDE in astrometry headers to EAST
+
+Mon Apr 23 08:29:18 2018 EDT  jpmorgen@snipe
+
+--> Add horizon limits
+
+Thu May 03 21:30:25 2018 EDT  jpmorgen@snipe
+
+Time to do the horizon limits!
+
+Fri May 04 20:17:25 2018 EDT  jpmorgen@snipe
+
+That sort of worked, but new centering logic did not.
+
+I have 4 levels here.  The initial IPT_Na_R, which calls center_loop,
+which calls center for the first time, which calls guider_move, then
+returns to IPT_Na_r, which starts the guider and recenters with
+guidebox moves which are ultimately done in move_with_guide_box.  It
+is only move_with_guide_box that knows that there are too many steps,
+but it is only in center_loop that I take a picture to get the
+recentering that I want.
+
+Sat May 05 08:16:47 2018 EDT  jpmorgen@snipe
+
+O = CorObsData('/data/io/IoIO/raw/2018-05-05/R_010.fits')
+O.obj_center[::-1]
+array([ 1306.33932366,  1108.02146345])
+
+I get 1381, 1069
+
+Fix this.  Think I need a better way to determine if it is off or on
+
+Sun May 06 07:57:53 2018 EDT  jpmorgen@snipe
+
+--> Consider putting some horizon limit code in the guider stuff
+--> And a catch to keep from bombing
+
+Mon May 07 02:04:41 2018 EDT  jpmorgen@snipe
+
+DEBUG: Target centered to 5 pixels [__main__]
+DEBUG: IN GuideBoxCommander [__main__]
+Traceback (most recent call last):
+  File "ioio.py", line 4106, in <module>
+    args.func(args)
+  File "ioio.py", line 3726, in GuideBoxMover
+    rates_list = json.loads(com.read())
+  File "C:\ProgramData\Anaconda3\lib\json\__init__.py", line 354, in loads
+INFO: Guide box rate: 2018-05-07T06:02:04.383(UTC) [0.0, 0.0] [__main__]
+    return _default_decoder.decode(s)
+  File "C:\ProgramData\Anaconda3\lib\json\decoder.py", line 339, in decode
+INFO: Collecting [SII] [__main__]
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+  File "C:\ProgramData\Anaconda3\lib\json\decoder.py", line 357, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+Coming in at 6 clients, but guidebox mover definitly not running
+
+Tue May 08 22:48:58 2018 EDT  jpmorgen@snipe
+
+--> Probably need to do a center or something like that after I turn
+    off guider when guide box moves don't work.
+
+--> Really need to get logic for horizon limit in center loop
+
+Wed May 09 18:59:47 2018 EDT  jpmorgen@snipe
+
+Above horizon might be a better way to think of it
+
+tracking and alt > horizon limit
+
+not(tracking and alt > horizon limit)
+
+not tracking or alt < horizon limit
+
+Sat May 12 07:34:15 2018 EDT  jpmorgen@snipe
+
+--> Add an exit script that turns off guiding and does anything else
+
+Sat May 12 20:00:18 2018 EDT  jpmorgen@snipe
+

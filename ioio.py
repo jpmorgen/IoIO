@@ -1647,6 +1647,17 @@ if sys.platform == 'win32':
             return (not self.Telescope.Tracking
                     or self.Telescope.Altitude < self.horizon_limit_value)
 
+
+        # For now use self.Application.ShutDownObservatory()
+        #def do_shutdown(self):
+        #    self.Telescope.Park()
+        #    return True
+        #
+        #def check_shutdown(self):
+        #    # if weather: AstroAlert.Weather
+        #    #    self.do_shutdown()
+
+
         def guider_cycle(self, n=1):
             """Returns average and RMS guider error magnitude after n guider cycles
 
@@ -1707,7 +1718,7 @@ if sys.platform == 'win32':
                    and av > self.guider_settle_tolerance
                    and time.time() <= start + self.guider_max_settle_time):
                 if self.horizon_limit():
-                    log.debug('Horizon limit reached')
+                    log.error('Horizon limit reached')
                     return False
                 av, rms = self.guider_cycle(self.guider_settle_cycle)
                 log.debug('guider AV, RMS = ' + str((av, rms)))
@@ -1807,7 +1818,7 @@ if sys.platform == 'win32':
                 # !!! TRANSPOSE !!!
                 self.CCDCamera.GuiderMoveStar(tp_coords[1], tp_coords[0])
                 if self.horizon_limit():
-                    log.debug('Horizon limit reached')
+                    log.error('Horizon limit reached')
                     return False
                 self.guider_settle()
             
@@ -2620,8 +2631,8 @@ if sys.platform == 'win32':
                 present.  Default: False
 
             """
-            if self.horizon_limit():
-                log.debug('Horizon limit reached')
+            if self.MD.horizon_limit():
+                log.error('Horizon limit reached')
                 return False
 
             # save some typing
@@ -2733,7 +2744,7 @@ if sys.platform == 'win32':
             fails = 0
             while True:
                 if self.MD.horizon_limit():
-                    log.debug('Horizon limit reached')
+                    log.error('Horizon limit reached')
                     return False
                 log.debug('CENTER_LOOP TAKING EXPOSURE')
                 HDUList = self.MD.take_im(exptime, filt)
@@ -3722,6 +3733,10 @@ def GuideBoxMover(args):
     MD = MaxImData()
     last_modtime = 0
     while True:
+        if MD.horizon_limit():
+            log.error('GuideBoxMover: Horizon limit reached')
+            return False
+
         # --> Make this sleep time variable based on a fraction of the
         # --> expected motion calculated below
         time.sleep(1)
@@ -3873,7 +3888,8 @@ def IPT_Na_R(args):
     P = PrecisionGuide("CorObsData") # other defaults should be good
     while P.MD.horizon_limit():
         if not P.MD.Telescope.Tracking:
-            log.error('Horizon limit reached')
+            log.error('Horizon limit reached.  Shutting down observatory.')
+            P.MD.Application.ShutDownObservatory()
             return
         # --> Should probably put some sort of message here and maybe
         # --> a longer wait
@@ -3897,7 +3913,8 @@ def IPT_Na_R(args):
     log.debug('CENTERING WITH GUIDEBOX MOVES') 
     P.center_loop()
     if P.MD.horizon_limit():
-        log.debug('Horizon limit reached')
+        log.debug('Horizon limit reached.  Shutting down observatory')
+        P.MD.Application.ShutDownObservatory()
         return
     log.info('Starting with R')
     P.MD.acquire_im(uniq_fname('R_', d),
@@ -3919,7 +3936,8 @@ def IPT_Na_R(args):
         # 4 = Na off-band
 
         if P.MD.horizon_limit():
-            log.debug('Horizon limit reached')
+            log.debug('Horizon limit reached.  Shutting down observatory')
+            P.MD.Application.ShutDownObservatory()
             return
         log.info('Collecting Na')
         P.MD.acquire_im(uniq_fname('Na_off-band_', d),
@@ -3932,7 +3950,8 @@ def IPT_Na_R(args):
                         exptime=300,
                         filt=2)
         if P.MD.horizon_limit():
-            log.debug('Horizon limit reached')
+            log.debug('Horizon limit reached.  Shutting down observatory')
+            P.MD.Application.ShutDownObservatory()
             return
         log.debug('CENTERING WITH GUIDEBOX MOVES') 
         P.center_loop()
@@ -3947,7 +3966,8 @@ def IPT_Na_R(args):
                             exptime=300,
                             filt=1)
             if P.MD.horizon_limit():
-                log.debug('Horizon limit reached')
+                log.debug('Horizon limit reached.  Shutting down observatory')
+                P.MD.Application.ShutDownObservatory()
                 return
             P.MD.acquire_im(uniq_fname('SII_off-band_', d),
                             exptime=60,
@@ -3959,7 +3979,8 @@ def IPT_Na_R(args):
             log.debug('CENTERING WITH GUIDEBOX MOVES') 
             P.center_loop()
             if P.MD.horizon_limit():
-                log.debug('Horizon limit reached')
+                log.debug('Horizon limit reached.  Shutting down observatory')
+                P.MD.Application.ShutDownObservatory()
                 return
             log.info('Collecting R')
             P.MD.acquire_im(uniq_fname('R_', d),
