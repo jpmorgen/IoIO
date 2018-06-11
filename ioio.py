@@ -48,6 +48,21 @@ run_level_default_ND_params \
        [  1.28303305e+03,   1.39479846e+03]]
 
 
+def get_HDUList(HDUList_im_or_fname):
+    """Returns an astropy.fits.HDUList given a filename, image or
+    HDUList.  If you have a set of HDUs, you'll need to put them
+    together into an HDUList yourself, since this can't guess how
+    to do that"""
+    if isinstance(HDUList_im_or_fname, fits.HDUList):
+        return HDUList_im_or_fname
+    elif isinstance(HDUList_im_or_fname, str):
+        return fits.open(HDUList_im_or_fname)
+    elif isinstance(HDUList_im_or_fname, np.ndarray):
+        hdu = fits.PrimaryHDU(HDUList_im_or_fname)
+        return fits.HDUList(hdu)
+    else:
+        raise ValueError('Not a valid input, HDUList_im_or_fname, expecting, fits.HDUList, string, or np.ndarray')
+
 # These are shared definitions between Windows and Linux
 class ObsData():
     """Base class for observations, enabling object centering, etc.
@@ -69,7 +84,9 @@ class ObsData():
         self._binning = None
         self._subframe_origin = None
         self._we_opened_file = None
-        # This is the most basic observation data to be tracked.
+        # Keep property for later use/speedy access
+        self._hist_of_im = None
+        self._back_level = None
         # These are in pixels
         self._obj_center = None
         self._desired_center = desired_center
@@ -148,13 +165,17 @@ class ObsData():
             # Calculate an astropy Time object for the midpoint of the
             # observation for ease of time delta calculations.
             # Account for darktime, if available
-            exptime = self.header.get('DARKTIME') 
-            if exptime is None:
-                exptime = self.header['EXPTIME']
-            # Use units to help with astropy.time calculations
-            exptime *= u.s
-            self.Tmidpoint = (Time(self.header['DATE-OBS'], format='fits')
-                              + exptime/2)
+            try:
+                exptime = self.header.get('DARKTIME') 
+                if exptime is None:
+                    exptime = self.header['EXPTIME']
+                    # Use units to help with astropy.time calculations
+                    exptime *= u.s
+                    self.Tmidpoint = (Time(self.header['DATE-OBS'],
+                                           format='fits')
+                                      + exptime/2)
+            except:
+                log.warning('Cannot read DARKTIME and/or EXPTIME keywords from FITS header')
             try:
                 # Note Astropy Pythonic transpose Y, X order
                 self._binning = (self.header['YBINNING'],
@@ -259,11 +280,15 @@ class ObsData():
                 coefs = self.iter_linfit(x[goodc], y[goodc])
         return coefs
     
-        
+
+    @property
     def hist_of_im(self, im, readnoise):
-        """Returns histogram of image and index into centers of bins.  
-Uses readnoise (default = 5 e- RMS) to define bin widths
+        """Returns a tuple of the histogram of image and index into centers of
+bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
+
         """
+        if self._hist_of_im is not None:
+            return self._hist_of_im
         if not readnoise:
             readnoise = 5
         # Code from west_aux.py, maskgen.
@@ -277,8 +302,10 @@ Uses readnoise (default = 5 e- RMS) to define bin widths
         centers = (edges[0:-1] + edges[1:])/2
         #plt.plot(centers, hist)
         #plt.show()
-        return (hist, centers)
+        self._hist_of_im = (hist, centers)
+        return self._hist_of_im
 
+    @property
     def back_level(self, im, **kwargs):
         # Use the histogram technique to spot the bias level of the image.
         # The coronagraph creates a margin of un-illuminated pixels on the
@@ -288,10 +315,12 @@ Uses readnoise (default = 5 e- RMS) to define bin widths
         # second such peak)
         # --> This is very specific to the coronagraph.  Consider porting first peak find from IDL
         # Pass on readnoise, if supplied
+        if self._back_level is not None:
+            return self._back_level
         im_hist, im_hist_centers = self.hist_of_im(im, kwargs)
         im_peak_idx = signal.find_peaks_cwt(im_hist, np.arange(10, 50))
-        return im_hist_centers[im_peak_idx[0]]
-        #im -= im_hist_centers[im_peak_idx[0]]
+        self._back_level = im_hist_centers[im_peak_idx[0]]
+        return self._back_level
 
     def imshow(self, im=None):
         if im is None:
@@ -1067,6 +1096,15 @@ class CorObsData(ObsData):
 
     # Code above was provided by Daniel R. Morgenthaler, May 2017
 
+class ReduceCorObs():
+    """Do a quick reduction of on-band off-band coronagraph image pair"""
+    
+    def __init__(self,
+                 OnBand_HDUList_im_or_fname=None,
+                 OffBand_HDUList_im_or_fname=None):
+        OnBand = CorObsData(OnBand_HDUList_im_or_fname)
+        OffBand = CorObsData(OffBand_HDUList_im_or_fname)
+        
 def get_default_ND_params(dir='.', maxcount=None):
     """Derive default_ND_params from up to maxcount flats in dir
     """
@@ -1191,6 +1229,7 @@ def ND_params_tree(args):
         D.say(d)
         try:
             default_ND_params = get_default_ND_params(d)
+            persistent_default_ND_params = default_ND_params
         except KeyboardInterrupt:
             # Allow C-C to interrupt
             raise
@@ -1306,7 +1345,7 @@ if sys.platform == 'win32':
         raw_data_root, '2018-04_Astrometry/GuiderPinPointSolutionWestofPier.fit')
         #raw_data_root, '2018-01_Astrometry//GuiderPinPointSolutionEastofPier.fit')
 
-    horizon_limit = 8.1
+    horizon_limit = 8.5
 
     #Daniel
     if True:
@@ -1405,6 +1444,9 @@ if sys.platform == 'win32':
             # indication of how long it is safe to press the guider
             # movement buttons
             self.guider_max_move_multiplier = 20
+            #  --> Too little motion seems to freeze the system, at
+            # least sometimes
+            self.min_guide_move_time = 0.05
             self.horizon_limit_value = horizon_limit
             self.max_guide_num_steps = 8
             self.connect()
@@ -1958,6 +2000,9 @@ if sys.platform == 'win32':
                 log.warning('requested move of ' + str(dra_ddec) + ' arcsec translates into move times of ' + str(np.abs(dt)) + ' seconds.  Limiting move in one or more axes to max t of ' + str(max_t))
                 dt = np.minimum(max_t, abs(dt)) * np.sign(dt)
                 
+            # Or too little
+            dt[np.where(np.abs(dt) < self.min_guide_move_time)] = 0
+
             log.info('Seconds to move guider in RA and DEC: ' + str(dt))
 
             # Keep track of whether or not MaxIm is flipping any
@@ -3886,13 +3931,26 @@ def data_collector(args):
 
 def IPT_Na_R(args):
     P = PrecisionGuide("CorObsData") # other defaults should be good
+    wait_for_horizons = False
+    while not P.MD.Telescope.Tracking:
+        if not wait_for_horizons:
+            log.info('Tracking is off.  Assuming I am waiting for A-P HORIZONS app to acquire Jupiter')
+        wait_for_horizons = True
+        time.sleep(5)
+    if wait_for_horizons:
+        # Give mount a couple of minutes to get to Jupiter and for A-P
+        # HORIZONS to do its calibration dance
+        log.info('Waiting for A-P HORIZONS app to finishing acquiring Jupiter')
+        time.sleep(120)
+    horizon_message = False
     while P.MD.horizon_limit():
         if not P.MD.Telescope.Tracking:
             log.error('Horizon limit reached.  Shutting down observatory.')
             P.MD.Application.ShutDownObservatory()
             return
-        # --> Should probably put some sort of message here and maybe
-        # --> a longer wait
+        if not horizon_message:
+            log.info('Waiting for object to rise above horizon limit')
+            horizon_message = True
         time.sleep(5)
     d = args.dir
     if d is None:
@@ -3958,7 +4016,8 @@ def IPT_Na_R(args):
         
         for i in range(4):
             if P.MD.horizon_limit():
-                log.debug('Horizon limit reached')
+                log.debug('Horizon limit reached.  Shutting down observatory')
+                P.MD.Application.ShutDownObservatory()
                 return
             P.diff_flex()
             log.info('Collecting [SII]')
@@ -3973,7 +4032,8 @@ def IPT_Na_R(args):
                             exptime=60,
                             filt=3)
             if P.MD.horizon_limit():
-                log.debug('Horizon limit reached')
+                log.debug('Horizon limit reached.  Shutting down observatory')
+                P.MD.Application.ShutDownObservatory()
                 return
             P.diff_flex()
             log.debug('CENTERING WITH GUIDEBOX MOVES') 
