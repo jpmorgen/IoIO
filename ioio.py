@@ -10,6 +10,8 @@
 import define as D
 import importlib
 
+
+
 import argparse
 import sys
 import os
@@ -23,6 +25,7 @@ from astropy import wcs
 from astropy.time import Time, TimeDelta
 import matplotlib.pyplot as plt
 from scipy import signal, ndimage
+
 # For GuideBoxCommander/GuideBoxMover system --> may improve
 import json
 import subprocess
@@ -38,10 +41,6 @@ elif socket.gethostname() == "IoIO1U1":
     raw_data_root = r'C:\Users\PLANETARY SCIENCE\Desktop\IoIO\data'
     # --> Eventually, it would be nice to have this in a chooser
     default_telescope = 'AstroPhysicsV2.Telescope'
-
-# --> I may improve this location or the technique of message passing
-default_guide_box_command_file = os.path.join(raw_data_root, 'GuideBoxCommand.txt')
-default_guide_box_log_file = os.path.join(raw_data_root, 'GuideBoxLog.txt')
 
 run_level_default_ND_params \
     = [[  3.63686271e-01,   3.68675375e-01],
@@ -74,12 +73,14 @@ class ObsData():
 
     """
 
-    def __init__(self, HDUList_im_or_fname=None,
-                 desired_center=None):
+    def __init__(self,
+                 HDUList_im_or_fname=None,
+                 desired_center=None,
+                 readnoise=5):
         if HDUList_im_or_fname is None:
             raise ValueError('No HDUList_im_or_fname provided')
+        self.readnoise = readnoise
         # Set up our basic FITS image info
-        self.fname = None
         self.header = None
         self._binning = None
         self._subframe_origin = None
@@ -137,59 +138,47 @@ class ObsData():
 
 
     def read_im(self, HDUList_im_or_fname=None):
-        """Returns an astropy.fits.HDUList given a filename, image or
-        HDUList.  If you have a set of HDUs, you'll need to put them
-        together into an HDUList yourself, since this can't guess how
-        to do that"""
-        if HDUList_im_or_fname is None:
-            log.info('No error, just saying that you have no image.')
-            HDUList = None
-        elif isinstance(HDUList_im_or_fname, fits.HDUList):
-            HDUList = HDUList_im_or_fname
-            self.fname = HDUList.filename()
-        elif isinstance(HDUList_im_or_fname, str):
-            HDUList = fits.open(HDUList_im_or_fname)
-            self.fname = HDUList.filename()
+        """Populate ObsData with HDUList and associated info"""
+        self.HDUList = get_HDUList(HDUList_im_or_fname)
+        if isinstance(HDUList_im_or_fname, np.ndarray):
+            # We don't have any metadata
+            return self.HDUList
+        # All other options should have HDUList already populated with
+        # stuff we need.  Copy stuff into our local property as needed
+        if isinstance(HDUList_im_or_fname, str):
             self._we_opened_file = True
-        elif isinstance(HDUList_im_or_fname, np.ndarray):
-            hdu = fits.PrimaryHDU(HDUList_im_or_fname)
-            HDUList = fits.HDUList(hdu)
-        else:
-            raise ValueError('Not a valid input, HDUList_im_or_fname')
-        if HDUList is not None:
-            # Store the header in our object.  This is just a
-            # reference at first, but after HDUList is deleted, this
-            # becomes the only copy
-            # https://stackoverflow.com/questions/22069727/python-garbage-collector-behavior-on-compound-objects
-            self.header = HDUList[0].header
-            # Calculate an astropy Time object for the midpoint of the
-            # observation for ease of time delta calculations.
-            # Account for darktime, if available
-            try:
-                exptime = self.header.get('DARKTIME') 
-                if exptime is None:
-                    exptime = self.header['EXPTIME']
-                    # Use units to help with astropy.time calculations
-                    exptime *= u.s
-                    self.Tmidpoint = (Time(self.header['DATE-OBS'],
-                                           format='fits')
-                                      + exptime/2)
-            except:
-                log.warning('Cannot read DARKTIME and/or EXPTIME keywords from FITS header')
-            try:
-                # Note Astropy Pythonic transpose Y, X order
-                self._binning = (self.header['YBINNING'],
-                                 self.header['XBINNING'])
-                self._binning = np.asarray(self._binning)
-                # This is in binned coordinates
-                self._subframe_origin = (self.header['YORGSUBF'],
-                                         self.header['XORGSUBF'])
-                self._subframe_origin = np.asarray(self._subframe_origin)
-            except:
-                log.warning('Could not read binning or subframe origin from image header.  Did you pass a valid MaxIm-recorded image and header?  Assuming binning = 1, subframe_origin = 0,0')
-                self._binning = np.asarray((1,1))
-                self._subframe_origin = (0,0)
-        self.HDUList = HDUList
+        # Store the header in our object.  This is just a
+        # reference at first, but after HDUList is deleted, this
+        # becomes the only copy
+        # https://stackoverflow.com/questions/22069727/python-garbage-collector-behavior-on-compound-objects
+        self.header = self.HDUList[0].header
+        # Calculate an astropy Time object for the midpoint of the
+        # observation for ease of time delta calculations.
+        # Account for darktime, if available
+        try:
+            exptime = self.header.get('DARKTIME') 
+            if exptime is None:
+                exptime = self.header['EXPTIME']
+                # Use units to help with astropy.time calculations
+                exptime *= u.s
+                self.Tmidpoint = (Time(self.header['DATE-OBS'],
+                                       format='fits')
+                                  + exptime/2)
+        except:
+            log.warning('Cannot read DARKTIME and/or EXPTIME keywords from FITS header')
+        try:
+            # Note Astropy Pythonic transpose Y, X order
+            self._binning = (self.header['YBINNING'],
+                             self.header['XBINNING'])
+            self._binning = np.asarray(self._binning)
+            # This is in binned coordinates
+            self._subframe_origin = (self.header['YORGSUBF'],
+                                     self.header['XORGSUBF'])
+            self._subframe_origin = np.asarray(self._subframe_origin)
+        except:
+            log.warning('Could not read binning or subframe origin from image header.  Did you pass a valid MaxIm-recorded image and header?  Assuming binning = 1, subframe_origin = 0,0')
+            self._binning = np.asarray((1,1))
+            self._subframe_origin = (0,0)
         return self.HDUList
     
     def unbinned(self, coords):
@@ -202,10 +191,11 @@ class ObsData():
         coords = np.asarray(coords)
         return np.asarray((coords - self._subframe_origin) / self._binning)
         
-    def HDU_unbinned(self):
-        """Unbin primary HDU image
+    def HDU_unbinned(self, a=None):
+        """Returns an unbinned version of the primary HDU image or the primary HDU image if it is not binned.  If a is provided, pretend that is the primary HDU (e.g., it may be a modified version) and unbin that
         """
-        a = self.HDUList[0].data
+        if a is None:
+            a = self.HDUList[0].data
         # Don't bother if we are already unbinned
         if np.sum(self._binning) == 2:
             return a
@@ -282,20 +272,19 @@ class ObsData():
     
 
     @property
-    def hist_of_im(self, im, readnoise):
+    def hist_of_im(self):
         """Returns a tuple of the histogram of image and index into centers of
 bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
 
         """
         if self._hist_of_im is not None:
             return self._hist_of_im
-        if not readnoise:
-            readnoise = 5
         # Code from west_aux.py, maskgen.
 
         # Histogram bin size should be related to readnoise
+        im = self.HDUList[0].data
         hrange = (im.min(), im.max())
-        nbins = int((hrange[1] - hrange[0]) / readnoise)
+        nbins = int((hrange[1] - hrange[0]) / self.readnoise)
         hist, edges = np.histogram(im, bins=nbins,
                                    range=hrange, density=True)
         # Convert edges of histogram bins to centers
@@ -306,7 +295,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         return self._hist_of_im
 
     @property
-    def back_level(self, im, **kwargs):
+    def back_level(self):
         # Use the histogram technique to spot the bias level of the image.
         # The coronagraph creates a margin of un-illuminated pixels on the
         # CCD.  These are great for estimating the bias and scattered
@@ -317,7 +306,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         # Pass on readnoise, if supplied
         if self._back_level is not None:
             return self._back_level
-        im_hist, im_hist_centers = self.hist_of_im(im, kwargs)
+        im_hist, im_hist_centers = self.hist_of_im
         im_peak_idx = signal.find_peaks_cwt(im_hist, np.arange(10, 50))
         self._back_level = im_hist_centers[im_peak_idx[0]]
         return self._back_level
@@ -412,6 +401,7 @@ class CorObsData(ObsData):
     def __init__(self,
                  HDUList_im_or_fname=None,
                  default_ND_params=None,
+                 readnoise=5, 
                  y_center=None,
                  n_y_steps=8, # was 15
                  x_filt_width=25,
@@ -580,7 +570,8 @@ class CorObsData(ObsData):
         #log.debug('Number of saturated pixels in image: ' + str(num_sat))
 
         # Work another way to see if the ND filter has a low flux
-        im = im - self.back_level(im)
+        # Note, this assignment dereferences im from HDUList[0].data
+        im  = im - self.back_level
         
         # Get the coordinates of the ND filter
         NDc = self.ND_coords
@@ -792,7 +783,7 @@ class CorObsData(ObsData):
 
     @property
     def ND_params(self):
-        """Returns parameters which characterize the coronagraph ND filter, calculating if necessary"""
+        """Returns parameters which characterize the coronagraph ND filter, calculating if necessary.  Parameters are relative to unbinned image"""
         if self._ND_params is not None:
             return self._ND_params
 
@@ -806,19 +797,35 @@ class CorObsData(ObsData):
 
         # Trying a filter to get rid of cosmic ray hits in awkward
         # places.  Do this only for section of CCD we will be working
-        # with, since it is our most time-consuming step
-        if not self.isflat:
-            im = self.HDUList[0].data
+        # with, since it is our most time-consuming step.  Also work
+        # in our original, potentially binned image, so cosmic rays
+        # don't get blown up by unbinning
+        if self.isflat:
+            # Don't bother for flats, just unbin the image
+            im = self.HDU_unbinned()
+        else:
+            # Make a copy so we don't mess up the primary HDU (see below)
+            im = self.HDUList[0].data.copy()
             xtop = self.binned(self.ND_edges(ytop, self.default_ND_params))
             xbot = self.binned(self.ND_edges(ybot, self.default_ND_params))
-            x0 = int(np.min(xtop) - self.search_margin / self._binning[1])
-            x1 = int(np.max(xtop) + self.search_margin / self._binning[1])
+            # Get the far left and right coords, keeping in mind ND
+            # filter might be oriented CW or CCW of vertical
+            x0 = int(np.min((xbot, xtop))
+                     - self.search_margin / self._binning[1])
+            x1 = int(np.max((xbot, xtop))
+                     + self.search_margin / self._binning[1])
             x0 = np.max((0, x0))
             x1 = np.min((x1, im.shape[1]))
+            # This is the operation that messes with the array in place
             im[ytop:ybot, x0:x1] \
                 = signal.medfilt(im[ytop:ybot, x0:x1], 
                                  kernel_size=3)
-        im = self.HDU_unbinned()
+            # Unbin now that we have removed cosmic rays from the section we
+            # care about in native binning
+            im = self.HDU_unbinned(im)
+            
+        # We needed to remove cosmic rays from the unbinned version, but
+        # now we may have a copy
 
         # The general method is to take the absolute value of the
         # gradient along each row to spot the edges of the ND filter.
@@ -1072,39 +1079,30 @@ class CorObsData(ObsData):
     #
     #    if nd_pos is None:
     #        print('These are 4 numbers and nd_pos is none.')
-    def area(self, width_nd_pos, length_nd_pos, variable=True):
-        if variable is False or variable is None:
-            print('The area of the netral density filter is ' +
-                  str(width_nd_pos * length_nd_pos) +  '.')
-        elif variable is True:
-            return str(width_nd_pos * length_nd_pos)
-        else:
-            raiseValueError('Use True False or None in variable')
+def area(self, width_nd_pos, length_nd_pos, variable=True):
+    if variable is False or variable is None:
+        print('The area of the netral density filter is ' +
+              str(width_nd_pos * length_nd_pos) +  '.')
+    elif variable is True:
+        return str(width_nd_pos * length_nd_pos)
+    else:
+        raiseValueError('Use True False or None in variable')
         
-    def perimeter(self, width_nd_pos,  length_nd_pos, variable=True):
-        if variable is False or variable is None:
-            print('The perimeter of the netral density filter is ' +
-                  str(width_nd_pos * 2 + 2 *  length_nd_pos) +  '.')
-        elif variable is True:
-            return str(width_nd_pos * 2 + 2 *  length_nd_pos) +  '.'
-        else:
+def perimeter(width_nd_pos,  length_nd_pos, variable=True):
+    if variable is False or variable is None:
+        print('The perimeter of the netral density filter is ' +
+              str(width_nd_pos * 2 + 2 *  length_nd_pos) +  '.')
+    elif variable is True:
+        return str(width_nd_pos * 2 + 2 *  length_nd_pos) +  '.'
+    else:
             raiseValueError('Use True False or None in variable')
             
     def VS(self,v1,value1,v2,value2,v3,value3):
         v1=value1 ; v2=value2 ; v3=value3
         return (v1, v2, v3)
 
-    # Code above was provided by Daniel R. Morgenthaler, May 2017
+# Code above was provided by Daniel R. Morgenthaler, May 2017
 
-class ReduceCorObs():
-    """Do a quick reduction of on-band off-band coronagraph image pair"""
-    
-    def __init__(self,
-                 OnBand_HDUList_im_or_fname=None,
-                 OffBand_HDUList_im_or_fname=None):
-        OnBand = CorObsData(OnBand_HDUList_im_or_fname)
-        OffBand = CorObsData(OffBand_HDUList_im_or_fname)
-        
 def get_default_ND_params(dir='.', maxcount=None):
     """Derive default_ND_params from up to maxcount flats in dir
     """
@@ -4266,45 +4264,4 @@ if __name__ == "__main__":
 # # plt.show()
 # # # Kill MaxIm
 # # #M = None
-# 
-# #print('Getting jupiter center')
-# #print(get_jupiter_center('/Users/jpmorgen/byted/xfr/2017-04-20/IPT-0032_off-band.fit'))
-# 
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0032_off-band.fit'))
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0033_off-band.fit'))
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0034_off-band.fit'))
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0035_off-band.fit'))
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0036_off-band.fit'))
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0037_off-band.fit'))
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0038_off-band.fit'))
-# # 
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0042_off-band.fit'))
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0043_off-band.fit'))
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0044_off-band.fit'))
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit'))
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0046_off-band.fit'))
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0047_off-band.fit'))
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0048_off-band.fit'))
-# # 
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0032_off-band.fit'))
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0033_off-band.fit'))
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0034_off-band.fit'))
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0035_off-band.fit'))
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0036_off-band.fit'))
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0037_off-band.fit'))
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0038_off-band.fit'))
-# # 
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0042_off-band.fit'))
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0043_off-band.fit'))
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0044_off-band.fit'))
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit'))
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0046_off-band.fit'))
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0047_off-band.fit'))
-# # print(nd_center('/data/io/IoIO/raw/2017-04-20/IPT-0048_off-band.fit'))
-# #ND=NDData('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit')
-# #print(ND.get_ND_params())
-# 
-# #print(get_jupiter_center('/data/io/IoIO/raw/2017-04-20/IPT-0045_off-band.fit'))
-#O = CorObsData('/data/io/IoIO/raw/2018-05-05/R_010.fits')
-
 

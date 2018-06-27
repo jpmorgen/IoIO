@@ -3741,7 +3741,298 @@ not tracking or alt < horizon limit
 
 Sat May 12 07:34:15 2018 EDT  jpmorgen@snipe
 
---> Add an exit script that turns off guiding and does anything else
+Add an exit script that turns off guiding and does anything else.  I
+think the Application.ShutDownObservatory() does that
 
-Sat May 12 20:00:18 2018 EDT  jpmorgen@snipe
+--> Consider having a check for the exposure time and brightness.  Or
+    justr a time for nautical twighlight end 
+
+Sun May 13 01:38:13 2018 EDT  jpmorgen@snipe
+
+Flip
+
+Focus at 3.74 stilll!
+
+05:39:37   Position = 34884  Mean HFD =  3.22
+05:39:37   Temperature = 17.69
+
+Tmp comp back on
+
+Sun May 13 06:03:26 2018 EDT  jpmorgen@snipe
+
+Temp comp still active
+
+Sun May 13 07:56:09 2018 EDT  jpmorgen@snipe
+
+Shutdown script didn't work, but it was called
+
+--> Maybe because reset wasn't pushed?  In that case I don't want to
+    rely on it.  Indeed, when I pressed reset, it automatically
+    started to shutdown
+
+
+Temp comp still enabled
+
+Something I did popped Temp comp off.  Possibly closing Focus Max 
+
+Wed Jun 06 21:57:40 2018 EDT  jpmorgen@snipe
+
+DEBUG: Setting to: [ 367.71538329  277.39762213] [__main__]
+DEBUG: guider AV, RMS = (3.8042393480279619, 6.00234083938083) [__main__]
+ERROR: Horizon limit reached [__main__]
+ERROR: GuideBoxMover: Horizon limit reached [__main__]
+DEBUG: Saved file: C:\Users\PLANETARY SCIENCE\Desktop\IoIO\data\2018-06-06\Na_off-band_011.fits [__main__]
+DEBUG: Horizon limit reached [__main__]
+
+--> Didn't shutdown
+
+Mon Jun 11 10:11:17 2018 EDT  jpmorgen@snipe
+
+Looking at tweaking read_im to work more generally.  Right now it is
+all intertwined.  I could still run some of the tests I need in the
+method read_im while having a general get_HDU routine at the top level.
+
+Tue Jun 12 21:02:27 2018 EDT  jpmorgen@snipe
+
+median filtering was happening in the wrong places for ND_params
+
+--> not being consistent about whether or not HDUList[0].data is being
+    used for work or if a scratch copy should be maintained
+
+cd ~/py/IoIO
+ioio.py ND_params_tree >& /data/io/IoIO/analysis/ND_params_tree.log &
+
+Hmm.  That seems to be not in order
+
+Total elapsed time: 52060.81957936287s
+20294 obj files took 50086.02242708206s
+Average time per file: 0.4051829036642928s
+Total torus: 4003
+Total Na: 1091
+
+Same average per file even though I increased the copying and amount
+of median filtering
+
+Wed Jun 13 15:25:52 2018 EDT  jpmorgen@snipe
+
+JPL horizons astropy!
+
+http://astroquery.readthedocs.io/en/latest/jplhorizons/jplhorizons.html
+
+from astroquery.jplhorizons import Horizons
+
+https://github.com/astropy/astroquery
+
+su
+pip3 install astroquery
+
+Wed Jun 13 21:34:14 2018 EDT  jpmorgen@snipe
+
+http://photutils.readthedocs.io/en/stable/aperture.html
+
+is another one I could use to do aperture photometry on Juptier to get
+accurate scaling
+
+Fri Jun 15 13:36:35 2018 EDT  jpmorgen@snipe
+
+thinking with Daniel about how to break up ioio.py since with these
+new analysis modules, things are going to get complicated.
+
+Doing a test with define.py which suggests that when you do
+
+from define import wait
+
+the entire module is read in.  Reading
+https://stackoverflow.com/questions/3162810/stop-evaluation-within-a-module
+gives me the idea of breaking things up into more modules.
+
+PrecisionGuide needs to have ObsData as an object.  When I use ObsData
+in reduction code, it should be
+
+from PrecisionGuide import ObsData
+
+The problem with that is the win32 stuff.  But wait a minute.  Is
+MaxImData the only thing that uses the win32?  YES!  But
+PrecisionGuide uses MaxIm data, so we are back to square 1
+
+Ah, but maybe I can use an exception.
+
+Tue Jun 19 11:26:47 2018 EDT  jpmorgen@snipe
+
+Indeed, exception works!
+
+Rearranged some things so I can start to import things on snipe for
+reduction and analysis that don't get in the way of PrecisionGuide on
+IoIO1U1
+
+I would like to think about what to do with raw_data_root, since I am
+now using it in three places.
+
+Revisiting the wisdom of having MaxImData separate.  It is really part
+of PrecisionGuide, just like ObsData.  Someone could use it
+separately, but that is just a from PrecisionGuide import MaxImData.
+The point is PrecisionGuide could have a chooser which for now is just
+hard-coded stuff.  Right now the names are in
+PrecisionGuide.raw_data_root, etc.  If I do a real ASCOM chooser, that
+will depend on win32com.client, I think.  But that is only for the
+ASCOM stuff.  raw_data_root has two purposes.  Storage of astrometry,
+which could be in the same Windows directory that chooser stuff is
+stored.  And then the general stuff for data storage, which could
+eventually be split out, which I essentially do.
+
+So the question is, do I need an object to do all of this or are
+properties OK.  Go with the property for now.  Objects can set
+property
+
+
+Tue Jun 19 18:47:01 2018 EDT  jpmorgen@snipe
+
+Here is an idea for making a movie
+
+http://zulko.github.io/blog/2014/11/29/data-animations-with-python-and-moviepy/
+
+So that suggests I have make_frame (or whatever the "iterator") would
+be somewhere that has access to all of the reduced images.  I make a
+VideoClip object (e.g. animation) and then write it in whatever format
+I want.
+
+The flow would be for me to reduce things to FITS files first, since
+that is likely to take a while.  Then the thing would be how to best
+display and 
+
+Matplotlib has animation, but blog claims moviepy is better
+
+numpy arrays go directly to MoviePy.  See jpm_fns for scaling, which
+is really good news!  I do it in the np array
+
+So for doing the animation, I don't really need objects, I just need
+some code segments.  For doing the collapsing, as well, I don't see
+the need for an object right now.  Though I could potentially do the
+reduction like a cache.  If it recognizes a file, it would read that
+for collapse, movie making, or whatever
+
+I would need to have some sort of /redo, which could be keyed to the
+reduction level automatically!
+
+So the real thing I am making is the iterator function that is going
+to return the movie frame or collapsed thing (which might eventually
+get written as a FITS extension or companion file).  But maybe I only
+want part of that.  As in the make_frame would be something that
+called the read/reduction code.
+
+Hmm.  That is a nice idea, but I won't necessarily know the name of
+the reduced file + there are decisions during reduction to limit bad
+ones....
+
+Thu Jun 21 13:47:32 2018 EDT  jpmorgen@snipe
+
+I want to be able to flip the images properly, but maybe first make
+the movie, since one frame of that gives me the proper orientation
+compared to Nick's image
+
+pip3 install moviepy
+
+Fri Jun 22 10:47:52 2018 EDT  jpmorgen@snipe
+
+OK, when PIERSIDE = 'WEST' things seem to match Nick's picture, but
+that doens't make it right
+
+Indeed, the astrometry suggests Y is flipped
+
+--! Stopped CrashPlan from backing up /data/io/IoIO/reduced
+
+Sun Jun 24 20:50:59 2018 EDT  jpmorgen@snipe
+
+Need skikit
+
+pip3 install -U scikit-image
+
+Hmm.  Might regret that as things might break....
+
+ReduceCorObs.py movie '/data/io/IoIO/reduced/2018-04-21'
+
+That is not working.  I might need ffmpeg at the distro level
+
+Mon Jun 25 08:20:34 2018 EDT  jpmorgen@snipe
+
+ReduceCorObs.py movie '/data/io/IoIO/reduced/2018-04-21' --crop 500x250
+
+Mon Jun 25 09:14:24 2018 EDT  jpmorgen@snipe
+
+doing integral of filters so I can scale Jupiter properly.
+
+Integral of curve gives equivalent width
+
+Na = 11.22
+[SII] = 9.95
+
+ReduceCorObs.py reduce /data/io/IoIO/raw/2018-04-21
+
+ReduceCorObs.py movie '/data/io/IoIO/reduced/2018-04-21' --crop 500x250 --speedup=24000 --frame_rate=40
+
+Hmm.  I can't make the image too big because mp4 doesn't support that.
+
+640 x 360 and 640 × 480 
+
+And I don't want to do a general scaling because that would change the
+size as the array angle changes.  Dimensions are 2750*2200
+
+(2750**2+2200**2)**0.5
+3521.7183305880667
+
+(2750**2+2200**2)**0.5 / 640
+5.502684891543854
+
+c = np.asarray((1632, 1488))
+e = np.asarray((3000, 1988))
+np.linalg.norm(e - c)
+1456.5108993756278
+
+Call it 1500, so I can crop to 3000x3000
+
+3000/640
+4.6875
+3000/480
+6.25
+
+Aim for easy calc of 6
+(2750**2+2200**2)**0.5/6
+586.9530550980111
+
+480*6
+2880
+
+pip3 install --no-deps photutils
+
+Really needed -U
+
+pip3 install -U photutils
+
+ReduceCorObs.py reduce /data/io/IoIO/raw/2018-04-21
+
+Tue Jun 26 10:40:17 2018 EDT  jpmorgen@snipe
+
+Working with astroquery
+
+https://minorplanetcenter.net/iau/lists/ObsCodesF.html
+Looks like 
+V09 249.74202 0.849537 +0.526080 Moka Observatory, Benson
+might be the closest 
+
+Tue Jun 26 11:44:02 2018 EDT  jpmorgen@snipe
+
+Ack!  They don't collect everything!  They jhust collect things that
+are relevant for the position of the object in the solar system, not
+things intrinsic to the body itself
+
+Well, looking at the __init__.py in the package and seeing in the Conf
+object, which inherits from the astropy config class, the
+eph_qualities and eph_columns are defined.  Presumably I could just
+edit those
+
+Wed Jun 27 14:58:49 2018 EDT  jpmorgen@snipe
+
+--> for the reactive correction algorithm in PrecisionGuide, make an
+    emulator so I don't have to take data!
+
 
