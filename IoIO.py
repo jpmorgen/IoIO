@@ -328,8 +328,6 @@ class CorObsData(pg.ObsData):
         if self._ND_coords is not None:
             return self._ND_coords
 
-        # --> consider making this faster with coordinate math
-
         # Work with unbinned image
         xs = [] ; ys = []
         us = self.unbinned(self.oshape)

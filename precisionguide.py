@@ -8,6 +8,7 @@ import sys
 import os
 import socket
 import time
+import subprocess
 import argparse
 
 import numpy as np

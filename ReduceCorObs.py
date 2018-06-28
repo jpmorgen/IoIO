@@ -2,6 +2,7 @@
 import os
 import re
 import time
+import subprocess
 import argparse
 
 import numpy as np
@@ -15,9 +16,6 @@ from jplhorizons import Horizons
 
 import matplotlib.pyplot as plt
 import moviepy.editor as mpy
-#from moviepy.video.fx.all import loop as mpyloop
-#from moviepy.editor import VideoClip
-#from moviepy.video.io.bindings import mplfig_to_npimage
 
 from precisionguide import get_HDUList
 from IoIO import CorObsData, run_level_default_ND_params
@@ -334,7 +332,8 @@ class ReduceCorObs():
         # Tried to do this in the general case but I got confused by
         # the geometry or a rolling cube.  Plus I am not set up to
         # deal with the ND filter in the horizontal position
-        on_angle = abs(on_angle - gem_flip)
+        on_angle -= gem_flip
+        print(on_angle)
         ron_angle = np.radians(on_angle)
         # Offsets
         ND01 = header['NDPAR01']
@@ -343,17 +342,20 @@ class ReduceCorObs():
         xshift = np.dot(on_shift, np.asarray(((0,1))))
         ND01 += xshift
         ND11 += xshift
-        ND01 = (o_center[0] * np.sin(ron_angle)
+        ND01 = (o_center[0] * abs(np.sin(ron_angle))
                 + ND01 * np.cos(ron_angle))
-        ND11 = (o_center[0] * np.sin(ron_angle)
+        ND11 = (o_center[0] * abs(np.sin(ron_angle))
                 + ND11 * np.cos(ron_angle))
         header['NDPAR01'] = ND01
         header['NDPAR11'] = ND11
         # Angles
         ND00 = header['NDPAR00']
         ND10 = header['NDPAR10']
-        header['NDPAR00'] = np.tan(np.arctan(ND00) - on_angle)
-        header['NDPAR10'] = np.tan(np.arctan(ND10) - on_angle)
+        print(np.degrees(np.arctan(ND00)))
+        
+        # Tricky!  Swapped image so north is up
+        header['NDPAR00'] = -np.tan(np.arctan(ND00) + ron_angle)
+        header['NDPAR10'] = -np.tan(np.arctan(ND10) + ron_angle)
 
         # Coronagraph flips images N/S.  Transpose alert
         scat_sub_im =np.flipud(scat_sub_im)
@@ -394,13 +396,14 @@ class ReduceCorObs():
 def reduce(args):
     if args.tree is not None:
         raise ValueError('Code not written yet')
-
-    if not args.directory is None:
+    
+    if args.directory is not None:
         # Collect file names
         files = [f for f in os.listdir(args.directory)
                  if os.path.isfile(os.path.join(args.directory, f))]
 
-        # For now just put things together based on file names since IPT_Na_R
+        # For now just put things together based on file names since
+        # IPT_Na_R has been working
         SII_on_list = []
         SII_off_list = []
         Na_on_list = []
@@ -463,6 +466,13 @@ def reduce(args):
         elapsed = time.time() - start
         log.info('Elapsed time for ' + args.directory + ': ' + str(elapsed))
         log.info('Average per file: ' + str(elapsed/(n_SII+n_Na)))
+        return
+    # Reduce a pair of files -- just keep it simple
+    R = ReduceCorObs(args.on_band,
+                     args.off_band,
+                     NPang=args.NPang,
+                     default_ND_params=args.default_ND_params,
+                     overwrite=args.overwrite)
 
 class MovieCorObs():
     def __init__(self,
@@ -553,12 +563,19 @@ class MovieCorObs():
         if self.persist_im is not None:
             return self.persist_im
         # If we made it here, we need to create our image
+        # --> playing with these on 2018-04-21
+        if self.filt == '[SII]':
+            chop = 2000
+            scale_jup = 100
+        else:
+            chop = 8000
+            scale_jup = 50
         im = self.HDULcur[0].data
         O = CorObsData(self.HDULcur)
         c = (np.asarray(im.shape)/2).astype(int)
         # Scale Jupiter down by 10 to get MR/A and 10 to get
         # it on comparable scale to torus
-        im[O.ND_coords] = 100#im[O.ND_coords] 
+        im[O.ND_coords] = im[O.ND_coords] /scale_jup
         #jcrop = np.asarray((50,50))
         #ll = (c - jcrop).astype(int)
         #ur = (c + jcrop).astype(int)
@@ -569,14 +586,11 @@ class MovieCorObs():
             ur = (c + self.crop/2).astype(int)
             im = im[ll[0]:ur[0], ll[1]:ur[1]]
         # chop high pixels
-        if self.filt == '[SII]':
-            chop = 2000
-        else:
-            chop = 5000
         badc = np.where(np.logical_or(im < 0, im > chop))
         im[badc] = 0
-        # Keep it linear for now -- this accentuated noise
-        #im = exposure.equalize_adapthist(np.asarray(im/np.max(im)))
+        # Keep it linear for now on [SII] -- this accentuated noise
+        if self.filt == 'Na':
+            im = exposure.equalize_adapthist(np.asarray(im/np.max(im)))
         # Scale for mp4
         im = im/np.max(im) * 255
 
@@ -618,9 +632,6 @@ def make_movie(args):
                         args.speedup,
                         args.frame_rate,
                         args.crop)
-    #SII_movie.write_gif(os.path.join(args.directory, 
-    #                                 "SII_movie.gif"),
-    #                    fps=M_SII.frame_rate)
     M_Na = MovieCorObs(Na_on_list,
                        args.speedup,
                        args.frame_rate)
@@ -629,19 +640,61 @@ def make_movie(args):
     SII_movie.write_videofile(os.path.join(args.directory, 
                                            "SII_movie.mp4"),
                               fps=M_SII.frame_rate)
+    #SII_movie.write_gif(os.path.join(args.directory, 
+    #                                 "SII_movie.gif"),
+    #                    fps=M_SII.frame_rate)
     Na_movie = mpy.VideoClip(M_Na.make_frame, duration=duration)
     Na_movie.write_videofile(os.path.join(args.directory, 
-                                           "Na_movie.mp4"),
+                                          "Na_movie.mp4"),
                               fps=M_SII.frame_rate)
-    Na_clip = mpy.VideoFileClip(os.path.join(args.directory, 
-                                             "Na_movie.mp4"))
-    SII_clip = mpy.VideoFileClip(
-        os.path.join(args.directory,
-                     "SII_movie.mp4")).resize(height=Na_clip.h)
-    animation = mpy.clips_array([[Na_clip, SII_clip]])
-    animation.write_videofile(os.path.join(args.directory,
-                                     "Na_SII.mp4"),
-                        fps=M_SII.frame_rate)
+    #Na_clip = mpy.VideoFileClip(os.path.join(args.directory, 
+    #                                         "Na_movie.mp4"))
+    #SII_clip = mpy.VideoFileClip(
+    #    os.path.join(args.directory,
+    #                 "SII_movie.mp4")).resize(height=Na_clip.h)
+    #animation = mpy.clips_array([[Na_clip, SII_clip]])
+    #animation.write_videofile(os.path.join(args.directory, 
+    #                                      "Na_SII.mp4"),
+    #                          fps=M_SII.frame_rate)
+
+    #SII_gif_clip = mpy.VideoFileClip(
+    #    os.path.join(args.directory,
+    #                 "SII_movie.gif")).resize(height=Na_clip.h)
+
+
+    Na_SII_movie = mpy.clips_array([[Na_movie, SII_movie]])
+    Na_SII_movie.write_videofile(
+        os.path.join(args.directory, "Na_SII.mp4"),
+        fps=M_SII.frame_rate)
+
+    # For some reason I need to write out the file and read it back in
+    # to make a composite
+    Na_SII_clip = mpy.VideoFileClip(os.path.join(args.directory, 
+                                             "Na_SII.mp4"))
+    datedir = os.path.split(args.directory)[1]
+    txt = (mpy.TextClip(datedir, font="Times-Roman", fontsize=15, color='white')
+           .set_position(("center","top"))
+           .set_duration(duration)
+           .set_fps(M_SII.frame_rate))
+    #Na_SII_movie = mpy.CompositeVideoClip([NS_SII_clip, txt])
+    Na_SII_movie = mpy.CompositeVideoClip(
+        [mpy.clips_array([[Na_movie, SII_movie]]), txt])
+    Na_SII_movie.write_videofile(
+        os.path.join(args.directory, "Na_SII_titled.mp4"),
+        fps=M_SII.frame_rate)
+    #[mpy.clips_array([Na_movie, SII_movie]), txt])
+    #animation = mpy.CompositeVideoClip([SII_clip, txt])
+    #animation.write_gif(os.path.join(args.directory,
+    #                                 "Na_SII.gif"),
+    #                    fps=M_SII.frame_rate)
+    #Na_SII_movie.write_videofile(
+    #    os.path.join(args.directory, "Na_SII.mp4"),
+    #    fps=M_SII.frame_rate)
+    #Na_SII_clip = mpy.VideoFileClip(
+    #    os.path.join(args.directory, "Na_SII.mp4"))
+    #animation = mpy.CompositeVideoClip(
+    #    mpy.clips_array([[Na_clip, SII_clip]], txt))
+    
     #animation = animation.fx(mpy.vfx.loop)
     #animation = animation.fx(mpy.vfx.make_loopable, 0.5)
     #animation.write_videofile(os.path.join(args.directory,
@@ -682,6 +735,9 @@ if __name__ == "__main__":
     reduce_parser.add_argument(
         '--directory', help='Directory to process')
     reduce_parser.add_argument(
+        '--overwrite', action='store_const', const=True,
+        help='OK to overwrite files in reduced directory (note: does not remove files from previous runs!)')
+    reduce_parser.add_argument(
         'on_band', nargs='?', help='on-band filename')
     reduce_parser.add_argument(
         'off_band', nargs='?', help='off-band filename')
@@ -719,14 +775,14 @@ if __name__ == "__main__":
 #off_band = os.path.join(data_root, 'raw', '2018-04-21', 'SII_off-band_010.fits')
 #on_band = os.path.join(data_root, 'raw', '2018-04-21', 'SII_on-band_043.fits')
 #off_band = os.path.join(data_root, 'raw', '2018-04-21', 'SII_off-band_043.fits')
-on_band = os.path.join(data_root, 'raw', '2018-04-21', 'Na_on-band_011.fits')
-off_band = os.path.join(data_root, 'raw', '2018-04-21', 'Na_off-band_011.fits')
+#on_band = os.path.join(data_root, 'raw', '2018-04-21', 'Na_on-band_011.fits')
+#off_band = os.path.join(data_root, 'raw', '2018-04-21', 'Na_off-band_011.fits')
 #on_band = os.path.join(data_root, 'raw', '2018-04-21', 'Na_on-band_001.fits')
 #off_band = os.path.join(data_root, 'raw', '2018-04-21', 'Na_off-band_001.fits')
 #on_band = 'SII_on-band_010.fits'
 #off_band = 'SII_off-band_010.fits'
     
-R = ReduceCorObs(on_band, off_band, overwrite=True)
+#R = ReduceCorObs(on_band, off_band, overwrite=True)
 #HDUList = get_HDUList(on_band)
 #im = TiltImage(HDUList[0].data, .933, 16)
 #plt.imshow(im)

@@ -4035,4 +4035,19 @@ Wed Jun 27 14:58:49 2018 EDT  jpmorgen@snipe
 --> for the reactive correction algorithm in PrecisionGuide, make an
     emulator so I don't have to take data!
 
+ReduceCorObs.py reduce /data/io/IoIO/raw/2018-04-21/Na_on-band_011.fits /data/io/IoIO/raw/2018-04-21/Na_off-band_011.fits --overwrite
 
+Was thinking about going parallel at the individual file reduction
+level, but Python is so slow to load that would have too much overhead
+
+ReduceCorObs.py reduce --directory /data/io/IoIO/raw/2018-04-21
+
+ReduceCorObs.py movie '/data/io/IoIO/reduced/2018-04-21' --crop 800x800
+
+Wed Jun 27 23:03:42 2018 EDT  jpmorgen@snipe
+
+Need to get components of imagemagick to get fonts to work.
+
+apt install libmagick++-dev
+
+Still having a heck of a time with 
