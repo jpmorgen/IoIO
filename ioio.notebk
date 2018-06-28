@@ -4050,4 +4050,89 @@ Need to get components of imagemagick to get fonts to work.
 
 apt install libmagick++-dev
 
-Still having a heck of a time with 
+Still having a heck of a time with movie caption.  Turned out to be
+parentheses!  (problem with being tired)
+
+Thu Jun 28 10:09:18 2018 EDT  jpmorgen@snipe
+
+Now I need to run this on everything.  See if parallel processing
+gains me anything
+
+ReduceCorObs.py reduce --directory /data/io/IoIO/raw/2018-04-21
+ReduceCorObs.py reduce --directory /data/io/IoIO/raw/2018-04-23
+ReduceCorObs.py reduce --directory /data/io/IoIO/raw/2018-04-24
+
+Just these three.  Seems like the first one is faster, but we will see
+9s per file!  Parallel works!
+
+One crashed because of NAN in header from
+
+DEBUG: /data/io/IoIO/raw/2018-04-24/SII_on-band_028.fits [__main__]
+
+
+ReduceCorObs.py movie /data/io/IoIO/reduced/2018-04-21 --crop 600x600
+ReduceCorObs.py movie /data/io/IoIO/reduced/2018-04-23 --crop 600x600
+ReduceCorObs.py movie /data/io/IoIO/reduced/2018-04-24 --crop 600x600
+
+
+
+
+ReduceCorObs.py reduce --directory /data/io/IoIO/raw/2018-04-26
+
+In order to do parallel, I am looking at
+
+https://docs.python.org/3.5/library/multiprocessing.html#multiprocessing.pool.Pool
+
+So I have the iterable as the directory name, or if I do this at the
+individual directory level, the file name.  But I have a bunch of
+other arguments to pass.  That seems to be what the initializer and
+initargs does
+
+class multiprocessing.pool.Pool([processes[, initializer[, initargs[, maxtasksperchild[, context]]]]])
+
+So initializer is going to be something that returns something into
+the process, where the process...  No
+
+https://stackoverflow.com/questions/10117073/how-to-use-initializer-to-set-up-my-multiprocess-pool
+
+suggests that initializer and args are something that float in global
+namespace?
+
+ReduceCorObs.py movie --tree
+
+Thu Jun 28 17:05:45 2018 EDT  jpmorgen@snipe
+
+After parallelizing individual directory, time is down to 1s per file,
+~60s total.
+
+12 processors
+INFO: Average per file: 1.0895171892845024 [__main__]
+24 processors
+INFO: Average per file: 0.7718984555389922 [__main__]
+6 processors
+INFO: Average per file: 1.7209861925092793 [__main__]
+3 processors
+INFO: Average per file: 3.0761179843191373 [__main__]
+18 processors
+INFO: Average per file: 1.0278544143094854 [__main__]
+
+1 processor was about 7 -- 9 
+
+Consider going with either 12 or 24
+
+Go with 12 which was my initial default
+
+ReduceCorObs.py reduce --overwrite --movie --directory /data/io/IoIO/raw/2018-04-21
+
+
+OK, after chasing down some bugs on that, run the big one!
+
+Thu Jun 28 18:53:55 2018 EDT  jpmorgen@snipe
+
+(a few minutes late
+
+ReduceCorObs.py reduce --overwrite --movie --tree
+
+while that is working, do some work on logic of recalculation
+
+ReduceCorObs.py movie '/data/io/IoIO/reduced/2018-06-27'

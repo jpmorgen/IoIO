@@ -2,7 +2,7 @@
 import os
 import re
 import time
-import subprocess
+from multiprocessing import Pool
 import argparse
 
 import numpy as np
@@ -22,6 +22,7 @@ from IoIO import CorObsData, run_level_default_ND_params
 import define as D
 
 # Constants for use in code
+data_root = '/data/io/IoIO'
 # These are the equavalent widths of the filters in angstroms
 SII_eq_width = 9.95
 Na_eq_width = 11.22
@@ -133,7 +134,7 @@ def ND_params_dir(directory=None, default_ND_params=None):
             # Allow C-C to interrupt
             raise
         except Exception as e:
-            log.error('Skipping: ' + str(e))
+            log.error('Skipping: ' + str(e)) 
 
     elapsed = time.time() - start
 
@@ -185,8 +186,6 @@ def ND_params_tree(args):
     D.say('Total torus: ' + str(totaltorus))
     D.say('Total Na: ' + str(totalNa))
 
-data_root = '/data/io/IoIO'
-
 def TiltImage(image, ImageNorth, JupiterNorth):
     # Assuming that "0" deg is to the right and ImageNorth is "90" deg.
     # Assuming JupiterNorth is relative to ImageNorth.
@@ -217,7 +216,7 @@ class ReduceCorObs():
                  default_ND_params=None,
                  NPang=None,
                  outfname=None,
-                 overwrite=False):
+                 recalculate=False):
         # Only bother with getting NPang (Jupiter's projected north
         # pole angle relative to celestial N in deg CCW) once per
         # directory, but do that with calling program's help
@@ -225,6 +224,7 @@ class ReduceCorObs():
         OnBand_HDUList = get_HDUList(OnBand_HDUList_im_or_fname)
         header = OnBand_HDUList[0].header
         OffBand_HDUList = get_HDUList(OffBand_HDUList_im_or_fname)
+        log.debug(OnBand_HDUList.filename() + OffBand_HDUList.filename())
         # Use CorObsData to get basic properties like background level
         # and center.
         OnBandObsData = CorObsData(OnBand_HDUList,
@@ -303,14 +303,18 @@ class ReduceCorObs():
             gem_flip = 0
             
         # Calculate NPang if we weren't passed it, but store it in
-        # property so it can be used for the next file in this day
+        # property so it can be used for the next file in this day.
+        # Also truncate to the integer so that astroquery caching can
+        # work --> might want to loosen this for nth degree
+        # calculations when I am ready for those
         if NPang is None:
             # V09 is the Moca observatory at Benson, which looks like
             # the San Pedro Valley observatory
             T = Time(header['DATE-OBS'], format='fits')
+            # --> eventually I might want to be general with the object
             jup = Horizons(id=599,
                            location='V09',
-                           epochs=T.jd,
+                           epochs=np.round(T.jd),
                            id_type='majorbody')
             NPang = jup.ephemerides()['NPang'].quantity.value[0]
             self.NPang = NPang
@@ -333,7 +337,6 @@ class ReduceCorObs():
         # the geometry or a rolling cube.  Plus I am not set up to
         # deal with the ND filter in the horizontal position
         on_angle -= gem_flip
-        print(on_angle)
         ron_angle = np.radians(on_angle)
         # Offsets
         ND01 = header['NDPAR01']
@@ -351,7 +354,6 @@ class ReduceCorObs():
         # Angles
         ND00 = header['NDPAR00']
         ND10 = header['NDPAR10']
-        print(np.degrees(np.arctan(ND00)))
         
         # Tricky!  Swapped image so north is up
         header['NDPAR00'] = -np.tan(np.arctan(ND00) + ron_angle)
@@ -368,11 +370,13 @@ class ReduceCorObs():
         rawfname = OnBand_HDUList.filename()
         if rawfname is None:
             log.warning('On-band image was not associated with any filename and outfname is not specified, writing to current directory, ReducedCorObs.fits')
-            OnBand_HDUList.writeto('ReducedCorObs.fits')#, overwrite=True)
+            OnBand_HDUList.writeto('ReducedCorObs.fits',
+                                   overwrite=recalculate)
             return
         if not os.path.isabs(rawfname):
             log.warning("On-band image fname was not an absolute path and outfname is not specified.  I can't deconstruct the raw to reduced path structure, writing to current directory, ReducedCorObs.fits")
-            OnBand_HDUList.writeto('ReducedCorObs.fits')#, overwrite=True)
+            OnBand_HDUList.writeto('ReducedCorObs.fits',
+                                   overwrite=recalculate)
             return
         # If we made it here, we have the normal case of writing to
         # the reduced directory tree
@@ -391,12 +395,32 @@ class ReduceCorObs():
         redfname = os.path.join(reddir, redbasename)
 
         header['RVERSION'] = (0.0, 'Reduction version')
-        OnBand_HDUList.writeto(redfname, overwrite=overwrite)
+        OnBand_HDUList.writeto(redfname, overwrite=recalculate)
+
+# https://stackoverflow.com/questions/16878315/what-is-the-right-way-to-treat-python-argparse-namespace-as-a-dictionary
+# Trying to use
+class PoolWorker():
+    def __init__(self, function, iterable, args):
+        self.function = function
+        self.iterable = iterable
+        self.args = args
+    def worker(self, arg):
+        d = vars(self.args)
+        d[self.iterable] = arg
+        self.function(self.args)
 
 def reduce(args):
     if args.tree is not None:
-        raise ValueError('Code not written yet')
-    
+        if args.directory is None:
+            top = os.path.join(data_root, 'raw')
+        dirs = [os.path.join(top, d) for d in os.listdir(top)
+                if os.path.isdir(os.path.join(top, d))]
+        # remove --tree so our recursive call won't loop!
+        args.tree = None
+        for args.directory in reversed(sorted(dirs)):
+            reduce(args)
+        return
+
     if args.directory is not None:
         # Collect file names
         files = [f for f in os.listdir(args.directory)
@@ -428,51 +452,75 @@ def reduce(args):
             # Just return if we don't have any files
             return
     
-        if args.default_ND_params is None:
-            try:
-                default_ND_params = get_default_ND_params(args.directory)
-            except KeyboardInterrupt:
-                # Allow C-C to interrupt
-                raise
-            except Exception as e:
-                log.warning('Problem with flats in ' + args.directory + ': '
-                            + str(e) + '.  using run_level_default_ND_params')
-                default_ND_params = run_level_default_ND_params
+        # --> for now speed this up.  Long term, think of some
+        #    caching/configuration system 
+        default_ND_params = run_level_default_ND_params
+        #if args.default_ND_params is None:
+        #    try:
+        #        default_ND_params = get_default_ND_params(args.directory)
+        #    except KeyboardInterrupt:
+        #        # Allow C-C to interrupt
+        #        raise
+        #    except Exception as e:
+        #        log.warning('Problem with flats in ' + args.directory + ': '
+        #                    + str(e) + '.  using run_level_default_ND_params')
+        #        default_ND_params = run_level_default_ND_params
     
+        if args.NPang is None:
+            # Reading in our first file is the easiest way to get the
+            # properly formatted date for astroquery.  Use UT00:00,
+            # since astroquery caches and repeat querys for the whole
+            # day will therefore benefit
+            if len(SII_on_list) > 0:
+                HDUL = get_HDUList(SII_on_list[0])
+            else:
+                HDUL = get_HDUList(Na_on_list[0])
+            T = Time(HDUL[0].header['DATE-OBS'], format='fits')
+            jup = Horizons(id=599,
+                           location='V09',
+                           epochs=np.round(T.jd),
+                           id_type='majorbody')
+            args.NPang = jup.ephemerides()['NPang'].quantity.value[0]
+
         start = time.time()
-        count = 0
-        torus_count = 0
-        Na_count = 0
-        NPang = None
-        n_SII = np.min((len(SII_on_list), len(SII_off_list)))
-        for ip in np.arange(n_SII):
-            log.debug(SII_on_list[ip], SII_off_list[ip])
-            R = ReduceCorObs(SII_on_list[ip],
-                             SII_off_list[ip],
-                             NPang=NPang,
-                             default_ND_params=default_ND_params,
-                             overwrite=True)
-            # ReduceCorObs stores NPang since it is expensive to get, but
-            # only use it once per day, since it does change a bit
-            NPang = R.NPang
-        n_Na = np.min((len(Na_on_list), len(Na_off_list)))
-        for ip in np.arange(n_Na):
-            log.debug(Na_on_list[ip], Na_off_list[ip])
-            R = ReduceCorObs(Na_on_list[ip],
-                             Na_off_list[ip],
-                             NPang=NPang,
-                             default_ND_params=default_ND_params,
-                             overwrite=True)
+        pairs = []
+        if len(SII_on_list) > 0:
+            pairs += zip(SII_on_list, SII_off_list)
+        if len(Na_on_list) > 0:
+            pairs += zip(Na_on_list, Na_off_list)
+        # remove --directory so our recursive call won't loop! But
+        # save it for time display and movie
+        directory = args.directory
+        args.directory = None
+        W = PoolWorker(reduce, 'on_band', args)
+        with Pool(int(args.num_processes)) as p:
+            p.map(W.worker, pairs)
+
         elapsed = time.time() - start
-        log.info('Elapsed time for ' + args.directory + ': ' + str(elapsed))
-        log.info('Average per file: ' + str(elapsed/(n_SII+n_Na)))
+        log.info('Elapsed time for ' + directory + ': ' + str(elapsed))
+        log.info('Average per file: ' +
+                 str(elapsed/(len(SII_on_list)+len(Na_on_list))))
+
+        if args.movie is not None:
+            directory = directory.replace('/raw/', '/reduced/')
+            try:
+                make_movie(directory, recalculate=args.recalculate)
+            except Exception as e:
+                log.error(str(e) + ' skipping movie for ' + directory)
         return
+
     # Reduce a pair of files -- just keep it simple
-    R = ReduceCorObs(args.on_band,
-                     args.off_band,
-                     NPang=args.NPang,
-                     default_ND_params=args.default_ND_params,
-                     overwrite=args.overwrite)
+    if len(args.on_band) == 2:
+        args.off_band = args.on_band[1]
+        args.on_band = args.on_band[0]
+    try:
+        R = ReduceCorObs(args.on_band,
+                         args.off_band,
+                         NPang=args.NPang,
+                         default_ND_params=args.default_ND_params,
+                         recalculate=args.recalculate)
+    except Exception as e:
+        log.error(str(e) + ' skipping ' + args.on_band + ' ' + args.off_band)
 
 class MovieCorObs():
     def __init__(self,
@@ -571,7 +619,8 @@ class MovieCorObs():
             chop = 8000
             scale_jup = 50
         im = self.HDULcur[0].data
-        O = CorObsData(self.HDULcur)
+        # Might want to adjust edge_mask.  -5 was OK on 2018-04-21
+        O = CorObsData(self.HDULcur, edge_mask=-8)
         c = (np.asarray(im.shape)/2).astype(int)
         # Scale Jupiter down by 10 to get MR/A and 10 to get
         # it on comparable scale to torus
@@ -609,13 +658,22 @@ class MovieCorObs():
         # Thanks to https://stackoverflow.com/questions/39463019/how-to-copy-numpy-array-value-into-higher-dimensions
         self.persist_im = np.stack((im,) * 3, axis=-1)
         return self.persist_im
-               
-def make_movie(args):
-    if args.tree is not None:
-        raise ValueError('Code not written yet')
+
+def make_movie(directory,
+               recalculate=False,
+               SII_crop=None,
+               Na_crop=None,
+               frame_rate=None,
+               speedup=None):
+    # Eventually put all desired products in here, though for now this
+    # is the only one
+    if (not recalculate
+        and os.path.isfile(os.path.join(directory, "Na_SII.mp4"))):
+        log.debug('movie output file(s) exist and recalculate=False: ' + directory)
+        return
     # Collect file names
-    files = [f for f in os.listdir(args.directory)
-             if os.path.isfile(os.path.join(args.directory, f))]
+    files = [f for f in os.listdir(directory)
+             if os.path.isfile(os.path.join(directory, f))]
     SII_on_list = []
     Na_on_list = []
 
@@ -624,83 +682,68 @@ def make_movie(args):
 
     for f in sorted(files):
         if SII_on.match(f):
-            SII_on_list.append(os.path.join(args.directory, f))
+            SII_on_list.append(os.path.join(directory, f))
         if Na_on.match(f):
-            Na_on_list.append(os.path.join(args.directory, f))
+            Na_on_list.append(os.path.join(directory, f))
 
+    if len(SII_on_list) == 0 or len(Na_on_list) == 0:
+        # Just return if we don't have BOTH [SII] and Na to display
+        return
+
+    # Set our default crop here so we can handle being called with
+    # only the directory from reduce
+    if SII_crop is None:
+        SII_crop = "600x600"
     M_SII = MovieCorObs(SII_on_list,
-                        args.speedup,
-                        args.frame_rate,
-                        args.crop)
+                        speedup,
+                        frame_rate,
+                        SII_crop)
     M_Na = MovieCorObs(Na_on_list,
-                       args.speedup,
-                       args.frame_rate)
+                       speedup,
+                       frame_rate,
+                       Na_crop)
     duration = np.max((M_SII.duration, M_Na.duration))
     SII_movie = mpy.VideoClip(M_SII.make_frame, duration=duration)
-    SII_movie.write_videofile(os.path.join(args.directory, 
-                                           "SII_movie.mp4"),
-                              fps=M_SII.frame_rate)
-    #SII_movie.write_gif(os.path.join(args.directory, 
-    #                                 "SII_movie.gif"),
-    #                    fps=M_SII.frame_rate)
     Na_movie = mpy.VideoClip(M_Na.make_frame, duration=duration)
-    Na_movie.write_videofile(os.path.join(args.directory, 
-                                          "Na_movie.mp4"),
-                              fps=M_SII.frame_rate)
-    #Na_clip = mpy.VideoFileClip(os.path.join(args.directory, 
-    #                                         "Na_movie.mp4"))
-    #SII_clip = mpy.VideoFileClip(
-    #    os.path.join(args.directory,
-    #                 "SII_movie.mp4")).resize(height=Na_clip.h)
-    #animation = mpy.clips_array([[Na_clip, SII_clip]])
-    #animation.write_videofile(os.path.join(args.directory, 
-    #                                      "Na_SII.mp4"),
-    #                          fps=M_SII.frame_rate)
-
-    #SII_gif_clip = mpy.VideoFileClip(
-    #    os.path.join(args.directory,
-    #                 "SII_movie.gif")).resize(height=Na_clip.h)
-
-
-    Na_SII_movie = mpy.clips_array([[Na_movie, SII_movie]])
-    Na_SII_movie.write_videofile(
-        os.path.join(args.directory, "Na_SII.mp4"),
-        fps=M_SII.frame_rate)
-
-    # For some reason I need to write out the file and read it back in
-    # to make a composite
-    Na_SII_clip = mpy.VideoFileClip(os.path.join(args.directory, 
-                                             "Na_SII.mp4"))
-    datedir = os.path.split(args.directory)[1]
+    datedir = os.path.split(directory)[1]
     txt = (mpy.TextClip(datedir, font="Times-Roman", fontsize=15, color='white')
            .set_position(("center","top"))
            .set_duration(duration)
            .set_fps(M_SII.frame_rate))
-    #Na_SII_movie = mpy.CompositeVideoClip([NS_SII_clip, txt])
     Na_SII_movie = mpy.CompositeVideoClip(
         [mpy.clips_array([[Na_movie, SII_movie]]), txt])
     Na_SII_movie.write_videofile(
-        os.path.join(args.directory, "Na_SII_titled.mp4"),
+        os.path.join(directory, "Na_SII.mp4"),
         fps=M_SII.frame_rate)
-    #[mpy.clips_array([Na_movie, SII_movie]), txt])
-    #animation = mpy.CompositeVideoClip([SII_clip, txt])
-    #animation.write_gif(os.path.join(args.directory,
-    #                                 "Na_SII.gif"),
-    #                    fps=M_SII.frame_rate)
-    #Na_SII_movie.write_videofile(
-    #    os.path.join(args.directory, "Na_SII.mp4"),
-    #    fps=M_SII.frame_rate)
-    #Na_SII_clip = mpy.VideoFileClip(
-    #    os.path.join(args.directory, "Na_SII.mp4"))
-    #animation = mpy.CompositeVideoClip(
-    #    mpy.clips_array([[Na_clip, SII_clip]], txt))
-    
-    #animation = animation.fx(mpy.vfx.loop)
-    #animation = animation.fx(mpy.vfx.make_loopable, 0.5)
-    #animation.write_videofile(os.path.join(args.directory,
-    #                                 "Na_SII_loop.mp4"),
+    # Since I am going for dual-display, no need to spend time writing these
+    #SII_movie.write_videofile(os.path.join(directory, 
+    #                                       "SII_movie.mp4"),
+    #                          fps=M_SII.frame_rate)
+    #Na_movie.write_videofile(os.path.join(directory, 
+    #                                      "Na_movie.mp4"),
     #                          fps=M_SII.frame_rate)
   
+def movie_cmd(args):
+    if args.tree is not None:
+        if args.directory is None:
+            top = os.path.join(data_root, 'reduced')
+        dirs = [os.path.join(top, d) for d in os.listdir(top)
+                if os.path.isdir(os.path.join(top, d))]
+        # https://stackoverflow.com/questions/5067604/determine-function-name-from-within-that-function-without-using-traceback
+        # remove --tree so our recursive call won't loop!
+        args.tree = None
+        W = PoolWorker(movie_cmd, 'directory', args)
+        with Pool(int(args.num_processes)) as p:
+            p.map(W.worker, dirs)
+        return
+    assert args.directory is not None
+    make_movie(args.directory,
+               recalculate=args.recalculate,
+               SII_crop=args.SII_crop,
+               Na_crop=args.Na_crop,
+               frame_rate=args.frame_rate,
+               speedup=args.speedup)
+
 if __name__ == "__main__":
     log.setLevel('DEBUG')
     parser = argparse.ArgumentParser(
@@ -731,18 +774,23 @@ if __name__ == "__main__":
         '--tree', action='store_const', const=True,
         help='Reduce all data files in tree rooted at directory')
     reduce_parser.add_argument(
+        '--num_processes', type=int, default=os.cpu_count()/2, help='number of subprocesses for parallelization')
+    reduce_parser.add_argument(
         '--default_ND_params', help='Default ND filter parameters to use')
     reduce_parser.add_argument(
         '--directory', help='Directory to process')
     reduce_parser.add_argument(
         '--overwrite', action='store_const', const=True,
-        help='OK to overwrite files in reduced directory (note: does not remove files from previous runs!)')
+        help='recalculate and overwrite files in reduced directory')
     reduce_parser.add_argument(
         'on_band', nargs='?', help='on-band filename')
     reduce_parser.add_argument(
         'off_band', nargs='?', help='off-band filename')
     reduce_parser.add_argument(
         '--NPang', help="Target's projected north pole angle relative to celestial N in deg CCW")
+    reduce_parser.add_argument(
+        '--movie', action='store_const', const=True,
+        help="Create movie when done")
     reduce_parser.set_defaults(func=reduce)
 
     movie_parser = subparsers.add_parser(
@@ -751,14 +799,22 @@ if __name__ == "__main__":
         '--tree', action='store_const', const=True,
         help='Makes a movie out of all of the files in the tree (unless there is already a movie).')
     movie_parser.add_argument(
+        '--recalculate', action='store_const', const=True,
+        help='recalculate and overwrite files in reduced directory')
+    movie_parser.add_argument(
+        '--num_processes', type=int, default=os.cpu_count()/2,
+        help='number of subprocesses for parallelization')
+    movie_parser.add_argument(
         '--speedup', type=int, help='Factor to speedup time.')
     movie_parser.add_argument(
         '--frame_rate', type=int, help='Video frame rate (frames/s).')
     movie_parser.add_argument(
-        '--crop', help='Format: 600x300 (X by Y)')
+        '--SII_crop', help='[SII] image crop, format: 600x300 (X by Y)')
     movie_parser.add_argument(
-        'directory', help='Directory to process')
-    movie_parser.set_defaults(func=make_movie)
+        '--Na_crop', help='Na image crop, format: 600x300 (X by Y)')
+    movie_parser.add_argument(
+        'directory', nargs='?', help='Directory to process')
+    movie_parser.set_defaults(func=movie_cmd)
 
     # Final set of commands that makes argparse work
     args = parser.parse_args()
