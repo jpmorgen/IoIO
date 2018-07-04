@@ -14,6 +14,7 @@ from astropy.time import Time, TimeDelta
 from jplhorizons import Horizons
 #from photutils import CircularAperture, aperture_photometry
 
+import ccdproc
 import matplotlib.pyplot as plt
 import moviepy.editor as mpy
 
@@ -31,6 +32,8 @@ Na_eq_width = 11.22
 # magnitude of the problem
 SII_on_loss = 1
 Na_on_loss = 0.8
+global_frame_rate = 20
+movie_edge_mask = 12
 
 background_light_threshold = 100 # ADU
 
@@ -217,14 +220,46 @@ class ReduceCorObs():
                  NPang=None,
                  outfname=None,
                  recalculate=False):
+        # Let these raise errors if our inputs have problems
+        OnBand_HDUList = get_HDUList(OnBand_HDUList_im_or_fname)
+        OffBand_HDUList = get_HDUList(OffBand_HDUList_im_or_fname)
+        log.debug(OnBand_HDUList.filename() + OffBand_HDUList.filename())
+        # Check to see if we want to recalculate & overwrite.  Do this
+        # in general so we can be called at any directory level
+        # (though see messages for issues)
+        header = OnBand_HDUList[0].header
+        if outfname is None:
+            rawfname = OnBand_HDUList.filename()
+            if rawfname is None:
+                log.warning('On-band image was not associated with any filename and outfname is not specified, writing to current directory, ReducedCorObs.fits')
+                outfname = 'ReducedCorObs.fits'
+            elif not os.path.isabs(rawfname):
+                log.warning("Outfname not specified and on-band image fname was not an absolute path and outfname is not specified.  I can't deconstruct the raw to reduced path structure, writing to current directory, ReducedCorObs.fits")
+                outfname = 'ReducedCorObs.fits'
+            else:
+                # We should be in our normal directory structure
+                basename = os.path.basename(rawfname)
+                # Insert "r" so no collisions are possible
+                (fbase, ext) = os.path.splitext(basename)
+                redbasename = fbase + 'r' + ext
+                # --! This is an assumtion
+                rawdatepath = os.path.dirname(rawfname)
+                datedir = os.path.split(rawdatepath)[1]
+                red_data_root = os.path.join(data_root, 'reduced')
+                reddir = os.path.join(data_root, 'reduced', datedir)
+                outfname = os.path.join(reddir, redbasename)
+
+        # Return if we have nothing to do.
+        if (not recalculate
+            and os.path.isfile(outfname)):
+            log.debug('output file exist and recalculate=False: '
+                      + outfname)
+            return
+
         # Only bother with getting NPang (Jupiter's projected north
         # pole angle relative to celestial N in deg CCW) once per
         # directory, but do that with calling program's help
         self.NPang = NPang
-        OnBand_HDUList = get_HDUList(OnBand_HDUList_im_or_fname)
-        header = OnBand_HDUList[0].header
-        OffBand_HDUList = get_HDUList(OffBand_HDUList_im_or_fname)
-        log.debug(OnBand_HDUList.filename() + OffBand_HDUList.filename())
         # Use CorObsData to get basic properties like background level
         # and center.
         OnBandObsData = CorObsData(OnBand_HDUList,
@@ -249,6 +284,14 @@ class ReduceCorObs():
         # Get ready to shift off-band image to match on-band image
         on_center = OnBandObsData.obj_center
         off_center = OffBandObsData.obj_center
+        if (np.linalg.norm(on_center - OnBandObsData.desired_center)
+            > 20):
+            log.error('on-band image too far away from desired center')
+            return
+        if (np.linalg.norm(off_center - OffBandObsData.desired_center)
+            > 20):
+            log.error('dd-band image too far away from desired center')
+            return
         shift_off = on_center - off_center
         if np.linalg.norm(shift_off) > 5:
             log.warning('On- and off-band image centers are > 5 pixels apart')
@@ -318,8 +361,8 @@ class ReduceCorObs():
                            id_type='majorbody')
             NPang = jup.ephemerides()['NPang'].quantity.value[0]
             self.NPang = NPang
-            # --> handle astrometry in a more general way.  -0.933 is for 2018
-            # Save off original center of image for NDparams update, below
+        # --> handle astrometry in a more general way.  -0.933 is for 2018
+        # Save off original center of image for NDparams update, below
         o_center = np.asarray(scat_sub_im.shape)/2
         on_shift = o_center - OnBandObsData.obj_center
         # interpolation.rotate rotates CW for positive angle
@@ -364,38 +407,12 @@ class ReduceCorObs():
 
         # Get ready to write
         OnBand_HDUList[0].data = scat_sub_im
-        if outfname is not None:
-            OnBand_HDUList.writeto(outfname)
-            return
-        rawfname = OnBand_HDUList.filename()
-        if rawfname is None:
-            log.warning('On-band image was not associated with any filename and outfname is not specified, writing to current directory, ReducedCorObs.fits')
-            OnBand_HDUList.writeto('ReducedCorObs.fits',
-                                   overwrite=recalculate)
-            return
-        if not os.path.isabs(rawfname):
-            log.warning("On-band image fname was not an absolute path and outfname is not specified.  I can't deconstruct the raw to reduced path structure, writing to current directory, ReducedCorObs.fits")
-            OnBand_HDUList.writeto('ReducedCorObs.fits',
-                                   overwrite=recalculate)
-            return
-        # If we made it here, we have the normal case of writing to
-        # the reduced directory tree
-        basename = os.path.basename(rawfname)
-        # Insert "r" so no collisions are possible
-        (fbase, ext) = os.path.splitext(basename)
-        redbasename = fbase + 'r' + ext
-        rawdatepath = os.path.dirname(rawfname)
-        datedir = os.path.split(rawdatepath)[1]
-        red_data_root = os.path.join(data_root, 'reduced')
+        header['RVERSION'] = (0.0, 'Reduction version')
         if not os.path.exists(red_data_root):
             os.mkdir(red_data_root)
-        reddir = os.path.join(data_root, 'reduced', datedir)
         if not os.path.exists(reddir):
             os.mkdir(reddir)
-        redfname = os.path.join(reddir, redbasename)
-
-        header['RVERSION'] = (0.0, 'Reduction version')
-        OnBand_HDUList.writeto(redfname, overwrite=recalculate)
+        OnBand_HDUList.writeto(outfname, overwrite=recalculate)
 
 # https://stackoverflow.com/questions/16878315/what-is-the-right-way-to-treat-python-argparse-namespace-as-a-dictionary
 # Trying to use
@@ -502,6 +519,8 @@ def reduce(args):
                  str(elapsed/(len(SII_on_list)+len(Na_on_list))))
 
         if args.movie is not None:
+            # We can be lazy here, since we know our directory
+            # structure and OS
             directory = directory.replace('/raw/', '/reduced/')
             try:
                 make_movie(directory, recalculate=args.recalculate)
@@ -538,7 +557,7 @@ class MovieCorObs():
         if self.speedup is None:
             self.speedup = 24000
         if self.frame_rate is None:
-            self.frame_rate=40
+            self.frame_rate=global_frame_rate
         if crop is None:
             # We need to make sure our image isn't too big for the mp4
             self.crop = 4*self.mp4shape
@@ -594,7 +613,7 @@ class MovieCorObs():
             self.dt_cur = (T - self.Tstart).sec
         if self.fnum < len(self.flist) - 1:
             self.HDUNext = get_HDUList(self.flist[self.fnum + 1])
-            T = Time(self.HDULcur[0].header['DATE-OBS'], format='fits')
+            T = Time(self.HDUNext[0].header['DATE-OBS'], format='fits')
             self.dt_next = (T - self.Tstart).sec
         else:
             self.HDUNext = None
@@ -620,7 +639,7 @@ class MovieCorObs():
             scale_jup = 50
         im = self.HDULcur[0].data
         # Might want to adjust edge_mask.  -5 was OK on 2018-04-21
-        O = CorObsData(self.HDULcur, edge_mask=-8)
+        O = CorObsData(self.HDULcur, edge_mask=movie_edge_mask)
         c = (np.asarray(im.shape)/2).astype(int)
         # Scale Jupiter down by 10 to get MR/A and 10 to get
         # it on comparable scale to torus
@@ -639,9 +658,10 @@ class MovieCorObs():
         im[badc] = 0
         # Keep it linear for now on [SII] -- this accentuated noise
         if self.filt == 'Na':
+            #--> try adjust_log here
             im = exposure.equalize_adapthist(np.asarray(im/np.max(im)))
-        # Scale for mp4
-        im = im/np.max(im) * 255
+            # Logarithmic brights out the noise no matter what
+            #im = exposure.adjust_log(np.asarray(im), gain=0.25)
 
         # mp4 wants to be 640 x 360 or 640 × 480
         # Note transpose space for C-style language
@@ -649,8 +669,13 @@ class MovieCorObs():
         if np.any(scale > 1):
             scale = np.max(scale)
             im = ndimage.zoom(im, 1/scale, order=0)
-            
-        ## DEBUGGING
+        # Scale pixel values for mp4
+        im = im/np.max(im) * 255
+        # MP4 thinks of pixels coordinates in the X-Y Cartesian sense,
+        # but filing in from the top down
+        im = np.flipud(im)
+
+        # DEBUGGING
         #impl = plt.imshow(im, origin='lower',
         #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
         #plt.show()
@@ -665,11 +690,12 @@ def make_movie(directory,
                Na_crop=None,
                frame_rate=None,
                speedup=None):
-    # Eventually put all desired products in here, though for now this
-    # is the only one
+    # Return if we have nothing to do.  Eventually put all desired
+    # products in here, though for now this is the only one
     if (not recalculate
         and os.path.isfile(os.path.join(directory, "Na_SII.mp4"))):
-        log.debug('movie output file(s) exist and recalculate=False: ' + directory)
+        log.debug('movie output file(s) exist and recalculate=False: '
+                  + directory)
         return
     # Collect file names
     files = [f for f in os.listdir(directory)
@@ -706,7 +732,10 @@ def make_movie(directory,
     SII_movie = mpy.VideoClip(M_SII.make_frame, duration=duration)
     Na_movie = mpy.VideoClip(M_Na.make_frame, duration=duration)
     datedir = os.path.split(directory)[1]
-    txt = (mpy.TextClip(datedir, font="Times-Roman", fontsize=15, color='white')
+    # Needed to get full libmagick++-dev package and edit /etc/ImageMagick-6/policy.xml to comment out <policy domain="path" rights="none" pattern="@*" />
+    # https://askubuntu.com/questions/873112/imagemagick-cannot-be-detected-by-moviepy
+    txt = (mpy.TextClip('Io Input/Output Facility (IoIO)\n' + datedir,
+                        font="Times-Roman", fontsize=15, color='white')
            .set_position(("center","top"))
            .set_duration(duration)
            .set_fps(M_SII.frame_rate))
@@ -724,17 +753,30 @@ def make_movie(directory,
     #                          fps=M_SII.frame_rate)
   
 def movie_cmd(args):
-    if args.tree is not None:
-        if args.directory is None:
+    if args.tree is not None or args.concatenate is not None:
+        top = args.directory
+        if top is None:
             top = os.path.join(data_root, 'reduced')
-        dirs = [os.path.join(top, d) for d in os.listdir(top)
+        dirs = [os.path.join(top, d) for d in sorted(os.listdir(top))
                 if os.path.isdir(os.path.join(top, d))]
-        # https://stackoverflow.com/questions/5067604/determine-function-name-from-within-that-function-without-using-traceback
-        # remove --tree so our recursive call won't loop!
-        args.tree = None
-        W = PoolWorker(movie_cmd, 'directory', args)
-        with Pool(int(args.num_processes)) as p:
-            p.map(W.worker, dirs)
+        if args.tree is not None:
+            # remove --tree so our recursive call won't loop!
+            args.tree = None
+            W = PoolWorker(movie_cmd, 'directory', args)
+            with Pool(int(args.num_processes)) as p:
+                p.map(W.worker, dirs)
+            return
+        # Concatenate.  If we call this, --recalculate is assumed
+        clips = [mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
+                 for d in dirs
+                 if not ('cloudy' in d
+                         or 'marginal' in d)]
+        animation = mpy.concatenate_videoclips(clips)
+        animation.write_videofile(os.path.join(top, 'Na_SII.mp4'),
+                            fps=global_frame_rate)
+        #animation.write_gif(os.path.join(top, 'Na_SII.gif'),
+        #                    fps=global_frame_rate)
+        
         return
     assert args.directory is not None
     make_movie(args.directory,
@@ -745,6 +787,8 @@ def movie_cmd(args):
                speedup=args.speedup)
 
 if __name__ == "__main__":
+    # --> Figure out how to do this with a command-line switch that
+    # --> works for everything
     log.setLevel('DEBUG')
     parser = argparse.ArgumentParser(
         description="IoIO-related instrument image reduction")
@@ -780,7 +824,7 @@ if __name__ == "__main__":
     reduce_parser.add_argument(
         '--directory', help='Directory to process')
     reduce_parser.add_argument(
-        '--overwrite', action='store_const', const=True,
+        '--recalculate', action='store_const', const=True,
         help='recalculate and overwrite files in reduced directory')
     reduce_parser.add_argument(
         'on_band', nargs='?', help='on-band filename')
@@ -796,11 +840,14 @@ if __name__ == "__main__":
     movie_parser = subparsers.add_parser(
         'movie', help='Makes a movie of the Io plasma torus')
     movie_parser.add_argument(
+        '--recalculate', action='store_const', const=True,
+        help='recalculate and overwrite files in reduced directory')
+    movie_parser.add_argument(
         '--tree', action='store_const', const=True,
         help='Makes a movie out of all of the files in the tree (unless there is already a movie).')
     movie_parser.add_argument(
-        '--recalculate', action='store_const', const=True,
-        help='recalculate and overwrite files in reduced directory')
+        '--concatenate', action='store_const', const=True,
+        help='concatenate all movies in directories below directory (default is top-level reduced.  --recalculate is implied')
     movie_parser.add_argument(
         '--num_processes', type=int, default=os.cpu_count()/2,
         help='number of subprocesses for parallelization')
@@ -835,10 +882,12 @@ if __name__ == "__main__":
 #off_band = os.path.join(data_root, 'raw', '2018-04-21', 'Na_off-band_011.fits')
 #on_band = os.path.join(data_root, 'raw', '2018-04-21', 'Na_on-band_001.fits')
 #off_band = os.path.join(data_root, 'raw', '2018-04-21', 'Na_off-band_001.fits')
+#on_band = os.path.join(data_root, 'raw', '2018-03-28', 'SII_on-band_010.fits')
+#off_band = os.path.join(data_root, 'raw', '2018-03-28', 'SII_off-band_010.fits')
 #on_band = 'SII_on-band_010.fits'
 #off_band = 'SII_off-band_010.fits'
     
-#R = ReduceCorObs(on_band, off_band, overwrite=True)
+#R = ReduceCorObs(on_band, off_band, recalculate=True)
 #HDUList = get_HDUList(on_band)
 #im = TiltImage(HDUList[0].data, .933, 16)
 #plt.imshow(im)
