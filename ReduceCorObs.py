@@ -35,47 +35,71 @@ SII_on_loss = 1
 Na_on_loss = 0.8
 global_frame_rate = 20
 movie_edge_mask = 12
-
+# Hyperthreading is a little optimistic reporting two full processes
+# per core.  Just stick with one process per core
+threads_per_core = 2
 background_light_threshold = 100 # ADU
 
-def get_default_ND_params(directory='.', maxcount=None):
-    """Derive default_ND_params from up to maxcount flats in directory
+def get_filt_name(collection, line=None, on_band=False, off_band=False):
+    assert line is not None
+    assert on_band + off_band == 1
+    filt_names = collection.values('filter', unique=True)
+    line_assocs = [('[SII]', '6731'), ('Na', '5890')]
+    line_assoc = [la for la in line_assocs
+                  if line in la]
+    if on_band:
+        filt = [f for f in filt_names
+                if (line[0] in f
+                    and (line[1] in f
+                         or ("on" in f
+                             and not "cont" in f)))]
+    elif off_band:
+        filt = [f for f in filt_names
+                    if (line[0] in f
+                        and ("cont" in f
+                             or "off" in f))]
+    else:
+        raise ValueError('either on_band or off_band must be True')
+    return filt[0]
+
+        
+def get_ND_params_1flat(fname):
+    iter_ND_params = None
+    try:
+        # Iterate to get independent default_ND_params for each flat
+        default_ND_params = None
+        for i in np.arange(3):
+            F = CorObsData(fname, default_ND_params=iter_ND_params)
+            iter_ND_params = F.ND_params
+    except ValueError as e:
+        log.error('Skipping: ' + fname + '. ' + str(e))
+    return iter_ND_params
+
+def get_default_ND_params(directory='.',
+                          collection=None,
+                          maxcount=None,
+                          num_processes=None):
+    """Derive default_ND_params from up to maxcount flats in directory.  Returns None if no (good) flats are found
     """
     if not os.path.isdir(directory):
         raise ValueError("Specify directory to search for flats and derive default_ND_params")
     if maxcount is None:
         maxcount = 10
-
-    files = [f for f in os.listdir(directory)
-             if os.path.isfile(os.path.join(directory, f))]
-
-    flats = []
-    for f in sorted(files):
-        if 'flat' in f.lower():
-            flats.append(os.path.join(directory, f))
-
-    # Create default_ND_params out of the flats in this directory.
-    ND_params_list = []
-    # Just do 10 flats
-    for fcount, f in enumerate(flats):
-        try:
-            # Iterate to get independent default_ND_params for
-            # each flat
-            default_ND_params = None
-            for i in np.arange(3):
-                F = CorObsData(f, default_ND_params=default_ND_params)
-                default_ND_params = F.ND_params
-        except ValueError as e:
-            log.error('Skipping: ' + f + '. ' + str(e))
-            continue
-        ND_params_list.append(default_ND_params)
-        if fcount >= maxcount:
-            break
+    if num_processes is None:
+        num_processes=int(os.cpu_count()/threads_per_core)
+    if collection is None:
+        collection = ccdproc.ImageFileCollection(directory)
+    flats = collection.files_filtered(imagetyp='FLAT', include_path=True)
+    if len(flats) == 0:
+        return None
+    maxcount = np.min((len(flats), maxcount))
+    # Do this in parallel for speed :-)
+    with Pool(processes=num_processes) as p:
+        ND_params_list = p.map(get_ND_params_1flat, flats[0:maxcount])
+    ND_params_list = [p for p in ND_params_list
+                      if p is not None]
     if len(ND_params_list) == 0:
-        raise ValueError('No good flats found in ' + directory)
-
-    # If we made it here, we have a decent list of ND_params.  Now
-    # take the median to create a really nice default_ND_params
+        return None
     ND_params_array = np.asarray(ND_params_list)
     default_ND_params \
         = ((np.median(ND_params_array[:, 0, 0]),
@@ -438,53 +462,62 @@ def reduce(args):
                 if os.path.isdir(os.path.join(top, d))]
         # remove --tree so our recursive call won't loop!
         args.tree = None
+        # Handling default_ND_params is a little more unpleasant.  We
+        # want each directory to handle its own default_ND_params, but
+        # we also want to have a persistent value around in case flats
+        # weren't taken.  Be polite in case user passed in
+        # args.default_ND_params and then use
+        # persistent_default_ND_params as the flag if that was not the
+        # case
+        persistent_default_ND_params = None
         for args.directory in reversed(sorted(dirs)):
+            if args.default_ND_params is None:
+                # We usually expect this, since we are going to run on
+                # a wide range of directories with different ND
+                # parameters
+                default_ND_params \
+                    = get_default_ND_params(args.directory,
+                                            collection)
+                if (default_ND_params is None
+                    and persistent_default_ND_params is None):
+                    # First time through no flats.  Presumably this is
+                    # recent data from the current run
+                    default_ND_params = run_level_default_ND_params
+                elif (default_ND_params is None
+                      and persistent_default_ND_params is not None):
+                    # No flats in current directory, use previous value
+                    default_ND_params = persistent_default_ND_params
+                args.default_ND_params = default_ND_params
+                persistent_default_ND_params = default_ND_params
             reduce(args)
+            if persistent_default_ND_params is not None:
+                # Reset to state on initial call for the next time
+                # through the loop
+                args.default_ND_params = None
         return
 
     if args.directory is not None:
         collection = ccdproc.ImageFileCollection(args.directory)
+        if args.default_ND_params is None:
+            default_ND_params \
+                = get_default_ND_params(args.directory,
+                                        collection)
         summary_table = collection.summary
         # Prepare to change our filter names from specific values and
         # wavelengths to abstract on-band and off-band (ask around if
         # this is wise)
         filt_names = collection.values('filter', unique=True)
         line_names = ['[SII]', 'Na']
-        lines = [('[SII]', '6731'), ('Na', '5890')]
         on_off_pairs = []
-        for line in lines:
-            print(line)
-            on_filt = [f for f in filt_names
-                       if (line[0] in f
-                           and (line[1] in f
-                                or ("on" in f
-                                    and not "cont" in f)))][0]
-            off_filt = [f for f in filt_names
-                        if (line[0] in f
-                            and ("cont" in f
-                                 or "off" in f))][0]
+        for line in line_names:
+            on_filt = get_filt_name(collection, line, on_band=True)
+            off_filt = get_filt_name(collection, line, off_band=True)
             on_idx = [i for i, l in enumerate(summary_table)
                       if (l['filter'] == on_filt
                           and l['imagetyp'].lower() == 'light')]
             off_idx = [i for i, l in enumerate(summary_table)
                        if (l['filter'] == off_filt
                            and l['imagetyp'].lower() == 'light')]
-            ## Create a list of tuples, (filename, on-band Tmid)
-            #on_fts = [(l['file'], Time(l['date-obs'], format='fits')
-            #           + l['exptime']/2*u.s)
-            #          for l in t
-            #          if l['filter'] == on_filt]
-            #off_fts = [(l['file'], Time(l['date-obs'], format='fits')
-            #           + l['exptime']/2*u.s)
-            #          for l in t
-            #          if l['filter'] == off_filt]
-            #off_tmids = list(zip(*off_fts))[1]
-            #for ft in on_fts:
-            #    dts = [ft[1] - t for t in off_tmids]
-            #    print(np.argmin(np.abs(dts)))
-            #    
-            #    #print(np.argmin(np.abs(ft[1] - np.asarray(off_tmids))))
-
             for i_on in on_idx:
                 tmid_on = get_tmid(summary_table[i_on])
                 dts = [tmid_on - T for T in get_tmid(summary_table[off_idx])]
@@ -496,45 +529,43 @@ def reduce(args):
                 pair = [os.path.join(args.directory,
                                      summary_table[i]['file'])
                                      for i in (i_on, i_off)]
-                print(pair)
                 on_off_pairs.append(pair)
-                #on_off_pairs.append((on_fname, off_fname))
-                     
-        print(on_off_pairs)
-        return
-        # Collect file names
-        files = [f for f in os.listdir(args.directory)
-                 if os.path.isfile(os.path.join(args.directory, f))]
-
-        # For now just put things together based on file names since
-        # IPT_Na_R has been working
-        SII_on_list = []
-        SII_off_list = []
-        Na_on_list = []
-        Na_off_list = []
-    
-        SII_on = re.compile('^SII_on-band')
-        SII_off = re.compile('^SII_off-band')
-        Na_on = re.compile('^Na_on-band')
-        Na_off = re.compile('^Na_off-band')
-    
-        for f in sorted(files):
-            if SII_on.match(f):
-                SII_on_list.append(os.path.join(args.directory, f))
-            if SII_off.match(f):
-                SII_off_list.append(os.path.join(args.directory, f))
-            if Na_on.match(f):
-                Na_on_list.append(os.path.join(args.directory, f))
-            if Na_off.match(f):
-                Na_off_list.append(os.path.join(args.directory, f))
-    
-        if len(SII_on_list) == 0 and len(Na_on_list) == 0:
-            # Just return if we don't have any files
+        if len(on_off_pairs) == 0:
+            log.warning('No object files found in ')
             return
-    
+        # Collect file names
+        # files = [f for f in os.listdir(args.directory)
+        #          if os.path.isfile(os.path.join(args.directory, f))]
+        # 
+        # # For now just put things together based on file names since
+        # # IPT_Na_R has been working
+        # SII_on_list = []
+        # SII_off_list = []
+        # Na_on_list = []
+        # Na_off_list = []
+        # 
+        # SII_on = re.compile('^SII_on-band')
+        # SII_off = re.compile('^SII_off-band')
+        # Na_on = re.compile('^Na_on-band')
+        # Na_off = re.compile('^Na_off-band')
+        # 
+        # for f in sorted(files):
+        #     if SII_on.match(f):
+        #         SII_on_list.append(os.path.join(args.directory, f))
+        #     if SII_off.match(f):
+        #         SII_off_list.append(os.path.join(args.directory, f))
+        #     if Na_on.match(f):
+        #         Na_on_list.append(os.path.join(args.directory, f))
+        #     if Na_off.match(f):
+        #         Na_off_list.append(os.path.join(args.directory, f))
+        #
+        #if len(SII_on_list) == 0 and len(Na_on_list) == 0:
+        #    # Just return if we don't have any files
+        #    return
+        #
         # --> for now speed this up.  Long term, think of some
         #    caching/configuration system 
-        default_ND_params = run_level_default_ND_params
+        #default_ND_params = run_level_default_ND_params
         #if args.default_ND_params is None:
         #    try:
         #        default_ND_params = get_default_ND_params(args.directory)
@@ -551,10 +582,11 @@ def reduce(args):
             # properly formatted date for astroquery.  Use UT00:00,
             # since astroquery caches and repeat querys for the whole
             # day will therefore benefit
-            if len(SII_on_list) > 0:
-                HDUL = get_HDUList(SII_on_list[0])
-            else:
-                HDUL = get_HDUList(Na_on_list[0])
+            HDUL = get_HDUList(on_off_pairs[0][0])
+            #if len(SII_on_list) > 0:
+            #    HDUL = get_HDUList(SII_on_list[0])
+            #else:
+            #    HDUL = get_HDUList(Na_on_list[0])
             T = Time(HDUL[0].header['DATE-OBS'], format='fits')
             jup = Horizons(id=599,
                            location='V09',
@@ -563,23 +595,23 @@ def reduce(args):
             args.NPang = jup.ephemerides()['NPang'].quantity.value[0]
 
         start = time.time()
-        pairs = []
-        if len(SII_on_list) > 0:
-            pairs += zip(SII_on_list, SII_off_list)
-        if len(Na_on_list) > 0:
-            pairs += zip(Na_on_list, Na_off_list)
+        #pairs = []
+        #if len(SII_on_list) > 0:
+        #    pairs += zip(SII_on_list, SII_off_list)
+        #if len(Na_on_list) > 0:
+        #    pairs += zip(Na_on_list, Na_off_list)
         # remove --directory so our recursive call won't loop! But
         # save it for time display and movie
         directory = args.directory
         args.directory = None
         W = PoolWorker(reduce, 'on_band', args)
         with Pool(int(args.num_processes)) as p:
-            p.map(W.worker, pairs)
+            p.map(W.worker, on_off_pairs)
 
         elapsed = time.time() - start
         log.info('Elapsed time for ' + directory + ': ' + str(elapsed))
         log.info('Average per file: ' +
-                 str(elapsed/(len(SII_on_list)+len(Na_on_list))))
+                 str(elapsed/(len(on_off_pairs))))
 
         if args.movie is not None:
             # We can be lazy here, since we know our directory
@@ -881,7 +913,8 @@ if __name__ == "__main__":
         '--tree', action='store_const', const=True,
         help='Reduce all data files in tree rooted at directory')
     reduce_parser.add_argument(
-        '--num_processes', type=int, default=os.cpu_count()/2, help='number of subprocesses for parallelization')
+        '--num_processes', type=int, default=os.cpu_count()/threads_per_core,
+        help='number of subprocesses for parallelization')
     reduce_parser.add_argument(
         '--default_ND_params', help='Default ND filter parameters to use')
     reduce_parser.add_argument(
@@ -912,7 +945,7 @@ if __name__ == "__main__":
         '--concatenate', action='store_const', const=True,
         help='concatenate all movies in directories below directory (default is top-level reduced.  --recalculate is implied')
     movie_parser.add_argument(
-        '--num_processes', type=int, default=os.cpu_count()/2,
+        '--num_processes', type=int, default=os.cpu_count()/threads_per_core,
         help='number of subprocesses for parallelization')
     movie_parser.add_argument(
         '--speedup', type=int, help='Factor to speedup time.')
