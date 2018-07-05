@@ -9,6 +9,7 @@ import numpy as np
 from scipy import ndimage
 from skimage import exposure
 from astropy import log
+from astropy import units as u
 from astropy.time import Time, TimeDelta
 #from astroquery.jplhorizons import Horizons
 from jplhorizons import Horizons
@@ -426,6 +427,9 @@ class PoolWorker():
         d[self.iterable] = arg
         self.function(self.args)
 
+def get_tmid(l):
+    return Time(l['date-obs'], format='fits') + l['exptime']/2*u.s
+
 def reduce(args):
     if args.tree is not None:
         if args.directory is None:
@@ -439,6 +443,65 @@ def reduce(args):
         return
 
     if args.directory is not None:
+        collection = ccdproc.ImageFileCollection(args.directory)
+        summary_table = collection.summary
+        # Prepare to change our filter names from specific values and
+        # wavelengths to abstract on-band and off-band (ask around if
+        # this is wise)
+        filt_names = collection.values('filter', unique=True)
+        line_names = ['[SII]', 'Na']
+        lines = [('[SII]', '6731'), ('Na', '5890')]
+        on_off_pairs = []
+        for line in lines:
+            print(line)
+            on_filt = [f for f in filt_names
+                       if (line[0] in f
+                           and (line[1] in f
+                                or ("on" in f
+                                    and not "cont" in f)))][0]
+            off_filt = [f for f in filt_names
+                        if (line[0] in f
+                            and ("cont" in f
+                                 or "off" in f))][0]
+            on_idx = [i for i, l in enumerate(summary_table)
+                      if (l['filter'] == on_filt
+                          and l['imagetyp'].lower() == 'light')]
+            off_idx = [i for i, l in enumerate(summary_table)
+                       if (l['filter'] == off_filt
+                           and l['imagetyp'].lower() == 'light')]
+            ## Create a list of tuples, (filename, on-band Tmid)
+            #on_fts = [(l['file'], Time(l['date-obs'], format='fits')
+            #           + l['exptime']/2*u.s)
+            #          for l in t
+            #          if l['filter'] == on_filt]
+            #off_fts = [(l['file'], Time(l['date-obs'], format='fits')
+            #           + l['exptime']/2*u.s)
+            #          for l in t
+            #          if l['filter'] == off_filt]
+            #off_tmids = list(zip(*off_fts))[1]
+            #for ft in on_fts:
+            #    dts = [ft[1] - t for t in off_tmids]
+            #    print(np.argmin(np.abs(dts)))
+            #    
+            #    #print(np.argmin(np.abs(ft[1] - np.asarray(off_tmids))))
+
+            for i_on in on_idx:
+                tmid_on = get_tmid(summary_table[i_on])
+                dts = [tmid_on - T for T in get_tmid(summary_table[off_idx])]
+                i_off = off_idx[np.argmin(np.abs(dts))]
+                on_fname = os.path.join(args.directory,
+                                        summary_table[i_on]['file'])
+                off_fname = os.path.join(args.directory,
+                                         summary_table[i_off]['file'])
+                pair = [os.path.join(args.directory,
+                                     summary_table[i]['file'])
+                                     for i in (i_on, i_off)]
+                print(pair)
+                on_off_pairs.append(pair)
+                #on_off_pairs.append((on_fname, off_fname))
+                     
+        print(on_off_pairs)
+        return
         # Collect file names
         files = [f for f in os.listdir(args.directory)
                  if os.path.isfile(os.path.join(args.directory, f))]
