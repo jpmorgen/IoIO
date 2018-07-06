@@ -79,6 +79,9 @@ def get_filt_name(collection, line=None, on_band=False, off_band=False):
     # their missing FILTER keywords results in a masked value being
     # inserted into the array, which throws a error: TypeError:
     # unhashable type: 'MaskedConstant'.  So do it by hand
+    if not 'filter' in collection.keywords:
+        log.warning('FILTER keyword not present in any FITS headers')
+        return None 
     filt_names = collection.values('filter')#, unique=True)
     filt_names = [f for f in filt_names
                   if isinstance(f, str)]
@@ -134,6 +137,10 @@ def get_default_ND_params(directory='.',
         num_processes=int(os.cpu_count()/threads_per_core)
     if collection is None:
         collection = ccdproc.ImageFileCollection(directory)
+    if not 'imagetyp' in collection.keywords:
+        log.warning('IMAGETYP keyword not found in any files: ' + directory)
+        return None 
+
     flats = collection.files_filtered(imagetyp='FLAT', include_path=True)
     if len(flats) == 0:
         return None
@@ -500,6 +507,187 @@ class PoolWorker():
 def get_tmid(l):
     return Time(l['date-obs'], format='fits') + l['exptime']/2*u.s
 
+class ReduceDir():
+    def __init__(self,
+                 directory=None,
+                 collection=None,
+                 recalculate=False,
+                 default_ND_params=None,
+                 NPang=None,
+                 num_processes=None,
+                 movie=None):
+        assert directory is not None
+        self.directory = directory
+        self._collection = None
+        self.recalculate = recalculate
+        self._default_ND_params = default_ND_params
+        # --> This will eventually be a more involved set of ephemerides outputs
+        self.NPang = NPang
+        self.num_processes = num_processes
+        self.movie = movie
+        self.reduce_dir()
+
+    @property
+    def collection(self):
+        if self._collection is not None:
+            return self._collection
+        self._collection = ccdproc.ImageFileCollection(self.directory)
+        return self._collection
+
+    @property
+    def default_ND_params(self):
+        if self._default_ND_params is not None:
+            return self._default_ND_params
+        self.default_ND_params \
+            = get_default_ND_params(self.directory, self.collection)
+        if self._default_ND_params is None:
+            log.warning('No (good) flats found in directory '
+                        + self.directory + ' using run_level_default_ND_params')
+            self._default_ND_params = run_level_default_ND_params
+        return self._default_ND_params
+
+    def reduce_pair(self, pair):
+        try:
+            R = ReduceCorObs(pair[0],
+                             pair[1],
+                             NPang=self.NPang,
+                             default_ND_params=self.default_ND_params,
+                             recalculate=self.recalculate)
+        except Exception as e:
+            log.error(str(e) + ' skipping ' + pair[0] + ' ' + pair[1])
+
+        
+    def reduce_dir(self):
+        if not 'filter' in self.collection.keywords:
+            log.warning('FILTER keyword not present in any FITS headers, no usable files in ' + self.directory)
+            return None 
+        summary_table = self.collection.summary
+
+        # Prepare to change our filter names from specific values and
+        # wavelengths to abstract on-band and off-band (ask around if
+        # this is wise)
+        line_names = ['[SII]', 'Na']
+        on_off_pairs = []
+        for line in line_names:
+            on_filt = get_filt_name(self.collection, line, on_band=True)
+            off_filt = get_filt_name(self.collection, line, off_band=True)
+            on_idx = [i for i, l in enumerate(summary_table)
+                      if (l['filter'] == on_filt
+                          and l['imagetyp'].lower() == 'light')]
+            if len(on_idx) == 0:
+                break
+            off_idx = [i for i, l in enumerate(summary_table)
+                       if (l['filter'] == off_filt
+                           and l['imagetyp'].lower() == 'light')]
+            if len(off_idx) == 0:
+                break
+            for i_on in on_idx:
+                tmid_on = get_tmid(summary_table[i_on])
+                dts = [tmid_on - T for T in get_tmid(summary_table[off_idx])]
+                # Unwrap
+                i_off = off_idx[np.argmin(np.abs(dts))]
+                on_fname = os.path.join(self.directory,
+                                        summary_table[i_on]['file'])
+                off_fname = os.path.join(self.directory,
+                                         summary_table[i_off]['file'])
+                pair = [os.path.join(self.directory,
+                                     summary_table[i]['file'])
+                                     for i in (i_on, i_off)]
+                on_off_pairs.append(pair)
+        if len(on_off_pairs) == 0:
+            log.warning('No object files found in ' + self.directory)
+            return
+    
+        if self.NPang is None:
+            # Reading in our first file is the easiest way to get the
+            # properly formatted date for astroquery.  Use UT00:00,
+            # since astroquery caches and repeat querys for the whole
+            # day will therefore benefit
+            HDUL = get_HDUList(on_off_pairs[0][0])
+            T = Time(HDUL[0].header['DATE-OBS'], format='fits')
+            jup = Horizons(id=599,
+                           location='V09',
+                           epochs=np.round(T.jd),
+                           id_type='majorbody')
+            self.NPang = jup.ephemerides()['NPang'].quantity.value[0]
+
+        start = time.time()
+        with Pool(int(args.num_processes)) as p:
+            p.map(self.reduce_pair, on_off_pairs)
+
+        elapsed = time.time() - start
+        log.info('Elapsed time for ' + self.directory + ': ' + str(elapsed))
+        log.info('Average per file: ' +
+                 str(elapsed/(len(on_off_pairs))))
+
+        if self.movie is not None:
+            # We can be lazy here, since we know our directory
+            # structure and OS
+            movie_dir = self.directory.replace('/raw/', '/reduced/')
+            try:
+                make_movie(movie_dir, recalculate=args.recalculate)
+            except Exception as e:
+                log.error(str(e) + ' skipping movie for ' + self.directory)
+        return
+
+def reduce_cmd(args):
+    if args.tree is not None:
+        if args.directory is None:
+            top = os.path.join(data_root, 'raw')
+        dirs = [os.path.join(top, d) for d in os.listdir(top)
+                if os.path.isdir(os.path.join(top, d))]
+        persistent_default_ND_params = None
+        for directory in reversed(sorted(dirs)):
+            collection = ccdproc.ImageFileCollection(directory)
+            log.info(collection.location)
+            if args.default_ND_params is None:
+                # We usually expect this, since we are going to run on
+                # a wide range of directories with different ND
+                # parameters
+                default_ND_params \
+                    = get_default_ND_params(directory, collection)
+                if (default_ND_params is None
+                    and persistent_default_ND_params is None):
+                    # First time through no flats.  Presumably this is
+                    # recent data from the current run
+                    default_ND_params = run_level_default_ND_params
+                    log.warning('No default_ND_params supplied and flats in '
+                                + directory)
+                elif (default_ND_params is None
+                      and persistent_default_ND_params is not None):
+                    # No flats in current directory, use previous value
+                    default_ND_params = persistent_default_ND_params
+                persistent_default_ND_params = default_ND_params
+            R = ReduceDir(directory,
+                          collection=collection,
+                          recalculate=args.recalculate,
+                          default_ND_params=default_ND_params,
+                          NPang=args.NPang,
+                          num_processes=args.num_processes,
+                          movie=args.movie)
+        return
+    if args.directory is not None:
+        R = ReduceDir(args.directory,
+                      recalculate=args.recalculate,
+                      default_ND_params=args.default_ND_params,
+                      NPang=args.NPang,
+                      num_processes=args.num_processes,
+                      movie=args.movie)
+    # Reduce a pair of files -- just keep it simple
+    if len(args.on_band) == 2:
+        on_band = args.on_band[0]
+        off_band = args.on_band[1]
+    else:
+        on_band = args.on_band
+        off_band = args.on_band
+    R = ReduceCorObs(on_band,
+                     off_band,
+                     NPang=args.NPang,
+                     default_ND_params=args.default_ND_params,
+                     recalculate=args.recalculate)
+
+    
+
 def reduce(args):
     if args.tree is not None:
         if args.directory is None:
@@ -583,7 +771,7 @@ def reduce(args):
                                      for i in (i_on, i_off)]
                 on_off_pairs.append(pair)
         if len(on_off_pairs) == 0:
-            log.warning('No object files found in ' + args.directory)
+            log.warning('No valid pairs of object files found in ' + args.directory)
             return
     
         if args.NPang is None:
@@ -793,6 +981,9 @@ def make_movie(directory,
                   + directory)
         return
     collection = ccdproc.ImageFileCollection(directory)
+    if not 'filter' in collection.keywords:
+        log.warning('Directory does not contain any usable images')
+        return        
     SII_filt = get_filt_name(collection, '[SII]', on_band=True)
     Na_filt = get_filt_name(collection, 'Na', on_band=True)
     SII_on_list = collection.files_filtered(filter=SII_filt,
@@ -938,7 +1129,7 @@ if __name__ == "__main__":
     reduce_parser.add_argument(
         '--movie', action='store_const', const=True,
         help="Create movie when done")
-    reduce_parser.set_defaults(func=reduce)
+    reduce_parser.set_defaults(func=reduce_cmd)
 
     movie_parser = subparsers.add_parser(
         'movie', help='Makes a movie of the Io plasma torus')
