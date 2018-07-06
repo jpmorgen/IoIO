@@ -297,6 +297,7 @@ class ReduceCorObs():
                  NPang=None,
                  outfname=None,
                  recalculate=False):
+        print('80NSSC17K0733 ', NPang)
         # Let these raise errors if our inputs have problems
         OnBand_HDUList = get_HDUList(OnBand_HDUList_im_or_fname)
         OffBand_HDUList = get_HDUList(OffBand_HDUList_im_or_fname)
@@ -547,7 +548,10 @@ class ReduceDir():
         return self._default_ND_params
 
     def reduce_pair(self, pair):
+        print('OK OASIDNJ OAIDJS OIADJS OIJ OIAJ DSD')
+        print(self.NPang)
         try:
+            print('now am I OK?')
             R = ReduceCorObs(pair[0],
                              pair[1],
                              NPang=self.NPang,
@@ -599,6 +603,7 @@ class ReduceDir():
             return
     
         if self.NPang is None:
+            print('HEREERIRJOWIJEORIWJEORJ')
             # Reading in our first file is the easiest way to get the
             # properly formatted date for astroquery.  Use UT00:00,
             # since astroquery caches and repeat querys for the whole
@@ -609,7 +614,9 @@ class ReduceDir():
                            location='V09',
                            epochs=np.round(T.jd),
                            id_type='majorbody')
+            print('22222222222222222222222')
             self.NPang = jup.ephemerides()['NPang'].quantity.value[0]
+            print('333333333333333333333333')
 
         start = time.time()
         with Pool(int(args.num_processes)) as p:
@@ -673,6 +680,7 @@ def reduce_cmd(args):
                       NPang=args.NPang,
                       num_processes=args.num_processes,
                       movie=args.movie)
+        return
     # Reduce a pair of files -- just keep it simple
     if len(args.on_band) == 2:
         on_band = args.on_band[0]
@@ -955,7 +963,7 @@ class MovieCorObs():
         # Scale pixel values for mp4
         im = im/np.max(im) * 255
         # MP4 thinks of pixels coordinates in the X-Y Cartesian sense,
-        # but filing in from the top down
+        # but filling in from the top down
         im = np.flipud(im)
 
         # DEBUGGING
@@ -990,20 +998,6 @@ def make_movie(directory,
                              include_path=True)
     Na_on_list = collection.files_filtered(filter=Na_filt,
                             include_path=True)
-    ## Collect file names
-    #files = [f for f in os.listdir(directory)
-    #         if os.path.isfile(os.path.join(directory, f))]
-    #SII_on_list = []
-    #Na_on_list = []
-    #
-    #SII_on = re.compile('^SII_on-band')
-    #Na_on = re.compile('^Na_on-band')
-    #
-    #for f in sorted(files):
-    #    if SII_on.match(f):
-    #        SII_on_list.append(os.path.join(directory, f))
-    #    if Na_on.match(f):
-    #        Na_on_list.append(os.path.join(directory, f))
 
     if len(SII_on_list) == 0 or len(Na_on_list) == 0:
         # Just return if we don't have BOTH [SII] and Na to display
