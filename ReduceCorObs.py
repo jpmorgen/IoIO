@@ -25,6 +25,9 @@ import define as D
 
 # Constants for use in code
 data_root = '/data/io/IoIO'
+# For greping filter names out of headers, since I may change them or
+# expand the number
+line_associations = [('[SII]', '6731'), ('Na', '5890')]
 # These are the equavalent widths of the filters in angstroms
 SII_eq_width = 9.95
 Na_eq_width = 11.22
@@ -35,31 +38,73 @@ SII_on_loss = 1
 Na_on_loss = 0.8
 global_frame_rate = 20
 movie_edge_mask = 12
+# Max perpendicular distance from center of ND filter
+max_ND_dist = 30
 # Hyperthreading is a little optimistic reporting two full processes
 # per core.  Just stick with one process per core
 threads_per_core = 2
 background_light_threshold = 100 # ADU
+# Astrometry.  Just keep track of angle for now
+astrometry = [('2017-03-03', 57),
+              ('2017-03-04', 175-180),
+              ('2017-03-05', 358),
+              ('2017-03-07', 177-180),
+              ('2017-03-12', 181-180),
+              ('2017-03-13', 0),
+              ('2017-04-14', 0),
+              ('2017-04-17', 4),
+              ('2017-05-18', 178-180),
+              ('2018-01-15', 358),
+              ('2018-01-24', 359)]
+
+def get_astrometry_angle(date_obs):
+    Tin = Time(date_obs, format='fits')
+    alast = astrometry[0]
+    T = Time(alast[0] + 'T00:00:00', format='fits')
+    if Tin < T:
+        raise ValueError(date_obs + ' before first IoIO observation!')
+    for a in astrometry:
+        T = Time(a[0] + 'T00:00:00', format='fits')
+        if T > Tin:
+            return(alast[1])
+        alast = a
+    return(alast[1])
+        
+              
 
 def get_filt_name(collection, line=None, on_band=False, off_band=False):
     assert line is not None
     assert on_band + off_band == 1
-    filt_names = collection.values('filter', unique=True)
-    line_assocs = [('[SII]', '6731'), ('Na', '5890')]
-    line_assoc = [la for la in line_assocs
+    # unique has problems when biases are in the directory because
+    # their missing FILTER keywords results in a masked value being
+    # inserted into the array, which throws a error: TypeError:
+    # unhashable type: 'MaskedConstant'.  So do it by hand
+    filt_names = collection.values('filter')#, unique=True)
+    filt_names = [f for f in filt_names
+                  if isinstance(f, str)]
+    # https://stackoverflow.com/questions/12897374/get-unique-values-from-a-list-in-python
+    filt_names = list(set(filt_names))
+    line_assoc = [la for la in line_associations
                   if line in la]
+    line_assoc = line_assoc[0]
     if on_band:
+        band = 'on'
         filt = [f for f in filt_names
-                if (line[0] in f
-                    and (line[1] in f
+                if (line_assoc[0] in f
+                    and (line_assoc[1] in f
                          or ("on" in f
                              and not "cont" in f)))]
     elif off_band:
+        band = 'off'
         filt = [f for f in filt_names
-                    if (line[0] in f
+                    if (line_assoc[0] in f
                         and ("cont" in f
                              or "off" in f))]
     else:
         raise ValueError('either on_band or off_band must be True')
+    if len(filt) == 0:
+        log.warning('Requested filter ' + line + ' ' + band + '-band not found')
+        return None
     return filt[0]
 
         
@@ -248,7 +293,7 @@ class ReduceCorObs():
         # Let these raise errors if our inputs have problems
         OnBand_HDUList = get_HDUList(OnBand_HDUList_im_or_fname)
         OffBand_HDUList = get_HDUList(OffBand_HDUList_im_or_fname)
-        log.debug(OnBand_HDUList.filename() + OffBand_HDUList.filename())
+        log.debug(OnBand_HDUList.filename() + ' ' + OffBand_HDUList.filename())
         # Check to see if we want to recalculate & overwrite.  Do this
         # in general so we can be called at any directory level
         # (though see messages for issues)
@@ -262,6 +307,7 @@ class ReduceCorObs():
                 log.warning("Outfname not specified and on-band image fname was not an absolute path and outfname is not specified.  I can't deconstruct the raw to reduced path structure, writing to current directory, ReducedCorObs.fits")
                 outfname = 'ReducedCorObs.fits'
             else:
+                # --> Consider making the filename out of the line and on-off
                 # We should be in our normal directory structure
                 basename = os.path.basename(rawfname)
                 # Insert "r" so no collisions are possible
@@ -306,16 +352,16 @@ class ReduceCorObs():
         header['BACKSUB'] = (OnBandObsData.back_level,
                              'background value subtracted')
         # --> Worry about flat-fielding later
+        # --> Make all these things FITS keywords
         # Get ready to shift off-band image to match on-band image
+        # --> Really want distance from ND filter center
         on_center = OnBandObsData.obj_center
         off_center = OffBandObsData.obj_center
-        if (np.linalg.norm(on_center - OnBandObsData.desired_center)
-            > 20):
-            log.error('on-band image too far away from desired center')
+        if OnBandObsData.header['OBJ2NDC'] > max_ND_dist:
+            log.error('on-band image: obj too far off center of ND filter')
             return
-        if (np.linalg.norm(off_center - OffBandObsData.desired_center)
-            > 20):
-            log.error('dd-band image too far away from desired center')
+        if OffBandObsData.header['OBJ2NDC'] > max_ND_dist:
+            log.error('off-band image: obj too far off center of ND filter')
             return
         shift_off = on_center - off_center
         if np.linalg.norm(shift_off) > 5:
@@ -386,12 +432,12 @@ class ReduceCorObs():
                            id_type='majorbody')
             NPang = jup.ephemerides()['NPang'].quantity.value[0]
             self.NPang = NPang
-        # --> handle astrometry in a more general way.  -0.933 is for 2018
         # Save off original center of image for NDparams update, below
         o_center = np.asarray(scat_sub_im.shape)/2
         on_shift = o_center - OnBandObsData.obj_center
+        aangle = get_astrometry_angle(header['DATE-OBS'])
+        on_angle = aangle - NPang + gem_flip
         # interpolation.rotate rotates CW for positive angle
-        on_angle = -0.933 - NPang + gem_flip
         scat_sub_im = ndimage.interpolation.shift(scat_sub_im, on_shift)
         scat_sub_im = ndimage.interpolation.rotate(scat_sub_im, on_angle)
 
@@ -432,7 +478,7 @@ class ReduceCorObs():
 
         # Get ready to write
         OnBand_HDUList[0].data = scat_sub_im
-        header['RVERSION'] = (0.0, 'Reduction version')
+        header['RVERSION'] = (0.1, 'Reduction version')
         if not os.path.exists(red_data_root):
             os.mkdir(red_data_root)
         if not os.path.exists(reddir):
@@ -476,13 +522,14 @@ def reduce(args):
                 # a wide range of directories with different ND
                 # parameters
                 default_ND_params \
-                    = get_default_ND_params(args.directory,
-                                            collection)
+                    = get_default_ND_params(args.directory)
                 if (default_ND_params is None
                     and persistent_default_ND_params is None):
                     # First time through no flats.  Presumably this is
                     # recent data from the current run
                     default_ND_params = run_level_default_ND_params
+                    log.warning('No default_ND_params supplied and flats in '
+                                + args.directory)
                 elif (default_ND_params is None
                       and persistent_default_ND_params is not None):
                     # No flats in current directory, use previous value
@@ -499,14 +546,18 @@ def reduce(args):
     if args.directory is not None:
         collection = ccdproc.ImageFileCollection(args.directory)
         if args.default_ND_params is None:
-            default_ND_params \
+            # Hack to be able to call ourselves recursively to process
+            # a pair of files
+            args.default_ND_params \
                 = get_default_ND_params(args.directory,
                                         collection)
+            if args.default_ND_params is None:
+                log.warning('No (good) flats found in directory '
+                            + args.directory)
         summary_table = collection.summary
         # Prepare to change our filter names from specific values and
         # wavelengths to abstract on-band and off-band (ask around if
         # this is wise)
-        filt_names = collection.values('filter', unique=True)
         line_names = ['[SII]', 'Na']
         on_off_pairs = []
         for line in line_names:
@@ -521,6 +572,7 @@ def reduce(args):
             for i_on in on_idx:
                 tmid_on = get_tmid(summary_table[i_on])
                 dts = [tmid_on - T for T in get_tmid(summary_table[off_idx])]
+                # Unwrap?
                 i_off = off_idx[np.argmin(np.abs(dts))]
                 on_fname = os.path.join(args.directory,
                                         summary_table[i_on]['file'])
@@ -531,51 +583,8 @@ def reduce(args):
                                      for i in (i_on, i_off)]
                 on_off_pairs.append(pair)
         if len(on_off_pairs) == 0:
-            log.warning('No object files found in ')
+            log.warning('No object files found in ' + args.directory)
             return
-        # Collect file names
-        # files = [f for f in os.listdir(args.directory)
-        #          if os.path.isfile(os.path.join(args.directory, f))]
-        # 
-        # # For now just put things together based on file names since
-        # # IPT_Na_R has been working
-        # SII_on_list = []
-        # SII_off_list = []
-        # Na_on_list = []
-        # Na_off_list = []
-        # 
-        # SII_on = re.compile('^SII_on-band')
-        # SII_off = re.compile('^SII_off-band')
-        # Na_on = re.compile('^Na_on-band')
-        # Na_off = re.compile('^Na_off-band')
-        # 
-        # for f in sorted(files):
-        #     if SII_on.match(f):
-        #         SII_on_list.append(os.path.join(args.directory, f))
-        #     if SII_off.match(f):
-        #         SII_off_list.append(os.path.join(args.directory, f))
-        #     if Na_on.match(f):
-        #         Na_on_list.append(os.path.join(args.directory, f))
-        #     if Na_off.match(f):
-        #         Na_off_list.append(os.path.join(args.directory, f))
-        #
-        #if len(SII_on_list) == 0 and len(Na_on_list) == 0:
-        #    # Just return if we don't have any files
-        #    return
-        #
-        # --> for now speed this up.  Long term, think of some
-        #    caching/configuration system 
-        #default_ND_params = run_level_default_ND_params
-        #if args.default_ND_params is None:
-        #    try:
-        #        default_ND_params = get_default_ND_params(args.directory)
-        #    except KeyboardInterrupt:
-        #        # Allow C-C to interrupt
-        #        raise
-        #    except Exception as e:
-        #        log.warning('Problem with flats in ' + args.directory + ': '
-        #                    + str(e) + '.  using run_level_default_ND_params')
-        #        default_ND_params = run_level_default_ND_params
     
         if args.NPang is None:
             # Reading in our first file is the easiest way to get the
@@ -583,10 +592,6 @@ def reduce(args):
             # since astroquery caches and repeat querys for the whole
             # day will therefore benefit
             HDUL = get_HDUList(on_off_pairs[0][0])
-            #if len(SII_on_list) > 0:
-            #    HDUL = get_HDUList(SII_on_list[0])
-            #else:
-            #    HDUL = get_HDUList(Na_on_list[0])
             T = Time(HDUL[0].header['DATE-OBS'], format='fits')
             jup = Horizons(id=599,
                            location='V09',
@@ -595,11 +600,6 @@ def reduce(args):
             args.NPang = jup.ephemerides()['NPang'].quantity.value[0]
 
         start = time.time()
-        #pairs = []
-        #if len(SII_on_list) > 0:
-        #    pairs += zip(SII_on_list, SII_off_list)
-        #if len(Na_on_list) > 0:
-        #    pairs += zip(Na_on_list, Na_off_list)
         # remove --directory so our recursive call won't loop! But
         # save it for time display and movie
         directory = args.directory
@@ -792,20 +792,27 @@ def make_movie(directory,
         log.debug('movie output file(s) exist and recalculate=False: '
                   + directory)
         return
-    # Collect file names
-    files = [f for f in os.listdir(directory)
-             if os.path.isfile(os.path.join(directory, f))]
-    SII_on_list = []
-    Na_on_list = []
-
-    SII_on = re.compile('^SII_on-band')
-    Na_on = re.compile('^Na_on-band')
-
-    for f in sorted(files):
-        if SII_on.match(f):
-            SII_on_list.append(os.path.join(directory, f))
-        if Na_on.match(f):
-            Na_on_list.append(os.path.join(directory, f))
+    collection = ccdproc.ImageFileCollection(directory)
+    SII_filt = get_filt_name(collection, '[SII]', on_band=True)
+    Na_filt = get_filt_name(collection, 'Na', on_band=True)
+    SII_on_list = collection.files_filtered(filter=SII_filt,
+                             include_path=True)
+    Na_on_list = collection.files_filtered(filter=Na_filt,
+                            include_path=True)
+    ## Collect file names
+    #files = [f for f in os.listdir(directory)
+    #         if os.path.isfile(os.path.join(directory, f))]
+    #SII_on_list = []
+    #Na_on_list = []
+    #
+    #SII_on = re.compile('^SII_on-band')
+    #Na_on = re.compile('^Na_on-band')
+    #
+    #for f in sorted(files):
+    #    if SII_on.match(f):
+    #        SII_on_list.append(os.path.join(directory, f))
+    #    if Na_on.match(f):
+    #        Na_on_list.append(os.path.join(directory, f))
 
     if len(SII_on_list) == 0 or len(Na_on_list) == 0:
         # Just return if we don't have BOTH [SII] and Na to display
@@ -993,3 +1000,4 @@ if __name__ == "__main__":
 #                 tree=None,
 #                 default_ND_params=None)
 #reduce_dir(args)
+#print(get_astrometry_angle('2017-01-18T00:00:00'))
