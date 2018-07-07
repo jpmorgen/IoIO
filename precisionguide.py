@@ -127,6 +127,10 @@ class ObsData():
         # one-time motion, just before exposure
         self.delta_pix = None
         # Make the guts of __init__ methods that can be overridden
+        # --> Here is where I would make the division between ObsData
+        # and PGData.  PGData would init the rates and stuff + read
+        # the ObsData.  The ObsData would have a cleanup method that
+        # otherwise would not be called
         # Read our image
         self.read_im(HDUList_im_or_fname)
         # Populate our object

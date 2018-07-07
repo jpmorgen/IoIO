@@ -248,24 +248,26 @@ class CorObsData(pg.ObsData):
             # if np.sum(im) < 65000 * 25:
             if np.sum(im) < 65000 * 250:
                 self.quality = 4
-                log.warning('Jupiter (or suitably bright object) not found in image.  This object is unlikely to show up on the ND filter.  Seeting quality to ' + str(self.quality))
+                log.warning('Jupiter (or suitably bright object) not found in image.  This object is unlikely to show up on the ND filter.  Seeting quality to ' + str(self.quality) + ', center to [-99, -99]')
+                self._obj_center = np.asarray([-99, -99])
             else:
                 self.quality = 6
-            # If we made it here, Jupiter is outside the ND filter,
-            # but shining bright enough to be found
-            # --> Try iterative approach
-            ny, nx = im.shape
-            y_x = np.asarray(ndimage.measurements.center_of_mass(im))
-            y = np.arange(ny) - y_x[0]
-            x = np.arange(nx) - y_x[1]
-            # input/output Cartesian direction by default
-            xx, yy = np.meshgrid(x, y)
-            rr = np.sqrt(xx**2 + yy**2)
-            im[np.where(rr > 200)] = 0
-            y_x = np.asarray(ndimage.measurements.center_of_mass(im))
-
-            self._obj_center = y_x
-            log.debug('Object center (X, Y; binned) = ' +
+                # If we made it here, Jupiter is outside the ND filter,
+                # but shining bright enough to be found
+                # --> Try iterative approach
+                ny, nx = im.shape
+                y_x = np.asarray(ndimage.measurements.center_of_mass(im))
+                print(y_x)
+                y = np.arange(ny) - y_x[0]
+                x = np.arange(nx) - y_x[1]
+                # input/output Cartesian direction by default
+                xx, yy = np.meshgrid(x, y)
+                rr = np.sqrt(xx**2 + yy**2)
+                im[np.where(rr > 200)] = 0
+                y_x = np.asarray(ndimage.measurements.center_of_mass(im))
+    
+                self._obj_center = y_x
+                log.info('Object center (X, Y; binned) = ' +
                       str(self.binned(self._obj_center)[::-1]))
         else:
             # Here is where we boost what is sure to be Jupiter, if Jupiter is
@@ -409,6 +411,8 @@ class CorObsData(pg.ObsData):
         y0 = self.obj_center[1]
         d = (np.abs((x2 - x1) * (y1 - y0) - (x1 - x0) * (y2 - y1))
              / ((x2 - x1)**2 + (y2 - y1)**2)**0.5)
+        self.header['OBJ2NDC'] = (d,
+                                  'Obj perpendicular dist. to ND filt. center')
         self._obj_to_ND = d
         return self._obj_to_ND
 

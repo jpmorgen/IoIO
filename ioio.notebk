@@ -4136,3 +4136,241 @@ ReduceCorObs.py reduce --overwrite --movie --tree
 while that is working, do some work on logic of recalculation
 
 ReduceCorObs.py movie '/data/io/IoIO/reduced/2018-06-27'
+
+ReduceCorObs.py reduce /data/io/IoIO/raw/2018-06-27/SII_on-band_016.fits /data/io/IoIO/raw/2018-06-27/SII_off-band_016.fits
+
+Thu Jun 28 20:33:48 2018 EDT  jpmorgen@snipe
+
+Just finished!  Only 1.5 hours!
+/data/io/IoIO/reduced/2018-03-28/Na_SII.mp4
+
+Now try concatenation!
+
+ReduceCorObs.py movie --concatenate
+
+WORKS!  And takes 1000% of CPU.  So I am parallel processing with that
+stuff too!  SO COOL
+
+Marking directories as _marginal if they have
+--> This needs to get copied into raw if it is going to stick
+--> Ultimately it would be nice to find individual cloudy frames and nuke them
+
+
+Fri Jun 29 09:49:12 2018 EDT  jpmorgen@snipe
+
+See if I can get rid of fold effect.  See in 3/28 and beyond
+
+ReduceCorObs.py reduce --movie --directory /data/io/IoIO/raw/2018-03-28/
+
+Shifting is not the root of the fold effect.  Ah, but it is primarily
+seen in the early days.  May 6+ dpesn't seem to show it
+
+mp4 not working on picture frame but jpgs are.  Try gif?
+
+ReduceCorObs.py movie --concatenate
+
+gif not supported.  Plus it is HUGE!
+
+Ah Ha!  I can get a small mp4 to be read.  What is the difference?
+
+The Andoer DH says it is 1024x600
+The small video is 560x320, but scales to full-frame
+My dual video is 1240x600.  Maybe that is the problem?
+
+
+ReduceCorObs.py movie --recalculate /data/io/IoIO/reduced/2018-05-06
+
+get 600x600.  Doesn't work.
+
+let's assume I have to match the aspect ratio
+
+1024/600 = 1.7066666666666668
+560/320 = 1.75
+1240/600 = 2.066666666666667
+
+I like the torus at 600x600.  It is the 
+
+ReduceCorObs.py movie --SII_crop 560x320 --recalculate /data/io/IoIO/reduced/2018-05-06
+
+Well, that didn't work either.
+
+From moviepy:     ftypisom   isomiso2avc1mp41
+
+small.mp4:       ftypmp42    mp42isomavc1
+
+Ah HA!  Got sinc_mll.mp4 to work!  So there is something I am doing
+wrong with the way I am creating my file
+
+That was 500x300 = 1.6666666666666667
+
+so aspect ratio is not the key
+
+ReduceCorObs.py movie --SII_crop 320x160 --recalculate /data/io/IoIO/reduced/2018-05-06
+
+Video size is not it.
+
+Tried data type int and that didn't do it
+
+Try 20 fps
+
+That was it!
+
+ReduceCorObs.py movie --recalculate /data/io/IoIO/reduced/2018-05-06
+
+OK, lets see if I can just bring in the higher frame rate movies and
+slow them down OK
+
+ReduceCorObs.py movie --concatenate
+
+tweaked fstab to add this particular thumb drive.  Deleted the .dat
+file that the frame was picking up on.
+
+WORKS!
+
+Sat Jun 30 21:24:44 2018 EDT  jpmorgen@snipe
+
+Working on ccdproc.ImageFileCollection
+
+import ccdproc
+
+collection = ImageFileCollection('/data/io/IoIO/raw/2018-05-04')
+
+Having trouble because of an old version of astropy I got with
+debian.  Uninstall
+
+--> Had to install astropy-helpers separately --> send note about dependency
+
+This is getting me toward a CCDData which has uncertainty, but I won't
+go there just yet because that would require gain correction and I
+would want to cosmic ray remove, etc.
+
+OK, so my design might need to change a little bit because I was
+calling ephemeridies inside ReduceCorObs.  npang is the only thing I
+really need to know in there.  Since the cost of the query is pretty
+high, I can plug in the rest of the values on the way out, or in there
+if I provide them
+
+Sun Jul 01 13:44:06 2018 EDT  jpmorgen@snipe
+
+It looks like FITS extensions are allowed now in PDS, which is good
+news.  Do I want to have my info on aperture sums (Na) and profiles
+(SII) in the FITS extension?  I think so
+
+ReduceCorObs.py movie --recalculate /data/io/IoIO/reduced/2018-05-08
+
+Wed Jul 04 16:14:47 2018 EDT  jpmorgen@snipe
+
+collection = ccdproc.ImageFileCollection('/data/io/IoIO/raw/2018-05-04')
+
+collection.values('filter', unique=True)
+['[SII] continuum 40A FWHM', 'Na continuum 50A FWHM', 'R', 'Na 5890A 10A FWHM', '[SII] 6731A 10A FWHM']
+
+SII_on_band_files = collection.files_filtered(imagetyp='LIGHT', filter='[SII] 6731A 10A FWHM')
+
+SII_off_band_files = collection.files_filtered(imagetyp='LIGHT', filter='[SII] continuum 40A FWHM')
+
+[print(f) for f in SII_on_band_files]
+
+weird output.  Lots of Nones on the end.  I think I need a generator method
+
+#[print(HDUList.filename()) for HDUList in SII_on_band_files.hdus()]
+
+#[print(HDUList.filename()) for HDUList in collection.hdus()]
+
+[print(h['DATE-OBS']) for h in collection.headers()]
+
+Still has junk on the end of Nones
+
+[print(fname, ' ', h['DATE-OBS']) for (h, fname) in collection.headers(return_fname=True)]
+
+t = collection.summary
+t['date-obs']
+
+SII_on_band_date_obs = [l['date-obs'] for l in t if l['filter'] == '[SII] 6731A 10A FWHM']
+
+tlist = [(l['file'], l['date-obs']) for l in t if l['filter'] == '[SII] 6731A 10A FWHM']
+
+ReduceCorObs.py reduce --movie --directory /data/io/IoIO/raw/2017-04-27
+
+Now that we are using ccdproc.ImageFileCollection (which I didn't want
+to burden ioio.py with, but which is OK)
+
+Thu Jul 05 16:15:27 2018 EDT  jpmorgen@snipe
+
+Hmm.  What I really want now is an object that has the table for a
+directory in it that things refer to.  Or I could just pass it as a parameter
+
+ReduceCorObs.py ND_params /data/io/IoIO/raw/2017-04-27
+
+ReduceCorObs.py ND_params /data/io/IoIO/raw/2017-04-28
+
+Working in parallel!
+
+But now I want to have some sort of persistent default_ND_params for
+directories that don't have flats
+
+--> put obj_to_ND in header and maybe ND angle?
+
+ReduceCorObs.py reduce --recalculate --directory /data/io/IoIO/raw/2017-04-28
+
+That is working a little better now
+
+Astrometry: Other than my notes, do I save any astrometry from 2017?!
+
+ReduceCorObs.py reduce --recalculate --directory /data/io/IoIO/raw/2017-05-01
+
+Seems good
+
+ReduceCorObs.py movie --recalculate /data/io/IoIO/reduced/2017-05-01
+
+ReduceCorObs.py reduce --recalculate --movie --tree
+
+--> The moving_to is presenting a problem
+
+ReduceCorObs.py reduce --recalculate --movie --directory /data/io/IoIO/raw/2018-02-12
+
+Fri Jul 06 19:23:20 2018 EDT  jpmorgen@snipe
+
+Getting weird behavior with movie.  Skipping way too frames.
+
+300s * 20f/s = 6000 = maximum speedup
+
+Ah.  The problem is file order vs time order.  Did a
+collection.sort('date-obs') to fix that.  Could potentially do a sort
+on reduction, but I don't think it matters since that is all
+asynchronous anyway.
+
+ReduceCorObs.py movie --recalculate /data/io/IoIO/reduced/2018-02-12 --Na_crop 600x424
+
+!  I can get the test zombie infection to go at 80fps.  Really not
+   sure what magic happened to have the movie write!
+
+So what frame rate do I really want?  Speedup = 24000 is right
+
+24000fps/300s =  80
+
+Hey, 6/20 is kind of nice in terms of double-sided and minimal moon
+
+Sat Jul 07 08:28:59 2018 EDT  jpmorgen@snipe
+
+Took about 3 hours
+
+--> should put writing the movie into the reduce tree code
+
+ReduceCorObs.py movie --tree --recalculate
+
+oops, that was wrong
+
+ReduceCorObs.py movie --recalculate /data/io/IoIO/reduced/2017-06-02
+
+ReduceCorObs.py movie --concatenate
+
+/data/io/IoIO/reduced/2017-04-18/
+
+Sat Jul 07 12:10:34 2018 EDT  jpmorgen@snipe
+
+2017-04-24 is a good example of bad background light
+
+ReduceCorObs.py movie --recalculate /data/io/IoIO/reduced/2017-04-24
+
+ReduceCorObs.py reduce --recalculate --directory /data/io/IoIO/raw/2017-04-24
