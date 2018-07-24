@@ -4374,3 +4374,52 @@ Sat Jul 07 12:10:34 2018 EDT  jpmorgen@snipe
 ReduceCorObs.py movie --recalculate /data/io/IoIO/reduced/2017-04-24
 
 ReduceCorObs.py reduce --recalculate --directory /data/io/IoIO/raw/2017-04-24
+
+Sat Jul 07 13:41:20 2018 EDT  jpmorgen@snipe
+
+Move off previous run to /data/io/IoIO/reduced.previous_versions/movie_on_Andoer_frame/
+
+ReduceCorObs.py reduce --tree --movie --recalculate
+
+ERROR: 'MovieCorObs' object has no attribute 'last_persist_im' skipping movie for /data/io/IoIO/raw/2018-05-07 [__main__]
+ERROR:astropy:'MovieCorObs' object has no attribute 'last_persist_im' skipping movie for /data/io/IoIO/raw/2018-05-07
+ERROR: 'MovieCorObs' object has no attribute 'last_persist_im' skipping movie for /data/io/IoIO/raw/2018-05-08 [__main__]
+ERROR:astropy:'MovieCorObs' object has no attribute 'last_persist_im' skipping movie for /data/io/IoIO/raw/2018-05-08
+ERROR: 'MovieCorObs' object has no attribute 'last_persist_im' skipping movie for /data/io/IoIO/raw/2018-05-09 [__main__]
+ERROR:astropy:'MovieCorObs' object has no attribute 'last_persist_im' skipping movie for /data/io/IoIO/raw/2018-05-09
+
+set last_persist_im = None
+do next if last_persist_im is None
+
+Sat Jul 07 16:21:56 2018 EDT  jpmorgen@snipe
+
+Job just ended!  
+
+More complicated than I thought to deal with the first image being
+bad.  might be able to deal with it using a self.catch_up variable to
+skip precision timing search
+
+OK, so I need to be able to search forward.  Maybe the thing to do is
+to call next, but mess with the dt_cur
+
+
+ReduceCorObs.py movie --recalculate /data/io/IoIO/reduced/2018-05-07
+
+ReduceCorObs.py movie --concatenate
+
+lots of bad movies.  Nevertheless, still 2112 frames.  Save to
+Na_SII_before_recalc.mp4
+
+ReduceCorObs.py movie --tree --recalculate
+
+Tue Jul 10 12:13:33 2018 MDT  jpmorgen@byted
+
+--> Change sort for off-band time to include same side of meridian as
+    on-band image
+
+Tue Jul 24 13:19:28 2018 EDT  jpmorgen@snipe
+
+Need to work on sodium time history for AGU ASAP.  Abstract deadline
+Aug 1
+
+Basically wanting a time series of residual background light.

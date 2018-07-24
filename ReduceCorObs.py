@@ -3,7 +3,6 @@ import os
 import re
 import time
 from multiprocessing import Pool
-import copy
 import argparse
 
 import numpy as np
@@ -48,6 +47,7 @@ max_ND_dist = 30
 # per core.  Just stick with one process per core
 threads_per_core = 2
 background_light_threshold = 100 # ADU
+movie_background_light_threshold = 50 # rayleighs
 # Astrometry.  Just keep track of angle for now
 astrometry = [('2017-03-03', 57),
               ('2017-03-04', 175-180),
@@ -328,7 +328,7 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     # Return if we have nothing to do.
     if (not recalculate
         and os.path.isfile(outfname)):
-        log.debug('output file exist and recalculate=False: '
+        log.debug('skipping -- output file exists and recalculate=False: '
                   + outfname)
         return
 
@@ -651,7 +651,8 @@ def get_dirs(directory):
 
 def reduce_cmd(args):
     if args.tree is not None:
-        if args.directory is None:
+        top = args.directory
+        if top is None:
             top = os.path.join(data_root, 'raw')
         persistent_default_ND_params = None
         for directory in reversed(get_dirs(top)):
@@ -683,7 +684,7 @@ def reduce_cmd(args):
                           num_processes=args.num_processes,
                           movie=args.movie)
         if args.movie is not None:
-            movie_concatenate(args.directory.replace('/raw/', '/reduced/'))
+            movie_concatenate(top.replace('/raw/', '/reduced/'))
         return
     if args.directory is not None:
         R = ReduceDir(args.directory,
@@ -737,6 +738,7 @@ class MovieCorObs():
         self.HDUCur = None
         self.HDUNext = None
         self.persist_im = None
+        self.last_persist_im = None
         self.next_f()
         HDULast = get_HDUList(flist[-1])
         self.Tstop = Time(HDULast[0].header['DATE-OBS'], format='fits')
@@ -787,13 +789,31 @@ class MovieCorObs():
             self.HDUNext = None
             self.dt_next = self.dt_cur + self.HDULcur[0].header['EXPTIME']
 
+    def get_good_frame(self, t):
+        if self.last_persist_im is not None:
+            # Some previous image was good.  Use it in place of the
+            # bad one.
+            self.persist_im = self.last_persist_im
+            return self.persist_im
+        # If we made it here, our first image was bad.  Recursively
+        # read the next one and pretend it is the first until we find
+        # a good one
+        if self.HDUNext is None:
+            raise ValueError ('No good images')
+        self.next_f()
+        self.dt_cur = 0
+        return(self.make_frame(t))
+        
     def make_frame(self, t):
-        # Let us stick on frames before the calculated start time and
-        # after the calculated duration
+        # Make a general backward-forward iterator since sometimes we
+        # run the object backward to get back to the beginning of a
+        # movie.  The idea is we read a frame in and store it in
+        # persist_im until we advance time past the beginning of the
+        # next frame.
         m_dt = t * self.speedup
         while t > 0 and m_dt < self.dt_cur:
             self.prev_f()
-        while t <= self.duration and m_dt >= self.dt_next:
+        while t <= self.duration and self.dt_next <= m_dt:
             self.next_f()
         if self.persist_im is not None:
             return self.persist_im
@@ -802,14 +822,12 @@ class MovieCorObs():
         if self.HDULcur[0].header['D_ON-OFF'] > 5:
             log.warning('on & off centers too far apart '
                         + self.HDULcur.filename())
-            self.persist_im = self.last_persist_im
-            return self.persist_im
+            return(self.get_good_frame(t))
         im = self.HDULcur[0].data
-        if abs(np.mean(im)) > background_light_threshold:
+        if abs(np.mean(im)) > movie_background_light_threshold:
             log.warning('background light too large or small for '
                         + self.HDULcur.filename())
-            self.persist_im = self.last_persist_im
-            return self.persist_im
+            return(self.get_good_frame(t))
         # --> playing with these on 2018-04-21 [seem good in general]
         if self.filt == '[SII]':
             chop = 2000
@@ -978,8 +996,8 @@ def movie_cmd(args):
         args.tree = None
         W = PoolWorker(movie_cmd, 'directory', args)
         with Pool(int(args.num_processes)) as p:
-            p.map(W.worker, dirs)
-        movie_concatenate(args.directory)
+            p.map(W.worker, get_dirs(top))
+        movie_concatenate(top)
         return
     if args.concatenate:
         movie_concatenate(args.directory)
@@ -1025,12 +1043,15 @@ def movie_cmd(args):
     #    
     #    return
     assert args.directory is not None
-    make_movie(args.directory,
-               recalculate=args.recalculate,
-               SII_crop=args.SII_crop,
-               Na_crop=args.Na_crop,
-               frame_rate=args.frame_rate,
-               speedup=args.speedup)
+    try:
+        make_movie(args.directory,
+                   recalculate=args.recalculate,
+                   SII_crop=args.SII_crop,
+                   Na_crop=args.Na_crop,
+                   frame_rate=args.frame_rate,
+                   speedup=args.speedup)
+    except Exception as e:
+        log.error(str(e) + ' skipping movie for ' + args.directory)
 
 if __name__ == "__main__":
     # --> Figure out how to do this with a command-line switch that
