@@ -4129,7 +4129,7 @@ OK, after chasing down some bugs on that, run the big one!
 
 Thu Jun 28 18:53:55 2018 EDT  jpmorgen@snipe
 
-(a few minutes late
+(a few minutes late)
 
 ReduceCorObs.py reduce --overwrite --movie --tree
 
@@ -4423,3 +4423,335 @@ Need to work on sodium time history for AGU ASAP.  Abstract deadline
 Aug 1
 
 Basically wanting a time series of residual background light.
+
+Can start just with the whole total.  How do I want to store it?  Can
+be in header value.  Also want something in a file kind of like I did
+the movie.  ASCII file:
+
+FNAME LINE TMID EXPTIME TOTAL [VARIOUS APERTURES]
+
+do this before and after filtering out cosmic rays
+
+cd, '/data/io/IoIO/reduced.previous_versions/2018_MOP_version/2018-05-20/
+atv, 'Na_on-band_007r.fits
+
+Looks like there is a lump in the middle as expected.  Away from
+center, vector is zero.  Corners are <0 suggesting off-band
+over-subtraction from bias or something
+
+Hmm.  Might need to do real bias subtraction because it looks like the
+BACKSUB picked up the background level of the whole image, not the
+off-image corners like I had hoped
+
+atv, '/data/io/IoIO/raw/2018-03-16_bias_dark/Trius_SX694-0005_1x1_bias.fit
+-20C 1635
+
+cd, '/data/PSIScope/raw/BIAS_DARKS
+atv, 'Bias-S001-R001-C001-B1.fts
+4.5C 1680 -- 1630
+
+atv, 'Bias-S001-R012-C001-B1.fts
+0C   1655 -- 1635 or so
+
+atv, 'Bias-S001-R079-C003-B1.fts
+-5C   1650 -- 1633 or so
+
+atv, 'Bias-S001-R144-C001-B1.fts
+-10C  1640 -- 1638
+
+atv, 'Bias-S001-R210-C001-B1.fts
+-15C 1635
+
+im = readfits('Bias-S001-R210-C001-B1.fts')
+median(im)
+       1634.0000
+
+atv, 'Dark-S001-R030-C001-B1.fts
+in 1000 s dark image at -15C
+
+im = readfits('Dark-S001-R030-C001-B1.fts')
+median(im)
+       1655.0000
+
+so that is 21/1000 # c/s/pix dark current
+
+0.021
+
+atv, 'Bias-S001-R276-C001-B1.fts
+-20C  1635
+
+im = readfits('Bias-S001-R276-C001-B1.fts')
+median(im)
+       1633.0000
+
+1000s dark
+im = readfits('Dark-S001-R036-C001-B1.fts')
+median(im)
+       1652.0000
+
+Not much different?
+
+1s dark
+im = readfits('Dark-S001-R031-C001-B1.fts')
+median(im)
+       1631.0000
+
+So there really is dark current.  Doesn't change much between sensor
+measured T -15 and -20C
+
+Supposed to be 0.003e-/s at -10C
+
+Gain is 0.3e-/ADU
+
+0.021 *.3
+0.0063
+
+So it is a factor of 2 high
+
+Could be high because of cosmic ray hits?  No, checked with 
+im = readfits('Dark-S001-R030-C001-B1.fts')
+imm = median(im, 3)
+median(imm)
+
+for a bias
+stddev(im)
+       15.475665
+
+Readnoise should be < 5
+
+stddev(im) * 0.3
+       4.6426997
+       
+So I should subtract bias and dark, which is pretty much one number
+
+ReduceCorObs.py reduce --recalculate --num 1 --directory /data/io/IoIO/raw/2018-05-20 
+atv, 'Na_on-band_007r.fits
+atv, '/data/io/IoIO/reduced.previous_versions/2018_MOP_version/2018-05-20/Na_on-band_007r.fits
+
+The previous was definitly over-subtracted in the corners
+
+Fixed code to do biases + there was som oscillation in the corners
+between +/-20- 20 or so, but other than that, it looks pretty good
+
+Don't want to kill Na because of on-band background level because that
+is my measurement!
+
+atv, 'SII_on-band_007r.fits
+
+looks nice,  compare to 
+
+atv, '/data/io/IoIO/reduced.previous_versions/2018_MOP_version/2018-05-20/SII_on-band_007r.fits
+
+0 scaling says they are a little different, but hard to tell
+
+Wed Jul 25 07:34:37 2018 EDT  jpmorgen@snipe
+
+I seem to have a time dependent difference between bias+dark and first
+hist peak: 14.79574140168711 -> 1 -> -15
+
+That is enough so that I should do better.
+
+After a while it get as big as -28, -38, -78, -84 (still on [SII])
+
+Consider taking a run through the [SII] images to get the real
+bias/dark as a function of time and then use that for all files.
+
+--> consider being more careful with patch of CCD used for dark.
+    Chance I see might be it just getting dark
+
+--> Long-term, make a bias_dark component that goes through and does
+    the study and informs final bias_dark subtraction
+
+Thinking of making a file with both Na and [SII] in it with the
+photometry from various apertures.  The [SII] would be a control.
+Keep in mind I am doing this asyncronously, so I will eventually need
+to sort the file.
+
+Looks like PDS4 wants CSV files.  There is a csv module in Python....
+
+import csv
+with open('ap_sum.csv', 'w', newline='') as csvfile:
+    csvw = csv.writer(csvfile, quoting=csv.QUOTE_NONNUMERIC)
+    csvw.writerow(['FNAME'] + ['LINE'] + ['TMID'] + ['EXPTIME'] + ['TOTAL'] + ['AP_WHOLE'] + ['AP_STRIP_300'])
+with open('ap_sum.csv', 'a', newline='') as csvfile:
+    csvw = csv.writer(csvfile, quoting=csv.QUOTE_NONNUMERIC)
+    csvw.writerow(['asd'] + ['Na'] + ['1998-02-03T00:00'] + [1234] + [123])
+
+with open('ap_sum.csv', newline='') as csvfile:
+    csvr = csv.reader(csvfile, quoting=csv.QUOTE_NONNUMERIC)
+    for row in csvr:
+        print(row)
+
+The alternative is dictionary, which is a little prettier maybe
+
+import csv
+with open('ap_sum.csv', newline='') as csvfile:
+    csvr = csv.DictReader(csvfile, quoting=csv.QUOTE_NONNUMERIC)
+    for row in csvr:
+        print(row)
+
+Prints None for things I haven't defined yet.  Looks like DictReader is nicer.
+
+But what I really want is something that gives me the rows in some way
+like a database
+
+import csv
+dlist = []
+with open('ap_sum.csv', newline='') as csvfile:
+    csvr = csv.DictReader(csvfile, quoting=csv.QUOTE_NONNUMERIC)
+    for row in csvr:
+        dlist.append(row)
+
+print(dlist[0]['TMID'])
+
+Tlist = [dlist[i]['TMID'] for i in range(len(dlist))]
+
+Tlist = [row['TMID'] for row in dlist]
+
+np.argsort(Tlist)
+
+
+dlist[0].keys()
+
+import csv
+with open('ap_sum_dict.csv', 'a', newline='') as csvfile:
+    csvw = csv.DictWriter(csvfile, dlist[0].keys(), quoting=csv.QUOTE_NONNUMERIC)
+    csvw.writeheader()
+    for row in dlist:
+        csvw.writerow(row)
+
+This puts the keys out of order.  It might be nice to define the keys
+first.  Also will need to check if overwrite, file has been written
+for header, all that stuff.
+
+OK, where do we put the writeheader?  Best in reduce_pair if I can get
+the logic right.
+
+reduce_pair doesn't know about other things that have run before.  So
+I should probably have ReduceDir delete the ap_sum (or whatever) file
+if it is going to recalculate a directory.  Then I check to see if the
+file exists on each call to reduce_pair, so I can make sure to start
+the file with the header.  After the directory has been processed,
+then I want to go back and look at the file.  This can be done in the
+same way do the movie tree, I suppose.
+
+ReduceCorObs.py reduce --recalculate /data/io/IoIO/raw/2018-05-20/SII_on-band_007.fits /data/io/IoIO/raw/2018-05-20/SII_off-band_007.fits
+
+ReduceCorObs.py reduce --recalculate /data/io/IoIO/raw/2018-05-20/SII_on-band_042.fits /data/io/IoIO/raw/2018-05-20/SII_off-band_042.fits
+
+atv, '/data/io/IoIO/reduced/2018-05-20/Na_on-band_007r.fits
+im = readfits('/data/io/IoIO/reduced/2018-05-20/Na_on-band_007r.fits')
+
+im35 = median(im, 35)
+taking a long time, like > 30s
+
+im3 = median(im, 3)
+
+im6 = median(im, 6)
+
+That looks the best
+
+There are some nasty negative things.
+
+mean(im)
+       57.027342241515456
+IDL> mean(im3)
+       56.118599598610693
+IDL> mean(im6)
+       57.167417728216272
+IDL> mean(im35)
+       51.595598239034388
+
+
+ReduceCorObs.py reduce --recalculate --directory /data/io/IoIO/raw/2018-05-20 
+
+Getting some big negative in the IPT images
+
+I suspect this is because of problems near the ND filter
+
+Thu Jul 26 10:03:24 2018 EDT  jpmorgen@snipe
+
+No, the problem on [SII] seems to be a general below zero
+
+ReduceCorObs.py reduce --recalculate /data/io/IoIO/raw/2018-05-20/SII_on-band_007.fits /data/io/IoIO/raw/2018-05-20/SII_off-band_007.fits
+
+On-band difference between bias+dark and first hist peak:  1.7966763942929447      
+Off-band difference between bias+dark and first hist peak:  -2.240000000000009  
+
+That is pretty good so it is presumably not
+
+atv, '/data/io/IoIO/raw/2018-05-20/SII_on-band_007.fits
+atv, '/data/io/IoIO/raw/2018-05-20/SII_off-band_007.fits
+
+There is definitly an edge from scattered light that can presumably be
+found by the first peak algorithm.
+
+But even after that is found to fairly high precision there is still
+this residual background.  For the [SII], this is relatively easy to
+deal with since we expect 0 and can set it to 0 by making the
+assumption we are seeing some sort of atmospheric emission in the
+off-band filter at the ~50R level.  This makes some sense because it
+is uniform across the field, not patterned after the scattered light
+
+OK, that potentially explains why [SII] is such a large negative sum.
+
+How can we make sure Na is OK?  I expect there to be earth atmospheric
+Na, which would make a pedestal.  The question is: do I have a large
+enough FOV to measure that.  Looking at Wilson et al 2002, 10Rj up or
+down is still 50 R or so from the intrinsic nebula.  I am getting an
+average of 57R
+
+Rj = np.asarray((50.1, 29.8))/2. # arcsec
+plate = 1.59/2 # main "/pix
+(2627-1467) * plate / Rj
+array([36.81437126, 61.89261745])
+
+So I do go up.down more than Wilson.
+
+im = readfits('/data/io/IoIO/reduced/2018-05-20/Na_on-band_007r.fits')
+plot, im[1522, *], /ylog, yrange=[1, 10000]
+
+Looks like residual might be 30 at an edge
+
+plot, im[1522, *] - 30, /ylog, yrange=[10, 1000]
+
+Fiddling with things convinces me I probably have a constant
+background issue in both the [SII] (off-band) and Na (on-band)
+
+I am also seeing the best way to present this is by average pixel
+value, so I need to do some pixel counting
+
+ReduceCorObs.py reduce --recalculate /data/io/IoIO/raw/2018-05-20/Na_on-band_007.fits /data/io/IoIO/raw/2018-05-20/Na_off-band_007.fits
+
+ReduceCorObs.py reduce --recalculate --movie --directory /data/io/IoIO/raw/2018-05-20 
+
+Consider doing edge masking from both on- and off-band images
+
+--> Note that the interpolate shift and rotate mess up the perfect 0
+    values at the edges of the ND filter
+
+--> note on this day the movie is messed up because it looks like the
+    center of Jupiter is messed up by the passage of a moon
+
+May be because I assume center of Jupiter is perfect?
+
+! Leave it a mystery for now
+
+Looking at aperture sums in Excel.  All apertures track each other.
+They all get brighter starting around 8UT.  That seems to be a linear
+trend on top of whatever downturn has happening before.  Last point is low
+
+second time equals first!  Seems to be my copying somehow
+
+A case could be made that there is a bump in the total aperture,
+presumably from Io.  There is less of that in the other data, but
+still a plateau.
+
+So I think I am ready to run this on everything.  I will need to make
+a routine that reads all the files like movie does, but that is what
+is up.
+
+Thu Jul 26 15:33:44 2018 EDT  jpmorgen@snipe
+
+ReduceCorObs.py reduce --tree --movie --recalculate
+

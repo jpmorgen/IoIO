@@ -3,6 +3,7 @@ import os
 import re
 import time
 from multiprocessing import Pool
+import csv
 import argparse
 
 import numpy as np
@@ -24,6 +25,7 @@ from IoIO import CorObsData, run_level_default_ND_params
 import define as D
 
 # Constants for use in code
+rversion = 0.2 # reduction version 
 data_root = '/data/io/IoIO'
 # For greping filter names out of headers, since I may change them or
 # expand the number
@@ -34,20 +36,31 @@ Na_eq_width = 11.22
 # There is a noticeable scattered light loss in the Na on-band filter.
 # Aperture photometry didn't fix it, so this is my guess at the
 # magnitude of the problem
-SII_on_loss = 1
+SII_on_loss = 0.95
 Na_on_loss = 0.8
+# Tue Jul 24 17:37:12 2018 EDT  jpmorgen@snipe
+# See notes in ioio.notebk of this day
+global_bias = 1633 # ADU
+global_dark = 0.021 # ADU/s
+global_readnoise = 15.5 # ADU
+global_gain = 0.3 # e/ADU --> from website for now
+reduce_edge_mask = -10 # Block out beyond ND filter
+ap_sum_fname = 'ap_sum.csv'
+
 # 80 would be perfect match.  Lets go a little short of that
 #global_frame_rate = 80
 global_frame_rate = 40
 default_movie_speedup = 24000
-movie_edge_mask = 12
+movie_edge_mask = -8
+#movie_edge_mask = 0
 # Max perpendicular distance from center of ND filter
-max_ND_dist = 30
+max_ND_dist = 20
 # Hyperthreading is a little optimistic reporting two full processes
 # per core.  Just stick with one process per core
 threads_per_core = 2
-background_light_threshold = 100 # ADU
-movie_background_light_threshold = 50 # rayleighs
+# Raised this from 100 since I am doing a better job with bias & dark
+background_light_threshold = 250 # ADU
+movie_background_light_threshold = 250 # rayleighs
 # Astrometry.  Just keep track of angle for now
 astrometry = [('2017-03-03', 57),
               ('2017-03-04', 175-180),
@@ -335,26 +348,44 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     # Use CorObsData to get basic properties like background level
     # and center.
     OnBandObsData = CorObsData(OnBand_HDUList,
-                               default_ND_params=default_ND_params)
+                               default_ND_params=default_ND_params,
+                               edge_mask=reduce_edge_mask)
     if OnBandObsData.quality < 5:
         log.warning('Skipping: poor quality center determination for '
                     + OnBand_HDUList.filename())
         return
     OffBandObsData = CorObsData(OffBand_HDUList,
-                                default_ND_params=default_ND_params)
+                                default_ND_params=default_ND_params,
+                                edge_mask=reduce_edge_mask)
     if OffBandObsData.quality < 5:
         log.warning('Skipping: poor quality center determination for '
                     + OffBand_HDUList.filename())
         return
     # --> eventually do proper bias subtraction
     # --> potentially check for high levels to reject bad files
-    on_im = OnBand_HDUList[0].data - OnBandObsData.back_level
+    #on_im = OnBand_HDUList[0].data - OnBandObsData.back_level
+    bias_dark = (float(global_bias)
+                 + OnBandObsData.header['EXPTIME'] * global_dark)
+    on_im = OnBand_HDUList[0].data -  bias_dark
+    D.say('On-band difference between bias+dark and first hist peak: ' ,
+          bias_dark - OnBandObsData.back_level)
+    header['BACKSUB'] = (bias_dark,
+                         'on-band back (bias, dark) value subtracted')
+    #impl = plt.imshow(on_im, origin='lower',
+    #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
+    #plt.show()
+
     on_back = np.mean(on_im)
     if on_back > background_light_threshold:
         log.warning('On-band background level too high: ' + str(on_back)
                     + ' for ' + OnBand_HDUList.filename())
         return
-    off_im = OffBand_HDUList[0].data - OffBandObsData.back_level
+    #off_im = OffBand_HDUList[0].data - OffBandObsData.back_level
+    bias_dark = (float(global_bias)
+                 + OffBandObsData.header['EXPTIME'] * global_dark)
+    off_im = OffBand_HDUList[0].data - bias_dark
+    D.say('Off-band difference between bias+dark and first hist peak: ' ,
+          bias_dark - OffBandObsData.back_level)
     off_back = np.mean(off_im)
     if off_back > background_light_threshold:
         log.warning('Off-band background level too high: ' + str(off_back)
@@ -365,12 +396,13 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
                     + OnBand_HDUList.filename() + ' '
                     + OffBand_HDUList.filename())
         return
-    header['BACKSUB'] = (OnBandObsData.back_level,
-                         'background value subtracted')
+    header['BBACKSUB'] = (bias_dark,
+                         'off-band back (bias, dark) value subtracted')
     # --> Worry about flat-fielding later
     # --> Make all these things FITS keywords
     # Get ready to shift off-band image to match on-band image
-    # --> Really want distance from ND filter center
+    # --> consider making a better center finder with correlation with
+    # 90 degree flip method that Carl suggested
     on_center = OnBandObsData.obj_center
     off_center = OffBandObsData.obj_center
     if OnBandObsData.header['OBJ2NDC'] > max_ND_dist:
@@ -402,9 +434,11 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     header['OFFS0'] = (shift_off[1], 'off-band axis 0 shift to align w/on-band')
     header['OFFS1'] = (shift_off[0], 'off-band axis 1 shift to align w/on-band')
     if '[SII]' in OnBandObsData.header['FILTER']:
+        line = '[SII]'
         eq_width = SII_eq_width
         on_loss = SII_on_loss
     elif 'Na' in OnBandObsData.header['FILTER']:
+        line = 'Na'
         eq_width = Na_eq_width
         on_loss = Na_on_loss
     else:
@@ -412,7 +446,16 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
                          OnBandObsData.header['FILTER'])
     header['ON_LOSS'] \
         = (on_loss, 'on-band scat. light loss for discrete sources')
+    off_im[OffBandObsData.ND_coords] = 0
     scat_sub_im = on_im - off_im * on_jup/off_jup * on_loss
+    # Get an on-band ObsData that has the ND_coords inside the edge of
+    # the ND filter and use that to define the good ND filter pixels
+    O = CorObsData(OnBand_HDUList, default_ND_params=default_ND_params)
+    good_ndpix = scat_sub_im[O.ND_coords]
+    # Blank out our ND filter with the reduce_edge_mask
+    scat_sub_im[OnBandObsData.ND_coords] = 0
+    # Poke back in good pixels
+    scat_sub_im[O.ND_coords] = good_ndpix
     header['OFFFNAME'] = (OffBand_HDUList.filename(),
                           'off-band file')
     header['OFFSCALE'] = (on_jup/off_jup, 'scale factor applied to off-band im')
@@ -421,9 +464,6 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     MR = 5.6E6 * eq_width
     # 1000 is ND filter
     scat_sub_im = scat_sub_im / (on_jup * 1000) * MR
-    # Put Jupiter back in.  Note this is MR, not MR/A
-    scat_sub_im[OnBandObsData.ND_coords] \
-        = on_im[OnBandObsData.ND_coords] / (on_jup * 1000) * MR
     header['BUNIT'] = ('rayleighs', 'pixel unit')
 
     # --> will want to check this earlier for proper pairing of
@@ -434,6 +474,10 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     else:
         gem_flip = 0
         
+    # --> consider just storing this in the header and letting
+    # --> subsequent reduction & analysis do things in native
+    # --> coordinates
+    
     # Calculate NPang if we weren't passed it, but store it in
     # property so it can be used for the next file in this day.
     # Also truncate to the integer so that astroquery caching can
@@ -493,16 +537,68 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     # Coronagraph flips images N/S.  Transpose alert
     scat_sub_im =np.flipud(scat_sub_im)
 
-    # Get ready to write
-    OnBand_HDUList[0].data = scat_sub_im
-    header['RVERSION'] = (0.1, 'Reduction version')
+    # Get ready to write some output to the reduced directory
     if not os.path.exists(red_data_root):
         os.mkdir(red_data_root)
     if not os.path.exists(reddir):
         os.mkdir(reddir)
+
+    # Do some quick-and-dirty aperture sums
+    # --> improve on this
+    fieldnames = ['TMID', 'EXPTIME', 'FNAME', 'LINE', 'TOTAL', 'AP_STRIP_300', 'AP_STRIP_600', 'AP_STRIP_1200', 'RDATE', 'RVERSION']
+    this_ap_sum_fname = os.path.join(reddir, ap_sum_fname)
+    if not os.path.exists(this_ap_sum_fname):
+        with open(this_ap_sum_fname, 'w', newline='') as csvfile:
+            csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
+                                   quoting=csv.QUOTE_NONNUMERIC)
+            csvdw.writeheader()
+    tmid = (get_tmid(header)).fits
+    ap_total = np.sum(scat_sub_im)
+    good_idx = np.where(scat_sub_im != 0)
+    ap_total /= len(good_idx[0])
+    # Make a copy so we don't mess up scat_sub_im
+    tim = scat_sub_im + 0
+    tim[int(center[0])-150:int(center[0])+150, :] = 0
+    ap_strip_300 = np.sum(tim)
+    good_idx = np.where(tim != 0)
+    ap_strip_300 /= len(good_idx[0])
+    tim[int(center[0])-300:int(center[0])+300, :] = 0
+    ap_strip_600 = np.sum(tim)
+    good_idx = np.where(tim != 0)
+    ap_strip_600 /= len(good_idx[0])
+    tim[int(center[0])-600:int(center[0])+600, :] = 0
+    ap_strip_1200 = np.sum(tim)
+    good_idx = np.where(tim != 0)
+    ap_strip_1200 /= len(good_idx[0])
+    rdate = (Time.now()).fits
+    header['TMID'] = (tmid, 'Midpoint of observation')
+    header['TOTAL'] = (ap_total, 'sum of entire image')
+    header['AP_300'] = (ap_strip_300, 'sum excluding strip _XXX pix in Y')
+    header['AP_600'] = (ap_strip_600, 'sum excluding strip _XXX pix in Y')
+    header['AP_1200'] = (ap_strip_1200, 'sum excluding strip _XXX pix in Y')
+    header['RDATE'] = (rdate, 'UT time of reduction')
+    header['RVERSION'] = (rversion, 'Reduction version')
+    row = {'TMID': tmid,
+           'EXPTIME': header['EXPTIME'],
+           'FNAME': outfname,
+           'LINE': line,
+           'TOTAL': ap_total,
+           'AP_STRIP_300': ap_strip_300,
+           'AP_STRIP_600': ap_strip_600,
+           'AP_STRIP_1200': ap_strip_1200,
+           'RDATE': rdate,
+           'RVERSION': rversion}
+    with open(this_ap_sum_fname, 'a', newline='') as csvfile:
+        csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
+                               quoting=csv.QUOTE_NONNUMERIC)
+        csvdw.writerow(row)
+
+    # Get ready to write
+    OnBand_HDUList[0].data = scat_sub_im
     OnBand_HDUList.writeto(outfname, overwrite=recalculate)
 
 def get_tmid(l):
+    """Get midpoint of observation whose FITS header is stored in dictionary l"""
     return Time(l['date-obs'], format='fits') + l['exptime']/2*u.s
 
 class ReduceDir():
@@ -551,11 +647,6 @@ class ReduceDir():
                         NPang=self.NPang,
                         default_ND_params=self.default_ND_params,
                         recalculate=self.recalculate)
-            #R = ReduceCorObs(pair[0],
-            #                 pair[1],
-            #                 NPang=self.NPang,
-            #                 default_ND_params=self.default_ND_params,
-            #                 recalculate=self.recalculate)
         except Exception as e:
             log.error(str(e) + ' skipping ' + pair[0] + ' ' + pair[1])
 
@@ -565,15 +656,15 @@ class ReduceDir():
             log.warning('FILTER keyword not present in any FITS headers, no usable files in ' + self.directory)
             return None 
         summary_table = self.collection.summary
+        reduced_dir = self.directory.replace('/raw/', '/reduced/')
         # --! We need to make sure the default_ND_params code has run
         # once so it evaluates to a value rather than a method when
         # used with multiprocessing otherwise it raises a "daemonic
         # processes are not allowed to have children" error
         self.default_ND_params
 
-        # Prepare to change our filter names from specific values and
-        # wavelengths to abstract on-band and off-band (ask around if
-        # this is wise)
+        # Create a list of on-band off-band pairs that are closest in
+        # time for each of our science lines
         line_names = ['[SII]', 'Na']
         on_off_pairs = []
         for line in line_names:
@@ -611,6 +702,7 @@ class ReduceDir():
             log.warning('No object files found in ' + self.directory)
             return
     
+        # --> I am going to want to improve this
         if self.NPang is None:
             # Reading in our first file is the easiest way to get the
             # properly formatted date for astroquery.  Use UT00:00,
@@ -624,6 +716,18 @@ class ReduceDir():
                            id_type='majorbody')
             self.NPang = jup.ephemerides()['NPang'].quantity.value[0]
 
+        # Get our summary file(s) ready.
+        this_ap_sum_fname = os.path.join(reduced_dir, ap_sum_fname)
+        if self.recalculate and os.path.isfile(this_ap_sum_fname):
+            # All files will be rewritten, so we want to start with a
+            # frech file
+            os.remove(os.path.join(reduced_dir, ap_sum_fname))
+        else:
+            # If reduced files already exist, they will be skipped,
+            # but we may have improved the code to add more reduced
+            # files, in which case we want their records to append to
+            # the summary file(s)
+            pass
         start = time.time()
         with Pool(int(args.num_processes)) as p:
             p.map(self.worker_reduce_pair, on_off_pairs)
@@ -636,9 +740,8 @@ class ReduceDir():
         if self.movie is not None:
             # We can be lazy here, since we know our directory
             # structure and OS
-            movie_dir = self.directory.replace('/raw/', '/reduced/')
             try:
-                make_movie(movie_dir, recalculate=args.recalculate)
+                make_movie(reduced_dir, recalculate=args.recalculate)
             except Exception as e:
                 log.error(str(e) + ' skipping movie for ' + self.directory)
         return
@@ -700,7 +803,7 @@ def reduce_cmd(args):
         off_band = args.on_band[1]
     else:
         on_band = args.on_band
-        off_band = args.on_band
+        off_band = args.off_band
     reduce_pair(on_band,
                 off_band,
                 NPang=args.NPang,
@@ -1152,9 +1255,12 @@ if __name__ == "__main__":
 #off_band = os.path.join(data_root, 'raw', '2018-04-21', 'Na_off-band_001.fits')
 #on_band = os.path.join(data_root, 'raw', '2018-03-28', 'SII_on-band_010.fits')
 #off_band = os.path.join(data_root, 'raw', '2018-03-28', 'SII_off-band_010.fits')
+#on_band = os.path.join(data_root, 'raw', '2018-05-20', 'SII_on-band_010.fits')
+#off_band = os.path.join(data_root, 'raw', '2018-05-20', 'SII_off-band_010.fits')
 #on_band = 'SII_on-band_010.fits'
 #off_band = 'SII_off-band_010.fits'
-    
+
+#reduce_pair(on_band, off_band, recalculate=True)
 #R = ReduceCorObs(on_band, off_band, recalculate=True)
 #HDUList = get_HDUList(on_band)
 #im = TiltImage(HDUList[0].data, .933, 16)
