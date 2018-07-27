@@ -309,47 +309,6 @@ class ObsData():
                 coefs = self.iter_linfit(x[goodc], y[goodc])
         return coefs
     
-
-    @property
-    def hist_of_im(self):
-        """Returns a tuple of the histogram of image and index into centers of
-bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
-
-        """
-        if self._hist_of_im is not None:
-            return self._hist_of_im
-        # Code from west_aux.py, maskgen.
-
-        # Histogram bin size should be related to readnoise
-        im = self.HDUList[0].data
-        hrange = (im.min(), im.max())
-        nbins = int((hrange[1] - hrange[0]) / self.readnoise)
-        hist, edges = np.histogram(im, bins=nbins,
-                                   range=hrange, density=True)
-        # Convert edges of histogram bins to centers
-        centers = (edges[0:-1] + edges[1:])/2
-        #plt.plot(centers, hist)
-        #plt.show()
-        self._hist_of_im = (hist, centers)
-        return self._hist_of_im
-
-    @property
-    def back_level(self):
-        # Use the histogram technique to spot the bias level of the image.
-        # The coronagraph creates a margin of un-illuminated pixels on the
-        # CCD.  These are great for estimating the bias and scattered
-        # light for spontanous subtraction.  The ND filter provides a
-        # similar peak after bias subutraction (or, rather, it is the
-        # second such peak)
-        # --> This is very specific to the coronagraph.  Consider porting first peak find from IDL
-        # Pass on readnoise, if supplied
-        if self._back_level is not None:
-            return self._back_level
-        im_hist, im_hist_centers = self.hist_of_im
-        im_peak_idx = signal.find_peaks_cwt(im_hist, np.arange(10, 50))
-        self._back_level = im_hist_centers[im_peak_idx[0]]
-        return self._back_level
-
     def imshow(self, im=None):
         if im is None:
             im = self.HDUList[0].data

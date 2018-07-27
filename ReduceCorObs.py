@@ -8,6 +8,7 @@ import argparse
 
 import numpy as np
 from scipy import ndimage
+from scipy.interpolate import UnivariateSpline
 from skimage import exposure
 from astropy import log
 from astropy import units as u
@@ -21,7 +22,8 @@ import matplotlib.pyplot as plt
 import moviepy.editor as mpy
 
 from precisionguide import get_HDUList
-from IoIO import CorObsData, run_level_default_ND_params
+import IoIO
+#from IoIO import CorObsData, run_level_default_ND_params
 import define as D
 
 # Constants for use in code
@@ -42,8 +44,6 @@ Na_on_loss = 0.8
 # See notes in ioio.notebk of this day
 global_bias = 1633 # ADU
 global_dark = 0.021 # ADU/s
-global_readnoise = 15.5 # ADU
-global_gain = 0.3 # e/ADU --> from website for now
 reduce_edge_mask = -10 # Block out beyond ND filter
 ap_sum_fname = 'ap_sum.csv'
 
@@ -132,7 +132,7 @@ def get_ND_params_1flat(fname):
         # Iterate to get independent default_ND_params for each flat
         default_ND_params = None
         for i in np.arange(3):
-            F = CorObsData(fname, default_ND_params=iter_ND_params)
+            F = IoIO.CorObsData(fname, default_ND_params=iter_ND_params)
             iter_ND_params = F.ND_params
     except ValueError as e:
         log.error('Skipping: ' + fname + '. ' + str(e))
@@ -144,8 +144,7 @@ def get_default_ND_params(directory='.',
                           num_processes=None):
     """Derive default_ND_params from up to maxcount flats in directory.  Returns None if no (good) flats are found
     """
-    if not os.path.isdir(directory):
-        raise ValueError("Specify directory to search for flats and derive default_ND_params")
+    assert os.path.isdir(directory), "Specify directory to search for flats and derive default_ND_params"
     if maxcount is None:
         maxcount = 10
     if num_processes is None:
@@ -215,7 +214,7 @@ def ND_params_dir(directory=None, default_ND_params=None):
     for count, f in enumerate(objs):
         D.say(f)
         try:
-            O = CorObsData(f, default_ND_params=default_ND_params)
+            O = IoIO.CorObsData(f, default_ND_params=default_ND_params)
             if O.header["EXPTIME"] == 300:
                 if O.header["FILTER"] == "[SII] 6731A 10A FWHM":
                     torus_count += 1
@@ -302,8 +301,65 @@ def surf_bright(im, coord, minrad=3.):
         print(sb)
         r += 1
 
+class Background():
+    """Class for measuring and providing CCD background as a function of time using [SII] on-band images"""
+    def __init__(self,
+                 fname_or_directory=None,
+                 collection=None,
+                 num_processes=None):
+        if fname_or_directory is None:
+            fname_or_directory = '.'
+        if num_processes is None:
+            num_processes=int(os.cpu_count()/threads_per_core)
+        SII_on_list = []
+        if os.path.isfile(fname_or_directory):
+            SII_on_list = [fname_or_directory]
+        elif os.path.isdir(fname_or_directory):
+            if collection is None:
+                collection = ccdproc.ImageFileCollection(fname_or_directory)
+            if not 'imagetyp' in collection.keywords:
+                raise ValueError('IMAGETYP keyword not found in any files: ' + fname_or_directory)
+            # Do this like reduce_dir
+            SII_filt = get_filt_name(collection, '[SII]', on_band=True)
+            SII_on_list = [os.path.join(fname_or_directory, l['file'])
+                           for l in collection.summary
+                           if (l['filter'] == SII_filt
+                               and l['imagetyp'].lower() == 'light'
+                               and l['xbinning'] == 1
+                               and l['ybinning'] == 1)]
+        if len(SII_on_list) == 0:
+            # --> I might want to ammend this
+            raise ValueError('Background: no [SII] images to work with')
+        with Pool(int(num_processes)) as p:
+            self.jd_b_list = p.map(self.worker_get_back_level, SII_on_list)
+        if len(SII_on_list) == 1:
+            log.warning("Only one image found, doing the best I can with it's background")
+            self.spl = None
+            return
+        (jdlist, backlist) = zip(*self.jd_b_list)
+        self.spl = UnivariateSpline(jdlist, backlist)
+        return
+
+    def worker_get_back_level(self, f):
+        HDUL = get_HDUList(f)
+        T = Time(HDUL[0].header['DATE-OBS'], format='fits')
+        b = IoIO.back_level(HDUL[0].data)
+        return (T.jd, b)
+    
+    def background(self, ftime):
+        """Returns best estimate background for time given in FITS string format"""
+        if self.spl is None:
+            return self.Tb_list[0][1]
+        T = Time(ftime, format='fits')
+        return np.asscalar(self.spl(T.jd))
+
+def get_tmid(l):
+    """Get midpoint of observation whose FITS header is stored in dictionary l (l can be a line in a collection)"""
+    return Time(l['date-obs'], format='fits') + l['exptime']/2*u.s
+
 def reduce_pair(OnBand_HDUList_im_or_fname=None,
                 OffBand_HDUList_im_or_fname=None,
+                back_obj=None,
                 default_ND_params=None,
                 NPang=None,
                 outfname=None,
@@ -345,32 +401,41 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
                   + outfname)
         return
 
-    # Use CorObsData to get basic properties like background level
+    # Use IoIO.CorObsData to get basic properties like background level
     # and center.
-    OnBandObsData = CorObsData(OnBand_HDUList,
+    OnBandObsData = IoIO.CorObsData(OnBand_HDUList,
                                default_ND_params=default_ND_params,
                                edge_mask=reduce_edge_mask)
     if OnBandObsData.quality < 5:
         log.warning('Skipping: poor quality center determination for '
                     + OnBand_HDUList.filename())
         return
-    OffBandObsData = CorObsData(OffBand_HDUList,
+    OffBandObsData = IoIO.CorObsData(OffBand_HDUList,
                                 default_ND_params=default_ND_params,
                                 edge_mask=reduce_edge_mask)
     if OffBandObsData.quality < 5:
         log.warning('Skipping: poor quality center determination for '
                     + OffBand_HDUList.filename())
         return
+    if back_obj is None:
+        rawfname = OnBand_HDUList.filename()
+        if rawfname is None:
+            back_obj = Background(OnBand_HDUList)
+        else:
+            back_obj = Background(os.path.dirname(rawfname))
+    bias_dark = back_obj.background(OnBandObsData.header['DATE-OBS'])
     # --> eventually do proper bias subtraction
     # --> potentially check for high levels to reject bad files
     #on_im = OnBand_HDUList[0].data - OnBandObsData.back_level
-    bias_dark = (float(global_bias)
-                 + OnBandObsData.header['EXPTIME'] * global_dark)
+    #bias_dark = (float(global_bias)
+    #             + OnBandObsData.header['EXPTIME'] * global_dark)
     on_im = OnBand_HDUList[0].data -  bias_dark
-    D.say('On-band difference between bias+dark and first hist peak: ' ,
-          bias_dark - OnBandObsData.back_level)
-    header['BACKSUB'] = (bias_dark,
+    #D.say('On-band difference between bias+dark and first hist peak: ' ,
+    #      bias_dark - OnBandObsData.back_level)
+    header['ONBSUB'] = (bias_dark,
                          'on-band back (bias, dark) value subtracted')
+    header['DONBSUB'] = (bias_dark - OnBandObsData.back_level,
+                         'on-band back - ind. est. back via histogram')
     #impl = plt.imshow(on_im, origin='lower',
     #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
     #plt.show()
@@ -381,11 +446,12 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
                     + ' for ' + OnBand_HDUList.filename())
         return
     #off_im = OffBand_HDUList[0].data - OffBandObsData.back_level
-    bias_dark = (float(global_bias)
-                 + OffBandObsData.header['EXPTIME'] * global_dark)
+    bias_dark = back_obj.background(OffBandObsData.header['DATE-OBS'])
+    #bias_dark = (float(global_bias)
+    #             + OffBandObsData.header['EXPTIME'] * global_dark)
     off_im = OffBand_HDUList[0].data - bias_dark
-    D.say('Off-band difference between bias+dark and first hist peak: ' ,
-          bias_dark - OffBandObsData.back_level)
+    #D.say('Off-band difference between bias+dark and first hist peak: ' ,
+    #      bias_dark - OffBandObsData.back_level)
     off_back = np.mean(off_im)
     if off_back > background_light_threshold:
         log.warning('Off-band background level too high: ' + str(off_back)
@@ -396,8 +462,10 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
                     + OnBand_HDUList.filename() + ' '
                     + OffBand_HDUList.filename())
         return
-    header['BBACKSUB'] = (bias_dark,
+    header['OFFBSUB'] = (bias_dark,
                          'off-band back (bias, dark) value subtracted')
+    header['DOFFBSUB'] = (bias_dark - OffBandObsData.back_level,
+                         'off-band back - ind. est. back via histogram')
     # --> Worry about flat-fielding later
     # --> Make all these things FITS keywords
     # Get ready to shift off-band image to match on-band image
@@ -450,7 +518,7 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     scat_sub_im = on_im - off_im * on_jup/off_jup * on_loss
     # Get an on-band ObsData that has the ND_coords inside the edge of
     # the ND filter and use that to define the good ND filter pixels
-    O = CorObsData(OnBand_HDUList, default_ND_params=default_ND_params)
+    O = IoIO.CorObsData(OnBand_HDUList, default_ND_params=default_ND_params)
     good_ndpix = scat_sub_im[O.ND_coords]
     # Blank out our ND filter with the reduce_edge_mask
     scat_sub_im[OnBandObsData.ND_coords] = 0
@@ -545,7 +613,7 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
 
     # Do some quick-and-dirty aperture sums
     # --> improve on this
-    fieldnames = ['TMID', 'EXPTIME', 'FNAME', 'LINE', 'TOTAL', 'AP_STRIP_300', 'AP_STRIP_600', 'AP_STRIP_1200', 'RDATE', 'RVERSION']
+    fieldnames = ['TMID', 'EXPTIME', 'FNAME', 'LINE', 'ONBSUB', 'OFFBSUB', 'DONBSUB', 'DOFFBSUB', 'TOTAL', 'AP_STRIP_300', 'AP_STRIP_600', 'AP_STRIP_1200', 'RDATE', 'RVERSION']
     this_ap_sum_fname = os.path.join(reddir, ap_sum_fname)
     if not os.path.exists(this_ap_sum_fname):
         with open(this_ap_sum_fname, 'w', newline='') as csvfile:
@@ -582,6 +650,10 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
            'EXPTIME': header['EXPTIME'],
            'FNAME': outfname,
            'LINE': line,
+           'ONBSUB': header['ONBSUB'],
+           'OFFBSUB': header['OFFBSUB'],
+           'DONBSUB': header['DONBSUB'],
+           'DOFFBSUB': header['DOFFBSUB'],
            'TOTAL': ap_total,
            'AP_STRIP_300': ap_strip_300,
            'AP_STRIP_600': ap_strip_600,
@@ -597,23 +669,21 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     OnBand_HDUList[0].data = scat_sub_im
     OnBand_HDUList.writeto(outfname, overwrite=recalculate)
 
-def get_tmid(l):
-    """Get midpoint of observation whose FITS header is stored in dictionary l"""
-    return Time(l['date-obs'], format='fits') + l['exptime']/2*u.s
-
 class ReduceDir():
     def __init__(self,
                  directory=None,
                  collection=None,
                  recalculate=False,
+                 back_obj=None,
                  default_ND_params=None,
                  NPang=None,
                  num_processes=None,
                  movie=None):
         assert directory is not None
         self.directory = directory
-        self._collection = None
+        self._collection = collection
         self.recalculate = recalculate
+        self._back_obj = back_obj
         self._default_ND_params = default_ND_params
         # --> This will eventually be a more involved set of ephemerides outputs
         self.NPang = NPang
@@ -629,6 +699,12 @@ class ReduceDir():
         return self._collection
 
     @property
+    def back_obj(self):
+        if self._back_obj is not None:
+            return self._back_obj
+        self._back_obj = Background(self.directory, self.collection)
+
+    @property
     def default_ND_params(self):
         if self._default_ND_params is not None:
             return self._default_ND_params
@@ -637,15 +713,16 @@ class ReduceDir():
         if self._default_ND_params is None:
             log.warning('No (good) flats found in directory '
                         + self.directory + ' using run_level_default_ND_params')
-            self._default_ND_params = run_level_default_ND_params
+            self._default_ND_params = IoIO.run_level_default_ND_params
         return self._default_ND_params
 
     def worker_reduce_pair(self, pair):
         try:
             reduce_pair(pair[0],
                         pair[1],
-                        NPang=self.NPang,
+                        back_obj=self.back_obj,
                         default_ND_params=self.default_ND_params,
+                        NPang=self.NPang,
                         recalculate=self.recalculate)
         except Exception as e:
             log.error(str(e) + ' skipping ' + pair[0] + ' ' + pair[1])
@@ -657,10 +734,17 @@ class ReduceDir():
             return None 
         summary_table = self.collection.summary
         reduced_dir = self.directory.replace('/raw/', '/reduced/')
-        # --! We need to make sure the default_ND_params code has run
-        # once so it evaluates to a value rather than a method when
-        # used with multiprocessing otherwise it raises a "daemonic
-        # processes are not allowed to have children" error
+        # --! We need to make sure the Background and
+        # default_ND_params code has run once so it evaluates to a
+        # value rather than a method when used with multiprocessing
+        # otherwise it raises a "daemonic processes are not allowed to
+        # have children" error
+        try:
+            self.back_obj
+        except Exception as e:
+            log.error(str(e) + ' skipping ' + self.directory)
+            return
+
         self.default_ND_params
 
         # Create a list of on-band off-band pairs that are closest in
@@ -771,7 +855,7 @@ def reduce_cmd(args):
                     and persistent_default_ND_params is None):
                     # First time through no flats.  Presumably this is
                     # recent data from the current run
-                    default_ND_params = run_level_default_ND_params
+                    default_ND_params = IoIO.run_level_default_ND_params
                     log.warning('No default_ND_params supplied and flats in '
                                 + directory)
                 elif (default_ND_params is None
@@ -787,7 +871,7 @@ def reduce_cmd(args):
                           num_processes=args.num_processes,
                           movie=args.movie)
         if args.movie is not None:
-            movie_concatenate(top.replace('/raw/', '/reduced/'))
+            movie_concatenate(top.replace('/raw', '/reduced'))
         return
     if args.directory is not None:
         R = ReduceDir(args.directory,
@@ -939,7 +1023,7 @@ class MovieCorObs():
             chop = 8000
             scale_jup = 50
         # Might want to adjust edge_mask.  -5 was OK on 2018-04-21
-        O = CorObsData(self.HDULcur, edge_mask=movie_edge_mask)
+        O = IoIO.CorObsData(self.HDULcur, edge_mask=movie_edge_mask)
         c = (np.asarray(im.shape)/2).astype(int)
         # Scale Jupiter down by 10 to get MR/A and 10 to get
         # it on comparable scale to torus
@@ -1105,46 +1189,6 @@ def movie_cmd(args):
     if args.concatenate:
         movie_concatenate(args.directory)
         return
-    #if args.tree is not None or args.concatenate is not None:
-    #    top = args.directory
-    #    if top is None:
-    #        top = os.path.join(data_root, 'reduced')
-    #    dirs = [os.path.join(top, d) for d in sorted(os.listdir(top))
-    #            if os.path.isdir(os.path.join(top, d))]
-    #    if args.tree is not None:
-    #        # remove --tree so our recursive call won't loop!
-    #        args.tree = None
-    #        W = PoolWorker(movie_cmd, 'directory', args)
-    #        with Pool(int(args.num_processes)) as p:
-    #            p.map(W.worker, dirs)
-    #        return
-    #    # Concatenate.  If we call this, --recalculate is assumed
-    #    clips = []
-    #    for d in dirs:
-    #        if (('cloudy' in d
-    #             or 'marginal' in d
-    #             or 'dew' in d
-    #             or 'bad' in d)):
-    #            continue
-    #        try:
-    #            c = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
-    #        except:
-    #            log.warning('Bad movie in ' + d)
-    #            continue
-    #        clips.append(c)
-    #    #clips = [mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
-    #    #         for d in dirs
-    #    #         if (not ('cloudy' in d
-    #    #                  or 'marginal' in d)
-    #    #             and os.path.isfile(os.path.join(d, 'Na_SII.mp4'))
-    #    #             and print(os.path.join(d, 'Na_SII.mp4')))]
-    #    animation = mpy.concatenate_videoclips(clips)
-    #    animation.write_videofile(os.path.join(top, 'Na_SII.mp4'),
-    #                        fps=global_frame_rate)
-    #    #animation.write_gif(os.path.join(top, 'Na_SII.gif'),
-    #    #                    fps=global_frame_rate)
-    #    
-    #    return
     assert args.directory is not None
     try:
         make_movie(args.directory,

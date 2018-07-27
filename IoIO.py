@@ -5,20 +5,54 @@
 # "C:\ProgramData\Anaconda3\python.exe" "%1" %*
 # Thanks to https://stackoverflow.com/questions/29540541/executable-python-script-not-take-sys-argv-in-windows
 
+import argparse
+
 import numpy as np
 from astropy import log
 from astropy.io import fits
 from astropy.time import Time, TimeDelta
-import precisionguide as pg
 from scipy import signal, ndimage
 import matplotlib.pyplot as plt
-import argparse
+
+import precisionguide as pg
 
 # Constants for use in code
+global_gain = 0.3 # measure this to make sure
+# Measured as per ioio.notebk Tue Jul 10 12:13:33 2018 MDT  jpmorgen@byted
+global_readnoise = 15.475665 * global_gain
 SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 run_level_default_ND_params \
     = [[  3.63686271e-01,   3.68675375e-01],
        [  1.28303305e+03,   1.39479846e+03]]
+
+def hist_of_im(im, readnoise=None):
+    """Returns a tuple of the histogram of image and index into centers of
+bins."""
+    # Code from west_aux.py, maskgen.
+    if readnoise is None:
+        readnoise = global_readnoise
+    # Histogram bin size should be related to readnoise
+    hrange = (im.min(), im.max())
+    nbins = int((hrange[1] - hrange[0]) / readnoise)
+    hist, edges = np.histogram(im, bins=nbins,
+                               range=hrange, density=True)
+    # Convert edges of histogram bins to centers
+    centers = (edges[0:-1] + edges[1:])/2
+    #plt.plot(centers, hist)
+    #plt.show()
+    return (hist, centers)
+
+def back_level(im, readnoise=None):
+    # Use the histogram technique to spot the bias level of the image.
+    # The coronagraph creates a margin of un-illuminated pixels on the
+    # CCD.  These are great for estimating the bias and scattered
+    # light for spontanous subtraction.  The ND filter provides a
+    # similar peak after bias subutraction (or, rather, it is the
+    # second such peak)
+    # --> This is very specific to the coronagraph.  Consider porting first peak find from IDL
+    im_hist, im_hist_centers = hist_of_im(im, readnoise)
+    im_peak_idx = signal.find_peaks_cwt(im_hist, np.arange(10, 50))
+    return im_hist_centers[im_peak_idx[0]]
 
 class CorObsData(pg.ObsData):
     """Object for containing coronagraph image data used for centering Jupiter
@@ -30,7 +64,7 @@ class CorObsData(pg.ObsData):
                  HDUList_im_or_fname=None,
                  default_ND_params=None,
                  recalculate=False,
-                 readnoise=5, 
+                 readnoise=None, 
                  y_center=None,
                  n_y_steps=8, # was 15
                  x_filt_width=25,
@@ -48,6 +82,8 @@ class CorObsData(pg.ObsData):
 
         self.y_center = y_center
         self.readnoise = readnoise
+        if self.readnoise is None:
+            self.readnoise = global_readnoise
 
         # Define defaults for ND mask finding algorithm.  It is easy
         # to find the ND mask in flats, but not Jupiter images.  We
@@ -173,6 +209,23 @@ class CorObsData(pg.ObsData):
         self.desired_center
         self.obj_to_ND
 
+    @property
+    def hist_of_im(self):
+        """Returns a tuple of the histogram of image and index into centers of
+bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
+
+        """
+        if self._hist_of_im is not None:
+            return self._hist_of_im
+        self._hist_of_im = hist_of_im(self.HDUList[0].data, self.readnoise)
+        return self._hist_of_im
+
+    @property
+    def back_level(self):
+        if self._back_level is not None:
+            return self._back_level
+        self._back_level = back_level(self.HDUList[0].data, self.readnoise)
+        return self._back_level
 
     @property
     def obj_center(self):

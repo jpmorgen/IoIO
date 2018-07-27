@@ -4755,3 +4755,25 @@ Thu Jul 26 15:33:44 2018 EDT  jpmorgen@snipe
 
 ReduceCorObs.py reduce --tree --movie --recalculate
 
+!!  Something seemed to happen April .  Hmm.  My data got rattier....
+
+Horizons gives me the moon angle for Jupiter, so I don't need to
+calculate that separately, though moon height would be nice (does have
+m flag)
+
+? Am I too cool in April?
+
+Seems to be the pattern
+
+atv, '/data/io/IoIO/reduced/2018-02-06/Na_IPT_R-0002_SII_on-bandr.fit
+atv, '/data/io/IoIO/reduced/2018-02-06/Na_IPT_R-0003_Na_on-bandr.fit
+
+Whoa!  Bias changed!  Seems to be about 1726 now, easily read from
+[SII] image
+
+Need to have a better way of determining this for the Na images.  Try
+some aperture sums?  No, do the interpolation from SII images
+
+Thu Jul 26 22:23:26 2018 EDT  jpmorgen@snipe
+
+ReduceCorObs.py reduce --tree --movie --recalculate
