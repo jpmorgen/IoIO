@@ -4777,3 +4777,9 @@ some aperture sums?  No, do the interpolation from SII images
 Thu Jul 26 22:23:26 2018 EDT  jpmorgen@snipe
 
 ReduceCorObs.py reduce --tree --movie --recalculate
+
+Fri Jul 27 07:43:24 2018 EDT  jpmorgen@snipe
+
+Well, that finished and it looks almost the same!
+
+No, the problem is that I did not sort the output of 

@@ -336,6 +336,9 @@ class Background():
             log.warning("Only one image found, doing the best I can with it's background")
             self.spl = None
             return
+        # UnivariateSpline needs things in order.  Thanks to
+        # https://stackoverflow.com/questions/3121979/how-to-sort-list-tuple-of-lists-tuples
+        self.jd_b_list.sort(key=lambda tup: tup[0])
         (jdlist, backlist) = zip(*self.jd_b_list)
         self.spl = UnivariateSpline(jdlist, backlist)
         return
