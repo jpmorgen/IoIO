@@ -38,12 +38,12 @@ for d in get_dirs(top):
         master_list.extend(dlist)
         # Separate out Na measurements for this day and take the median
         line_list = [row for row in dlist if row['LINE'] == line]
-        m = np.median([row['TOTAL'] for row in line_list])
+        #m = np.median([row['TOTAL'] for row in line_list])
         #m = np.median([row['TOTAL'] - row['AP_STRIP_300'] for row in line_list])
         #n = np.median([row['AP_STRIP_300'] for row in line_list])
         #m = m - n
         #m = np.median([row['AP_STRIP_300'] for row in line_list])
-        #m = np.median([row['AP_STRIP_600'] for row in line_list])
+        m = np.median([row['AP_STRIP_600'] for row in line_list])
         #m = np.median([row['AP_STRIP_1200'] for row in line_list])
         median_list.append(m)
         median_times.append(dlist[0]['TMID'])
@@ -56,9 +56,9 @@ Tlist = [row['TMID'] for row in line_list]
 T = Time(Tlist, format='fits')
 TM = Time(median_times, format='fits')
 #plt.plot_date(T.plot_date, [row['TOTAL'] - row['AP_STRIP_1200'] for row in line_list]),
-plt.plot_date(T.plot_date, [row['TOTAL'] for row in line_list]),
+#plt.plot_date(T.plot_date, [row['TOTAL'] for row in line_list]),
 #plt.plot_date(T.plot_date, [row['AP_STRIP_300'] for row in line_list], 'v')
-#plt.plot_date(T.plot_date, [row['AP_STRIP_600'] for row in line_list], 's')
+plt.plot_date(T.plot_date, [row['AP_STRIP_600'] for row in line_list], 's')
 #plt.plot_date(T.plot_date, [row['AP_STRIP_1200'] for row in line_list], '*')
 #plt.plot_date(T.plot_date, [row['DONBSUB'] for row in line_list], 'o')
 #plt.plot_date(T.plot_date, [row['DOFFBSUB'] for row in line_list], '^')

@@ -4782,4 +4782,72 @@ Fri Jul 27 07:43:24 2018 EDT  jpmorgen@snipe
 
 Well, that finished and it looks almost the same!
 
-No, the problem is that I did not sort the output of 
+No, the problem is that I did not sort the output of asyncronous
+jobs....
+
+OK, rerunning.  
+
+Fri Jul 27 11:37:06 2018 EDT  jpmorgen@snipe
+
+Done with rerun
+
+Looks like moon was not until Jan 27.  Got close Feb 6 -- 9, went away
+Feb 13.
+
+Back again Feb 23, close Mar 5 -- 9, gone Mar 15
+
+out very close starting Feb 6
+
+Fri Jul 27 13:08:25 2018 EDT  jpmorgen@snipe
+
+Well, I can look at the [SII] distribution and find that away from the
+IPT, there is no evidence of increase in light.
+
+Worry about temperature sensitivity of off-axis response.  Plot total
+and it really doesn't make much difference.
+
+Interestingly, just the central part peaks later.
+
+Wait a minute.  The way I have done the subtraction with medians, the
+surface brightness in the center is much less bright than I
+expect....  Ahh.  I am subtracting the surface brightnesses without
+taking into consideration the area...
+
+But the reason I was checking the middle area inside of 300 pixels was
+to see if the effect went away, since I would expect the wavelength
+shift to not be so close to the edge of the bandpass.  That didn't
+seem to be the problem
+
+--> Oops, I think I need to fix my background to include off-band
+    images as well, since the exposure time and thus dark current will
+    be different
+
+Tue Jul 31 12:51:49 2018 EDT  jpmorgen@byted
+
+--> Consider taking the stdev of the nighly aperture sums to see if it
+    is a bad cloud night
+
+Sat Aug 04 04:05:00 2018 MST  jpmorgen@byted
+
+--> talked with Dean about coordinate systems and camera orientation.
+    It seems like ASCOM has things backward from Astro-Physics and
+    Dean's preference.  His preference is to have north up when the
+    mount is on the west looking east.  I didn't necessarily think of
+    it that way, I just pressed north on the AP ASCOM driver and
+    assumed that was north.  But that is only north when the mount is
+    on the west looking east
+
+Thu Aug 16 17:37:56 2018 EDT  jpmorgen@snipe
+
++    off_im *= on_jup/off_jup * on_loss
++    scat_sub_im = on_im - off_im
++    # I like TACOS!
+
+what an aperture sum procedure or method of an object that does the
+aperture sum for an exclusion zone and writes the result somehow
+
+ReduceCorObs.py reduce --recalculate /data/io/IoIO/raw/2018-05-20/Na_on-band_007.fits /data/io/IoIO/raw/2018-05-20/Na_off-band_007.fits
+ReduceCorObs.py reduce --recalculate --movie --directory /data/io/IoIO/raw/2018-05-20 
+Move files off
+Thu Aug 16 23:16:34 2018 EDT  jpmorgen@snipe
+ReduceCorObs.py reduce --tree --movie --recalculate

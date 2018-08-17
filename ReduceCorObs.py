@@ -31,7 +31,12 @@ rversion = 0.2 # reduction version
 data_root = '/data/io/IoIO'
 # For greping filter names out of headers, since I may change them or
 # expand the number
-line_associations = [('[SII]', '6731'), ('Na', '5890')]
+# Na 5890A 10A FWHM
+# [SII] 6731A 10A FWHM
+# Na continuum 50A FWHM
+# [SII] continuum 40A FWHM
+line_associations = [{'line': '[SII]', 'cwl': '6731'},
+                     {'line': 'Na',    'cwl': '5890'}]
 # These are the equavalent widths of the filters in angstroms
 SII_eq_width = 9.95
 Na_eq_width = 11.22
@@ -87,9 +92,29 @@ def get_astrometry_angle(date_obs):
         alast = a
     return(alast[1])
 
-def get_filt_name(collection, line=None, on_band=False, off_band=False):
+def get_filt_band(header):
+    f = header['FILTER'] 
+    if 'cont' in f or 'off' in f:
+        return 'off'
+    # On-band is harder, since I don't labeled it as such...
+    if 'on' in header['FILTER']:
+        # ...but may in the future
+        return 'on'
+    line_assoc = [la for la in line_associations
+                  if la['cwl'] in f]
+    # Make it just one element
+    line_assoc = line_assoc[0]
+    if (line_assoc['line'] in f
+        and (line_assoc['cwl'] in f
+             or ("on" in f
+                 and not "cont" in f))):
+        return 'on'
+    raise ValueError("Cannot identify band in " + f)
+
+def get_filt_name(collection, line=None, band='None'):
     assert line is not None
-    assert on_band + off_band == 1
+    assert band is not None
+    band = band.lower()  
     # unique has problems when biases are in the directory because
     # their missing FILTER keywords results in a masked value being
     # inserted into the array, which throws a error: TypeError:
@@ -103,23 +128,22 @@ def get_filt_name(collection, line=None, on_band=False, off_band=False):
     # https://stackoverflow.com/questions/12897374/get-unique-values-from-a-list-in-python
     filt_names = list(set(filt_names))
     line_assoc = [la for la in line_associations
-                  if line in la]
+                  if line in la['line']]
+    # make it one item
     line_assoc = line_assoc[0]
-    if on_band:
-        band = 'on'
+    if band == 'on':
         filt = [f for f in filt_names
-                if (line_assoc[0] in f
-                    and (line_assoc[1] in f
+                if (line_assoc['line'] in f
+                    and (line_assoc['cwl'] in f
                          or ("on" in f
                              and not "cont" in f)))]
-    elif off_band:
-        band = 'off'
+    elif band == 'off':
         filt = [f for f in filt_names
-                    if (line_assoc[0] in f
+                    if (line_assoc['line'] in f
                         and ("cont" in f
                              or "off" in f))]
     else:
-        raise ValueError('either on_band or off_band must be True')
+        raise ValueError("Unknown band type " + band + ".  Expecting 'on' or 'off'")
     if len(filt) == 0:
         log.warning('Requested filter ' + line + ' ' + band + '-band not found')
         return None
@@ -319,28 +343,44 @@ class Background():
                 collection = ccdproc.ImageFileCollection(fname_or_directory)
             if not 'imagetyp' in collection.keywords:
                 raise ValueError('IMAGETYP keyword not found in any files: ' + fname_or_directory)
-            # Do this like reduce_dir
-            SII_filt = get_filt_name(collection, '[SII]', on_band=True)
-            SII_on_list = [os.path.join(fname_or_directory, l['file'])
-                           for l in collection.summary
-                           if (l['filter'] == SII_filt
-                               and l['imagetyp'].lower() == 'light'
-                               and l['xbinning'] == 1
-                               and l['ybinning'] == 1)]
-        if len(SII_on_list) == 0:
-            # --> I might want to ammend this
+            
+        # Make a dictionary containing two keys: on and off, with
+        # the lists of files for on and off-band filters in each
+        fdict = {}
+        for band in ['on', 'off']:
+            SII_filt = get_filt_name(collection, '[SII]', band)
+            flist = [os.path.join(fname_or_directory, l['file'])
+                     for l in collection.summary
+                     if (l['filter'] == SII_filt
+                         and l['imagetyp'].lower() == 'light'
+                         and l['xbinning'] == 1
+                         and l['ybinning'] == 1)]
+            if len(flist) == 0:
+                continue
+            fdict[band] = flist
+        if not fdict:
+            # --> could potentially do the best I can with Na or
+            # another method
             raise ValueError('Background: no [SII] images to work with')
-        with Pool(int(num_processes)) as p:
-            self.jd_b_list = p.map(self.worker_get_back_level, SII_on_list)
-        if len(SII_on_list) == 1:
-            log.warning("Only one image found, doing the best I can with it's background")
-            self.spl = None
-            return
+        self.jd_b_dict = {}
+        self.spl_dict = {}
+        for band in ['on', 'off']:
+            with Pool(int(num_processes)) as p:
+                jd_b_list = p.map(self.worker_get_back_level, fdict[band])
+            self.jd_b_dict[band] = jd_b_list
+            if len(jd_b_list) == 1:
+                log.warning("Only one " + band + "-band image found, doing the best I can with it's background")
+                self.spl_dict[band] = None
+                return
         # UnivariateSpline needs things in order.  Thanks to
         # https://stackoverflow.com/questions/3121979/how-to-sort-list-tuple-of-lists-tuples
-        self.jd_b_list.sort(key=lambda tup: tup[0])
-        (jdlist, backlist) = zip(*self.jd_b_list)
-        self.spl = UnivariateSpline(jdlist, backlist)
+        self.spl_dict = {}
+        for band in ['on', 'off']:
+            jd_b_list = self.jd_b_dict[band]
+            jd_b_list.sort(key=lambda tup: tup[0])
+            (jdlist, backlist) = zip(*jd_b_list)
+            spl = UnivariateSpline(jdlist, backlist)
+            self.spl_dict[band] = spl
         return
 
     def worker_get_back_level(self, f):
@@ -349,16 +389,31 @@ class Background():
         b = IoIO.back_level(HDUL[0].data)
         return (T.jd, b)
     
-    def background(self, ftime):
+    def background(self, header):
         """Returns best estimate background for time given in FITS string format"""
-        if self.spl is None:
-            return self.Tb_list[0][1]
-        T = Time(ftime, format='fits')
-        return np.asscalar(self.spl(T.jd))
+        band = get_filt_band(header)
+        if self.spl_dict[band] is None:
+            return self.jd_b_dict[band][0][1]
+        T = Time(header['DATE-OBS'], format='fits')
+        return np.asscalar(self.spl_dict[band](T.jd))
 
 def get_tmid(l):
     """Get midpoint of observation whose FITS header is stored in dictionary l (l can be a line in a collection)"""
     return Time(l['date-obs'], format='fits') + l['exptime']/2*u.s
+
+def aperture_sum(im, center, exclude, imtype, header, row):
+    """Take aperture sums excluding a strip exclude pix high centered on the middle of the image"""
+    tim = im + 0
+    if exclude != 0:
+        # Blank out the strip
+        tim[int(center[0])-exclude:int(center[0])+exclude, :] = 0
+    asum = np.sum(tim)
+    good_idx = np.where(tim != 0)
+    asum /= len(good_idx[0])
+    key = imtype + '_' + str(exclude)
+    header[key] = (asum, 'sum excluding strip _' + str(exclude) + ' pix in Y')
+    row[key] = asum
+    return key        
 
 def reduce_pair(OnBand_HDUList_im_or_fname=None,
                 OffBand_HDUList_im_or_fname=None,
@@ -426,7 +481,7 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
             back_obj = Background(OnBand_HDUList)
         else:
             back_obj = Background(os.path.dirname(rawfname))
-    bias_dark = back_obj.background(OnBandObsData.header['DATE-OBS'])
+    bias_dark = back_obj.background(OnBandObsData.header)
     # --> eventually do proper bias subtraction
     # --> potentially check for high levels to reject bad files
     #on_im = OnBand_HDUList[0].data - OnBandObsData.back_level
@@ -439,9 +494,6 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
                          'on-band back (bias, dark) value subtracted')
     header['DONBSUB'] = (bias_dark - OnBandObsData.back_level,
                          'on-band back - ind. est. back via histogram')
-    #impl = plt.imshow(on_im, origin='lower',
-    #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
-    #plt.show()
 
     on_back = np.mean(on_im)
     if on_back > background_light_threshold:
@@ -449,7 +501,7 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
                     + ' for ' + OnBand_HDUList.filename())
         return
     #off_im = OffBand_HDUList[0].data - OffBandObsData.back_level
-    bias_dark = back_obj.background(OffBandObsData.header['DATE-OBS'])
+    bias_dark = back_obj.background(OffBandObsData.header)
     #bias_dark = (float(global_bias)
     #             + OffBandObsData.header['EXPTIME'] * global_dark)
     off_im = OffBand_HDUList[0].data - bias_dark
@@ -518,7 +570,19 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     header['ON_LOSS'] \
         = (on_loss, 'on-band scat. light loss for discrete sources')
     off_im[OffBandObsData.ND_coords] = 0
-    scat_sub_im = on_im - off_im * on_jup/off_jup * on_loss
+    off_im = off_im * on_jup/off_jup * on_loss
+    scat_sub_im = on_im - off_im
+    ## DEBUGGING
+    #bad_idx = np.where(on_im > 100)
+    #on_im[bad_idx] = 0
+    #impl = plt.imshow(on_im, origin='lower',
+    #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
+    #plt.show()
+    #bad_idx = np.where(off_im > 100)
+    #off_im[bad_idx] = 0
+    #impl = plt.imshow(on_im, origin='lower',
+    #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
+    #plt.show()
     # Get an on-band ObsData that has the ND_coords inside the edge of
     # the ND filter and use that to define the good ND filter pixels
     O = IoIO.CorObsData(OnBand_HDUList, default_ND_params=default_ND_params)
@@ -616,39 +680,10 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
 
     # Do some quick-and-dirty aperture sums
     # --> improve on this
-    fieldnames = ['TMID', 'EXPTIME', 'FNAME', 'LINE', 'ONBSUB', 'OFFBSUB', 'DONBSUB', 'DOFFBSUB', 'TOTAL', 'AP_STRIP_300', 'AP_STRIP_600', 'AP_STRIP_1200', 'RDATE', 'RVERSION']
+    fieldnames = ['TMID', 'EXPTIME', 'FNAME', 'LINE', 'ONBSUB', 'OFFBSUB', 'DONBSUB', 'DOFFBSUB']
     this_ap_sum_fname = os.path.join(reddir, ap_sum_fname)
-    if not os.path.exists(this_ap_sum_fname):
-        with open(this_ap_sum_fname, 'w', newline='') as csvfile:
-            csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
-                                   quoting=csv.QUOTE_NONNUMERIC)
-            csvdw.writeheader()
     tmid = (get_tmid(header)).fits
-    ap_total = np.sum(scat_sub_im)
-    good_idx = np.where(scat_sub_im != 0)
-    ap_total /= len(good_idx[0])
-    # Make a copy so we don't mess up scat_sub_im
-    tim = scat_sub_im + 0
-    tim[int(center[0])-150:int(center[0])+150, :] = 0
-    ap_strip_300 = np.sum(tim)
-    good_idx = np.where(tim != 0)
-    ap_strip_300 /= len(good_idx[0])
-    tim[int(center[0])-300:int(center[0])+300, :] = 0
-    ap_strip_600 = np.sum(tim)
-    good_idx = np.where(tim != 0)
-    ap_strip_600 /= len(good_idx[0])
-    tim[int(center[0])-600:int(center[0])+600, :] = 0
-    ap_strip_1200 = np.sum(tim)
-    good_idx = np.where(tim != 0)
-    ap_strip_1200 /= len(good_idx[0])
-    rdate = (Time.now()).fits
     header['TMID'] = (tmid, 'Midpoint of observation')
-    header['TOTAL'] = (ap_total, 'sum of entire image')
-    header['AP_300'] = (ap_strip_300, 'sum excluding strip _XXX pix in Y')
-    header['AP_600'] = (ap_strip_600, 'sum excluding strip _XXX pix in Y')
-    header['AP_1200'] = (ap_strip_1200, 'sum excluding strip _XXX pix in Y')
-    header['RDATE'] = (rdate, 'UT time of reduction')
-    header['RVERSION'] = (rversion, 'Reduction version')
     row = {'TMID': tmid,
            'EXPTIME': header['EXPTIME'],
            'FNAME': outfname,
@@ -656,13 +691,30 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
            'ONBSUB': header['ONBSUB'],
            'OFFBSUB': header['OFFBSUB'],
            'DONBSUB': header['DONBSUB'],
-           'DOFFBSUB': header['DOFFBSUB'],
-           'TOTAL': ap_total,
-           'AP_STRIP_300': ap_strip_300,
-           'AP_STRIP_600': ap_strip_600,
-           'AP_STRIP_1200': ap_strip_1200,
-           'RDATE': rdate,
-           'RVERSION': rversion}
+           'DOFFBSUB': header['DOFFBSUB']}
+    for imtype in ['AP', 'On', 'Off']:
+        for exclude in [0, 300, 600, 1200]:
+            if imtype == 'AP':
+                im = scat_sub_im
+            elif imtype == 'On':
+                im = on_im / (on_jup * 1000) * MR
+            elif imtype == 'Off':
+                im = off_im / (on_jup * 1000) * MR
+            else:
+                raise ValueError('Unknown imtype ' + imtype)
+            key = aperture_sum(im, center, exclude, imtype, header, row)
+            fieldnames.append(key)
+    rdate = (Time.now()).fits
+    header['RDATE'] = (rdate, 'UT time of reduction')
+    header['RVERSION'] = (rversion, 'Reduction version')
+    row['RDATE'] = rdate
+    row['RVERSION'] = rversion
+    fieldnames.extend(['RDATE', 'RVERSION'])
+    if not os.path.exists(this_ap_sum_fname):
+        with open(this_ap_sum_fname, 'w', newline='') as csvfile:
+            csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
+                                   quoting=csv.QUOTE_NONNUMERIC)
+            csvdw.writeheader()
     with open(this_ap_sum_fname, 'a', newline='') as csvfile:
         csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
                                quoting=csv.QUOTE_NONNUMERIC)
@@ -755,8 +807,8 @@ class ReduceDir():
         line_names = ['[SII]', 'Na']
         on_off_pairs = []
         for line in line_names:
-            on_filt = get_filt_name(self.collection, line, on_band=True)
-            off_filt = get_filt_name(self.collection, line, off_band=True)
+            on_filt = get_filt_name(self.collection, line, 'on')
+            off_filt = get_filt_name(self.collection, line, 'off')
             on_idx = [i for i, l in enumerate(summary_table)
                       if (l['filter'] == on_filt
                           and l['imagetyp'].lower() == 'light'
@@ -1091,8 +1143,8 @@ def make_movie(directory,
     if not 'filter' in collection.keywords:
         log.warning('Directory does not contain any usable images')
         return        
-    SII_filt = get_filt_name(collection, '[SII]', on_band=True)
-    Na_filt = get_filt_name(collection, 'Na', on_band=True)
+    SII_filt = get_filt_name(collection, '[SII]', 'on')
+    Na_filt = get_filt_name(collection, 'Na', 'on')
     SII_on_list = collection.files_filtered(filter=SII_filt,
                              include_path=True)
     Na_on_list = collection.files_filtered(filter=Na_filt,
