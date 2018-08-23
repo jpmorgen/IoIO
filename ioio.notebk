@@ -4851,3 +4851,93 @@ ReduceCorObs.py reduce --recalculate --movie --directory /data/io/IoIO/raw/2018-
 Move files off
 Thu Aug 16 23:16:34 2018 EDT  jpmorgen@snipe
 ReduceCorObs.py reduce --tree --movie --recalculate
+
+INFO:astropy:/data/io/IoIO/raw/2018-06-25
+WARNING: ND filter edges are not parallel.  Edges are off by 51.185743252081764 
+
+Fri Aug 17 10:12:19 2018 EDT  jpmorgen@snipe
+
+Finished at 2:48AM
+
+I am seeing a lot of flashing events before 2018 May
+
+AP_600 looks the same
+On_0 looks the same as the volcanic outbest, just higher
+
+Off_0 increases to the later dates just like I would expect!  It also
+decreases from the early observations in 2017, which I don't quite understand
+
+The On_0 shows the same decrease
+
+The AP_600 shows a hint of it
+
+--> Make a composite of nightly plots
+
+Fri Aug 17 14:29:26 2018 EDT  jpmorgen@snipe
+
+sodium layer is at 50 -- 65 miles altitude.  That is about the
+distance from Tucson
+
+March 2018 is peak
+
+Opposition was May 8-9.
+
+Expecting minimum distance of light travel to be the way to get light
+into the telecsope, I would expect the peak to be after opposition
+
+Looking at night individually and many nights in May are clumpy around
+a median with some high values at beginning and end.
+
+Late ooposition swoppy to end of night
+
+May is about even
+
+April there is more spread
+
+March 15 is a swoop plus plateau that looks like it could be from
+emission down the pipe in the middle of the night
+
+Wed Aug 22 09:45:21 2018 EDT  jpmorgen@snipe
+
+https://agupubs.onlinelibrary.wiley.com/doi/pdf/10.1029/JA086iA03p01463
+
+Ozone and sodium linked, but not sure how
+
+The ozone density shows a strong seasonal variation with well defined maxima at the equinoxes, a
+
+https://ac.els-cdn.com/S136468261500005X/1-s2.0-S136468261500005X-main.pdf?_tid=ac6314ea-8c36-452a-8f73-d18e87eff390&acdnat=1534945773_9aec1f2f3e1dafb67eebc0b31d1825fc
+
+Column density at WACCM-Na.  There is a flat plateau ~ Sept to late
+Jan and then a precipitous drop from Feb to Jul
+
+ALOMAR Na lidar (69.3°N, 16.0°E)
+
+So that is northern hemisphere.  
+
+So that is similar to what I see in general profile
+
+Wed Aug 22 13:48:39 2018 EDT  jpmorgen@snipe
+
+Reading Carl's email, he says that mesospheric Na emission is 100 -- 200R
+
+That is right in the range that the full-field aperture sum shows, at
+peak time.
+
+Assuming this, I want to take a smaller aperture, maybe above and
+below for background, and then ones out to the side that would be
+dominated by the Jovian Na.
+
+Thu Aug 23 11:35:18 2018 EDT  jpmorgen@snipe
+
+Get places to do aperture sums.
+
+On SII, highest is
+1900 - 1100 = 800
+
+Getting aperture sums to work
+
+--> consider getting rid of aperure sum FITS keywords or reducing
+    sensitivity to warning message
+
+Thu Aug 23 12:27:44 2018 EDT  jpmorgen@snipe
+ReduceCorObs.py reduce --tree --movie --recalculate

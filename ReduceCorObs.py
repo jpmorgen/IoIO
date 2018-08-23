@@ -401,17 +401,44 @@ def get_tmid(l):
     """Get midpoint of observation whose FITS header is stored in dictionary l (l can be a line in a collection)"""
     return Time(l['date-obs'], format='fits') + l['exptime']/2*u.s
 
-def aperture_sum(im, center, exclude, imtype, header, row):
-    """Take aperture sums excluding a strip exclude pix high centered on the middle of the image"""
+def strip_sum(im, center, ap_height, imtype, header, row):
+    """Take aperture sums -- expressed as average pixel values -- in strips on the image.  ap_height = 0 whole image, ap_height > 0 strip of that height centered on center of image, ap_height < 0 two strips excluding strip of that height centered on center of image"""
     tim = im + 0
-    if exclude != 0:
-        # Blank out the strip
-        tim[int(center[0])-exclude:int(center[0])+exclude, :] = 0
+    if ap_height > 0:
+        ny, nx = tim.shape
+        # Blank out pixels above and below aperture strip
+        tim[0:int(center[0])-ap_height, :] = 0
+        tim[int(center[0])+ap_height:ny, :] = 0
+    elif ap_height < 0:
+        # Blank out the strip in the center
+        tim[int(center[0])+ap_height:int(center[0])-ap_height, :] = 0
     asum = np.sum(tim)
     good_idx = np.where(tim != 0)
     asum /= len(good_idx[0])
-    key = imtype + '_' + str(exclude)
-    header[key] = (asum, 'sum excluding strip _' + str(exclude) + ' pix in Y')
+    sap_height = str(abs(ap_height))
+    if ap_height > 0:
+        keypm = 'p'
+        comstr = 'strip ' + sap_height + ' pix in Y'
+    elif ap_height < 0:
+        keypm = 'm'
+        comstr = 'excluding strip ' + sap_height + ' pix in Y'
+    else:
+        keypm = '_'
+        comstr = 'entire image'
+    key = imtype + keypm + sap_height
+    header[key] = (asum, 'average of ' + comstr)
+    row[key] = asum
+    return key        
+
+def aperture_sum(im, center, y, x, r, imtype, header, row):
+    """Take aperture sums of im.  y, x relative to center"""
+    r2 = int(r/2)
+    center = center.astype(int)
+    asum = np.sum(im[center[0]+y-r2:center[0]+y+r2,
+                     center[1]+x-r2:center[1]+x+r2])
+    asum /= r**2
+    key = imtype + 'AP' + str(x) + '_' + str(y)
+    header[key] = (asum, 'square aperture average at x, y, r = ' + str(r))
     row[key] = asum
     return key        
 
@@ -693,17 +720,21 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
            'DONBSUB': header['DONBSUB'],
            'DOFFBSUB': header['DOFFBSUB']}
     for imtype in ['AP', 'On', 'Off']:
-        for exclude in [0, 300, 600, 1200]:
-            if imtype == 'AP':
-                im = scat_sub_im
-            elif imtype == 'On':
-                im = on_im / (on_jup * 1000) * MR
-            elif imtype == 'Off':
-                im = off_im / (on_jup * 1000) * MR
-            else:
-                raise ValueError('Unknown imtype ' + imtype)
-            key = aperture_sum(im, center, exclude, imtype, header, row)
+        if imtype == 'AP':
+            im = scat_sub_im
+        elif imtype == 'On':
+            im = on_im / (on_jup * 1000) * MR
+        elif imtype == 'Off':
+            im = off_im / (on_jup * 1000) * MR
+        else:
+            raise ValueError('Unknown imtype ' + imtype)
+        for ap_height in [0, 1200, 600, 300, -300, -600, -1200]:
+            key = strip_sum(im, center, ap_height, imtype, header, row)
             fieldnames.append(key)
+        for y in [600, 150, 0, -150, -600]:
+            for x in [-600, -500, -400, -300, -200, 200, 300, 400, 500, 600]:
+                key = aperture_sum(im, center, y, x, 60, imtype, header, row)
+                fieldnames.append(key)
     rdate = (Time.now()).fits
     header['RDATE'] = (rdate, 'UT time of reduction')
     header['RVERSION'] = (rversion, 'Reduction version')
