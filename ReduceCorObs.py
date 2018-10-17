@@ -13,8 +13,9 @@ from skimage import exposure
 from astropy import log
 from astropy import units as u
 from astropy.time import Time, TimeDelta
-#from astroquery.jplhorizons import Horizons
-from jplhorizons import Horizons
+# Using source for now
+from astroquery.jplhorizons import Horizons
+#from jplhorizons import Horizons
 #from photutils import CircularAperture, aperture_photometry
 
 import ccdproc
@@ -466,6 +467,10 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
             log.warning("Outfname not specified and on-band image fname was not an absolute path and outfname is not specified.  I can't deconstruct the raw to reduced path structure, writing to current directory, ReducedCorObs.fits")
             outfname = 'ReducedCorObs.fits'
         else:
+            # Expect raw filenames are of the format
+            # /data/io/IoIO/raw/2018-05-20/Na_on-band_001.fits
+            # Create reduced of the format
+            # /data/io/IoIO/reduced/2018-05-20/Na_on-band_001r.fits
             # --> Consider making the filename out of the line and on-off
             # We should be in our normal directory structure
             basename = os.path.basename(rawfname)
@@ -489,15 +494,15 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     # Use IoIO.CorObsData to get basic properties like background level
     # and center.
     OnBandObsData = IoIO.CorObsData(OnBand_HDUList,
-                               default_ND_params=default_ND_params,
-                               edge_mask=reduce_edge_mask)
+                                    default_ND_params=default_ND_params,
+                                    edge_mask=reduce_edge_mask)
     if OnBandObsData.quality < 5:
         log.warning('Skipping: poor quality center determination for '
                     + OnBand_HDUList.filename())
         return
     OffBandObsData = IoIO.CorObsData(OffBand_HDUList,
-                                default_ND_params=default_ND_params,
-                                edge_mask=reduce_edge_mask)
+                                     default_ND_params=default_ND_params,
+                                     edge_mask=reduce_edge_mask)
     if OffBandObsData.quality < 5:
         log.warning('Skipping: poor quality center determination for '
                     + OffBand_HDUList.filename())
@@ -509,14 +514,7 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
         else:
             back_obj = Background(os.path.dirname(rawfname))
     bias_dark = back_obj.background(OnBandObsData.header)
-    # --> eventually do proper bias subtraction
-    # --> potentially check for high levels to reject bad files
-    #on_im = OnBand_HDUList[0].data - OnBandObsData.back_level
-    #bias_dark = (float(global_bias)
-    #             + OnBandObsData.header['EXPTIME'] * global_dark)
     on_im = OnBand_HDUList[0].data -  bias_dark
-    #D.say('On-band difference between bias+dark and first hist peak: ' ,
-    #      bias_dark - OnBandObsData.back_level)
     header['ONBSUB'] = (bias_dark,
                          'on-band back (bias, dark) value subtracted')
     header['DONBSUB'] = (bias_dark - OnBandObsData.back_level,
@@ -527,10 +525,7 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
         log.warning('On-band background level too high: ' + str(on_back)
                     + ' for ' + OnBand_HDUList.filename())
         return
-    #off_im = OffBand_HDUList[0].data - OffBandObsData.back_level
     bias_dark = back_obj.background(OffBandObsData.header)
-    #bias_dark = (float(global_bias)
-    #             + OffBandObsData.header['EXPTIME'] * global_dark)
     off_im = OffBand_HDUList[0].data - bias_dark
     #D.say('Off-band difference between bias+dark and first hist peak: ' ,
     #      bias_dark - OffBandObsData.back_level)
