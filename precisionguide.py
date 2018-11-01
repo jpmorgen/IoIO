@@ -1677,7 +1677,7 @@ guide_box_log_file : str
 
     def diff_flex(self):
         """-->Eventually this is going to read a map/model file and calculate the differential flexure to feed to GuideBoxCommander.  There may need to be an additional method for concatenation of this flex and the measured flexure.  THIS IS ONLY FOR JUPITER DEC RIGHT NOW"""
-        plate_ratio = 4.42/(1.59/2)
+        plate_ratio = 4.42/(1.56/2)
         if (-40 < self.MD.Telescope.Declination
             and self.MD.Telescope.Declination < +10
             and self.MD.Telescope.Altitude < 30):

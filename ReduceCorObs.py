@@ -30,6 +30,7 @@ import define as D
 # Constants for use in code
 rversion = 0.2 # reduction version 
 data_root = '/data/io/IoIO'
+plate_scale = 1.56/2 # arcsec/pix
 # For greping filter names out of headers, since I may change them or
 # expand the number
 # Na 5890A 10A FWHM
@@ -408,11 +409,11 @@ def strip_sum(im, center, ap_height, imtype, header, row):
     if ap_height > 0:
         ny, nx = tim.shape
         # Blank out pixels above and below aperture strip
-        tim[0:int(center[0])-ap_height, :] = 0
-        tim[int(center[0])+ap_height:ny, :] = 0
+        tim[0:int(center[0]-ap_height/2), :] = 0
+        tim[int(center[0]+ap_height/2):ny, :] = 0
     elif ap_height < 0:
         # Blank out the strip in the center
-        tim[int(center[0])+ap_height:int(center[0])-ap_height, :] = 0
+        tim[int(center[0]+ap_height/2):int(center[0]-ap_height/2), :] = 0
     asum = np.sum(tim)
     good_idx = np.where(tim != 0)
     asum /= len(good_idx[0])
@@ -431,6 +432,109 @@ def strip_sum(im, center, ap_height, imtype, header, row):
     row[key] = asum
     return key        
 
+def Rj_strip_sum(ang_width, im, center, Rj_ap_height, imtype, header, row):
+    """Take aperture sums -- expressed as average pixel values -- in strips on the image.  ap_height = 0 whole image, ap_height > 0 strip of that height in Rj centered on center of image, ap_height < 0 two strips excluding strip of that height in Rj centered on center of image.  ang_width is the angular diameter of Jupiter in arcsec"""
+    Rj = ang_width/2/plate_scale # arcsec / (arcsec/pix)
+    #D.say('Rj = ', Rj, ' pixels')
+    ap_height = int(Rj_ap_height * Rj)
+    if ((abs(ap_height)/2 + center[0]) >= im.shape[0]
+        or (center[0] - abs(ap_height)/2 < 0 )):
+        log.warning('Rj_ap_height ' + str(Rj_ap_height) + ' Rj too large, setting aperture sum to zero')
+        asum = 0
+    else:
+        tim = im + 0
+        #D.say('Total of pixels in image: ', np.sum(tim))
+        #D.say(Rj_ap_height, ' Rj ', ap_height, ' pix')
+        if ap_height > 0:
+            ny, nx = tim.shape
+            #D.say('ycenter, ny: ', center[0], ny)
+            # Blank out pixels above and below aperture strip
+            tim[0:int(center[0]-ap_height/2), :] = 0
+            tim[int(center[0]+ap_height/2):ny, :] = 0
+            #impl = plt.imshow(tim, origin='lower',
+            #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
+            #plt.show()
+
+        elif ap_height < 0:
+            # Blank out the strip in the center
+            tim[int(center[0]+ap_height/2):int(center[0]-ap_height/2), :] = 0
+            #impl = plt.imshow(tim, origin='lower',
+            #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
+            #plt.show()
+        asum = np.sum(tim)
+        #D.say(asum)
+        good_idx = np.where(tim != 0)
+        asum /= len(good_idx[0])
+        #D.say(asum)
+    sap_height = str(abs(Rj_ap_height))
+    if ap_height > 0:
+        keypm = 'p'
+        comstr = 'strip ' + sap_height + ' Rj in Y'
+    elif ap_height < 0:
+        keypm = 'm'
+        comstr = 'excluding strip ' + sap_height + ' Rj in Y'
+    else:
+        keypm = '_'
+        comstr = 'entire image'
+    key = imtype + 'Rj' + keypm + sap_height
+    header[key] = (asum, 'average of ' + comstr)
+    row[key] = asum
+    return key        
+
+def Rj_box_sum(ang_width, im, center, Rj_ap_side, imtype, header, row):
+    """Take aperture sums -- expressed as average pixel values -- for a square box Rj_ap_side Rj on a side.  Rj_ap_side = 0 whole image, Rj_ap_side > 0 box of that side and width in Rj centered on center of image, Rj_ap_side < 0 area outside of box.  ang_width is the angular diameter of Jupiter in arcsec"""
+    Rjpix = ang_width/2/plate_scale # arcsec / (arcsec/pix)
+    #D.say('Rj = ', Rj, ' pixels')
+    ap_side = int(Rj_ap_side * Rjpix)
+    if ((abs(ap_side)/2 + center[0]) >= im.shape[0]
+        or (center[0] - abs(ap_side)/2 < 0 )
+        or (abs(ap_side)/2 + center[1]) >= im.shape[1]
+        or (center[1] - abs(ap_side)/2 < 0 )):
+        log.warning('Rj_ap_side ' + str(Rj_ap_side) + ' Rj too large, setting aperture sum to zero')
+        asum = 0
+    else:
+        tim = im + 0
+        #D.say('Total of pixels in image: ', np.sum(tim))
+        #D.say(Rj_ap_side, ' Rj ', ap_side, ' pix')
+        if ap_side > 0:
+            ny, nx = tim.shape
+            #D.say('ycenter, ny: ', center[0], ny)
+            # Blank out pixels outside of the box
+            tim[0:int(center[0]-ap_side/2), :] = 0
+            tim[int(center[0]+ap_side/2):ny, :] = 0
+            tim[:, 0:int(center[1]-ap_side/2)] = 0
+            tim[:, int(center[1]+ap_side/2):nx] = 0
+            #impl = plt.imshow(tim, origin='lower',
+            #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
+            #plt.show()
+
+        elif ap_side < 0:
+            # Blank out the box
+            tim[int(center[0]+ap_side/2):int(center[0]-ap_side/2),
+            int(center[1]+ap_side/2):int(center[1]-ap_side/2)] = 0
+            #impl = plt.imshow(tim, origin='lower',
+            #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
+            #plt.show()
+        asum = np.sum(tim)
+        #D.say(asum)
+        good_idx = np.where(tim != 0)
+        asum /= len(good_idx[0])
+        #D.say(asum)
+    sap_side = str(abs(Rj_ap_side))
+    if ap_side > 0:
+        keypm = 'p'
+        comstr = 'box ' + sap_side + ' Rj in size'
+    elif ap_side < 0:
+        keypm = 'm'
+        comstr = 'excluding box ' + sap_side + ' Rj in size'
+    else:
+        keypm = '_'
+        comstr = 'entire image'
+    key = imtype + 'Rj' + keypm + sap_side
+    header[key] = (asum, 'average of ' + comstr)
+    row[key] = asum
+    return key        
+
 def aperture_sum(im, center, y, x, r, imtype, header, row):
     """Take aperture sums of im.  y, x relative to center"""
     r2 = int(r/2)
@@ -443,11 +547,28 @@ def aperture_sum(im, center, y, x, r, imtype, header, row):
     row[key] = asum
     return key        
 
+def Rj_aperture_sum(ang_width, im, center, yRj, xRj, rpix, imtype, header, row):
+    """Take aperture sums of im.  y, x relative to center"""
+    r2 = int(rpix/2)
+    center = center.astype(int)
+    Rjpix = ang_width/2/plate_scale # arcsec / (arcsec/pix)
+    y = int(yRj * Rjpix)
+    x = int(xRj * Rjpix)
+    center = center.astype(int)
+    asum = np.sum(im[center[0]+y-r2:center[0]+y+r2,
+                     center[1]+x-r2:center[1]+x+r2])
+    asum /= rpix**2
+    key = imtype + 'AP' + str(xRj) + '_' + str(yRj)
+    header[key] = (asum, str(rpix) + ' pix square aperture [-]NNN_[-]MMM Rj from Jupiter' )
+    row[key] = asum
+    return key        
+
 def reduce_pair(OnBand_HDUList_im_or_fname=None,
                 OffBand_HDUList_im_or_fname=None,
                 back_obj=None,
                 default_ND_params=None,
-                NPang=None,
+                NPole_ang=None,
+                ang_width=None,
                 outfname=None,
                 recalculate=False):
     # Let these raise errors if our inputs have problems
@@ -568,6 +689,12 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     # help Na over-subtraction problem  
     #surf_bright(on_im, on_center)
     #surf_bright(off_im, off_center)
+
+    # Wed Oct 31 13:19:25 2018 EDT  jpmorgen@snipe
+    # --> Email discussion of yesterday and today suggests better
+    # on/off calibration is done using ratio of identically exposed
+    # on-and off-band images of sources away from the ND filter.  I
+    # think I have stars that can oblige, maybe even day sky.
     on_center = np.round(on_center).astype(int)
     off_center = np.round(off_center).astype(int)
     on_jup = np.average(on_im[on_center[0]-5:on_center[0]+5,
@@ -619,10 +746,11 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     # Establish calibration in Rayleighs.  Brown & Schneider 1981
     # Jupiter is 5.6 MR/A
     MR = 5.6E6 * eq_width
+    ADU2R = on_jup * 1000 / MR
     # 1000 is ND filter
-    scat_sub_im = scat_sub_im / (on_jup * 1000) * MR
+    scat_sub_im = scat_sub_im / ADU2R
     header['BUNIT'] = ('rayleighs', 'pixel unit')
-
+    header['ADU2R'] = (ADU2R, 'conversion factor from ADU to R')
     # --> will want to check this earlier for proper pairing of
     # on-off band images
     pier_side = OnBandObsData.header.get('PIERSIDE')
@@ -635,12 +763,12 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     # --> subsequent reduction & analysis do things in native
     # --> coordinates
     
-    # Calculate NPang if we weren't passed it, but store it in
+    # Calculate NPole_ang if we weren't passed it, but store it in
     # property so it can be used for the next file in this day.
     # Also truncate to the integer so that astroquery caching can
     # work --> might want to loosen this for nth degree
     # calculations when I am ready for those
-    if NPang is None:
+    if NPole_ang is None:
         # V09 is the Moca observatory at Benson, which looks like
         # the San Pedro Valley observatory
         T = Time(header['DATE-OBS'], format='fits')
@@ -649,12 +777,13 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
                        location='V09',
                        epochs=np.round(T.jd),
                        id_type='majorbody')
-        NPang = jup.ephemerides()['NPang'].quantity.value[0]
+        NPole_ang = jup.ephemerides()['NPole_ang'].quantity.value[0]
+        ang_width = jup.ephemerides()['ang_width'].quantity.value[0]
     # Save off original center of image for NDparams update, below
     o_center = np.asarray(scat_sub_im.shape)/2
     on_shift = o_center - OnBandObsData.obj_center
     aangle = get_astrometry_angle(header['DATE-OBS'])
-    on_angle = aangle - NPang + gem_flip
+    on_angle = aangle - NPole_ang + gem_flip
     # interpolation.rotate rotates CW for positive angle
     scat_sub_im = ndimage.interpolation.shift(scat_sub_im, on_shift)
     scat_sub_im = ndimage.interpolation.rotate(scat_sub_im, on_angle)
@@ -702,34 +831,52 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
 
     # Do some quick-and-dirty aperture sums
     # --> improve on this
-    fieldnames = ['TMID', 'EXPTIME', 'FNAME', 'LINE', 'ONBSUB', 'OFFBSUB', 'DONBSUB', 'DOFFBSUB']
+    #fieldnames = ['TMID', 'ANGDIAM', 'EXPTIME', 'FNAME', 'LINE', 'ONBSUB', 'OFFBSUB', 'DONBSUB', 'DOFFBSUB']
     this_ap_sum_fname = os.path.join(reddir, ap_sum_fname)
     tmid = (get_tmid(header)).fits
     header['TMID'] = (tmid, 'Midpoint of observation')
-    row = {'TMID': tmid,
-           'EXPTIME': header['EXPTIME'],
-           'FNAME': outfname,
+    header['ANGDIAM'] = (ang_width, 'Angular diameter of Jupiter (arcsec)')
+    row = {'FNAME': outfname,
            'LINE': line,
+           'TMID': tmid,
+           'EXPTIME': header['EXPTIME'],
            'ONBSUB': header['ONBSUB'],
-           'OFFBSUB': header['OFFBSUB'],
            'DONBSUB': header['DONBSUB'],
-           'DOFFBSUB': header['DOFFBSUB']}
+           'OFFBSUB': header['OFFBSUB'],
+           'DOFFBSUB': header['DOFFBSUB'],
+           'OFFSCALE': header['OFFSCALE'],
+           'ADU2R': ADU2R,
+           'ANGDIAM': ang_width}
+    fieldnames = list(row.keys())
+    # Remember to shift, rotate, and calibrate On and Off images
     for imtype in ['AP', 'On', 'Off']:
         if imtype == 'AP':
             im = scat_sub_im
         elif imtype == 'On':
-            im = on_im / (on_jup * 1000) * MR
+            on_im = ndimage.interpolation.shift(on_im, on_shift)
+            on_im = ndimage.interpolation.rotate(on_im, on_angle)
+            im = on_im / ADU2R
         elif imtype == 'Off':
-            im = off_im / (on_jup * 1000) * MR
+            off_im = ndimage.interpolation.shift(off_im, on_shift)
+            off_im = ndimage.interpolation.rotate(off_im, on_angle)
+            im = off_im / ADU2R
         else:
             raise ValueError('Unknown imtype ' + imtype)
-        for ap_height in [0, 1200, 600, 300, -300, -600, -1200]:
-            key = strip_sum(im, center, ap_height, imtype, header, row)
+        center = np.asarray(im.shape)/2
+        #for ap_height in [0, 1200, 600, 300, -300, -600, -1200]:
+        #    key = strip_sum(im, center, ap_height, imtype, header, row)
+        #    fieldnames.append(key)
+        for ap_box in [0, 150, 140, 130, 120, 110, 100, 90, 80, 70, 60, 50, 40, 30, 15]:
+            key = Rj_box_sum(ang_width, im, center, ap_box, imtype, header, row)
             fieldnames.append(key)
-        for y in [600, 150, 0, -150, -600]:
-            for x in [-600, -500, -400, -300, -200, 200, 300, 400, 500, 600]:
-                key = aperture_sum(im, center, y, x, 60, imtype, header, row)
-                fieldnames.append(key)
+        #for y in [600, 150, 0, -150, -600]:
+        #    for x in [-600, -500, -400, -300, -200, 200, 300, 400, 500, 600]:
+        #        key = aperture_sum(im, center, y, x, 60, imtype, header, row)
+        #        fieldnames.append(key)
+        #for y in [30, 20, 10, 5, 0, -5, -10, -20, -30]:
+        #    for x in [30, 20, 10, 5, 0, -5, -10, -20, -30]:
+        #        key = Rj_aperture_sum(ang_width, im, center, y, x, 60, imtype, header, row)
+        #        fieldnames.append(key)
     rdate = (Time.now()).fits
     header['RDATE'] = (rdate, 'UT time of reduction')
     header['RVERSION'] = (rversion, 'Reduction version')
@@ -757,7 +904,8 @@ class ReduceDir():
                  recalculate=False,
                  back_obj=None,
                  default_ND_params=None,
-                 NPang=None,
+                 NPole_ang=None,
+                 ang_width=None,
                  num_processes=None,
                  movie=None):
         assert directory is not None
@@ -767,7 +915,8 @@ class ReduceDir():
         self._back_obj = back_obj
         self._default_ND_params = default_ND_params
         # --> This will eventually be a more involved set of ephemerides outputs
-        self.NPang = NPang
+        self.NPole_ang = NPole_ang
+        self.ang_width = ang_width
         self.num_processes = num_processes
         self.movie = movie
         self.reduce_dir()
@@ -803,7 +952,8 @@ class ReduceDir():
                         pair[1],
                         back_obj=self.back_obj,
                         default_ND_params=self.default_ND_params,
-                        NPang=self.NPang,
+                        NPole_ang=self.NPole_ang,
+                        ang_width=self.ang_width,
                         recalculate=self.recalculate)
         except Exception as e:
             log.error(str(e) + ' skipping ' + pair[0] + ' ' + pair[1])
@@ -868,7 +1018,7 @@ class ReduceDir():
             return
     
         # --> I am going to want to improve this
-        if self.NPang is None:
+        if self.NPole_ang is None:
             # Reading in our first file is the easiest way to get the
             # properly formatted date for astroquery.  Use UT00:00,
             # since astroquery caches and repeat querys for the whole
@@ -879,8 +1029,9 @@ class ReduceDir():
                            location='V09',
                            epochs=np.round(T.jd),
                            id_type='majorbody')
-            self.NPang = jup.ephemerides()['NPang'].quantity.value[0]
-
+            self.NPole_ang = jup.ephemerides()['NPole_ang'].quantity.value[0]
+            self.ang_width = jup.ephemerides()['ang_width'].quantity.value[0]
+        
         # Get our summary file(s) ready.
         this_ap_sum_fname = os.path.join(reduced_dir, ap_sum_fname)
         if self.recalculate and os.path.isfile(this_ap_sum_fname):
@@ -911,10 +1062,13 @@ class ReduceDir():
                 log.error(str(e) + ' skipping movie for ' + self.directory)
         return
 
-def get_dirs(directory):
+def get_dirs(directory, filt_list=None):
+    """get sorted list of subdirectories excluding dirs containing strings in filt_list"""
     assert os.path.isdir(directory)
     return [os.path.join(directory, d) for d in sorted(os.listdir(directory))
-            if os.path.isdir(os.path.join(directory, d))]
+            if (os.path.isdir(os.path.join(directory, d))
+                and (filt_list is None
+                     or not np.any([filt in d for filt in filt_list])))]
     
 
 def reduce_cmd(args):
@@ -948,17 +1102,31 @@ def reduce_cmd(args):
                           collection=collection,
                           recalculate=args.recalculate,
                           default_ND_params=default_ND_params,
-                          NPang=args.NPang,
                           num_processes=args.num_processes,
                           movie=args.movie)
+        redtop = top.replace('/raw', '/reduced')
+        filt_list = ['cloudy', 'marginal', 'dew', 'bad']
+        csvlist = [os.path.join(d, 'ap_sum.csv')
+                   for d in get_dirs(redtop, filt_list=filt_list)
+                   if os.path.isfile(os.path.join(d, 'ap_sum.csv'))]
+        # https://stackoverflow.com/questions/13613336/python-concatenate-text-files
+        first = True
+        with open(os.path.join(redtop, 'ap_sum.csv'), 'w') as outfile:
+            for fname in csvlist:
+                with open(fname) as infile:
+                    if not first:
+                        # Read past the header
+                        infile.readline()
+                    first = False
+                    outfile.write(infile.read())
         if args.movie is not None:
-            movie_concatenate(top.replace('/raw', '/reduced'))
+            movie_concatenate(redtop)
         return
+
     if args.directory is not None:
         R = ReduceDir(args.directory,
                       recalculate=args.recalculate,
                       default_ND_params=args.default_ND_params,
-                      NPang=args.NPang,
                       num_processes=args.num_processes,
                       movie=args.movie)
         return
@@ -971,7 +1139,6 @@ def reduce_cmd(args):
         off_band = args.off_band
     reduce_pair(on_band,
                 off_band,
-                NPang=args.NPang,
                 default_ND_params=args.default_ND_params,
                 recalculate=args.recalculate)
 
@@ -1220,12 +1387,9 @@ def movie_concatenate(directory):
     if directory is None:
         directory = os.path.join(data_root, 'reduced')
     clips = []
-    for d in get_dirs(directory):
-        if (('cloudy' in d
-             or 'marginal' in d
-             or 'dew' in d
-             or 'bad' in d)):
-            continue
+    # --> eventually I want to have the data themselves indicate this
+    filt_list = ['cloudy', 'marginal', 'dew', 'bad']
+    for d in get_dirs(directory, filt_list=filt_list):
         try:
             c = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
         except:
@@ -1326,8 +1490,6 @@ if __name__ == "__main__":
         'on_band', nargs='?', help='on-band filename')
     reduce_parser.add_argument(
         'off_band', nargs='?', help='off-band filename')
-    reduce_parser.add_argument(
-        '--NPang', help="Target's projected north pole angle relative to celestial N in deg CCW")
     reduce_parser.add_argument(
         '--movie', action='store_const', const=True,
         help="Create movie when done")

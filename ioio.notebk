@@ -4941,3 +4941,180 @@ Getting aperture sums to work
 
 Thu Aug 23 12:27:44 2018 EDT  jpmorgen@snipe
 ReduceCorObs.py reduce --tree --movie --recalculate
+
+Thu Aug 23 16:17:31 2018 EDT  jpmorgen@snipe
+
+Just finished
+
+Thu Aug 23 18:59:56 2018 EDT  jpmorgen@snipe
+
+Doing comparison of APp300 and APm1200.  The APm1200 is very low
+compared to APp300, like down around 50 approx R.  
+
+Fri Aug 24 11:09:21 2018 EDT  jpmorgen@snipe
+
+Double-check what the flat fields are like
+
+cd, '/data/io/IoIO/raw/2018-05-20
+atv, 'Sky_Flat-0001_Na_off-band.fit
+
+bias ~ 1618
+
+edge, middle 
+f = [14700, 17000] - 1618.
+f[1]/f[0]
+       1.1758142
+
+That is not going to break the bank.
+
+Wed Oct 17 16:48:07 2018 EDT  jpmorgen@snipe
+
+See also ../../IoIO_reduction.notebk
+
+pip3 install -U scikit-image
+pip3 install -U moviepy
+
+$ # If you have a github account:
+$ git clone git@github.com:astropy/astroquery.git
+$ # If you do not:
+$ git clone https://github.com/astropy/astroquery.git
+$ cd astroquery
+$ python3 setup.py install
+
+ReduceCorObs.py reduce --recalculate /data/io/IoIO/raw/2018-05-20/Na_on-band_007.fits /data/io/IoIO/raw/2018-05-20/Na_off-band_007.fits
+
+ReduceCorObs.py reduce --recalculate --movie --directory /data/io/IoIO/raw/2018-05-20 
+
+https://github.com/Zulko/moviepy/issues/401
+
+ERROR:astropy:MoviePy Error: creation of None failed because of the following error:
+
+convert-im6.q16: not authorized `@/tmp/tmp1bjiq8cc.txt' @ error/property.c/InterpretImageProperties/3663.
+convert-im6.q16: no images defined `PNG32:/tmp/tmpa5uj0gw6.png' @ error/convert.c/ConvertImageCommand/3258.
+.
+
+Took out 
+  <!--<policy domain="path" rights="none" pattern="@*"/> -->
+
+in /etc/ImageMagick-6/policy.xml
+
+ReduceCorObs.py reduce --tree --movie --recalculate
+
+INFO:astropy:/data/io/IoIO/raw/2018-05-19
+
+WARNING:py.warnings:/usr/lib/python3/dist-packages/scipy/signal/_arraytools.py:45: FutureWarning: Using a non-tuple sequence for multidimensional indexing is deprecated; use `arr[tuple(seq)]` instead of `arr[seq]`. In the future this will be interpreted as an array index, `arr[np.array(seq)]`, which will result either in an error or a different result.
+  b = a[a_slice]
+
+Thu Oct 18 07:40:20 2018 EDT  jpmorgen@snipe
+
+It looks like there is a problem when I do the ValueError -- column
+elements are not written, so the row gets all messed up.  Last one
+that seems to work OK is 50, which is basically indistinguishable from
+the plain aperture sum
+
+filt_list = ['cloudy', 'marginal', 'dew', 'bad']
+
+data_root = '/data/io/IoIO'
+ap_sum_fname = 'ap_sum.csv'
+top = os.path.join(data_root, 'reduced')
+
+Thu Oct 18 21:29:35 2018 EDT  jpmorgen@snipe
+
+Not going well with read_ap.py new version late at night.  Just run
+main code overnight and improve tomorrow.
+
+--> useful!
+https://matplotlib.org/gallery/recipes/common_date_problems.html
+
+https://matplotlib.org/2.2.3/_modules/matplotlib/dates.html
+
+Matplotlib represents dates using floating point numbers specifying the number
+of days since 0001-01-01 UTC, plus 1.  For example, 0001-01-01, 06:00 is 1.25,
+
+Fri Oct 19 08:52:20 2018 EDT  jpmorgen@snipe
+
+Something weird going on between 50 and 60 Rj.  Ahh.  This might be
+the turn-over point.  Certainly by 110, I have reached the edge of the
+entire FOV for measurements at the peak of opposition:
+
+For this opposition, 
+Rj = [44.8, 34.2]/2. ;; arcsec
+
+2948*0.78/Rj ; rotated image height * arcsec/pix / (arcsec/Rj)
+       102.65357       134.47017
+
+The weird thing is that the edge is greater than the middle for this extreme
+
+60 is the cross-over, where the edges are 0 at the beginning of the
+opposition and high after March and the inner is high initially and
+low after March.
+
+1200*0.78/Rj
+       41.785713       54.736835
+
+40 is starting to look normal
+
+2948/2.
+       1474.0000
+
+2948/2. + 1200
+       2674.0000
+
+So this is just edge effects.  When I am out beyond 40, I am getting
+0s from the original rotation and a little signal from the point.  But
+the wierd thing is when I do AP_Rjp60 and get a small signal
+
+So there are two ways for this to happen.  The sum of pixels gets
+small for some reason or the number of non-zero pixels gets large.
+
+AP_Rj_0 is happy, which is a good sign that the images are OK and this
+is just a weird coding issue in Rj_strip_sum
+
+I get why extremely high Rj values make the "m" apertures small --
+they are just sampling the background and are contaminated
+
+Dates between 2018-02-21 and 2018-03-05 are worth looking at
+
+/data/io/IoIO/reduced/2018-02-22/Na_IPT_R-0001_Na_on-bandr.fit
+
+looks like a fine specimen
+
+ReduceCorObs.py reduce --recalculate /data/io/IoIO/raw/2018-02-22/Na_IPT_R-0001_Na_on-band.fit /data/io/IoIO/raw/2018-02-22/Na_IPT_R-0001_Na_off-band.fit
+
+Ah ha!  I think I am seeing the problem.  It has to be put in an
+ordered dictionary?  Check the worst one:
+
+ReduceCorObs.py reduce --recalculate /data/io/IoIO/raw/2018-02-22/Na_IPT_R-0013_Na_on-band.fit /data/io/IoIO/raw/2018-02-22/Na_IPT_R-0013_Na_off-band.fit
+
+yc = 2859/2. ; center
+total(im[*, yc-1472/2:yc+1472/2])
+
+Ah HA!  The confusion is diameter vs radius of FOV
+
+ReduceCorObs.py reduce --recalculate --movie --directory /data/io/IoIO/raw/2018-02-22
+
+This is giving the tuple sequence error
+
+ReduceCorObs.py reduce --tree --movie --recalculate
+
+Fri Oct 19 20:01:30 2018 EDT  jpmorgen@snipe
+
+Telling a little bit of a different story.  The background beyond 80
+Rj FOV strip is about a factor of 2 down from full-field and 80 Rj FOV
+average surface brightness.  This is in late March.  Earlier than
+that, the background is higher, later it is lower.  This could be some
+seasonal effect, since I think it gets eroded in the spring
+
+Tue Oct 23 12:59:06 2018 EDT  jpmorgen@snipe
+
+Need to have a program that makes the supporting table
+
+ReduceCorObs.py reduce --recalculate --movie --directory /data/io/IoIO/raw/2018-02-22
+
+Decide to not do negative boxes.  Don't do apertures, since they give
+confusing results near Jupiter, presumably because of the satellites.
+
+Look into figure production
+
+from precisionguide import get_HDUList
+HDUList = get_HDUList('/data/io/IoIO/reduced/2018-02-22/Na_IPT_R-0003_SII_on-bandr.fit')
