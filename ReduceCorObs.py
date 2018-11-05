@@ -719,7 +719,8 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     header['ON_LOSS'] \
         = (on_loss, 'on-band scat. light loss for discrete sources')
     off_im[OffBandObsData.ND_coords] = 0
-    off_im = off_im * on_jup/off_jup * on_loss
+    offscale = on_jup/off_jup
+    off_im = off_im * offscale * on_loss
     scat_sub_im = on_im - off_im
     ## DEBUGGING
     #bad_idx = np.where(on_im > 100)
@@ -742,9 +743,11 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     scat_sub_im[O.ND_coords] = good_ndpix
     header['OFFFNAME'] = (OffBand_HDUList.filename(),
                           'off-band file')
-    header['OFFSCALE'] = (on_jup/off_jup, 'scale factor applied to off-band im')
+    header['OFFSCALE'] = (offscale, 'scale factor applied to off-band im')
     # Establish calibration in Rayleighs.  Brown & Schneider 1981
     # Jupiter is 5.6 MR/A
+    # --> This is between the Na lines, so it is not quite right.  The
+    # Na lines will knock it down by 10-20% 
     MR = 5.6E6 * eq_width
     ADU2R = on_jup * 1000 / MR
     # 1000 is ND filter
@@ -866,7 +869,7 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
         #for ap_height in [0, 1200, 600, 300, -300, -600, -1200]:
         #    key = strip_sum(im, center, ap_height, imtype, header, row)
         #    fieldnames.append(key)
-        for ap_box in [0, 150, 140, 130, 120, 110, 100, 90, 80, 70, 60, 50, 40, 30, 15]:
+        for ap_box in [0, 150, 140, 130, 120, 110, 100, 90, 80, 70, 60, 50, 40, 30, 15, 10, 5]:
             key = Rj_box_sum(ang_width, im, center, ap_box, imtype, header, row)
             fieldnames.append(key)
         #for y in [600, 150, 0, -150, -600]:

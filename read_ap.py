@@ -10,6 +10,8 @@ from astropy.time import Time
 from ReduceCorObs import get_dirs
 
 line = 'Na'
+onoff = 'AP'
+
 #line = '[SII]'
 ap_sum_fname = '/data/io/IoIO/reduced/ap_sum.csv'
 #ap_sum_fname = '/data/io/IoIO/reduced.previous_versions/Rj_strip_sum/ap_sum.csv'
@@ -27,6 +29,11 @@ with open(ap_sum_fname, newline='') as csvfile:
     for row in csvr:
         if row['LINE'] != line:
             continue
+        # if (line == 'Na'
+        #     and row['ADU2R'] < 0.18
+        #     and (row['OFFSCALE'] < 1 or
+        #          row['OFFSCALE'] > 1.26)):
+        #     continue
         T = Time(row['TMID'], format='fits')
         pdlist.append(T.plot_date)
         rlist.append(row)
@@ -34,7 +41,9 @@ pds = np.asarray(pdlist)
 idays = pds.astype(int)
 
 ap_keys = [k for k in row.keys()
-           if 'AP' in k]
+           if ('AP' in k
+               or 'On' in k
+               or 'Off' in k)]
 # Compute daily medians
 median_ap_list = []
 for id in list(set(idays)):
@@ -51,53 +60,77 @@ for id in list(set(idays)):
 
 #print(median_ap_list)
 #print(pds)
-#print([row['AP_Rj_0'] for row in median_ap_list])
+#print([row[onoff + '_Rj_0'] for row in median_ap_list])
 mpds = [row['TMID'] for row in median_ap_list]
 #plt.plot_date(pds, 
-#              [row['APRj_0'] for row in rlist], '.')
+#              [row[onoff + 'Rj_0'] for row in rlist], '.')
 #plt.plot_date(mpds, 
-#              [row['APRj_0'] for row in median_ap_list], 's')
+#              [row[onoff + 'Rj_0'] for row in median_ap_list], 's')
 #plt.plot_date(pds, 
-#              [row['APRjp40'] for row in rlist], '.')
+#              [row[onoff + 'Rjp40'] for row in rlist], '.')
 #plt.plot_date(pds, 
-#              [row['APRjp60'] for row in rlist], 's')
+#              [row[onoff + 'Rjp60'] for row in rlist], 's')
 #plt.plot_date(pds, 
-#              [row['APRjm40'] for row in rlist], 'x')
-plt.plot_date(pds, 
-              [row['APRjp30'] for row in rlist], '.')
-plt.plot_date(mpds, 
-              [row['APRjp30'] for row in median_ap_list], 's')
-plt.plot_date(mpds, 
-              [row['APRjp15'] for row in median_ap_list], '^')
+#              [row[onoff + 'Rjm40'] for row in rlist], 'x')
 #plt.plot_date(mpds, 
-#              [row['APRjm50'] for row in median_ap_list], 'x')
-c15 = np.asarray([row['APRjp15']*15**2 for row in median_ap_list])
-c50 = np.asarray([row['APRjp50']*50**2 for row in median_ap_list])
-c40 = np.asarray([row['APRjp40']*40**2 for row in median_ap_list])
-c60 = np.asarray([row['APRjp60']*60**2 for row in median_ap_list])
-back = (c60 - c50) / (60**2 - 50**2)
-plt.plot_date(mpds, back, 'x')
+#              [row[onoff + 'Rjp15'] for row in median_ap_list], '^')
+#plt.plot_date(mpds, 
+#              [row[onoff + 'Rjp30'] for row in median_ap_list], 's')
+#plt.plot_date(pds, 
+#              [row[onoff + 'Rjp30'] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
+#plt.plot_date(mpds, 
+#              [row[onoff + 'Rjm50'] for row in median_ap_list], 'x')
+c5 = np.asarray([row[onoff + 'Rjp5']*5**2 for row in median_ap_list])
+c10 = np.asarray([row[onoff + 'Rjp10']*10**2 for row in median_ap_list])
+c15 = np.asarray([row[onoff + 'Rjp15']*15**2 for row in median_ap_list])
+c30 = np.asarray([row[onoff + 'Rjp30']*30**2 for row in median_ap_list])
+c40 = np.asarray([row[onoff + 'Rjp40']*40**2 for row in median_ap_list])
+c50 = np.asarray([row[onoff + 'Rjp50']*50**2 for row in median_ap_list])
+c60 = np.asarray([row[onoff + 'Rjp60']*60**2 for row in median_ap_list])
+#back = (c60 - c50) / (60**2 - 50**2)
+#center = (c15 - c5) / (15**2 - 5**2)
+center = (c15 - c10) / (15**2 - 10**2)
+fore = (c30 - c15) / (30**2 - 15**2)
+back = (c50 - c40) / (50**2 - 40**2)
+plt.plot_date(mpds, center-back, '^')
+plt.plot_date(mpds, (fore-back), 's')
+#plt.plot_date(mpds, back, 'x')
 # It is wrong to subtract rates like this
 #plt.plot_date(mpds, 
-#              [(row['APRjp40']-row['APRjp60']) for row in median_ap_list], 'x')
+#              [(row[onoff + 'Rjp40']-row[onoff + 'Rjp60']) for row in median_ap_list], 'x')
 #plt.plot_date(pds, 
-#              [row['APRjp15'] for row in rlist], '.')
+#              [row[onoff + 'Rjp15'] for row in rlist], '.')
 #plt.plot_date(mpds, 
-#              [row['APRjp15'] for row in median_ap_list], 's')
+#              [row[onoff + 'Rjp15'] for row in median_ap_list], 's')
 #plt.plot_date(pds, 
 #              [-row['DOFFBSUB'] for row in rlist], '^')
 #plt.plot_date(mpds, 
-#              [row['APRjm15'] for row in median_ap_list], 'x')
+#              [row[onoff + 'Rjm15'] for row in median_ap_list], 'x')
+#plt.plot_date(pds,
+#              #[(2 - row['OFFSCALE'])*500 for row in rlist], 'y^')
+#              [row['OFFSCALE'] for row in rlist], 'y^')
+#plt.plot_date(pds,
+#              [1000*row['ADU2R'] for row in rlist], 'gs')
+#plt.plot_date(mpds, 
+#              [row['OnRjp60'] for row in median_ap_list], 'rs')
+#plt.plot_date(mpds, 
+#              [row['OffRjp60'] for row in median_ap_list], 'bs')
 #plt.legend(['60 Rj box surface brightness', '60 Rj box nightly median', '>60 Rj box nightly median'])
-plt.legend(['30 Rj box surface brightness', '30 Rj box nightly median', '15 Rj box nightly median', '50 < Rj < 60 nightly median'])
+#plt.legend(['30 Rj box surface brightness', '10 < Rj < 15 nightly median', '15 < Rj < 30 nightly median', '40 < Rj < 50 nightly median'])
+#plt.legend(['10 < Rj < 15 nightly median', '15 < Rj < 30 nightly median', '40 < Rj < 50 nightly median'])
+plt.legend(['5 < Rj < 7.5 nightly median', '7.5 < Rj < 15 nightly median', '20 < Rj < 25 nightly median'])
 plt.xlabel('UT Date')
 plt.ylabel(line + ' Surf. Bright. (approx. R)')
 plt.gcf().autofmt_xdate()  # orient date labels at a slant
 axes = plt.gca()
+axes.set_yscale('log')
 if line == '[SII]':
     axes.set_ylim([-100, 1500])
 else:
-    axes.set_ylim([0, 1500])
+    axes.set_ylim([0, 800])
+    #axes.set_ylim([0, 4000])
+    #axes.set_ylim([0.5, 1.75])
+    #axes.set_ylim([0, 0.5])
 plt.show()
 
 

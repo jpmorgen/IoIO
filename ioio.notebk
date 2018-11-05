@@ -5118,3 +5118,15 @@ Look into figure production
 
 from precisionguide import get_HDUList
 HDUList = get_HDUList('/data/io/IoIO/reduced/2018-02-22/Na_IPT_R-0003_SII_on-bandr.fit')
+
+Thu Nov 01 15:07:15 2018 EDT  jpmorgen@snipe
+
+See IoIO_reduction.notebk
+
+ReduceCorObs.py reduce --recalculate /data/io/IoIO/raw/2018-05-08/Na_on-band_004.fits /data/io/IoIO/raw/2018-05-20/Na_off-band_004.fits
+
+Sat Nov 03 23:19:13 2018 EDT  jpmorgen@snipe
+
+Add a few more apertures
+
+ReduceCorObs.py reduce --tree --movie --recalculate
