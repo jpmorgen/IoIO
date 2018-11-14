@@ -747,10 +747,21 @@ def reduce_pair(OnBand_HDUList_im_or_fname=None,
     # Establish calibration in Rayleighs.  Brown & Schneider 1981
     # Jupiter is 5.6 MR/A
     # --> This is between the Na lines, so it is not quite right.  The
-    # Na lines will knock it down by 10-20% 
+    # Na lines will knock it down by 10-20%
+
+    # Tue Nov 13 11:30:03 2018 EST  jpmorgen@snipe
+
+    # Carl's calculations in an email of yesterday with code delivered
+    # last week (~/pro/IoIO/Ioio_flux_cal.pro) incorporate the
+    # spectra, albedo, etc. suggest that for Na, the effective
+    # continuum is 52.6 MR to 54.0 MR.  Since the bandpass is 11.22,
+    # the calculations below end up using 62.832E6 or 1.17 too high.
     MR = 5.6E6 * eq_width
     ADU2R = on_jup * 1000 / MR
     # 1000 is ND filter
+    # Tue Nov 13 11:38:04 2018 EST  jpmorgen@snipe
+    # See notes of today in ~/IoIO_reduction.notebk which measure ND
+    # filter to be more like 734 instead of 1000
     scat_sub_im = scat_sub_im / ADU2R
     header['BUNIT'] = ('rayleighs', 'pixel unit')
     header['ADU2R'] = (ADU2R, 'conversion factor from ADU to R')
@@ -1382,14 +1393,17 @@ def make_movie(directory,
     #SII_movie.write_videofile(os.path.join(directory, 
     #                                       "SII_movie.mp4"),
     #                          fps=M_SII.frame_rate)
-    #Na_movie.write_videofile(os.path.join(directory, 
-    #                                      "Na_movie.mp4"),
-    #                          fps=M_SII.frame_rate)
+    # Except I want this for the volcanic eruption paper
+    Na_movie = mpy.CompositeVideoClip([Na_movie, txt])
+    Na_movie.write_videofile(os.path.join(directory, 
+                                          "Na_movie.mp4"),
+                              fps=M_SII.frame_rate)
   
 def movie_concatenate(directory):
     if directory is None:
         directory = os.path.join(data_root, 'reduced')
     clips = []
+    Na_clips = []
     # --> eventually I want to have the data themselves indicate this
     filt_list = ['cloudy', 'marginal', 'dew', 'bad']
     for d in get_dirs(directory, filt_list=filt_list):
@@ -1399,8 +1413,17 @@ def movie_concatenate(directory):
             log.warning('Bad movie in ' + d)
             continue
         clips.append(c)
+        try:
+            c = mpy.VideoFileClip(os.path.join(d, 'Na_movie.mp4'))
+        except:
+            log.warning('Bad Na movie in ' + d)
+            continue
+        Na_clips.append(c)
     animation = mpy.concatenate_videoclips(clips)
     animation.write_videofile(os.path.join(directory, 'Na_SII.mp4'),
+                              fps=global_frame_rate)
+    animation = mpy.concatenate_videoclips(Na_clips)
+    animation.write_videofile(os.path.join(directory, 'Na_movie.mp4'),
                               fps=global_frame_rate)
 
 # https://stackoverflow.com/questions/16878315/what-is-the-right-way-to-treat-python-argparse-namespace-as-a-dictionary

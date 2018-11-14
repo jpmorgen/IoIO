@@ -1,1 +1,0 @@
-/home/jpmorgen/py/Daniel/define.py

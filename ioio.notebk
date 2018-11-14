@@ -5130,3 +5130,70 @@ Sat Nov 03 23:19:13 2018 EDT  jpmorgen@snipe
 Add a few more apertures
 
 ReduceCorObs.py reduce --tree --movie --recalculate
+
+Wed Nov 14 10:33:14 2018 EST  jpmorgen@snipe
+
+See ~/IoIO_reduction.notebk
+
+Oops, don't have dates in Na movie
+
+Fixed that.
+
+Getting ready to upload everything to GitHub
+
+git ls-tree --full-tree -r HEAD
+100644 blob c24e9012aa23ef81af4c9e89763f9cf571f89b5e    .gitignore
+100644 blob 22d1a3cd43165058a11ec3669292c010e80e8c1b    ASCOM_namespace.py
+100644 blob 379118ab2cae44d9b63d810f41235c734b55cf25    IoIO.py
+100644 blob 2865a96cf911096442605937f51cdad02ccae39b    Na_support_table.py
+100755 blob 884a3b21d1a428c7dfa89578a710f2687eaf6133    ReduceCorObs.py
+120000 blob c3bebd7b49061f20c713018216c36c7609b15260    define.py
+XXXXXXXXX blob 8892ebe0cd3eb67d01cbd566d01ad6b269e37e47    get_jupiter_center.py
+100644 blob a2aeb2b211217dc90a0f1e67e34406edf6124e4b    ioio.notebk
+100755 blob 9e4507bc32dbe8870fa5ecbdf446ad1da06f95a1    ioio.py
+XXXXXXXXXXX blob 8260742ca01ca714cbf7b9e88eb6306abd68e72c    maximdata.py
+XXXXXXXXXXX blob aff12e368fd5c4699dc133a619960587fcf19505    move_telecsope.py
+XXXXXXXXXXX blob f494a6224c3c1088d6e60509e89c4694250e7edc    offset_guide.py
+100644 blob 1be5f9610ae32c0ff6dc12f640a482215db6323d    precisionguide.py
+100755 blob a4c866595c1cce59ced4d6eb6559fefbb0eaf1b2    read_ap.py
+
+Not sure I need all of this stuff
+
+ioio.py: version of code used to control telescope during 2018 Jovian
+opposition.  No new development expected since precisionguide.py and
+IoIO.py combine to take on its functions
+
+ReduceCorObs.py: code used to reduce IoIO observations.  Imports
+precisionguide.py
+
+read_ap.py: reads the CSV file created by ReduceCorObs.py which has
+the individual image aperture surface brightness values and reduction
+parameters
+
+Na_support_table.py: generate a properly sorted CSV file containing
+the individual image aperture surface brightness values and reduction
+parameters
+
+precisionguide.py: start of a general package which will solve the
+problem of differential flexure between boresite-mounted guide scopes
+and main scope.  Based on ioio.py, imported by ReduceCorObs.py, imports
+ASCOM_namespace.py
+
+ASCOM_namespace.py: I have not figured out how to get Python to link
+into the same system that Visual Basic and related compilers use to
+make the ASCOM namespace available to client programs.  So I just
+define them myself here.
+
+IoIO.py: new version of ioio.py.  Imports precisionguide.py.
+
+ioio.notebk: software developement notebook
+
+Wed Nov 14 14:57:39 2018 EST  jpmorgen@snipe
+
+Wanting to push this to GitHub.  Been a while since I have done this.
+It looks like I need to create the repository on GitHub first and then
+push to it
+
+Description is separate from README.md
+
+Code used to record and reduce data with the Io Input/Output facility (IoIO)

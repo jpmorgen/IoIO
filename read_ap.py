@@ -2,20 +2,19 @@
 
 import os
 import csv
+from datetime import datetime
 
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.stats import linregress
 from astropy.time import Time
 
-from ReduceCorObs import get_dirs
-
 line = 'Na'
-onoff = 'AP'
+onoff = 'AP'	# on-band minus off-band, fully reduced images
+#onoff = 'On'	# on-band images after bias and dark subtraction and rayleigh calibration
+#onoff = 'Off'	# off-band images after bias and dark subtraction and rayleigh calibration
 
-#line = '[SII]'
 ap_sum_fname = '/data/io/IoIO/reduced/ap_sum.csv'
-#ap_sum_fname = '/data/io/IoIO/reduced.previous_versions/Rj_strip_sum/ap_sum.csv'
-#ap_sum_fname = '/data/io/IoIO/reduced/2018-02-22/ap_sum.csv'
 
 # list of days in matplotlib plot_date format, which happen to start
 # at midnight UT, which is the way I like it
@@ -25,7 +24,12 @@ pdlist = []
 rlist = []
 # Read in file
 with open(ap_sum_fname, newline='') as csvfile:
-    csvr = csv.DictReader(csvfile, quoting=csv.QUOTE_NONNUMERIC)    
+    csvr = csv.DictReader(csvfile, quoting=csv.QUOTE_NONNUMERIC)
+    fieldnames = csvr.fieldnames
+    ap_keys = [k for k in fieldnames
+               if ('AP' in k
+                   or 'On' in k
+                   or 'Off' in k)]
     for row in csvr:
         if row['LINE'] != line:
             continue
@@ -37,14 +41,42 @@ with open(ap_sum_fname, newline='') as csvfile:
         T = Time(row['TMID'], format='fits')
         pdlist.append(T.plot_date)
         rlist.append(row)
-pds = np.asarray(pdlist)
-idays = pds.astype(int)
+        for ap in ap_keys:
+            # compute counts so we can make annular apertures 
+            ap_split = ap.split('Rjp')
+            if len(ap_split) == 2:
+                ap_size = int(ap_split[1])
+                counts = row[ap] * ap_size**2
+                row['CTS_' + ap] = counts
+        # calculate specific apertures for plotting purposes
+        back = ((row['CTS_' + onoff + 'Rjp50']
+                 - row['CTS_' + onoff + 'Rjp40'])
+                / (50**2 - 40**2))
+        fore = ((row['CTS_' + onoff + 'Rjp30']
+                 - row['CTS_' + onoff + 'Rjp15'])
+                / (30**2 - 15**2))
+        center = ((row['CTS_' + onoff + 'Rjp15']
+                   - row['CTS_' + onoff + 'Rjp10'])
+                  / (15**2 - 10**2))
+        # Add these to the row
+        row[onoff + 'back'] = back
+        row[onoff + 'fore'] = fore
+        row[onoff + 'center'] = center
+        # Make sure we save a row with all the keys for the code below
+        saverow = row
 
-ap_keys = [k for k in row.keys()
+# supplement ap_keys with the CTS columns we just added 
+ap_keys = [k for k in saverow.keys()
            if ('AP' in k
                or 'On' in k
                or 'Off' in k)]
-# Compute daily medians
+
+# plt.plot_date list helps us get integer days which line up at
+# nighttime for IoIO in Arizona
+pds = np.asarray(pdlist)
+idays = pds.astype(int)
+
+# Compute daily medians and linear regressions between apertures
 median_ap_list = []
 for id in list(set(idays)):
     this_day_idx = np.where(idays == id)
@@ -53,15 +85,170 @@ for id in list(set(idays)):
     this_mpd = np.median(pds[this_day_idx])
     this_day_medians = {'TMID': this_mpd}
     for ap in ap_keys:
-        #this_day_ap_list = [row[ap] for row in rlist[this_day_idx]]
         this_day_ap_list = [rlist[i][ap] for i in this_day_idx]
         this_day_medians[ap] = np.median(this_day_ap_list)
+    # I could pythonify this with some sort of loop
+    this_back = [rlist[i][onoff + 'back']  for i in this_day_idx]
+    this_fore = [rlist[i][onoff + 'fore']  for i in this_day_idx]
+    this_center = [rlist[i][onoff + 'center']  for i in this_day_idx]
+    ### # Sample scatter plots
+    ### plt.scatter(this_back, this_fore)
+    ### dt = datetime.fromordinal(id)
+    ### plt.title(line + ' ' + dt.strftime('%Y-%m-%d'))
+    ### plt.xlabel('20 < Rj < 25 surface brightness (R)')
+    ### plt.ylabel('Rj < 15 surface brightness (R)')
+    ### plt.show()
+    
+    # stick linear regression results onto end of median dict
+    l = linregress(this_back, this_fore)
+    add_dict = {onoff + 'back_fore_' + k : l[i]
+                for i, k in enumerate(l._fields)}
+    this_day_medians.update(add_dict)
+    l = linregress(this_back, this_center)
+    add_dict = {onoff + 'back_center_' + k : l[i]
+                for i, k in enumerate(l._fields)}
+    this_day_medians.update(add_dict)
+    l = linregress(this_fore, this_center)
+    add_dict = {onoff + 'fore_center_' + k : l[i]
+                for i, k in enumerate(l._fields)}
+    this_day_medians.update(add_dict)
     median_ap_list.append(this_day_medians)
+
+mpds = [row['TMID'] for row in median_ap_list]
+
+######## Time series of primary apertures.
+# CHANGE onoff ABOVE TO PLOT FOR ON-BAND and OFF-BAND images 
+plt.plot_date(mpds, 
+              [row[onoff + 'Rjp15'] for row in median_ap_list], '^')
+plt.plot_date(mpds, 
+              [row[onoff + 'Rjp30'] for row in median_ap_list], 's')
+plt.plot_date(pds, 
+              [row[onoff + 'Rjp30'] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
+plt.plot_date(mpds, 
+              [row[onoff + 'back'] for row in median_ap_list], 'x')
+axes = plt.gca()
+if onoff == 'AP':
+    axes.set_ylim([0, 1500])
+    ylabel = ''
+else:
+    if onoff == 'On':
+        axes.set_ylim([0, 3000])
+    else:
+        axes.set_ylim([0, 1500])
+    ylabel = onoff + '-band'
+plt.legend(['Rj < 7.5 nightly median', 'Rj < 15 nightly median', 'Rj < 15 surface brightness', '20 < Rj < 25 nightly median'])
+plt.xlabel('UT Date')
+plt.ylabel(line + ' ' + ylabel + ' Surface Brightness (R)')
+plt.gcf().autofmt_xdate()  # orient date labels at a slant
+plt.show()
+
+
+##-## ######### Check offsets and scaling for final reduced images
+##-## if onoff == 'AP':
+##-##     plt.plot_date(mpds, 
+##-##                   [row[onoff + 'Rjp15'] - 900 for row in median_ap_list], '^')
+##-##     plt.plot_date(mpds, 
+##-##                   [(row[onoff + 'Rjp30'] - 320) * 1.5 for row in median_ap_list], 's')
+##-##     plt.plot_date(mpds, 
+##-##                   [(row[onoff + 'back'] - 70) * 2.2 for row in median_ap_list], 'x')
+##-##     axes = plt.gca()
+##-##     axes.set_ylim([-50, 500])
+##-##     plt.xlabel('UT Date')
+##-##     plt.ylabel(line + ' Surface Brightness (R)')
+##-##     plt.legend(['Rj < 7.5 nightly median - 900', '(Rj < 15 nightly median - 320) * 1.5', '(20 < Rj < 25 nightly median - 70) * 2.2'])
+##-##     plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-##     plt.show()
+
+
+##-## ####### Plot ADU2R
+##-## plt.plot_date(pds,
+##-##               [row['ADU2R'] for row in rlist])
+##-## axes = plt.gca()
+##-## plt.xlabel('UT Date')
+##-## plt.ylabel(line + ' ADU2R')
+##-## plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-## plt.show()
+
+##--## ###### Plot OFFSCALE
+##--## 
+##--## plt.plot_date(pds,
+##--##               #[(2.1 - row['OFFSCALE'])*500 for row in rlist], 'g,')
+##--##               [row['OFFSCALE'] for row in rlist])
+##--## axes = plt.gca()
+##--## axes.set_ylim([0.75, 1.75])
+##--## plt.xlabel('UT Date')
+##--## plt.ylabel(line + ' OFFSCALE')
+##--## plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##--## plt.show()
+
+## ######### Plot results of scatter plot linear regression
+## plt.plot_date(mpds, 
+##               [row[onoff + 'back_fore_slope']
+##                for row in median_ap_list], '.')
+## plt.plot_date(mpds, 
+##               [row[onoff + 'back_fore_rvalue']
+##                for row in median_ap_list], '.')
+## plt.plot_date(mpds, 
+##               [row[onoff + 'back_fore_pvalue']
+##                for row in median_ap_list], '.')
+## plt.plot_date(mpds, 
+##               [row[onoff + 'back_fore_stderr']
+##                for row in median_ap_list], '.')
+## axes = plt.gca()
+## plt.legend(['slope', 'rvalue', 'pvalue', 'stderr'])
+## plt.xlabel('UT Date')
+## plt.ylabel('20 < Rj < 25 to Rj < 15 Scatter Plot Results')
+## axes.set_ylim([0, 2])
+## plt.gcf().autofmt_xdate()  # orient date labels at a slant
+## plt.show()
+
+
+# plt.plot_date(pds, 
+#               [row[onoff + 'back'] for row in rlist], '.')
+# plt.plot_date(pds, 
+#               [row[onoff + 'fore'] for row in rlist], '.')
+# plt.plot_date(pds, 
+#               [row[onoff + 'center'] for row in rlist], '.')
+
+#plt.plot_date(mpds, 
+#              [row[onoff + 'center'] for row in median_ap_list], '.')
+
+
+# plt.plot_date(pds, 
+#               [row[onoff + 'fore']
+#                - row[onoff + 'back']
+#                   for row in rlist], '.')
+# plt.plot_date(pds, 
+#               [row[onoff + 'center']
+#                - row[onoff + 'back']
+#                   for row in rlist], '.')
+
+#plt.plot_date(pds, 
+#              [row[onoff + 'center']
+#               - row[onoff + 'fore']
+#                  for row in rlist], '.')
+
+
+###plt.legend(['Rj < 7.5 nightly median', 'Rj < 15 nightly median', 'Rj < 15 surface brightness', '20 < Rj < 25 nightly median'])
+###plt.xlabel('UT Date')
+###plt.ylabel(line + ' Surface Brightness (R)')
+###plt.gcf().autofmt_xdate()  # orient date labels at a slant
+###axes = plt.gca()
+###
+###if line == '[SII]':
+###    axes.set_ylim([-100, 1500])
+###else:
+###    axes.set_ylim([0, 1500])
+####    axes.set_ylim([-100, 500])
+###    #axes.set_ylim([0, 4000])
+###    #axes.set_ylim([0.5, 1.75])
+###    #axes.set_ylim([0, 0.5])
+###plt.show()
+
 
 #print(median_ap_list)
 #print(pds)
 #print([row[onoff + '_Rj_0'] for row in median_ap_list])
-mpds = [row['TMID'] for row in median_ap_list]
 #plt.plot_date(pds, 
 #              [row[onoff + 'Rj_0'] for row in rlist], '.')
 #plt.plot_date(mpds, 
@@ -80,20 +267,20 @@ mpds = [row['TMID'] for row in median_ap_list]
 #              [row[onoff + 'Rjp30'] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
 #plt.plot_date(mpds, 
 #              [row[onoff + 'Rjm50'] for row in median_ap_list], 'x')
-c5 = np.asarray([row[onoff + 'Rjp5']*5**2 for row in median_ap_list])
-c10 = np.asarray([row[onoff + 'Rjp10']*10**2 for row in median_ap_list])
-c15 = np.asarray([row[onoff + 'Rjp15']*15**2 for row in median_ap_list])
-c30 = np.asarray([row[onoff + 'Rjp30']*30**2 for row in median_ap_list])
-c40 = np.asarray([row[onoff + 'Rjp40']*40**2 for row in median_ap_list])
-c50 = np.asarray([row[onoff + 'Rjp50']*50**2 for row in median_ap_list])
-c60 = np.asarray([row[onoff + 'Rjp60']*60**2 for row in median_ap_list])
-#back = (c60 - c50) / (60**2 - 50**2)
-#center = (c15 - c5) / (15**2 - 5**2)
-center = (c15 - c10) / (15**2 - 10**2)
-fore = (c30 - c15) / (30**2 - 15**2)
-back = (c50 - c40) / (50**2 - 40**2)
-plt.plot_date(mpds, center-back, '^')
-plt.plot_date(mpds, (fore-back), 's')
+##c5 = np.asarray([row[onoff + 'Rjp5']*5**2 for row in median_ap_list])
+##c10 = np.asarray([row[onoff + 'Rjp10']*10**2 for row in median_ap_list])
+##c15 = np.asarray([row[onoff + 'Rjp15']*15**2 for row in median_ap_list])
+##c30 = np.asarray([row[onoff + 'Rjp30']*30**2 for row in median_ap_list])
+##c40 = np.asarray([row[onoff + 'Rjp40']*40**2 for row in median_ap_list])
+##c50 = np.asarray([row[onoff + 'Rjp50']*50**2 for row in median_ap_list])
+##c60 = np.asarray([row[onoff + 'Rjp60']*60**2 for row in median_ap_list])
+###back = (c60 - c50) / (60**2 - 50**2)
+###center = (c15 - c5) / (15**2 - 5**2)
+##center = (c15 - c10) / (15**2 - 10**2)
+##fore = (c30 - c15) / (30**2 - 15**2)
+##back = (c50 - c40) / (50**2 - 40**2)
+##plt.plot_date(mpds, center-back, '^')
+##plt.plot_date(mpds, (fore-back), 's')
 #plt.plot_date(mpds, back, 'x')
 # It is wrong to subtract rates like this
 #plt.plot_date(mpds, 
@@ -118,20 +305,21 @@ plt.plot_date(mpds, (fore-back), 's')
 #plt.legend(['60 Rj box surface brightness', '60 Rj box nightly median', '>60 Rj box nightly median'])
 #plt.legend(['30 Rj box surface brightness', '10 < Rj < 15 nightly median', '15 < Rj < 30 nightly median', '40 < Rj < 50 nightly median'])
 #plt.legend(['10 < Rj < 15 nightly median', '15 < Rj < 30 nightly median', '40 < Rj < 50 nightly median'])
-plt.legend(['5 < Rj < 7.5 nightly median', '7.5 < Rj < 15 nightly median', '20 < Rj < 25 nightly median'])
-plt.xlabel('UT Date')
-plt.ylabel(line + ' Surf. Bright. (approx. R)')
-plt.gcf().autofmt_xdate()  # orient date labels at a slant
-axes = plt.gca()
-axes.set_yscale('log')
-if line == '[SII]':
-    axes.set_ylim([-100, 1500])
-else:
-    axes.set_ylim([0, 800])
-    #axes.set_ylim([0, 4000])
-    #axes.set_ylim([0.5, 1.75])
-    #axes.set_ylim([0, 0.5])
-plt.show()
+
+# plt.legend(['5 < Rj < 7.5 nightly median', '7.5 < Rj < 15 nightly median', '20 < Rj < 25 nightly median'])
+# plt.xlabel('UT Date')
+# plt.ylabel(line + ' Surf. Bright. (R)')
+# plt.gcf().autofmt_xdate()  # orient date labels at a slant
+# axes = plt.gca()
+# #axes.set_yscale('log')
+# if line == '[SII]':
+#     axes.set_ylim([-100, 1500])
+# else:
+#     axes.set_ylim([0, 1500])
+#     #axes.set_ylim([0, 4000])
+#     #axes.set_ylim([0.5, 1.75])
+#     #axes.set_ylim([0, 0.5])
+# plt.show()
 
 
 #-#         
@@ -217,7 +405,7 @@ plt.show()
 #-# #plt.title(line + ' Full-frame Surface Brightness')
 #-# plt.legend(['Full-frame surf. bright.', 'Full frame nightly median', 'Frame edge nightly median'])
 #-# plt.xlabel('UT Date')
-#-# plt.ylabel(line + ' Surf. Bright (approx. R)')
+#-# plt.ylabel(line + ' Surf. Bright (R)')
 #-# plt.gcf().autofmt_xdate()  # orient date labels at a slant
 #-# axes = plt.gca()
 #-# if line == '[SII]':
