@@ -1,3 +1,7 @@
+The latest release of this software is available at
+
+https://zenodo.org/badge/latestdoi/157604461
+
 The Io Input/Output facility (IoIO) is a small-aperture (35 cm)
 coronagraph constructed for the study of material ejected from
 Jupiter's moon Io (the output) and entering Jupiter's magnetosphere
@@ -9,7 +13,8 @@ code for recording, reducing and presenting the data.
 
 
 Portions of this software depend on define.py, a package maintained by
-Daniel R. Morgenthaler available at https://github.com/jpmorgen/Daniel
+Daniel R. Morgenthaler available at
+https://zenodo.org/badge/latestdoi/157608102
 
 Brief description of files in this repository:
 
