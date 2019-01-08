@@ -11,160 +11,184 @@ from precisionguide import get_HDUList
 # Eventually I want to get propert C* WCS keywords into headers
 from ReduceCorObs import plate_scale
 
+from read_ap import ADU2R_adjust
+
+# Number of images to plot
+ims = 1
+apertures = True
+
 origin = 'lower'
 vmin = 10
 vmax = 3000
-binning = 4
+if ims == 1:
+    binning = 2
+    linewidth = 2
+else:
+    binning = 4
+    linewidth = 1
 
 # https://scipy-cookbook.readthedocs.io/items/Rebinning.html
 def rebin( a, newshape ):
-        '''Rebin an array to a new shape.
-        '''
-        assert len(a.shape) == len(newshape)
+    '''Rebin an array to a new shape.
+    '''
+    assert len(a.shape) == len(newshape)
 
-        slices = [ slice(0,old, float(old)/new) for old,new in zip(a.shape,newshape) ]
-        coordinates = np.mgrid[slices]
-        indices = coordinates.astype('i')   #choose the biggest smaller integer index
-        return a[tuple(indices)]
+    slices = [ slice(0,old, float(old)/new) for old,new in zip(a.shape,newshape) ]
+    coordinates = np.mgrid[slices]
+    indices = coordinates.astype('i')   #choose the biggest smaller integer index
+    return a[tuple(indices)]
 
 def rebin_factor( a, newshape ):
-        '''Rebin an array to a new shape.
-        newshape must be a factor of a.shape.
-        '''
-        assert len(a.shape) == len(newshape)
-        assert not np.sometrue(np.mod( a.shape, newshape ))
+    '''Rebin an array to a new shape.
+    newshape must be a factor of a.shape.
+    '''
+    assert len(a.shape) == len(newshape)
+    assert not np.sometrue(np.mod( a.shape, newshape ))
 
-        slices = [ slice(None,None, old/new) for old,new in zip(a.shape,newshape) ]
-        return a[slices]
+    slices = [ slice(None,None, old/new) for old,new in zip(a.shape,newshape) ]
+    return a[slices]
 
-fig = plt.figure(figsize=(6, 2.6))
-gs = gridspec.GridSpec(1, 2, width_ratios=[1,1.24])
+def plot_ims(ims):
+    if ims == 2:
+        fig = plt.figure(figsize=(6, 2.6))
+        gs = gridspec.GridSpec(1, 2, width_ratios=[1,1.24])
+    else:
+        fig = plt.figure()
+        gs = gridspec.GridSpec(1, 1)
+    ax = plt.subplot(gs[0])
+    rect15 = patches.Rectangle((-7.5,-7.5),15,15,linewidth=linewidth,edgecolor='C0',facecolor='none')
+    rect30 = patches.Rectangle((-15,-15),30,30,linewidth=linewidth,edgecolor='C1',facecolor='none')
+    rect40 = patches.Rectangle((-20,-20),40,40,linewidth=linewidth,edgecolor='C2',facecolor='none')
+    rect50 = patches.Rectangle((-25,-25),50,50,linewidth=linewidth,edgecolor='C2',facecolor='none')
+    
+    # These are less bright in background than 2018-03-02
+    #fname = '/data/io/IoIO/reduced/2018-02-27/IPT_Na_R_043r.fits'
+    
+    fname = '/data/io/IoIO/reduced/2018-02-27/IPT_Na_R_003r.fits'
+    
+    
+    # Like this but maybe too much uniform background
+    #fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_040r.fits'
+    #fname = '/data/io/IoIO/noCrashPlan/reduced.previous_versions/sent_to_coauthors/2018-02-27/IPT_Na_R_060r.fits'
+    
+    # Go through more images on this date
+    # Way too bright
+    #fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_003r.fits'
+    # Wow!  Beautiful extended structure, but brighht background
+    #fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_020r.fits'
+    #fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_023r.fits'
+    #fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_020r.fits'
+    #fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_040r.fits'
+    #fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_056r.fits'
+    # Background getting brighter
+    #fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_072r.fits'
+    #fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_089r.fits'
+    
+    plt.title('2018-03-02')
+    HDUList = get_HDUList(fname)
+    header = HDUList[0].header
+    im = HDUList[0].data
+    im = im * ADU2R_adjust
+    im = block_reduce(im, block_size=(binning, binning), func=np.median)
+    im = rebin(im, np.asarray(im.shape)/binning)
+    badc = np.where(im < 0)
+    im[badc] = 1
+    Rjpix = header['ANGDIAM']/2/plate_scale / binning**2 # arcsec / (arcsec/pix) / (pix/bin)
+    nr, nc = im.shape
+    x = (np.arange(nc) - nc/2) / Rjpix
+    y = (np.arange(nr) - nr/2) / Rjpix
+    X, Y = np.meshgrid(x, y)
+    #plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='YlOrRd')
+    plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='gist_heat')
+    if apertures:
+        ax.add_patch(rect15)
+        ax.add_patch(rect30)
+        ax.add_patch(rect40)
+        ax.add_patch(rect50)
+    plt.ylabel('Rj')
+    plt.xlabel('Rj')
+    # https://stackoverflow.com/questions/2934878/matplotlib-pyplot-preserve-aspect-ratio-of-the-plot
+    plt.axis('scaled')
+    #cbar = plt.colorbar()
+    #cbar.ax.set_ylabel('Surface brightness (approx. R)')
+    if ims == 1:
+        cbar = plt.colorbar()
+        cbar.ax.set_ylabel('Surface brightness (R)')
+        plt.show()
+        return ()
+    
+    ax = plt.subplot(gs[1])
+    rect15 = patches.Rectangle((-7.5,-7.5),15,15,linewidth=linewidth,edgecolor='C0',facecolor='none')
+    rect30 = patches.Rectangle((-15,-15),30,30,linewidth=linewidth,edgecolor='C1',facecolor='none')
+    rect40 = patches.Rectangle((-20,-20),40,40,linewidth=linewidth,edgecolor='C2',facecolor='none')
+    rect50 = patches.Rectangle((-25,-25),50,50,linewidth=linewidth,edgecolor='C2',facecolor='none')
+    
+    # Was using this one
+    fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_005r.fits'
+    
+    # Too bright
+    #fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_001r.fits'
+    # Better
+    #fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_002r.fits'
+    
+    # This looks pretty good
+    fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_003r.fits'
+    
+    #fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_004r.fits'
+    #fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_005r.fits'
+    # Oversubtracted
+    #fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_006r.fits'
+    #fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_007r.fits'
+    # OK
+    #fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_008r.fits'
+    # Ugly
+    #fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_010r.fits'
+    
+    #fname = '/data/io/IoIO/noCrashPlan/reduced.previous_versions/sent_to_coauthors/2018-06-12/Na_on-band_005r.fits'
+    plt.title('2018-06-12')
+    HDUList = get_HDUList(fname)
+    header = HDUList[0].header
+    im = HDUList[0].data
+    im = im * ADU2R_adjust
+    im = block_reduce(im, block_size=(binning, binning), func=np.median)
+    im = rebin(im, np.asarray(im.shape)/binning)
+    badc = np.where(im < 0)
+    im[badc] = 1
+    Rjpix = header['ANGDIAM']/2/plate_scale / binning**2 # arcsec / (arcsec/pix) / (pix/bin)
+    nr, nc = im.shape
+    x = (np.arange(nc) - nc/2) / Rjpix
+    y = (np.arange(nr) - nr/2) / Rjpix
+    X, Y = np.meshgrid(x, y)
+    #plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='YlOrRd')
+    plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='gist_heat')
+    if apertures:
+        ax.add_patch(rect15)
+        ax.add_patch(rect30)
+        ax.add_patch(rect40)
+        ax.add_patch(rect50)
+    plt.xlabel('Rj')
+    plt.axis('scaled')
+    cbar = plt.colorbar()
+    cbar.ax.set_ylabel('Surface brightness (R)')
+    
+    
+    #badc = np.where(np.logical_or(im < 10, im > chop))
+    #im[badc] = 0
+    
+    # https://matplotlib.org/examples/pylab_examples/pcolor_log.html
+    
+    #plt.pcolor(X, Y, im, norm=LogNorm(vmin=im.min(), vmax=im.max()), cmap='PuBu_r')
+    #plt.subplot(2, 1, 1)
+    #plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=1, vmax=5000), cmap='hsv')
+    #plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=1, vmax=5000), cmap='autumn')
+    
+    #plt.subplot(2, 1, 2)
+    #plt.pcolor(X, Y, im, norm=LogNorm(vmin=0, vmax=8000), cmap='PuBu_r')
+    #plt.colorbar()
+    
+    plt.show()
 
-ax = plt.subplot(gs[0])
-rect15 = patches.Rectangle((-7.5,-7.5),15,15,linewidth=1,edgecolor='C0',facecolor='none')
-rect30 = patches.Rectangle((-15,-15),30,30,linewidth=1,edgecolor='C1',facecolor='none')
-rect40 = patches.Rectangle((-20,-20),40,40,linewidth=1,edgecolor='C2',facecolor='none')
-rect50 = patches.Rectangle((-25,-25),50,50,linewidth=1,edgecolor='C2',facecolor='none')
-
-# These are less bright in background than 2018-03-02
-#fname = '/data/io/IoIO/reduced/2018-02-27/IPT_Na_R_043r.fits'
-
-fname = '/data/io/IoIO/reduced/2018-02-27/IPT_Na_R_003r.fits'
-
-
-# Like this but maybe too much uniform background
-#fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_040r.fits'
-#fname = '/data/io/IoIO/noCrashPlan/reduced.previous_versions/sent_to_coauthors/2018-02-27/IPT_Na_R_060r.fits'
-
-# Go through more images on this date
-# Way too bright
-#fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_003r.fits'
-# Wow!  Beautiful extended structure, but brighht background
-#fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_020r.fits'
-#fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_023r.fits'
-#fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_020r.fits'
-#fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_040r.fits'
-#fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_056r.fits'
-# Background getting brighter
-#fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_072r.fits'
-#fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_089r.fits'
-
-plt.title('2018-03-02')
-HDUList = get_HDUList(fname)
-header = HDUList[0].header
-im = HDUList[0].data
-im = block_reduce(im, block_size=(binning, binning), func=np.median)
-im = rebin(im, np.asarray(im.shape)/binning)
-badc = np.where(im < 0)
-im[badc] = 1
-Rjpix = header['ANGDIAM']/2/plate_scale / binning**2 # arcsec / (arcsec/pix) / (pix/bin)
-nr, nc = im.shape
-x = (np.arange(nc) - nc/2) / Rjpix
-y = (np.arange(nr) - nr/2) / Rjpix
-X, Y = np.meshgrid(x, y)
-#plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='YlOrRd')
-plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='gist_heat')
-ax.add_patch(rect15)
-ax.add_patch(rect30)
-ax.add_patch(rect40)
-ax.add_patch(rect50)
-plt.ylabel('Rj')
-plt.xlabel('Rj')
-# https://stackoverflow.com/questions/2934878/matplotlib-pyplot-preserve-aspect-ratio-of-the-plot
-plt.axis('scaled')
-#cbar = plt.colorbar()
-#cbar.ax.set_ylabel('Surface brightness (approx. R)')
-
-
-ax = plt.subplot(gs[1])
-rect15 = patches.Rectangle((-7.5,-7.5),15,15,linewidth=1,edgecolor='C0',facecolor='none')
-rect30 = patches.Rectangle((-15,-15),30,30,linewidth=1,edgecolor='C1',facecolor='none')
-rect40 = patches.Rectangle((-20,-20),40,40,linewidth=1,edgecolor='C2',facecolor='none')
-rect50 = patches.Rectangle((-25,-25),50,50,linewidth=1,edgecolor='C2',facecolor='none')
-
-# Was using this one
-fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_005r.fits'
-
-# Too bright
-#fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_001r.fits'
-# Better
-#fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_002r.fits'
-
-# This looks pretty good
-fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_003r.fits'
-
-#fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_004r.fits'
-#fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_005r.fits'
-# Oversubtracted
-#fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_006r.fits'
-#fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_007r.fits'
-# OK
-#fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_008r.fits'
-# Ugly
-#fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_010r.fits'
-
-#fname = '/data/io/IoIO/noCrashPlan/reduced.previous_versions/sent_to_coauthors/2018-06-12/Na_on-band_005r.fits'
-plt.title('2018-06-12')
-HDUList = get_HDUList(fname)
-header = HDUList[0].header
-im = HDUList[0].data
-im = block_reduce(im, block_size=(binning, binning), func=np.median)
-im = rebin(im, np.asarray(im.shape)/binning)
-badc = np.where(im < 0)
-im[badc] = 1
-Rjpix = header['ANGDIAM']/2/plate_scale / binning**2 # arcsec / (arcsec/pix) / (pix/bin)
-nr, nc = im.shape
-x = (np.arange(nc) - nc/2) / Rjpix
-y = (np.arange(nr) - nr/2) / Rjpix
-X, Y = np.meshgrid(x, y)
-#plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='YlOrRd')
-plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='gist_heat')
-ax.add_patch(rect15)
-ax.add_patch(rect30)
-ax.add_patch(rect40)
-ax.add_patch(rect50)
-plt.xlabel('Rj')
-plt.axis('scaled')
-cbar = plt.colorbar()
-cbar.ax.set_ylabel('Surface brightness (R)')
-
-
-#badc = np.where(np.logical_or(im < 10, im > chop))
-#im[badc] = 0
-
-# https://matplotlib.org/examples/pylab_examples/pcolor_log.html
-
-#plt.pcolor(X, Y, im, norm=LogNorm(vmin=im.min(), vmax=im.max()), cmap='PuBu_r')
-#plt.subplot(2, 1, 1)
-#plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=1, vmax=5000), cmap='hsv')
-#plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=1, vmax=5000), cmap='autumn')
-
-#plt.subplot(2, 1, 2)
-#plt.pcolor(X, Y, im, norm=LogNorm(vmin=0, vmax=8000), cmap='PuBu_r')
-#plt.colorbar()
-
-plt.show()
-
+plot_ims(ims)
 
 # # https://matplotlib.org/gallery/images_contours_and_fields/contourf_log.html#sphx-glr-gallery-images-contours-and-fields-contourf-log-py
 # 

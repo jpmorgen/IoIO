@@ -5197,3 +5197,14 @@ push to it
 Description is separate from README.md
 
 Code used to record and reduce data with the Io Input/Output facility (IoIO)
+
+Wed Nov 14 15:49:22 2018 EST  jpmorgen@snipe
+
+Got it up to GitHub, but I need to work with the local stuff to make
+GitHub the default master, or however you say that.
+
+Tue Jan 08 09:49:28 2019 EST  jpmorgen@snipe
+
+Decided to implement ADU2R_adjust in Na_support_table.py rather than
+re-do the pipeline at this point.  Getting ready to put a snapshot up
+on a permanent repository as suggested by the Data Editor

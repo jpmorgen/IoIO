@@ -7,7 +7,20 @@ from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import linregress
+from scipy.signal import medfilt
 from astropy.time import Time
+
+# More careful calculation detailed in Morgenthaler et al. 2019 ApJL
+# suggests that ND filter is ~30% low and in MR, 15% light lost to
+# Fraunhofer lines.  Net is 15% too low.  Correct here.
+# --> Eventually the full correction will be absorbed into the pipeline
+#\begin{equation}
+#  \mathrm{ADU2R} = {on\_jup * ND \over MR}
+#  \label{eq:ADU2R}
+#\end{equation}
+ADU2R_adjust = 1.15
+telluric_Na = 55
+N_med = 11
 
 line = 'Na'
 onoff = 'AP'	# on-band minus off-band, fully reduced images
@@ -33,15 +46,18 @@ with open(ap_sum_fname, newline='') as csvfile:
     for row in csvr:
         if row['LINE'] != line:
             continue
-        # if (line == 'Na'
-        #     and row['ADU2R'] < 0.18
-        #     and (row['OFFSCALE'] < 1 or
-        #          row['OFFSCALE'] > 1.26)):
-        #     continue
+        if (line == 'Na'
+            and row['ADU2R'] < 0.18
+            and (row['OFFSCALE'] < 1 or
+                 row['OFFSCALE'] > 1.26)):
+            continue
         T = Time(row['TMID'], format='fits')
         pdlist.append(T.plot_date)
         rlist.append(row)
         for ap in ap_keys:
+            # Apply ADU2R adjustment for sodium
+            if row['LINE'] == 'Na':
+                row[ap] *= ADU2R_adjust
             # compute counts so we can make annular apertures 
             ap_split = ap.split('Rjp')
             if len(ap_split) == 2:
@@ -116,19 +132,65 @@ for id in list(set(idays)):
 
 mpds = [row['TMID'] for row in median_ap_list]
 
-######## Time series of primary apertures.
-# CHANGE onoff ABOVE TO PLOT FOR ON-BAND and OFF-BAND images 
-plt.plot_date(mpds, 
-              [row[onoff + 'Rjp15'] for row in median_ap_list], '^')
-plt.plot_date(mpds, 
-              [row[onoff + 'Rjp30'] for row in median_ap_list], 's')
-plt.plot_date(pds, 
-              [row[onoff + 'Rjp30'] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
-plt.plot_date(mpds, 
-              [row[onoff + 'back'] for row in median_ap_list], 'x')
+######## UNCOMMENT APPROPRIATE BLOCK TO CREATE DESIRED FIGURE
+
+##-## ######## Time series of primary apertures.
+##-## # CHANGE onoff ABOVE TO PLOT FOR ON-BAND and OFF-BAND images 
+##-## plt.plot_date(mpds, 
+##-##               [row[onoff + 'Rjp15'] for row in median_ap_list], '^')
+##-## plt.plot_date(mpds, 
+##-##               [row[onoff + 'Rjp30'] for row in median_ap_list], 's')
+##-## plt.plot_date(pds, 
+##-##               [row[onoff + 'Rjp30'] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
+##-## back = [row[onoff + 'back'] for row in median_ap_list]
+##-## plt.plot_date(mpds, back, 'x')
+##-## #back_mav = np.convolve(back, np.ones((N_med,))/N_med, mode='same')
+##-## #back_med = medfilt(back, N_med)
+##-## #plt.plot_date(mpds, back_med, ',', linestyle='-')
+##-## axes = plt.gca()
+##-## if onoff == 'AP':
+##-##     axes.set_ylim([0, 1700])
+##-##     ylabel = ''
+##-## else:
+##-##     if onoff == 'On':
+##-##         axes.set_ylim([0, 3000])
+##-##     else:
+##-##         axes.set_ylim([0, 1500])
+##-##     ylabel = onoff + '-band'
+##-## plt.legend(['Rj < 7.5 nightly median', 'Rj < 15 nightly median', 'Rj < 15 surface brightness', '20 < Rj < 25 nightly median'], ncol=2)
+##-## plt.xlabel('UT Date')
+##-## plt.ylabel(line + ' ' + ylabel + ' Surface Brightness (R)')
+##-## plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-## plt.show()
+
+######## Time series of 25 Rj aperture.
+# Subtract the estimated telluric sodium background
+
+back = [row[onoff + 'back'] - telluric_Na for row in median_ap_list]
+mpds = np.asarray(mpds)
+back = np.asarray(back)
+T0 = Time('2017-12-01T00:00:00', format='fits')
+T1 = Time('2018-07-10T00:00:00', format='fits')
+good_idx = np.where(mpds > T0.plot_date)
+# unwrap
+mpds = mpds[good_idx]
+back = back[good_idx]
+sorted_idx = np.argsort(mpds)
+mpds = mpds[sorted_idx]
+back = back[sorted_idx]
+plt.plot_date(mpds, back, 'C2x')
+back_med = medfilt(back, N_med)
+plt.plot_date(mpds, back_med, ',', linestyle='-')
 axes = plt.gca()
+legend_list = ['20 < Rj < 25 nightly median',
+               str(N_med) + '-day running median']
 if onoff == 'AP':
-    axes.set_ylim([0, 1500])
+    T2 = Time('2018-01-10T00:00:00', format='fits')
+    T3 = Time('2018-02-20T00:00:00', format='fits')
+    plt.plot_date([T2.plot_date, T3.plot_date],
+                  [25, 150], ',', linestyle='-')
+    legend_list.append('linear extrapolation')
+    axes.set_ylim([0, 225])
     ylabel = ''
 else:
     if onoff == 'On':
@@ -136,23 +198,23 @@ else:
     else:
         axes.set_ylim([0, 1500])
     ylabel = onoff + '-band'
-plt.legend(['Rj < 7.5 nightly median', 'Rj < 15 nightly median', 'Rj < 15 surface brightness', '20 < Rj < 25 nightly median'])
+axes.set_xlim([T0.plot_date, T1.plot_date])
+plt.legend(legend_list, loc='upper right')
 plt.xlabel('UT Date')
 plt.ylabel(line + ' ' + ylabel + ' Surface Brightness (R)')
 plt.gcf().autofmt_xdate()  # orient date labels at a slant
 plt.show()
 
-
 ##-## ######### Check offsets and scaling for final reduced images
 ##-## if onoff == 'AP':
 ##-##     plt.plot_date(mpds, 
-##-##                   [row[onoff + 'Rjp15'] - 900 for row in median_ap_list], '^')
+##-##                   [row[onoff + 'Rjp15'] - 900*ADU2R_adjust for row in median_ap_list], '^')
 ##-##     plt.plot_date(mpds, 
-##-##                   [(row[onoff + 'Rjp30'] - 320) * 1.5 for row in median_ap_list], 's')
+##-##                   [(row[onoff + 'Rjp30'] - 320*ADU2R_adjust) * 1.5 for row in median_ap_list], 's')
 ##-##     plt.plot_date(mpds, 
-##-##                   [(row[onoff + 'back'] - 70) * 2.2 for row in median_ap_list], 'x')
+##-##                   [(row[onoff + 'back'] - 70*ADU2R_adjust) * 2.2 for row in median_ap_list], 'x')
 ##-##     axes = plt.gca()
-##-##     axes.set_ylim([-50, 500])
+##-##     axes.set_ylim([-50, 700])
 ##-##     plt.xlabel('UT Date')
 ##-##     plt.ylabel(line + ' Surface Brightness (R)')
 ##-##     plt.legend(['Rj < 7.5 nightly median - 900', '(Rj < 15 nightly median - 320) * 1.5', '(20 < Rj < 25 nightly median - 70) * 2.2'])
