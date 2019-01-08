@@ -5197,3 +5197,72 @@ push to it
 Description is separate from README.md
 
 Code used to record and reduce data with the Io Input/Output facility (IoIO)
+
+Wed Nov 14 15:49:22 2018 EST  jpmorgen@snipe
+
+Got it up to GitHub, but I need to work with the local stuff to make
+GitHub the default master, or however you say that.
+
+Tue Jan 08 09:49:28 2019 EST  jpmorgen@snipe
+
+Decided to implement ADU2R_adjust in Na_support_table.py rather than
+re-do the pipeline at this point.  Getting ready to put a snapshot up
+on a permanent repository as suggested by the Data Editor.
+
+COOL!  I can put the code on GitHub and then make a release in GitHub
+that will automatically be pulled over into Zenodo.  Whenever I make a
+new release in GitHub, a new release will be published in Zenodo too!
+
+https://zenodo.org/account/settings/github/
+
+https://git-scm.com/book/en/v2/Git-Basics-Tagging
+
+OK, so release tagging is how versioning is done in Git, rather than
+pure incremental as with RCS.  I can make tags locally, but I would
+have to push them separately, unless Magit takes care of this for me
+in a natural way.
+
+Made a release with GitHub for Daniel.  That was easy enough, so
+consider just sticking with that.
+
+Daniel has a DOI!
+
+Put it back into his README, as recommended and increment the tag.
+Try this in Magit.  Magit push has push tags as well!
+
+https://github.com/AASJournals/Tutorials/blob/master/Repositories/UsingRepositories.md
+
+Not clear, but authorship goes into Zenodo
+
+Did a tag upload with Magit and indeed, got another release for
+Daniel's stuff.
+
+But zenodo is not automatically grabbing it.
+
+Linked ORCID in addition to GitHub
+
+OK
+
+https://git-scm.com/book/en/v2/Git-Basics-Tagging
+
+misled me.  There are lightweight tags, annotated tags and GitHub Releases
+
+https://stackoverflow.com/questions/18506508/whats-the-difference-between-tag-and-release
+
+But GitHub still allows the difference and calls them releases on its
+release tab, but not the latest release.  I guess it is like a draft
+release until I tweak it in GitHub?
+
+OK, tried that.  Now see what Zenodo does.  Bar at top told me there
+was a newer version ready.  Ack.  It doesn't bring over the author and
+other metadata info.  Pain.
+
+So the important place for the Zenodo badge/latestdoi is in README.md,
+which I will be adding very shortly as I improve the software.  But if
+someone pulls it down....  So the best thing to do is commit twice.
+At least I can
+
+No, it looks like in the upload section, I can reserve a DOI.  But
+that breaks the GitHub association.
+
+Maybe I can use a draft release...
