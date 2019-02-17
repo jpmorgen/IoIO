@@ -1,15 +1,24 @@
-#--> Getting command line to work in Windows.  You need to edit
-# registry to make 
+#--> This code was developed using Anaconda3 installed as
+#--> administrator and with PATH option selected during the install so
+#--> that python can be used from a Windows command line.  NOTE: to
+#--> get command line arguments passed, which is essential for this
+#--> code, you need need to edit registry to make
 # Computer\HKEY_CLASSES_ROOT\Applications\python.exe\shell\open\command
 # "C:\ProgramData\Anaconda3\python.exe" "%1" %*
-# Thanks to https://stackoverflow.com/questions/29540541/executable-python-script-not-take-sys-argv-in-windows
+# Thanks to
+# https://stackoverflow.com/questions/29540541/executable-python-script-not-take-sys-argv-in-windows
+# Alternately, you can just call python with the full path to the
+# module and then its arguments
 
+
+import importlib
 import sys
 import os
 import socket
 import time
 import subprocess
 import argparse
+import json
 
 import numpy as np
 from scipy import signal
@@ -18,17 +27,32 @@ from astropy import wcs
 from astropy.io import fits
 from astropy import units as u
 from astropy.time import Time, TimeDelta
-try:
-    import win32com.client
-except:
-    if sys.platform == 'win32':
+
+if sys.platform == 'win32':
+    try:
+        import win32com.client
+    except:
         log.info('You are missing the win32com.client.  This should be in the Anaconda package.  MaxIm/telescope control will not work.')
     else:
+        # http://timgolden.me.uk/pywin32-docs/html/com/win32com/HTML/QuickStartClientCom.html
+        # Using makepy.py -i to poke around in what might be useful
+        try:
+            # 'ASCOM Master Interfaces for .NET and COM' constants.
+            win32com.client.gencache.EnsureModule('{76618F90-032F-4424-A680-802467A55742}', 0, 1, 0)
+        except:
+            log.info('ASCOM does not seem to be installed.  MaxIm/telescope control will not work.')
+        else:
+            try:
+                # MaxIm constants.  The long string is the GUID of MaxIm found by makepy.py
+                win32com.client.gencache.EnsureModule('{B4955EC7-F7F2-11D2-AA9C-444553540000}', 0, 1, 0)
+            except:
+                log.info('MaxIm not found.  MaxIm/telescope control will not work.')
+else:
         log.info('You are not on a Windows system.  The MaxIm/telescope control features of this package will not work unless you are on a Windows system.')
 
-# --> There may be a better way to do this with Iron Python or related
+# --> Above gencache may be a better way to do this.  Or maybe
+# ironpython or http://pythonnet.sourceforge.net/readme.html
 import ASCOM_namespace as ASCOM
-
 
 # --> these are things that eventually I would want to store in a
 # --> configuration file
@@ -42,7 +66,7 @@ default_guider_exptime = 1 # chage back to 1 for night, 0.2 for day
 # --> I may improve this location or the technique of message passing
 if socket.gethostname() == "snipe":
     raw_data_root = '/data/io/IoIO/raw'
-elif socket.gethostname() == "puppy":
+elif socket.gethostname() == "puppy" or socket.gethostname() == "gigabyte":
     # --> This doesn't work.  I need Unc?
     #raw_data_root = '//snipe/data/io/IoIO/raw'
     raw_data_root = r'\\snipe\data\io\IoIO\raw'
@@ -55,9 +79,15 @@ default_guide_box_command_file = os.path.join(raw_data_root, 'GuideBoxCommand.tx
 default_guide_box_log_file = os.path.join(raw_data_root, 'GuideBoxLog.txt')
 
 run_level_main_astrometry = os.path.join(
-    raw_data_root, '2018-04_Astrometry/PinPointSolutionEastofPier.fit')
+    raw_data_root, '2019-02_Astrometry/PinPointSolutionEastofPier.fit')
+    #raw_data_root, '2018-04_Astrometry/PinPointSolutionEastofPier.fit')
+
+# --> Currently only guider WestofPier (looking east) works properly,
+# --> which might indicate that calculations need to be made with true
+# --> north of CCD aligned with true north button on mount
 run_level_guider_astrometry = os.path.join(
-    raw_data_root, '2018-04_Astrometry/GuiderPinPointSolutionWestofPier.fit')
+    raw_data_root, '2019-02_Astrometry/GuiderPinPointSolutionWestofPier.fit')    
+    #raw_data_root, '2018-04_Astrometry/GuiderPinPointSolutionWestofPier.fit')
     #raw_data_root, '2018-01_Astrometry//GuiderPinPointSolutionEastofPier.fit')
 
 horizon_limit = 8.5
@@ -662,6 +692,7 @@ class MaxImData():
         # means I need to rotate my vector CW to have a simple
         # translation between RA and DEC after my astrometric
         # transformation
+        # --> But there still might be some confusion with pierside here (see GEM comment, below)
         ang_ccw = self.CCDCamera.GuiderAngle
         vec = self.rot((dx, dy), -ang_ccw)
         #--> try CW & it is a litle worse -- camera angle is
@@ -670,6 +701,9 @@ class MaxImData():
         x1 = x0 + vec[0]
         y1 = y0 + vec[1]
         # Transpose, since we are in pix
+        # --> Am I missing a final flip of the coordinate system in
+        # the case that we are on a GEM, since dra_ddec are in
+        # absolute coordinates?
         w_coords = self.scope_wcs(((y0, x0), (y1, x1)),
                                   to_world=True,
                                   astrometry=guider_astrometry,
@@ -709,6 +743,14 @@ class MaxImData():
                                   absolute=True)
         # remember transpose
         dp = p_coords[::-1] - np.asarray((x0, y0))
+
+        # --> I need to do some experiments with the simulator and
+        # --> guider calibration to convince myself this is correct.
+        # --> Suspect that the CCDCamera.GuiderAngle might be used as
+        # --> a clue as to which side of the pier the guider was
+        # --> calibrated on, which is close to what I am doing here
+        # West looking east Manual calibration has X Speed = -3.426 Y Speed 3.4498, angle -179 
+        # East looking west X Speed 3.4284 Y Speed -3.384 angle = 1.097
 
         # Calculate our axis flip RELATIVE to guider astrometry.
         # Note that only one axis is needed, since both flip in
@@ -949,6 +991,7 @@ class MaxImData():
         
     def MaxIm_pier_flip_state(self):
         """Return -1 if MaxIm is flipping the sense of the RA axis, 1 for non-flipped"""
+        # --> I AM NOT SURE THIS IS CORRECT!
         # Using GuiderAutoPierFlip or the interactive PierFlip
         # box, MaxIm can effectively cast the guider image in the
         # correct sense for the FOV of the guide camera across
@@ -1561,7 +1604,17 @@ guide_box_log_file : str
         self.last_delta_pix = None
         # --> Current way to keep the guide box moving, may improve
         self._GuideBoxMoverSubprocess = None
-        
+
+    # Thanks to
+    # https://stackoverflow.com/questions/865115/how-do-i-correctly-clean-up-a-python-object
+    # for instruction.  --> Could make this better to force a with
+    def __enter__(self):
+        return(self)
+
+    def __exit__(self, exception_type, exception_value, traceback):
+        # Turn off the guide box moving system
+        self.GuideBoxMoving = False
+
     def reinitialize(self,
                      keep_flex_pix_rate=False):
         """Resets system for new sequence of observations.  If keep_flex_pix_rate is True, which would be approprite for observations on the same general area of the sky. """ 
@@ -1617,6 +1670,7 @@ guide_box_log_file : str
                 l.write(Time.now().fits
                         + '---- GuideBoxMover Started ----- \n')
         if not value and not self._GuideBoxMoverSubprocess is None:
+            # --> consider making a more gentle exit
             self._GuideBoxMoverSubprocess.terminate()
             with open(self.guide_box_log_file, 'a') as l:
                 l.write(Time.now().fits
@@ -2648,6 +2702,20 @@ guide_box_log_file : str
     # print pythoncom.CreateGuid()
     # {3E09C890-40C9-4326-A75D-AEF3BF0E099F}
 
+def cmd_center(args):
+    if sys.platform != 'win32':
+        raise EnvironmentError('Can only control camera and telescope from Windows platform')
+    default_ND_params = None
+    if args.ND_params is not None:
+        default_ND_params = get_default_ND_params(args.ND_params, args.maxcount)
+        P = PrecisionGuide(args.ObsClassName,
+                           args.ObsClassModule,
+                           default_ND_params=default_ND_params) # other defaults should be good
+    else:
+        P = PrecisionGuide(args.ObsClassName,
+                           args.ObsClassModule) # other defaults should be good
+    P.center_loop()
+
 def cmd_guide(args):
     MD = MaxImData()
     if args.stop:
@@ -2673,6 +2741,7 @@ def GuideBoxMover(args):
         # --> expected motion calculated below
         time.sleep(1)
         # Wait until we have a file
+        # --> Consider making lack of file an exit condition
         if not os.path.isfile(args.command_file):
             continue
         # Check to see if the file has changed.  --> Note, when this

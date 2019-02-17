@@ -5,6 +5,8 @@
 # "C:\ProgramData\Anaconda3\python.exe" "%1" %*
 # Thanks to https://stackoverflow.com/questions/29540541/executable-python-script-not-take-sys-argv-in-windows
 
+import os
+import time
 import argparse
 
 import numpy as np
@@ -21,9 +23,16 @@ global_gain = 0.3 # measure this to make sure
 # Measured as per ioio.notebk Tue Jul 10 12:13:33 2018 MDT  jpmorgen@byted
 global_readnoise = 15.475665 * global_gain
 SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
+
+# 2018 end of run
+#run_level_default_ND_params \
+#    = [[  3.63686271e-01,   3.68675375e-01],
+#       [  1.28303305e+03,   1.39479846e+03]]
+
+# Fri Feb 08 19:35:56 2019 EST  jpmorgen@snipe
 run_level_default_ND_params \
-    = [[  3.63686271e-01,   3.68675375e-01],
-       [  1.28303305e+03,   1.39479846e+03]]
+    = [[  4.65269008e-03,   8.76050569e-03],
+       [  1.27189987e+03,   1.37717911e+03]]
 
 def hist_of_im(im, readnoise=None):
     """Returns a tuple of the histogram of image and index into centers of
@@ -783,7 +792,7 @@ def IPT_Na_R(args):
     d = args.dir
     if d is None:
         today = Time.now().fits.split('T')[0]
-        d = os.path.join(raw_data_root, today)
+        d = os.path.join(pg.raw_data_root, today)
     basename = args.basename
     #if basename is None:
     #    basename = 'IPT_Na_R_'
@@ -803,13 +812,13 @@ def IPT_Na_R(args):
         P.MD.Application.ShutDownObservatory()
         return
     log.info('Starting with R')
-    P.MD.acquire_im(uniq_fname('R_', d),
+    P.MD.acquire_im(pg.uniq_fname('R_', d),
                     exptime=2,
                     filt=0)
     
     # Jupiter observations
     while True:
-        #fname = uniq_fname(basename, d)
+        #fname = pg.uniq_fname(basename, d)
         #log.debug('data_collector preparing to record ' + fname)
         #P.acquire_image(fname,
         #                exptime=7,
@@ -826,13 +835,13 @@ def IPT_Na_R(args):
             P.MD.Application.ShutDownObservatory()
             return
         log.info('Collecting Na')
-        P.MD.acquire_im(uniq_fname('Na_off-band_', d),
+        P.MD.acquire_im(pg.uniq_fname('Na_off-band_', d),
                         exptime=60,
                         filt=4)
         if P.MD.horizon_limit():
             log.debug('Horizon limit reached')
             return
-        P.MD.acquire_im(uniq_fname('Na_on-band_', d),
+        P.MD.acquire_im(pg.uniq_fname('Na_on-band_', d),
                         exptime=300,
                         filt=2)
         if P.MD.horizon_limit():
@@ -849,14 +858,14 @@ def IPT_Na_R(args):
                 return
             P.diff_flex()
             log.info('Collecting [SII]')
-            P.MD.acquire_im(uniq_fname('SII_on-band_', d),
+            P.MD.acquire_im(pg.uniq_fname('SII_on-band_', d),
                             exptime=300,
                             filt=1)
             if P.MD.horizon_limit():
                 log.debug('Horizon limit reached.  Shutting down observatory')
                 P.MD.Application.ShutDownObservatory()
                 return
-            P.MD.acquire_im(uniq_fname('SII_off-band_', d),
+            P.MD.acquire_im(pg.uniq_fname('SII_off-band_', d),
                             exptime=60,
                             filt=3)
             if P.MD.horizon_limit():
@@ -871,13 +880,114 @@ def IPT_Na_R(args):
                 P.MD.Application.ShutDownObservatory()
                 return
             log.info('Collecting R')
-            P.MD.acquire_im(uniq_fname('R_', d),
+            P.MD.acquire_im(pg.uniq_fname('R_', d),
                             exptime=2,
                             filt=0)
 
+def ACP_IPT_Na_R(args):
+    Tstart = time.time()
+    Tend = Tstart + float(args.interval)
+    #P = pg.PrecisionGuide("CorObsData", "IoIO") # other defaults should be good
+    # Enable graceful exit
+    with pg.PrecisionGuide("CorObsData", "IoIO") as P:
+        # ACP passes fname.  We are going to ignore that for now and use
+        # pg.uniq_fname to create our fnames.  But we need the directory
+        # We will also ignore ACP's directory structure for now to
+        # keep IoIO data easily separable
+        # For debugging still keep ACP's structure, lest I muck up real data!
+        d = os.path.dirname(args.fname)
+        #today = Time.now().fits.split('T')[0]
+        #d = os.path.join(pg.raw_data_root, today)
+        if not P.MD.CCDCamera.GuiderRunning:
+            # User could have had guider already on.  If not, center with
+            # guider slews and start the guider
+            log.debug('CENTERING WITH GUIDER SLEWS') 
+            P.center_loop(max_tries=5)
+            if time.time() > Tend:
+                log.info('Past expected end of ACP exposure, returning') 
+                return
+            log.debug('STARTING GUIDER') 
+            P.MD.guider_start(filter=3)
+        if time.time() > Tend:
+            log.info('Past expected end of ACP exposure, returning') 
+            return
+        log.debug('TURNING ON GUIDEBOX MOVER SYSTEM')
+        P.diff_flex()
+        log.debug('CENTERING WITH GUIDEBOX MOVES') 
+        P.center_loop()
+        log.info('Starting with R')
+        exptime = 2
+        if ((time.time() + exptime) > Tend):
+            log.info('Exposure would extend past end of ACP exposure, returning') 
+            return
+        # --> Consider some limit check, but ACP should hopefully do this
+        P.MD.acquire_im(pg.uniq_fname('R_', d),
+                        exptime=exptime,
+                        filt=0)
+        # Jupiter observations
+        while True:
+            #fname = pg.uniq_fname(basename, d)
+            #log.debug('data_collector preparing to record ' + fname)
+            #P.acquire_image(fname,
+            #                exptime=7,
+            #                filt=0)
+            # was 0.7, filt 1 for mag 1 stars
+            # 0 = R
+            # 1 = [SII] on-band
+            # 2 = Na on-band
+            # 3 = [SII] off-band
+            # 4 = Na off-band
+    
+            log.info('Collecting Na')
+            exptime=60
+            if ((time.time() + exptime) > Tend):
+                log.info('Exposure would extend past end of ACP exposure, returning') 
+                return
+            P.MD.acquire_im(pg.uniq_fname('Na_off-band_', d),
+                            exptime=exptime,
+                            filt=4)
+            exptime=300
+            if ((time.time() + exptime) > Tend):
+                log.info('Exposure would extend past end of ACP exposure, returning') 
+                return
+            P.MD.acquire_im(pg.uniq_fname('Na_on-band_', d),
+                            exptime=exptime,
+                            filt=2)
+            log.debug('CENTERING WITH GUIDEBOX MOVES') 
+            P.center_loop()
+            
+            for i in range(4):
+                P.diff_flex()
+                log.info('Collecting [SII]')
+                exptime=300
+                if ((time.time() + exptime) > Tend):
+                    log.info('Exposure would extend past end of ACP exposure, returning') 
+                    return
+                P.MD.acquire_im(pg.uniq_fname('SII_on-band_', d),
+                                exptime=exptime,
+                                filt=1)
+                exptime=60
+                if ((time.time() + exptime) > Tend):
+                    log.info('Exposure would extend past end of ACP exposure, returning') 
+                    return
+                P.MD.acquire_im(pg.uniq_fname('SII_off-band_', d),
+                                exptime=exptime,
+                                filt=3)
+                P.diff_flex()
+                log.debug('CENTERING WITH GUIDEBOX MOVES') 
+                P.center_loop()
+                exptime=2
+                if ((time.time() + exptime) > Tend):
+                    log.info('Exposure would extend past end of ACP exposure, returning') 
+                    return
+                log.info('Collecting R')
+                P.MD.acquire_im(pg.uniq_fname('R_', d),
+                                exptime=exptime,
+                                filt=0)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="IoIO-related instrument control and image reduction")
+        description="IoIO-related instrument control")
     # --> Update this with final list once settled
     subparsers = parser.add_subparsers(dest='one of the subcommands in {}', help='sub-command help')
     subparsers.required = True
@@ -889,6 +999,14 @@ if __name__ == "__main__":
     IPT_Na_R_parser.add_argument(
         '--basename', help='base filename for files, default = IPT_Na_R_')
     IPT_Na_R_parser.set_defaults(func=IPT_Na_R)
+
+    ACP_IPT_Na_R_parser = subparsers.add_parser(
+        'ACP_IPT_Na_R', help='Collect IPT, Na, and R measurements using ACP UserActions simple shell-out')
+    ACP_IPT_Na_R_parser.add_argument(
+        'interval', help='ACP #interval value into which all exposure must fit')
+    ACP_IPT_Na_R_parser.add_argument(
+        'fname', help='single fname from ACP -- will extract path and use own fnames')
+    ACP_IPT_Na_R_parser.set_defaults(func=ACP_IPT_Na_R)
 
     # Final set of commands that makes argparse work
     args = parser.parse_args()
