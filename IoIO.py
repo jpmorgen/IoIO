@@ -916,7 +916,7 @@ def ACP_IPT_Na_R(args):
         log.debug('CENTERING WITH GUIDEBOX MOVES') 
         P.center_loop()
         log.info('Starting with R')
-        exptime = 2
+        exptime = 0.02
         if ((time.time() + exptime) > Tend):
             log.info('Exposure would extend past end of ACP exposure, returning') 
             return
@@ -976,7 +976,8 @@ def ACP_IPT_Na_R(args):
                 P.diff_flex()
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
                 P.center_loop()
-                exptime=2
+                # Test short exposures on Galilean satellites
+                exptime=0.02
                 if ((time.time() + exptime) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
                     return
@@ -984,6 +985,23 @@ def ACP_IPT_Na_R(args):
                 P.MD.acquire_im(pg.uniq_fname('R_', d),
                                 exptime=exptime,
                                 filt=0)
+                exptime=0.7*4
+                if ((time.time() + exptime) > Tend):
+                    log.info('Exposure would extend past end of ACP exposure, returning') 
+                    return
+                log.info('Collecting short exposures of narrow-band filters')
+                P.MD.acquire_im(pg.uniq_fname('SII_on_short', d),
+                                exptime=exptime,
+                                filt=1)
+                P.MD.acquire_im(pg.uniq_fname('Na_on_short', d),
+                                exptime=exptime,
+                                filt=2)
+                P.MD.acquire_im(pg.uniq_fname('SII_off_short', d),
+                                exptime=exptime,
+                                filt=3)
+                P.MD.acquire_im(pg.uniq_fname('Na_off_short', d),
+                                exptime=exptime,
+                                filt=4)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
