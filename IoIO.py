@@ -985,24 +985,43 @@ def ACP_IPT_Na_R(args):
                 P.MD.acquire_im(pg.uniq_fname('R_', d),
                                 exptime=exptime,
                                 filt=0)
-                exptime=0.7*4
-                if ((time.time() + exptime) > Tend):
+                downloadtime = 15
+                if ((time.time() + downloadtime*8) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
                     return
                 log.info('Collecting short exposures of narrow-band filters')
-                P.MD.acquire_im(pg.uniq_fname('SII_on_short', d),
-                                exptime=exptime,
+                P.MD.acquire_im(pg.uniq_fname('SII_on_07_', d),
+                                exptime=0.7,
                                 filt=1)
-                P.MD.acquire_im(pg.uniq_fname('Na_on_short', d),
-                                exptime=exptime,
+                P.MD.acquire_im(pg.uniq_fname('SII_on_15_', d),
+                                exptime=15,
+                                filt=1)
+                P.MD.acquire_im(pg.uniq_fname('Na_on_07_', d),
+                                exptime=0.7,
                                 filt=2)
-                P.MD.acquire_im(pg.uniq_fname('SII_off_short', d),
-                                exptime=exptime,
+                P.MD.acquire_im(pg.uniq_fname('Na_on_15_', d),
+                                exptime=15,
+                                filt=2)
+                P.MD.acquire_im(pg.uniq_fname('SII_off_07_', d),
+                                exptime=0.7,
                                 filt=3)
-                P.MD.acquire_im(pg.uniq_fname('Na_off_short', d),
-                                exptime=exptime,
+                P.MD.acquire_im(pg.uniq_fname('SII_off_3_', d),
+                                exptime=3,
+                                filt=3)
+                P.MD.acquire_im(pg.uniq_fname('Na_off_07_', d),
+                                exptime=0.7,
+                                filt=4)
+                P.MD.acquire_im(pg.uniq_fname('Na_off_28_', d),
+                                exptime=2.8,
                                 filt=4)
 
+def ACP_status(args):
+    # Just ignore the args and make a MaxImData to print out info
+    MD = pg.MaxImData()
+    log.info("GuiderReverseX: " + repr(MD.CCDCamera.GuiderReverseX))
+    log.info("Xspeed, Yspeed: " + repr(MD.CCDCamera.GuiderXSpeed) + ', ' + repr(MD.CCDCamera.GuiderYSpeed))
+    log.info("GuiderAngle: " + repr(MD.CCDCamera.GuiderAngle))
+    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="IoIO-related instrument control")
@@ -1025,6 +1044,14 @@ if __name__ == "__main__":
     ACP_IPT_Na_R_parser.add_argument(
         'fname', help='single fname from ACP -- will extract path and use own fnames')
     ACP_IPT_Na_R_parser.set_defaults(func=ACP_IPT_Na_R)
+
+    ACP_status_parser = subparsers.add_parser(
+        'ACP_status', help='Using ACP UserActions simple shell-out, print MaxIm internals')
+    ACP_status_parser.add_argument(
+        'interval', help='ACP #interval value into which all exposure must fit')
+    ACP_status_parser.add_argument(
+        'fname', help='single fname from ACP -- will extract path and use own fnames')
+    ACP_status_parser.set_defaults(func=ACP_status)
 
     # Final set of commands that makes argparse work
     args = parser.parse_args()
