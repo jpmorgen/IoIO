@@ -51,6 +51,8 @@ if sys.platform == 'win32':
 else:
         log.info('You are not on a Windows system.  The MaxIm/telescope control features of this package will not work unless you are on a Windows system.')
 
+import define as D
+
 # --> these are things that eventually I would want to store in a
 # --> configuration file
 # --> CHANGE ME BACK TO 1s(or 7s) and filter 0 (0.7s or 0.3 on
@@ -86,8 +88,8 @@ run_level_main_astrometry = os.path.join(
 # --> pier flip doesn't affect N/S because tube rolls over too, E/W is
 # --> affected
 run_level_guider_astrometry = os.path.join(
-    raw_data_root, '2019-02_Astrometry/GuiderPinPointSolutionWestofPier.fit')
-    #raw_data_root, '2019-02_Astrometry/GuiderPinPointSolutionEastofPier.fit')    
+    #raw_data_root, '2019-02_Astrometry/GuiderPinPointSolutionWestofPier.fit')
+    raw_data_root, '2019-02_Astrometry/GuiderPinPointSolutionEastofPier.fit')    
     #raw_data_root, '2018-04_Astrometry/GuiderPinPointSolutionWestofPier.fit')
     #raw_data_root, '2018-01_Astrometry//GuiderPinPointSolutionEastofPier.fit')
 
@@ -527,7 +529,7 @@ class MaxImData():
         self.previous_GuiderReverseX = None
         self.guide_rates = None # degrees/s
         self.calculated_guide_rates = None # degrees/s
-        self.pinpoint_N_is_up = None
+        #self.pinpoint_N_is_up = None
         self.guider_exptime = None
         self.guider_commanded_running = None
         # --> Eventually make this some sort of configurable
@@ -677,7 +679,7 @@ class MaxImData():
             raise EnvironmentError('Link to camera hardware failed.  Is the power on to the CCD (including any connection hardware such as USB hubs)?')
 
     def populate_obj(self):
-        """Called by init() to fill our object property with useful info"""
+        """Called by init() after connect() to finish init()"""
 
         # Fill our object with things we know
         if self.telescope_connectable:
@@ -685,8 +687,7 @@ class MaxImData():
         else:
             # --> Eventually this warning might go away
             log.error("Mount is not connected -- did you specify one in setup [currently the software source code]?  If you have a German equatorial mount (GEM), this software will likely not work properly upon pier flips [because code has not yet been written to let you specify the mode of your telescope on the fly].  Other mount types will work OK, but you should keep track of the Scope Dec. box in MaxIm's Guide tab.")
-
-        # Save GuiderReverseX state so we can put it back when we stop
+         # Save GuiderReverseX state so we can put it back when we stop
         # guiding
         self.previous_GuiderReverseX = self.CCDCamera.GuiderReverseX
         # --> DEBUGGING, or maybe long-term.  Clear this here for
@@ -695,7 +696,7 @@ class MaxImData():
         self.CCDCamera.GuiderReverseX = False
         if (self.Application.TelescopeConnected
             and self.CCDCamera.GuiderAutoPierFlip):
-            # MaxIm is managing pier flip
+            # MaxIm is connected to telescope and managing pier flip
             self.ACP_mode = False
         else:
             # Probably in ACP-mode, where it is not recommended to
@@ -711,8 +712,24 @@ class MaxImData():
             else:
                 self.ACP_mode = False
 
-        # Get the directions straight on our astrometries
+        # Figure out absolute direction for RA & DEC motor motion
+        # relative to guide camera.  CCDCamera.GuiderAngle is 0 if the
+        # camera is oriented torward north.  The measurement increases
+        # CCW
+        gang = angle_norm(self.CCDCamera.GuiderAngle, 180)
+        aang = angle_norm(self.guider_astrometry['CROTA1'], 180)
+        # CROTA* are roll angle perturbations, not camera orientation.
+        # If the camera is up-side-down for a pier flip, CDELT2 will
+        # be negative and CROTA* will still be small.  Make aang a
+        # quantity more like CCDCamera.GuiderAngle
+        if np.sign(self.guider_astrometry['CDELT2']) == -1:
+            aang = angle_norm(aang + 180, 180)
+        log.debug("GuiderAngle: " + repr(gang))
+        log.debug("PinPoint solution angle: " + repr(aang))
+        if abs(angle_norm(gang - aang, 180)) - 180 > 10:
+            raise EnvironmentError('Angle mismatch between Guider PinPoint solution and guider calibration is too large.  Record them both at the same time to ensure match')
 
+        # Check guider calibration rates against mount reported guide rates
         # Create a vector that is as long as we are willing to
         # move in each axis.  The origin of the vector is
         # reference point of the CCD (typically the center)
@@ -732,7 +749,8 @@ class MaxImData():
         # http://acp.dc3.com/RotatedGuiding.pdf.  But we don't need to
         # use it to calculate the guider rates, since MaxIm has
         # already taken care of that.  Not sure how MaxIm handles
-        # non-square pixels, though
+        # non-square pixels, though.   The MaxIm reported guide rates
+        # are RA and DEC motor motion in pixels/s.        
         #ang_ccw = self.CCDCamera.GuiderAngle
         ang_ccw = 0
         vec = self.rot((dx, dy), -ang_ccw)
@@ -746,55 +764,91 @@ class MaxImData():
         dra_ddec = w_coords[1, :] - w_coords[0, :]
         self.calculated_guide_rates = np.abs(dra_ddec/dt)
         log.debug("self.calculated_guide_rates: " + repr(self.calculated_guide_rates))
-        # Figure out absolute direction for RA & DEC motor motion
-        # relative to guide camera.  Make sure angles are positive for
-        # easy comparison
-        gang = angle_norm(self.CCDCamera.GuiderAngle, 180)
-        aang = angle_norm(self.guider_astrometry['CROTA1'], 180)
-        if np.sign(self.guider_astrometry['CDELT2']) == -1:
-            aang = angle_norm(aang + 180, 180)
-        log.debug("GuiderAngle: " + repr(gang))
-        log.debug("PinPoint solution angle: " + repr(aang))
-        if abs(angle_norm(gang - aang, 180)) - 180 > 10:
-            # --> make this a raise
-            log.warning("Angle mismatch between Guider PinPoint solution and guider calibration is too large.  Record them both at the same time to ensure match")
+        if not self.telescope_connectable:
+            self.guide_rates = abs(self.calculated_guide_rates)
+        elif self.Telescope.CanSetGuideRates: 
+            # Always assume telescope reported guide rates are
+            # correct, but warn if guider rates are off by 10%
+            self.guide_rates \
+                = np.asarray((self.Telescope.GuideRateRightAscension,
+                              self.Telescope.GuideRateDeclination))
+            if (np.abs(np.abs(self.calculated_guide_rates[0])
+                      - self.Telescope.GuideRateRightAscension)
+                > 0.1 * self.Telescope.GuideRateRightAscension):
+                log.warning('Calculated RA guide rate is off by more than 10% (scope reported, calculated): ' + str((self.Telescope.GuideRateRightAscension, self.calculated_guide_rates[0])) + '.  Have you specified the correct guider astrometery image?  Have you changed the guide rates changed since calibrating the guider?  Assuming reported telescope guide rates are correct.')
+            if (np.abs(np.abs(self.calculated_guide_rates[1])
+                      - self.Telescope.GuideRateDeclination)
+                > 0.1 * self.Telescope.GuideRateDeclination):
+                log.warning('Calculated DEC guide rate is off by more than 10% (scope reported, calculated): ' + str((self.Telescope.GuideRateDeclination, self.calculated_guide_rates[1])) + '.  Have you specified the correct guider astrometery image?  Have you changed the guide rates changed since calibrating the guider?  Assuming reported telescope guide rates are correct.')
+
+        if self.alignment_mode != win32com.client.constants.algGermanPolar:
+            return
+        
+        # The rest of this code deals with getting an absolute sense
+        # of the N button relative to our astrometries.  The strategy
+        # here is to use the guider calibration, which really does
+        # push the N and W buttons to establish directions on the
+        # guider.  The Guider astrometry is matched to that doing a
+        # pier flip if necessary.  Then the main astrometry is brought
+        # to the same side of the pier as the guide.  We then save the
+        # result in self.astrometry_pierside
         if abs(angle_norm(gang - aang, 180)) > 10:
             log.debug("Guide calibration and Guider PinPoint solution conducted on opposite sides of the pier")
             self.guider_cal_pinpoint_flip = -1
         else:
             log.debug("Guide calibration and Guider PinPoint solution conducted on same side of the pier")
             self.guider_cal_pinpoint_flip = 1
+        # GuiderYSpeed is negative when N is pushed, assuming camera
+        # is oriented in the -90 to + 90 range (roughly N).  This is
+        # because as the camera points farther north, the image of the
+        # star moves farther south.  If camera flips 180,
+        # CCDCamera.GuiderAngle = 180 and Yspeed flips sign.  We can
+        # use this and our guider_cal_pinpoint_flip to see if we need
+        # to flip our guider astrometry so that N is up
+        ns = self.CCDCamera.GuiderYSpeed * self.guider_cal_pinpoint_flip
+        if ns < 0:
+            #self.pinpoint_N_is_up = 1
+            log.debug("guider pointpoint up is north")
+        else:
+            #self.pinpoint_N_is_up = -1
+            log.debug("guider pointpoint up is south, flipping guider astrometry")
+            pier_flip_astrometry(self.guider_astrometry)
+        # --> try to see if this has an effect
+        #self.pinpoint_N_is_up = 1
+        #log.warning("forcing pinpoint_N_is_up = " + repr(self.pinpoint_N_is_up))
+
+        # Now that the guider N is up [assuming we really need that],
+        # get the main on the same side of the pier (which I am sure
+        # we need).  It may be at a different angle, but that is OK.
+        gps = self.guider_astrometry.get('PIERSIDE')
+        mps = self.main_astrometry.get('PIERSIDE')
+        if not (gps and mps):
+            raise EnvironmentError('PIERSIDE FITS keyword missing from guider and/or main astronemtry')
+        if gps == mps:
+            log.debug('Main and guider astrometry aligned to same side of pier')
+        else:
+            log.debug('Main and guider astrometry not aligned on same side of pier, flipping main')
+            pier_flip_astrometry(self.main_astrometry)
+
+        if gps == "WEST":
+            self.astrometry_pierside = win32com.client.constants.pierWest
+            log.debug('N is up in guider when telescope is on West side of pier looking East')
+        else:
+            self.astrometry_pierside = win32com.client.constants.pierEast
+            log.debug('N is up in guider when telescope is on East side of pier looking West')
+
+
+        #if (np.sign(self.main_astrometry['CDELT2']
+        #           * self.guider_astrometry['CDELT2'])
+        #    == -1):
+        #    log.debug("main pointpoint up is south, flipping main astrometry")
+        #    pier_flip_astrometry(self.main_astrometry)
+
+
 
         # I happen to know that east looking west is what
         # Astro-Physics thinks of as normal pointing mode -- north
         # button goes north
-
-        # GuiderYSpeed is negative when N is pushed, assuming camera
-        # is oriented in the -90 to + 90 range (roughly N).  This is
-        # because as the camera points farther north, the image of the
-        # star moves farther south.  If camera flips 180, Yspeed flips
-        # sign.  So make a temporary variable, ns which flips YSpeed
-        # to the same sense as our PinPoint astrometry and see which
-        # direction the N button really goes in our guider PinPoint
-        # solution
-        ns = self.CCDCamera.GuiderYSpeed * self.guider_cal_pinpoint_flip
-        if ns < 0:
-            self.pinpoint_N_is_up = 1
-            log.debug("guider pointpoint up is north")
-        else:
-            self.pinpoint_N_is_up = -1
-            log.debug("guider pointpoint up is south, flipping astrometry")
-            pier_flip_astrometry(self.guider_astrometry)
-        # --> try to see if this has an effect
-        self.pinpoint_N_is_up = 1
-        log.warning("forcing pinpoint_N_is_up = " + repr(self.pinpoint_N_is_up))
-
-        # Get the main in the correct orientation
-        if (np.sign(self.main_astrometry['CDELT2']
-                   * self.guider_astrometry['CDELT2'])
-            == -1):
-            log.debug("main pointpoint up is south, flipping main astrometry")
-            pier_flip_astrometry(self.main_astrometry)
 
         ## Not sure if this matters
         #if (np.abs(a) < 90 or a > 270):
@@ -822,26 +876,6 @@ class MaxImData():
         #    self.guider_cal_pier_side = win32com.client.constants.pierEast
 
 
-        # --> Use this code for comparison while making the change to absolute
-        # --> Eventually make calculated_guide_rates the prime and do
-        # --> a try/catch on the Telescope.GuideRate* stuff, since not
-        # --> all scopes CanSetGuideRates 
-        if not self.telescope_connectable:
-            self.guide_rates = abs(self.calculated_guide_rates)
-        elif self.Telescope.CanSetGuideRates: 
-            # Always assume telescope reported guide rates are
-            # correct, but warn if guider rates are off by 10%
-            self.guide_rates \
-                = np.asarray((self.Telescope.GuideRateRightAscension,
-                              self.Telescope.GuideRateDeclination))
-            if (np.abs(np.abs(self.calculated_guide_rates[0])
-                      - self.Telescope.GuideRateRightAscension)
-                > 0.1 * self.Telescope.GuideRateRightAscension):
-                log.warning('Calculated RA guide rate is off by more than 10% (scope reported, calculated): ' + str((self.Telescope.GuideRateRightAscension, self.calculated_guide_rates[0])) + '.  Have you specified the correct guider astrometery image?  Have you changed the guide rates changed since calibrating the guider?  Assuming reported telescope guide rates are correct.')
-            if (np.abs(np.abs(self.calculated_guide_rates[1])
-                      - self.Telescope.GuideRateDeclination)
-                > 0.1 * self.Telescope.GuideRateDeclination):
-                log.warning('Calculated DEC guide rate is off by more than 10% (scope reported, calculated): ' + str((self.Telescope.GuideRateDeclination, self.calculated_guide_rates[1])) + '.  Have you specified the correct guider astrometery image?  Have you changed the guide rates changed since calibrating the guider?  Assuming reported telescope guide rates are correct.')
             
         ## --> I don't think it is possible to determine this
         ## Now run the calculation the other way, not taking
@@ -1029,21 +1063,33 @@ class MaxImData():
         # in !!! TRANSPOSE !!!
         op_coords = (self.CCDCamera.GuiderYStarPosition,
                      self.CCDCamera.GuiderXStarPosition)
+        D.say('old guidebox coords: ' + repr(op_coords[::-1]))
         w_coords = self.scope_wcs(op_coords,
                                   to_world=True,
                                   astrometry=guider_astrometry)
+        D.say('world coords of old guidebox: ' + repr(w_coords))
         # When moving the scope in a particular direction, the
         # stars appear to move in the opposite direction.  Since
         # we are guiding on one of those stars (or whatever), we
         # have to move the guide box in the opposite direction
-        p_coords = self.scope_wcs(w_coords - dra_ddec,
+        badp_coords = self.scope_wcs(w_coords - dra_ddec,
+                                     to_pix=True,
+                                     astrometry=guider_astrometry)
+        D.say('badp_coords: ' + repr(badp_coords[::-1]))
+        # --> NEW CODE
+        # In world coords, we know how far we want to move our guide
+        # box.  Calculate the new guidebox position
+        p_coords = self.scope_wcs(w_coords + dra_ddec,
                                   to_pix=True,
                                   astrometry=guider_astrometry)
+        D.say('New code p_coords: ' + repr(p_coords[::-1]))
         # Now we are in pixel coordinates on the guider.
         # Calculate how far we need to move.
         # There is some implicit type casting here since op_coords
         # is a tuple, but p_coords is an np.array
         dp_coords = p_coords - op_coords
+        baddp_coords = badp_coords - op_coords
+
         # Calculate the length in pixels of our move and the unit
         # vector in that direction
         norm_dp = np.linalg.norm(dp_coords)
@@ -1058,6 +1104,7 @@ class MaxImData():
                              int(self.guide_box_steps_per_pix * norm_dp)))
 
         step_dp = dp_coords / num_steps
+        log.debug('move_with_guide_box: old, bad guider dpix (X, Y): ' + str(baddp_coords[::-1]))
         log.debug('move_with_guide_box: total guider dpix (X, Y): ' + str(dp_coords[::-1]))
         log.debug('norm_dp: ' + str(norm_dp))
         log.debug('Number of steps: ' + str(num_steps))
@@ -1110,6 +1157,17 @@ class MaxImData():
     #        log.error('Guider stopped running while performing move')
     #        return False
         
+    def astrometry_pier_flip_state(self):
+        """Return -1 if the telecsope is pier flipped relative to astrometry, 1 otherwise"""
+        if self.alignment_mode != win32com.client.constants.algGermanPolar:
+            return 1
+        log.debug('self.Telescope.SideOfPier: ' + repr(self.Telescope.SideOfPier))
+        if self.astrometry_pierside == self.Telescope.SideOfPier:
+            log.debug('Telescope is on same side as astrometry')
+            return 1
+        log.debug('Telescope is on opposite side from astrometry')
+        return -1
+
     def MaxIm_pier_flip_state(self):
         """Return -1 if MaxIm is flipping the sense the motors on the RA axis, 1 for non-flipped"""
         # --> I AM NOT SURE THIS IS CORRECT!
@@ -1239,8 +1297,13 @@ class MaxImData():
         # Use our rates to change to time to press E/W, N/S, where
         # E is the + RA direction
         #dt = dra_ddec/self.calculated_guide_rates
-        dt = dra_ddec/self.guide_rates
+
         
+        dt = dra_ddec/self.guide_rates
+        # flip the sense of dt if our absolute astrometry was flipped
+        # while making the calculations
+        dt *= self.astrometry_pier_flip_state()
+
         # Do a sanity check to make sure we are not moving too much
         max_t = (self.guider_max_move_multiplier *
                  np.asarray((self.CCDCamera.GuiderMaxMoveX, 
@@ -1255,7 +1318,7 @@ class MaxImData():
         log.info('Seconds to move guider in absolute RA and DEC: ' + str(dt))
 
         # New code
-        dt[1] *= self.pinpoint_N_is_up
+        #dt[1] *= self.pinpoint_N_is_up
         self.set_GuiderReverse_and_DEC()
         dt[0] *= self.MaxIm_pier_flip_state()
 
@@ -1269,11 +1332,11 @@ class MaxImData():
         # Keep track of whether or not MaxIm is flipping any
         # coordinates for us and flip them back, since we know our
         # dRA and dDEC in the absolute sense.  
-        dt[0] *= self.MaxIm_pier_flip_state()
+        #dt[0] *= self.MaxIm_pier_flip_state()
         # --> using GuiderPinPointSolutionWestofPier.fit now this
         # --> seems to result in another minus sign in ACP mode
-        if self.ACP_mode:
-            dt[0] *= -1
+        #if self.ACP_mode:
+        #    dt[0] *= -1
 
         if dt[0] > 0:
             # East is positive RA, but east is left (-X) on the sky
@@ -1335,7 +1398,8 @@ class MaxImData():
             raise ValueError('coordinates must be specified in pairs')
         if to_world + to_pix != 1:
             raise ValueError('Specify one of to_world or to_pix')
-        # Set up our default HDUList
+        # Set up our astrometry
+        we_opened_file = False
         if astrometry is None:
             astrometry = 'main'
         if isinstance(astrometry, str):
@@ -1353,13 +1417,10 @@ class MaxImData():
             we_opened_file = True
         if isinstance(astrometry, fits.HDUList):
             astrometry = astrometry[0].header
-            we_opened_file = False
-        elif isinstance(astrometry, fits.Header):
-            # Make sure we don't mess up original
-            header = astrometry.copy()
-            we_opened_file = False
-        else:
+        if not isinstance(astrometry, fits.Header):
             raise ValueError('astrometry must be a string, FITS HDUList, or FITS header')
+        # Make sure we don't mess up original
+        header = astrometry.copy()
         if we_opened_file:
             astrometry.close()
         if header.get('CTYPE1') is None:
@@ -1387,31 +1448,11 @@ class MaxImData():
                 RA = 0
                 DEC = self.CCDCamera.GuiderDeclination
                 log.warning('Telescope is not reporting RA and/or DEC.  Setting RA = ' + str(RA) + ' and DEC = ' + str(DEC) + ', which was read from the Scope Dec. box of the Guide tab.')
-            # Check to see if our astrometry image was taken on the
-            # other side of a GEM pier from our current pointing.  In
-            # that case, the telescope tube would have been upside
-            # down and both RA and DEC are reversed in the astrometry.
-            # For scope motion, the sense of DEC reverses when through
-            # the pole, which is why only RA changes when looking at
-            # guider images, but more on that when we apply the
-            # scope_wcs results....
-            #if header.get('FLIPAPPL'):
-            #    raise ValueError('FLIPAPPL detected!  Code needs to be improved with an if here')
-            pier_flip_sign = 1
-            try:
-                if (self.alignment_mode == win32com.client.constants.algGermanPolar
-                    and
-                    ((header['PIERSIDE'] == 'EAST'
-                      and self.Telescope.SideOfPier == win32com.client.constants.pierWest
-                      or
-                      header['PIERSIDE'] == 'WEST'
-                      and self.Telescope.SideOfPier == win32com.client.constants.pierEast))):
-                    pier_flip_sign = -1
-                # --> force
-                pier_flip_sign = 1
-                log.warning('pier_flip_sign forced to: ' + repr(pier_flip_sign))
-            except:
-                log.warning('Problem with pierside determination.  Check of telescope type or PIERSIDE FITS keyword failed.  Unable to determine if telescope is a German Equatorial in flipped state.')
+            # Check to see if we are pointed on the other side of the
+            # mount from our astrometry images
+            if self.astrometry_pier_flip_state() == -1:
+                pier_flip_astrometry(header)
+
             # Make sure RA is on correct axis and in the correct units
             if 'RA' in header['CTYPE1']:
                 header['CRVAL1'] = RA / 24*360
@@ -1423,12 +1464,12 @@ class MaxImData():
         # they are smaller.  Also apply pier_flip_sign
         header['CRPIX1'] = header['XBINNING'] * header['CRPIX1'] + header['XORGSUBF']
         header['CRPIX2'] = header['YBINNING'] * header['CRPIX2'] + header['YORGSUBF']
-        header['CDELT1'] /= header['XBINNING'] * pier_flip_sign
-        header['CDELT2'] /= header['YBINNING'] * pier_flip_sign
-        header['CD1_1']  /= header['XBINNING'] * pier_flip_sign
-        header['CD1_2']  /= header['YBINNING'] * pier_flip_sign
-        header['CD2_1']  /= header['XBINNING'] * pier_flip_sign
-        header['CD2_2']  /= header['YBINNING'] * pier_flip_sign
+        header['CDELT1'] /= header['XBINNING']
+        header['CDELT2'] /= header['YBINNING']
+        header['CD1_1']  /= header['XBINNING']
+        header['CD1_2']  /= header['YBINNING']
+        header['CD2_1']  /= header['XBINNING']
+        header['CD2_2']  /= header['YBINNING']
         # Put our binning and subframe to unbinned values so we
         # don't tweak things again!
         header['XORGSUBF'] = 0
@@ -1591,6 +1632,8 @@ class MaxImData():
             # --> Consider checking for timout here
             while self.CCDCamera.GuiderRunning:
                 time.sleep(0.1)
+        # Since ACP does not want MaxIm connected to the scope, we
+        # have to manage all that stuff ourselves
         self.set_GuiderReverse_and_DEC()
         if not self.CCDCamera.GuiderTrack(self.guider_exptime):
             raise EnvironmentError('Attempt to start guiding failed.  Guider configured correctly?')
@@ -2019,7 +2062,7 @@ guide_box_log_file : str
                 astrometry_from = current_astrometry
                 absolute = True
             elif (input.header.get('CTYPE1')
-                  and ignore_ObsData_astrometry == False):
+                  and not ignore_ObsData_astrometry):
                 astrometry_from = input.header
                 absolute = True
             elif scaling_astrometry is not None:
@@ -2895,6 +2938,25 @@ def cmd_center(args):
                            args.ObsClassModule) # other defaults should be good
     P.center_loop()
 
+def cmd_test_center(args):
+    if sys.platform != 'win32':
+        raise EnvironmentError('Can only control camera and telescope from Windows platform')
+    P = PrecisionGuide(args.ObsClassName,
+                       args.ObsClassModule) # other defaults should be good
+    if args.x and args.y:
+        # NOTE TRANSPOSE!
+        desired_center = (args.y, args.x)
+    else:
+        desired_center = None
+    log.debug('Desired center (X, Y; binned) = ' + str(desired_center[::-1]))
+
+    P.center(desired_center=desired_center)
+    log.debug('STARTING GUIDER') 
+    P.MD.guider_start()
+    log.debug('CENTERING WITH GUIDEBOX MOVES') 
+    P.center(desired_center=desired_center)
+
+
 def cmd_guide(args):
     MD = MaxImData()
     if args.stop:
@@ -3043,6 +3105,21 @@ if __name__ == "__main__":
     center_parser.add_argument(
         '--maxcount', help='maximum number of flats to process -- median of parameters returned')
     center_parser.set_defaults(func=cmd_center)
+
+    test_center_parser = subparsers.add_parser(
+        'test_center', help='test center code')
+    test_center_parser.add_argument(
+        'x', type=float, nargs='?', default=None, help='desired_center X')
+    test_center_parser.add_argument(
+        'y', type=float, nargs='?', default=None, help='desired_center Y')
+    test_center_parser.add_argument(
+        '--ObsClassName', help='ObsData class name')
+    test_center_parser.add_argument(
+        '--ObsClassModule', help='ObsData class module file name')
+    test_center_parser.set_defaults(func=cmd_test_center)
+
+
+
 
     GuideBox_parser = subparsers.add_parser(
         'GuideBoxMover', help='Start guide box mover process')
