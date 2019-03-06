@@ -1318,17 +1318,20 @@ class MaxImData():
         log.info('Seconds to move guider in absolute RA and DEC: ' + str(dt))
 
         # New code
-        #dt[1] *= self.pinpoint_N_is_up
-        self.set_GuiderReverse_and_DEC()
-        dt[0] *= self.MaxIm_pier_flip_state()
-
-        log.info('Seconds to command MaxIm to move guider in RA and DEC: ' + str(dt))
-
 
         # So that we have a consistent begining state, set the
         # GuiderReverse[XY] before we query about motor reverse states
-        # in our next statement
         self.set_GuiderReverse_and_DEC()
+        dt[0] *= self.MaxIm_pier_flip_state()
+        # --> This seems to be necessary.  Should I incorporate in it
+        # --> MaxIm_pier_flip_state?
+        if self.ACP_mode:
+            dt[0] *= -1
+        log.info('Seconds to command MaxIm to move guider in RA and DEC: ' + str(dt))
+
+
+        # in our next statement
+        #self.set_GuiderReverse_and_DEC()
         # Keep track of whether or not MaxIm is flipping any
         # coordinates for us and flip them back, since we know our
         # dRA and dDEC in the absolute sense.  
