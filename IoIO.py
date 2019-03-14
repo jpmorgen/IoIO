@@ -730,10 +730,10 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
 
         # Try an iterative approach to fitting lines to the ND_edges
         ND_edges = np.asarray(ND_edges)
-        ND_params0 = self.iter_linfit(ypts-im.shape[0]/2, ND_edges[:,0],
-                                      self.max_fit_delta_pix)
-        ND_params1 = self.iter_linfit(ypts-im.shape[0]/2, ND_edges[:,1],
-                                      self.max_fit_delta_pix)
+        ND_params0 = pg.iter_linfit(ypts-im.shape[0]/2, ND_edges[:,0],
+                                    self.max_fit_delta_pix)
+        ND_params1 = pg.iter_linfit(ypts-im.shape[0]/2, ND_edges[:,1],
+                                    self.max_fit_delta_pix)
         # Note when np.polyfit is given 2 vectors, the coefs
         # come out in columns, one per vector, as expected in C.
         ND_params = np.transpose(np.asarray((ND_params0, ND_params1)))
