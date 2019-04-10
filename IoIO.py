@@ -20,7 +20,7 @@ import precisionguide as pg
 
 # Constants for use in code
 global_gain = 0.3 # measure this to make sure
-# Measured as per ioio.notebk Tue Jul 10 12:13:33 2018 MDT  jpmorgen@byted
+# Measured as per ioio.notebk Tue Jul 10 12:13:33 2018 MCT  jpmorgen@byted
 global_readnoise = 15.475665 * global_gain
 SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 
@@ -769,7 +769,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
 def IPT_Na_R(args):
     P = pg.PrecisionGuide("CorObsData", "IoIO") # other defaults should be good
     wait_for_horizons = False
-    while not P.MD.Telescope.Tracking:
+    while not P.MC.Telescope.Tracking:
         if not wait_for_horizons:
             log.info('Tracking is off.  Assuming I am waiting for A-P HORIZONS app to acquire Jupiter')
         wait_for_horizons = True
@@ -780,10 +780,10 @@ def IPT_Na_R(args):
         log.info('Waiting for A-P HORIZONS app to finishing acquiring Jupiter')
         time.sleep(120)
     horizon_message = False
-    while P.MD.horizon_limit():
-        if not P.MD.Telescope.Tracking:
+    while P.MC.horizon_limit():
+        if not P.MC.Telescope.Tracking:
             log.error('Horizon limit reached.  Shutting down observatory.')
-            P.MD.Application.ShutDownObservatory()
+            P.MC.Application.ShutDownObservatory()
             return
         if not horizon_message:
             log.info('Waiting for object to rise above horizon limit')
@@ -796,23 +796,23 @@ def IPT_Na_R(args):
     basename = args.basename
     #if basename is None:
     #    basename = 'IPT_Na_R_'
-    if not P.MD.CCDCamera.GuiderRunning:
+    if not P.MC.CCDCamera.GuiderRunning:
         # User could have had guider already on.  If not, center with
         # guider slews and start the guider
         log.debug('CENTERING WITH GUIDER SLEWS') 
         P.center_loop(max_tries=5)
         log.debug('STARTING GUIDER') 
-        P.MD.guider_start(filter=3)
+        P.MC.guider_start(filter=3)
     log.debug('TURNING ON GUIDEBOX MOVER SYSTEM')
     P.diff_flex()
     log.debug('CENTERING WITH GUIDEBOX MOVES') 
     P.center_loop()
-    if P.MD.horizon_limit():
+    if P.MC.horizon_limit():
         log.debug('Horizon limit reached.  Shutting down observatory')
-        P.MD.Application.ShutDownObservatory()
+        P.MC.Application.ShutDownObservatory()
         return
     log.info('Starting with R')
-    P.MD.acquire_im(pg.uniq_fname('R_', d),
+    P.MC.acquire_im(pg.uniq_fname('R_', d),
                     exptime=2,
                     filt=0)
     
@@ -830,57 +830,57 @@ def IPT_Na_R(args):
         # 3 = [SII] off-band
         # 4 = Na off-band
 
-        if P.MD.horizon_limit():
+        if P.MC.horizon_limit():
             log.debug('Horizon limit reached.  Shutting down observatory')
-            P.MD.Application.ShutDownObservatory()
+            P.MC.Application.ShutDownObservatory()
             return
         log.info('Collecting Na')
-        P.MD.acquire_im(pg.uniq_fname('Na_off-band_', d),
+        P.MC.acquire_im(pg.uniq_fname('Na_off-band_', d),
                         exptime=60,
                         filt=4)
-        if P.MD.horizon_limit():
+        if P.MC.horizon_limit():
             log.debug('Horizon limit reached')
             return
-        P.MD.acquire_im(pg.uniq_fname('Na_on-band_', d),
+        P.MC.acquire_im(pg.uniq_fname('Na_on-band_', d),
                         exptime=300,
                         filt=2)
-        if P.MD.horizon_limit():
+        if P.MC.horizon_limit():
             log.debug('Horizon limit reached.  Shutting down observatory')
-            P.MD.Application.ShutDownObservatory()
+            P.MC.Application.ShutDownObservatory()
             return
         log.debug('CENTERING WITH GUIDEBOX MOVES') 
         P.center_loop()
         
         for i in range(4):
-            if P.MD.horizon_limit():
+            if P.MC.horizon_limit():
                 log.debug('Horizon limit reached.  Shutting down observatory')
-                P.MD.Application.ShutDownObservatory()
+                P.MC.Application.ShutDownObservatory()
                 return
             P.diff_flex()
             log.info('Collecting [SII]')
-            P.MD.acquire_im(pg.uniq_fname('SII_on-band_', d),
+            P.MC.acquire_im(pg.uniq_fname('SII_on-band_', d),
                             exptime=300,
                             filt=1)
-            if P.MD.horizon_limit():
+            if P.MC.horizon_limit():
                 log.debug('Horizon limit reached.  Shutting down observatory')
-                P.MD.Application.ShutDownObservatory()
+                P.MC.Application.ShutDownObservatory()
                 return
-            P.MD.acquire_im(pg.uniq_fname('SII_off-band_', d),
+            P.MC.acquire_im(pg.uniq_fname('SII_off-band_', d),
                             exptime=60,
                             filt=3)
-            if P.MD.horizon_limit():
+            if P.MC.horizon_limit():
                 log.debug('Horizon limit reached.  Shutting down observatory')
-                P.MD.Application.ShutDownObservatory()
+                P.MC.Application.ShutDownObservatory()
                 return
             P.diff_flex()
             log.debug('CENTERING WITH GUIDEBOX MOVES') 
             P.center_loop()
-            if P.MD.horizon_limit():
+            if P.MC.horizon_limit():
                 log.debug('Horizon limit reached.  Shutting down observatory')
-                P.MD.Application.ShutDownObservatory()
+                P.MC.Application.ShutDownObservatory()
                 return
             log.info('Collecting R')
-            P.MD.acquire_im(pg.uniq_fname('R_', d),
+            P.MC.acquire_im(pg.uniq_fname('R_', d),
                             exptime=2,
                             filt=0)
 
@@ -890,6 +890,12 @@ def ACP_IPT_Na_R(args):
     #P = pg.PrecisionGuide("CorObsData", "IoIO") # other defaults should be good
     # Enable graceful exit
     with pg.PrecisionGuide("CorObsData", "IoIO") as P:
+        # Before we do any filter changing, we need to make sure MaxIm
+        # is connected to the focuser so it does offsets properly.
+        # When ACP is running the show, it does focus offsets using
+        # FocusMax.  PrecisionGuide is set up to put the focuser back
+        # to its original state when in context statement __exit__ method
+        P.MC.Application.FocuserConnected = True
         # ACP passes fname.  We are going to ignore that for now and use
         # pg.uniq_fname to create our fnames.  But we need the directory
         # We will also ignore ACP's directory structure for now to
@@ -898,7 +904,7 @@ def ACP_IPT_Na_R(args):
         d = os.path.dirname(args.fname)
         #today = Time.now().fits.split('T')[0]
         #d = os.path.join(pg.raw_data_root, today)
-        if not P.MD.CCDCamera.GuiderRunning:
+        if not P.MC.CCDCamera.GuiderRunning:
             # User could have had guider already on.  If not, center with
             # guider slews and start the guider
             log.debug('CENTERING WITH GUIDER SLEWS') 
@@ -907,7 +913,7 @@ def ACP_IPT_Na_R(args):
                 log.info('Past expected end of ACP exposure, returning') 
                 return
             log.debug('STARTING GUIDER') 
-            P.MD.guider_start(filter=3)
+            P.MC.guider_start(filter=3)
         if time.time() > Tend:
             log.info('Past expected end of ACP exposure, returning') 
             return
@@ -915,15 +921,7 @@ def ACP_IPT_Na_R(args):
         P.diff_flex()
         log.debug('CENTERING WITH GUIDEBOX MOVES') 
         P.center_loop()
-        log.info('Starting with R')
-        exptime = 0.02
-        if ((time.time() + exptime) > Tend):
-            log.info('Exposure would extend past end of ACP exposure, returning') 
-            return
-        # --> Consider some limit check, but ACP should hopefully do this
-        P.MD.acquire_im(pg.uniq_fname('R_', d),
-                        exptime=exptime,
-                        filt=0)
+        downloadtime = 10
         # Jupiter observations
         while True:
             #fname = pg.uniq_fname(basename, d)
@@ -932,95 +930,134 @@ def ACP_IPT_Na_R(args):
             #                exptime=7,
             #                filt=0)
             # was 0.7, filt 1 for mag 1 stars
-            # 0 = R
-            # 1 = [SII] on-band
-            # 2 = Na on-band
-            # 3 = [SII] off-band
-            # 4 = Na off-band
+            #X Small filter wheel
+            #X 0 = R
+            #X 1 = [SII] on-band
+            #X 2 = Na on-band
+            #X 3 = [SII] off-band
+            #X 4 = Na off-band
+
+            # Large filter wheel
+            # 0 R  			full 0.4 deg field
+            # 1 [SII] on-band 		~0.25 deg
+            # 2 [SII] off-band 		~0.25 deg
+            # 3 Na off-band  		full 0.4 deg field ** upside-down **
+            # 4 Hale-Bopp H20+  	~0.25 deg
+            # 5 Hale-Bopp Red Continuum ~0.25 deg
+            # 6 Na on-band  		full 0.4 deg field
+            # 7 V 			~0.25 deg
+            # 8 U		  	~0.25 deg
     
+            log.info('Collecting V, U, and R')
+            if ((time.time() + downloadtime*3) > Tend):
+                log.info('Exposure would extend past end of ACP exposure, returning') 
+                return
+            P.MC.acquire_im(pg.uniq_fname('V_', d),
+                            exptime=0.7,
+                            filt=7)
+            P.MC.acquire_im(pg.uniq_fname('U_', d),
+                            exptime=0.7,
+                            filt=8)
+            P.MC.acquire_im(pg.uniq_fname('R_', d),
+                            exptime=0.1, # Was 0.02
+                            filt=0)
             log.info('Collecting Na')
             exptime=60
             if ((time.time() + exptime) > Tend):
                 log.info('Exposure would extend past end of ACP exposure, returning') 
                 return
-            P.MD.acquire_im(pg.uniq_fname('Na_off-band_', d),
+            P.MC.acquire_im(pg.uniq_fname('Na_off-band_', d),
                             exptime=exptime,
-                            filt=4)
+                            filt=3)
             exptime=300
             if ((time.time() + exptime) > Tend):
                 log.info('Exposure would extend past end of ACP exposure, returning') 
                 return
-            P.MD.acquire_im(pg.uniq_fname('Na_on-band_', d),
+            P.MC.acquire_im(pg.uniq_fname('Na_on-band_', d),
                             exptime=exptime,
-                            filt=2)
+                            filt=6)
             log.debug('CENTERING WITH GUIDEBOX MOVES') 
             P.center_loop()
             
             for i in range(4):
                 P.diff_flex()
+                log.info('Collecting V, U, and R')
+                if ((time.time() + downloadtime*3) > Tend):
+                    log.info('Exposure would extend past end of ACP exposure, returning') 
+                    return
+                P.MC.acquire_im(pg.uniq_fname('V_', d),
+                                exptime=0.7,
+                                filt=7)
+                P.MC.acquire_im(pg.uniq_fname('U_', d),
+                                exptime=0.7,
+                                filt=8)
+                P.MC.acquire_im(pg.uniq_fname('R_', d),
+                                exptime=0.1, # Was 0.02
+                                filt=0)
                 log.info('Collecting [SII]')
                 exptime=300
                 if ((time.time() + exptime) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
                     return
-                P.MD.acquire_im(pg.uniq_fname('SII_on-band_', d),
+                P.MC.acquire_im(pg.uniq_fname('SII_on-band_', d),
                                 exptime=exptime,
                                 filt=1)
                 exptime=60
                 if ((time.time() + exptime) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
                     return
-                P.MD.acquire_im(pg.uniq_fname('SII_off-band_', d),
+                P.MC.acquire_im(pg.uniq_fname('SII_off-band_', d),
                                 exptime=exptime,
-                                filt=3)
+                                filt=2)
                 P.diff_flex()
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
                 P.center_loop()
-                # Test short exposures on Galilean satellites
-                exptime=0.02
-                if ((time.time() + exptime) > Tend):
-                    log.info('Exposure would extend past end of ACP exposure, returning') 
-                    return
-                log.info('Collecting R')
-                P.MD.acquire_im(pg.uniq_fname('R_', d),
-                                exptime=exptime,
-                                filt=0)
-                downloadtime = 15
-                if ((time.time() + downloadtime*8) > Tend):
-                    log.info('Exposure would extend past end of ACP exposure, returning') 
-                    return
-                log.info('Collecting short exposures of narrow-band filters')
-                P.MD.acquire_im(pg.uniq_fname('SII_on_07_', d),
-                                exptime=0.7,
-                                filt=1)
-                P.MD.acquire_im(pg.uniq_fname('SII_on_15_', d),
-                                exptime=15,
-                                filt=1)
-                P.MD.acquire_im(pg.uniq_fname('Na_on_07_', d),
-                                exptime=0.7,
-                                filt=2)
-                P.MD.acquire_im(pg.uniq_fname('Na_on_15_', d),
-                                exptime=15,
-                                filt=2)
-                P.MD.acquire_im(pg.uniq_fname('SII_off_07_', d),
-                                exptime=0.7,
-                                filt=3)
-                P.MD.acquire_im(pg.uniq_fname('SII_off_3_', d),
-                                exptime=3,
-                                filt=3)
-                P.MD.acquire_im(pg.uniq_fname('Na_off_07_', d),
-                                exptime=0.7,
-                                filt=4)
-                P.MD.acquire_im(pg.uniq_fname('Na_off_28_', d),
-                                exptime=2.8,
-                                filt=4)
+            ## Test short exposures on Galilean satellites
+            #if ((time.time() + downloadtime*11) > Tend):
+            #    log.info('Exposure would extend past end of ACP exposure, returning') 
+            #    return
+            #log.info('Collecting short exposures of narrow-band filters')
+            #P.MC.acquire_im(pg.uniq_fname('SII_on_07_', d),
+            #                exptime=0.7,
+            #                filt=1)
+            #P.MC.acquire_im(pg.uniq_fname('SII_on_15_', d),
+            #                exptime=15,
+            #                filt=1)
+            #P.MC.acquire_im(pg.uniq_fname('SII_off_07_', d),
+            #                exptime=0.7,
+            #                filt=2)
+            #P.MC.acquire_im(pg.uniq_fname('SII_off_3_', d),
+            #                exptime=3,
+            #                filt=2)
+            #P.MC.acquire_im(pg.uniq_fname('Na_off_07_', d),
+            #                exptime=0.7,
+            #                filt=3)
+            #P.MC.acquire_im(pg.uniq_fname('Na_off_28_', d),
+            #                exptime=2.8,
+            #                filt=3)
+            #P.MC.acquire_im(pg.uniq_fname('Na_on_07_', d),
+            #                exptime=0.7,
+            #                filt=4)
+            #P.MC.acquire_im(pg.uniq_fname('Na_on_15_', d),
+            #                exptime=15,
+            #                filt=4)
+            #log.info('Collecting V, U, and R')
+            #P.MC.acquire_im(pg.uniq_fname('V_', d),
+            #                exptime=0.7,
+            #                filt=7)
+            #P.MC.acquire_im(pg.uniq_fname('U_', d),
+            #                exptime=0.7,
+            #                filt=8)
+            #P.MC.acquire_im(pg.uniq_fname('R_', d),
+            #                exptime=0.1, # Was 0.02
+            #                filt=0)
 
 def ACP_status(args):
-    # Just ignore the args and make a MaxImData to print out info
-    MD = pg.MaxImData()
-    log.info("GuiderReverseX: " + repr(MD.CCDCamera.GuiderReverseX))
-    log.info("Xspeed, Yspeed: " + repr(MD.CCDCamera.GuiderXSpeed) + ', ' + repr(MD.CCDCamera.GuiderYSpeed))
-    log.info("GuiderAngle: " + repr(MD.CCDCamera.GuiderAngle))
+    # Just ignore the args and make a MaxImControl to print out info
+    MC = pg.MaxImControl()
+    log.info("GuiderReverseX: " + repr(MC.CCDCamera.GuiderReverseX))
+    log.info("Xspeed, Yspeed: " + repr(MC.CCDCamera.GuiderXSpeed) + ', ' + repr(MC.CCDCamera.GuiderYSpeed))
+    log.info("GuiderAngle: " + repr(MC.CCDCamera.GuiderAngle))
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
