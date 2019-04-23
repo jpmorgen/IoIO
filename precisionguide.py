@@ -104,7 +104,9 @@ default_guide_box_command_file = os.path.join(raw_data_root, 'GuideBoxCommand.tx
 default_guide_box_log_file = os.path.join(raw_data_root, 'GuideBoxLog.txt')
 
 run_level_main_astrometry = os.path.join(
-    raw_data_root, '2019-02_Astrometry/PinPointSolutionEastofPier.fit')
+    raw_data_root, '2019-04_Astrometry/Main_Astrometry_East_of_Pier.fit')
+    #raw_data_root, '2019-04_Astrometry/Main_Astrometry_West_of_Pier.fit')
+    #raw_data_root, '2019-02_Astrometry/PinPointSolutionEastofPier.fit')
     #raw_data_root, '2019-02_Astrometry/PinPointSolutionWestofPier.fit')
     #raw_data_root, '2018-04_Astrometry/PinPointSolutionEastofPier.fit')
 
@@ -114,7 +116,9 @@ run_level_main_astrometry = os.path.join(
 # --> pier flip doesn't affect N/S because tube rolls over too, E/W is
 # --> affected
 run_level_guider_astrometry = os.path.join(
-    raw_data_root, '2019-02_Astrometry/GuiderPinPointSolutionWestofPier.fit')
+    raw_data_root, '2019-04_Astrometry/Guider_Astrometry_East_of_Pier.fit')
+    #raw_data_root, '2019-04_Astrometry/Guider_Astrometry_West_of_Pier.fit')
+    #raw_data_root, '2019-02_Astrometry/GuiderPinPointSolutionWestofPier.fit')
     #raw_data_root, '2019-02_Astrometry/GuiderPinPointSolutionEastofPier.fit')    
     #raw_data_root, '2018-04_Astrometry/GuiderPinPointSolutionWestofPier.fit')
     #raw_data_root, '2018-01_Astrometry//GuiderPinPointSolutionEastofPier.fit')
@@ -642,10 +646,12 @@ class MaxImControl():
         # --> IoIO.notebk about C-c dance if you need to run this
         # --> without killing camera link)
         if self.CCDCamera:
+            self.guider_stop()
             self.CCDCamera.GuiderFilter = self.previous_guider_filter
-            self.CCDCamera.LinkEnabled = False
+            #self.CCDCamera.LinkEnabled = False
         # Put the MaxIm focuser connection back to its previous state
         self.Application.FocuserConnected = self.focuser_previously_connected
+        # --> Not sure if I need to do these or if they mess it up worse
         self.Application = None
         self.CCDCamera = None
         self.Telescope = None
@@ -1117,6 +1123,10 @@ class MaxImControl():
         if (self.Application.TelescopeConnected
             and self.CCDCamera.GuiderAutoPierFlip):
             log.debug('Let MaxIm manage pier flip state: it is connected to the telescope and Auto Pier Flip is on.')
+            # Set these to False, since otherwise they would confuse
+            # us and MaxIm
+            self.CCDCamera.GuiderReverseX = False
+            self.CCDCamera.GuiderReverseY = False
             return
         log.debug("MaxIm is not managing pier flip...")
         if self.Telescope.SideOfPier == self.pier_flip_on_side:
@@ -1242,39 +1252,23 @@ class MaxImControl():
 
 
         """
-        # --> This would be better with events
         if not self.CCDCamera.GuiderRunning:
             log.warning('Guider not running')
             return None
         this_norm = 0
-        last_norm = 0
         running_total = 0
         running_sq = 0
         for i in range(n):
-            while True:
-                # Wait until MaxIm gets the first measurement.
-                # eps is epsilon, a very small number.  Don't
-                # forget to force the logic to get a measurement!
-                # --> use GuiderNewMeasurement and better wait with timeout logic
-                this_norm = 0
-                while this_norm < 1000 * np.finfo(np.float).eps:
-                    # --> this needs a timeout
-                    time.sleep(self.loop_sleep_time)
-                    this_norm = np.linalg.norm(
-                        (self.CCDCamera.GuiderYError,
-                         self.CCDCamera.GuiderXError))
-                #log.debug('this_norm: ' + str(this_norm))
-                #log.debug('last_norm: ' + str(last_norm)) 
-                if (np.abs(last_norm - this_norm)
-                    > 1000 * np.finfo(np.float).eps):
-                    # We have a new reading.
-                    break
-                # Keep looking for the new reading
-                last_norm = this_norm
-                #log.debug('last_norm after reassignment: ' + str(last_norm))
+            # --> Need a timeout
+            while self.CCDCamera.GuiderNewMeasurement is False:
+                time.sleep(self.loop_sleep_time)
+            # As per MaxIm documentation, reading these clears
+            # GuiderNewMeasurement
+            this_norm = np.linalg.norm(
+                (self.CCDCamera.GuiderYError,
+                 self.CCDCamera.GuiderXError))
             running_total += this_norm
             running_sq += this_norm**2
-            last_norm = this_norm
         return (running_total/n, (running_sq/n)**0.5)
 
     def guider_settle(self):
@@ -1765,16 +1759,22 @@ class MaxImControl():
         self.guider_exptime, auto_star_selected \
             = self.get_guider_exposure(exptime=exptime,
                                        filter=filter)
-        if not auto_star_selected and star_position is None:
+        # --> don't be fancy, having trouble getting initial guide star
+        # --> not sure if this is the trouble or if the initial
+        # time.sleep(0.3) before the while solved the problem
+        #if not auto_star_selected and star_position is None:
+        if True:
             # Take an exposure to get MaxIm to calculate the guide
-            # star postion
+            # star postion --> consider temporary code to select lower
+            # filter number if guide star not found
             self.CCDCamera.GuiderExpose(self.guider_exptime)
+            time.sleep(self.guider_exptime)
             # --> Consider checking for timout here
             while self.CCDCamera.GuiderRunning:
-                time.sleep(0.1)
+                time.sleep(0.3)
         # Since ACP does not want MaxIm connected to the scope, we
         # have to manage all that stuff ourselves
-        self.set_guider_motor_reverse_and_DEC
+        self.set_guider_motor_reverse_and_DEC()
         if not self.CCDCamera.GuiderTrack(self.guider_exptime):
             raise EnvironmentError('Attempt to start guiding failed.  Guider configured correctly?')
         # MaxIm rounds pixel center value to the nearest pixel,
@@ -1786,8 +1786,10 @@ class MaxImControl():
         self.guider_commanded_running = False
         self.CCDCamera.GuiderReverseX = self.previous_GuiderReverseX
         self.CCDCamera.GuiderReverseY = self.previous_GuiderReverseY
-        return self.CCDCamera.GuiderStop
-
+        if self.CCDCamera.GuiderRunning:
+            return self.CCDCamera.GuiderStop
+        return False
+    
     def get_im(self):
         """Puts current MaxIm image (the image with focus) into a FITS HDUList.  If an exposure is being taken or there is no image, the im array is set equal to None"""
         # Clear out HDUList in case we fail
@@ -1850,13 +1852,17 @@ class MaxImControl():
             exptime = default_exptime
         if filt is None:
             filt = self.default_filt
+        if binning is None:
+            binning = 1
         # Set the filter separately, since some filter wheels need
         # time to rotate
         if self.CCDCamera.Filter != filt:
             self.CCDCamera.Filter = filt
             time.sleep(self.main_filt_change_time)
-        # --> Add support for binning, camera, and non-light
-        # --> Add support for a pause for the filter wheel
+        self.CCDCamera.BinX = binning
+        if not self.CCDCamera.XYBinning:
+            self.CCDCamera.BinY = binning
+        # --> Add support for camera, and non-light
         # Take a light (1) exposure
         self.CCDCamera.Expose(exptime, 1, filt)
         # This is potentially a place for a coroutine and/or events
@@ -2094,14 +2100,14 @@ guide_box_log_file : str
 
     def diff_flex(self):
         """-->Eventually this is going to read a map/model file and calculate the differential flexure to feed to GuideBoxCommander.  There may need to be an additional method for concatenation of this flex and the measured flexure.  THIS IS ONLY FOR JUPITER DEC RIGHT NOW"""
-        plate_ratio = 4.42/(1.56/2)
-        if (-40 < self.MC.Telescope.Declination
-            and self.MC.Telescope.Declination < +10
-            and self.MC.Telescope.Altitude < 30):
-            # Change from guider pixels per 10s to main camera pixels per s
-            dec_pix_rate = -0.020/10 * plate_ratio
-            # Note Pythonic transpose
-            return self.GuideBoxCommander(np.asarray((dec_pix_rate, 0)))
+        #plate_ratio = 4.42/(1.56/2)
+        #if (-40 < self.MC.Telescope.Declination
+        #    and self.MC.Telescope.Declination < +10
+        #    and self.MC.Telescope.Altitude < 30):
+        #    # Change from guider pixels per 10s to main camera pixels per s
+        #    dec_pix_rate = -0.020/10 * plate_ratio
+        #    # Note Pythonic transpose
+        #    return self.GuideBoxCommander(np.asarray((dec_pix_rate, 0)))
         # For now, don't guess, though I could potentially put
         # Mercury in here
         return self.GuideBoxCommander(np.asarray((0, 0)))
@@ -3091,7 +3097,7 @@ def cmd_test_center(args):
     else:
         desired_center = None
     P.center(desired_center=desired_center)
-    #log.debug('STARTING GUIDER') 
+    log.debug('STARTING GUIDER') 
     #P.MC.guider_start()
     #log.debug('CENTERING WITH GUIDEBOX MOVES') 
     #P.center(desired_center=desired_center)

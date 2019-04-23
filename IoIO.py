@@ -5,6 +5,10 @@
 # "C:\ProgramData\Anaconda3\python.exe" "%1" %*
 # Thanks to https://stackoverflow.com/questions/29540541/executable-python-script-not-take-sys-argv-in-windows
 
+# See ioio.notebk Fri Mar 15 05:51:44 2019 EDT  jpmorgen@snipe
+# for ideas for how to improve the precisionguide structure to have
+# instead cor_guide which subclasses ObsDataBaseClass
+
 import os
 import time
 import argparse
@@ -29,10 +33,16 @@ SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 #    = [[  3.63686271e-01,   3.68675375e-01],
 #       [  1.28303305e+03,   1.39479846e+03]]
 
-# Fri Feb 08 19:35:56 2019 EST  jpmorgen@snipe
+## Fri Feb 08 19:35:56 2019 EST  jpmorgen@snipe
+#run_level_default_ND_params \
+#    = [[  4.65269008e-03,   8.76050569e-03],
+#       [  1.27189987e+03,   1.37717911e+03]]
+
+# Fri Apr 12 15:42:30 2019 EDT  jpmorgen@snipe
 run_level_default_ND_params \
-    = [[  4.65269008e-03,   8.76050569e-03],
-       [  1.27189987e+03,   1.37717911e+03]]
+    = [[1.40749551e-02, 2.36320869e-02],
+       [1.24240593e+03, 1.33789081e+03]]
+
 
 def hist_of_im(im, readnoise=None):
     """Returns a tuple of the histogram of image and index into centers of
@@ -597,9 +607,11 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
                                     self.ND_edges(
                                         rowpt+ypt_top,
                                         self.default_ND_params))))
+                    left = max((0, this_ND_center-subim_hw))
+                    right = min((this_ND_center+subim_hw,
+                                 this_ND_center+subim.shape[1]))
                     subim[rowpt, :] \
-                        = im[ypt_top+rowpt, 
-                             this_ND_center-subim_hw:this_ND_center+subim_hw]
+                        = im[ypt_top+rowpt, left:right]
 
                 profile = np.sum(subim, 0)
                 # This spots the sharp edge of the filter surprisingly
@@ -949,18 +961,31 @@ def ACP_IPT_Na_R(args):
             # 8 U		  	~0.25 deg
     
             log.info('Collecting V, U, and R')
-            if ((time.time() + downloadtime*3) > Tend):
+            if ((time.time() + downloadtime*3*3) > Tend):
                 log.info('Exposure would extend past end of ACP exposure, returning') 
                 return
-            P.MC.acquire_im(pg.uniq_fname('V_', d),
-                            exptime=0.7,
-                            filt=7)
-            P.MC.acquire_im(pg.uniq_fname('U_', d),
-                            exptime=0.7,
-                            filt=8)
-            P.MC.acquire_im(pg.uniq_fname('R_', d),
-                            exptime=0.1, # Was 0.02
-                            filt=0)
+            for ifilt in range(3):
+                P.MC.acquire_im(pg.uniq_fname('V_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=7)
+            for ifilt in range(3):
+                P.MC.acquire_im(pg.uniq_fname('U_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=8)
+            for ifilt in range(3):
+                # Note to get exposure time of 2.8, we need 1.3s expo
+                # because of additional time of 1.5s added to exposures > 0.7s
+                P.MC.acquire_im(pg.uniq_fname('U_2.8_', d),
+                                exptime=1.3,
+                                binning=1,
+                                filt=8)
+            for ifilt in range(3):
+                P.MC.acquire_im(pg.uniq_fname('R_', d),
+                                exptime=0.1, # Was 0.02
+                                binning=1,
+                                filt=0)
             log.info('Collecting Na')
             exptime=60
             if ((time.time() + exptime) > Tend):
@@ -982,18 +1007,24 @@ def ACP_IPT_Na_R(args):
             for i in range(4):
                 P.diff_flex()
                 log.info('Collecting V, U, and R')
-                if ((time.time() + downloadtime*3) > Tend):
+                if ((time.time() + downloadtime*3*3) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
                     return
-                P.MC.acquire_im(pg.uniq_fname('V_', d),
-                                exptime=0.7,
-                                filt=7)
-                P.MC.acquire_im(pg.uniq_fname('U_', d),
-                                exptime=0.7,
-                                filt=8)
-                P.MC.acquire_im(pg.uniq_fname('R_', d),
-                                exptime=0.1, # Was 0.02
-                                filt=0)
+                for ifilt in range(3):                                
+                    P.MC.acquire_im(pg.uniq_fname('V_', d),
+                                    exptime=0.7,
+                                    binning=1,
+                                    filt=7)
+                for ifilt in range(3):
+                    P.MC.acquire_im(pg.uniq_fname('U_', d),
+                                    exptime=0.7,
+                                    binning=1,
+                                    filt=8)
+                for ifilt in range(3):
+                    P.MC.acquire_im(pg.uniq_fname('R_', d),
+                                    exptime=0.1, # Was 0.02
+                                    binning=1,
+                                    filt=0)
                 log.info('Collecting [SII]')
                 exptime=300
                 if ((time.time() + exptime) > Tend):
