@@ -22,12 +22,14 @@ ADU2R_adjust = 1.15
 telluric_Na = 55
 N_med = 11
 
-line = 'Na'
+#line = 'Na'
+line = '[SII]'
 onoff = 'AP'	# on-band minus off-band, fully reduced images
 #onoff = 'On'	# on-band images after bias and dark subtraction and rayleigh calibration
 #onoff = 'Off'	# off-band images after bias and dark subtraction and rayleigh calibration
 
 ap_sum_fname = '/data/io/IoIO/reduced/ap_sum.csv'
+#ap_sum_fname = '/data/io/IoIO/reduced/ap_sum_20190411+.csv'
 
 # list of days in matplotlib plot_date format, which happen to start
 # at midnight UT, which is the way I like it
@@ -46,11 +48,11 @@ with open(ap_sum_fname, newline='') as csvfile:
     for row in csvr:
         if row['LINE'] != line:
             continue
-        if (line == 'Na'
-            and row['ADU2R'] < 0.18
-            and (row['OFFSCALE'] < 1 or
-                 row['OFFSCALE'] > 1.26)):
-            continue
+        #if (line == 'Na'
+        #    and row['ADU2R'] < 0.18
+        #    and (row['OFFSCALE'] < 1 or
+        #         row['OFFSCALE'] > 1.26)):
+        #    continue
         T = Time(row['TMID'], format='fits')
         pdlist.append(T.plot_date)
         rlist.append(row)
@@ -74,10 +76,17 @@ with open(ap_sum_fname, newline='') as csvfile:
         center = ((row['CTS_' + onoff + 'Rjp15']
                    - row['CTS_' + onoff + 'Rjp10'])
                   / (15**2 - 10**2))
+        #torus = ((row['CTS_' + onoff + 'Rjp30']
+        #           - row['CTS_' + onoff + 'Rjp10'])
+        #          / (30**2 - 10**2))
+        torus = ((row['CTS_' + onoff + 'Rjp30']
+                   - row['CTS_' + onoff + 'Rjp5'])
+                  / (30**2 - 5**2))
         # Add these to the row
         row[onoff + 'back'] = back
         row[onoff + 'fore'] = fore
         row[onoff + 'center'] = center
+        row[onoff + 'torus'] = torus
         # Make sure we save a row with all the keys for the code below
         saverow = row
 
@@ -97,7 +106,6 @@ median_ap_list = []
 for id in list(set(idays)):
     this_day_idx = np.where(idays == id)
     this_day_idx = this_day_idx[0]
-    #print(this_day_idx)
     this_mpd = np.median(pds[this_day_idx])
     this_day_medians = {'TMID': this_mpd}
     for ap in ap_keys:
@@ -134,63 +142,22 @@ mpds = [row['TMID'] for row in median_ap_list]
 
 ######## UNCOMMENT APPROPRIATE BLOCK TO CREATE DESIRED FIGURE
 
-##-## ######## Time series of primary apertures.
-##-## # CHANGE onoff ABOVE TO PLOT FOR ON-BAND and OFF-BAND images 
-##-## plt.plot_date(mpds, 
-##-##               [row[onoff + 'Rjp15'] for row in median_ap_list], '^')
-##-## plt.plot_date(mpds, 
-##-##               [row[onoff + 'Rjp30'] for row in median_ap_list], 's')
-##-## plt.plot_date(pds, 
-##-##               [row[onoff + 'Rjp30'] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
-##-## back = [row[onoff + 'back'] for row in median_ap_list]
-##-## plt.plot_date(mpds, back, 'x')
-##-## #back_mav = np.convolve(back, np.ones((N_med,))/N_med, mode='same')
-##-## #back_med = medfilt(back, N_med)
-##-## #plt.plot_date(mpds, back_med, ',', linestyle='-')
-##-## axes = plt.gca()
-##-## if onoff == 'AP':
-##-##     axes.set_ylim([0, 1700])
-##-##     ylabel = ''
-##-## else:
-##-##     if onoff == 'On':
-##-##         axes.set_ylim([0, 3000])
-##-##     else:
-##-##         axes.set_ylim([0, 1500])
-##-##     ylabel = onoff + '-band'
-##-## plt.legend(['Rj < 7.5 nightly median', 'Rj < 15 nightly median', 'Rj < 15 surface brightness', '20 < Rj < 25 nightly median'], ncol=2)
-##-## plt.xlabel('UT Date')
-##-## plt.ylabel(line + ' ' + ylabel + ' Surface Brightness (R)')
-##-## plt.gcf().autofmt_xdate()  # orient date labels at a slant
-##-## plt.show()
-
-######## Time series of 25 Rj aperture.
-# Subtract the estimated telluric sodium background
-
-back = [row[onoff + 'back'] - telluric_Na for row in median_ap_list]
-mpds = np.asarray(mpds)
-back = np.asarray(back)
-T0 = Time('2017-12-01T00:00:00', format='fits')
-T1 = Time('2018-07-10T00:00:00', format='fits')
-good_idx = np.where(mpds > T0.plot_date)
-# unwrap
-mpds = mpds[good_idx]
-back = back[good_idx]
-sorted_idx = np.argsort(mpds)
-mpds = mpds[sorted_idx]
-back = back[sorted_idx]
-plt.plot_date(mpds, back, 'C2x')
-back_med = medfilt(back, N_med)
-plt.plot_date(mpds, back_med, ',', linestyle='-')
+######## Time series of primary apertures.
+# CHANGE onoff ABOVE TO PLOT FOR ON-BAND and OFF-BAND images 
+plt.plot_date(mpds, 
+              [row[onoff + 'Rjp15'] for row in median_ap_list], '^')
+plt.plot_date(mpds, 
+              [row[onoff + 'Rjp30'] for row in median_ap_list], 's')
+plt.plot_date(pds, 
+              [row[onoff + 'Rjp30'] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
+back = [row[onoff + 'back'] for row in median_ap_list]
+plt.plot_date(mpds, back, 'x')
+#back_mav = np.convolve(back, np.ones((N_med,))/N_med, mode='same')
+#back_med = medfilt(back, N_med)
+#plt.plot_date(mpds, back_med, ',', linestyle='-')
 axes = plt.gca()
-legend_list = ['20 < Rj < 25 nightly median',
-               str(N_med) + '-day running median']
 if onoff == 'AP':
-    T2 = Time('2018-01-10T00:00:00', format='fits')
-    T3 = Time('2018-02-20T00:00:00', format='fits')
-    plt.plot_date([T2.plot_date, T3.plot_date],
-                  [25, 150], ',', linestyle='-')
-    legend_list.append('linear extrapolation')
-    axes.set_ylim([0, 225])
+    axes.set_ylim([0, 1700])
     ylabel = ''
 else:
     if onoff == 'On':
@@ -198,12 +165,151 @@ else:
     else:
         axes.set_ylim([0, 1500])
     ylabel = onoff + '-band'
-axes.set_xlim([T0.plot_date, T1.plot_date])
-plt.legend(legend_list, loc='upper right')
+plt.legend(['Rj < 7.5 nightly median', 'Rj < 15 nightly median', 'Rj < 15 surface brightness', '20 < Rj < 25 nightly median'], ncol=2)
 plt.xlabel('UT Date')
 plt.ylabel(line + ' ' + ylabel + ' Surface Brightness (R)')
 plt.gcf().autofmt_xdate()  # orient date labels at a slant
 plt.show()
+
+##-## ######## Time series of 25 Rj aperture.
+##-## # Subtract the estimated telluric sodium background
+##-## 
+##-## back = [row[onoff + 'back'] - telluric_Na for row in median_ap_list]
+##-## mpds = np.asarray(mpds)
+##-## back = np.asarray(back)
+##-## T0 = Time('2017-12-01T00:00:00', format='fits')
+##-## T1 = Time('2018-07-10T00:00:00', format='fits')
+##-## good_idx = np.where(mpds > T0.plot_date)
+##-## # unwrap
+##-## mpds = mpds[good_idx]
+##-## back = back[good_idx]
+##-## sorted_idx = np.argsort(mpds)
+##-## mpds = mpds[sorted_idx]
+##-## back = back[sorted_idx]
+##-## plt.plot_date(mpds, back, 'C2x')
+##-## back_med = medfilt(back, N_med)
+##-## plt.plot_date(mpds, back_med, ',', linestyle='-')
+##-## axes = plt.gca()
+##-## legend_list = ['20 < Rj < 25 nightly median',
+##-##                str(N_med) + '-day running median']
+##-## if onoff == 'AP':
+##-##     T2 = Time('2018-01-10T00:00:00', format='fits')
+##-##     T3 = Time('2018-02-20T00:00:00', format='fits')
+##-##     plt.plot_date([T2.plot_date, T3.plot_date],
+##-##                   [25, 150], ',', linestyle='-')
+##-##     legend_list.append('linear extrapolation')
+##-##     axes.set_ylim([0, 225])
+##-##     ylabel = ''
+##-## else:
+##-##     if onoff == 'On':
+##-##         axes.set_ylim([0, 3000])
+##-##     else:
+##-##         axes.set_ylim([0, 1500])
+##-##     ylabel = onoff + '-band'
+##-## axes.set_xlim([T0.plot_date, T1.plot_date])
+##-## plt.legend(legend_list, loc='upper right')
+##-## plt.xlabel('UT Date')
+##-## plt.ylabel(line + ' ' + ylabel + ' Surface Brightness (R)')
+##-## plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-## plt.savefig('Na_vs_T_25Rj_hires.png', transparent=True, dpi=1200)
+##-## plt.show()
+
+######## Time series of on-torus apertures
+
+##-## ap = '5_7_1'
+##-## plt.plot_date(pds, 
+##-##               [row[onoff + '_IPT_east_' + ap] for row in rlist], 'C1.', ms=1)
+##-## plt.plot_date(pds, 
+##-##               [row[onoff + '_IPT_west_' + ap] for row in rlist], 'C2.', ms=1)
+##-## east = [row[onoff + '_IPT_east_' + ap] for row in median_ap_list]
+##-## west = [row[onoff + '_IPT_west_' + ap] for row in median_ap_list]
+##-## mpds = np.asarray(mpds)
+##-## east = np.asarray(east)
+##-## west = np.asarray(west)
+##-## T0 = Time('2017-12-31T00:00:00', format='fits')
+##-## #T0 = Time('2016-12-01T00:00:00', format='fits')
+##-## T1 = Time('2018-07-10T00:00:00', format='fits')
+##-## good_idx = np.where(mpds > T0.plot_date)
+##-## # unwrap
+##-## mpds = mpds[good_idx]
+##-## east = east[good_idx]
+##-## west = west[good_idx]
+##-## sorted_idx = np.argsort(mpds)
+##-## mpds = mpds[sorted_idx]
+##-## east = east[sorted_idx]
+##-## west = west[sorted_idx]
+##-## east_med = medfilt(east, N_med)
+##-## west_med = medfilt(west, N_med)
+##-## plt.plot_date(mpds, east, 'C1.')
+##-## plt.plot_date(mpds, east_med, ',', linestyle='-', color='C1')
+##-## plt.plot_date(mpds, west, 'C2.')
+##-## plt.plot_date(mpds, west_med, ',', linestyle='--', color='C2')
+##-## axes = plt.gca()
+##-## legend_list = ['east',
+##-##                str(N_med) + '-day running median',
+##-##                'west',
+##-##                str(N_med) + '-day running median']
+##-## if onoff == 'AP':
+##-##     legend_list.append('linear extrapolation')
+##-##     axes.set_ylim([-300, 300])
+##-##     ylabel = ''
+##-## else:
+##-##     if onoff == 'On':
+##-##         axes.set_ylim([0, 3000])
+##-##     else:
+##-##         axes.set_ylim([0, 1500])
+##-##     ylabel = onoff + '-band'
+##-## axes.set_xlim([T0.plot_date, T1.plot_date])
+##-## plt.legend(legend_list, loc='upper right')
+##-## plt.xlabel('UT Date')
+##-## plt.ylabel(line + ' ' + ylabel + ' Surface Brightness (R)')
+##-## plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-## plt.savefig('Torus_vs_T_hires.png', transparent=True, dpi=1200)
+##-## plt.show()
+
+##-## ######## Time series of torus annular aperture.
+##-## # Subtract the estimated telluric sodium background
+##-## 
+##-## torus = [row[onoff + 'torus'] for row in median_ap_list]
+##-## #torus = [row[onoff + 'Rjp15'] for row in median_ap_list]
+##-## #torus = [row[onoff + 'Rjp50'] for row in median_ap_list]
+##-## mpds = np.asarray(mpds)
+##-## torus = np.asarray(torus)
+##-## T0 = Time('2017-12-01T00:00:00', format='fits')
+##-## #T0 = Time('2016-12-01T00:00:00', format='fits')
+##-## T1 = Time('2018-07-10T00:00:00', format='fits')
+##-## good_idx = np.where(mpds > T0.plot_date)
+##-## # unwrap
+##-## mpds = mpds[good_idx]
+##-## torus = torus[good_idx]
+##-## sorted_idx = np.argsort(mpds)
+##-## mpds = mpds[sorted_idx]
+##-## torus = torus[sorted_idx]
+##-## plt.plot_date(mpds, torus, 'C1.')
+##-## torus_med = medfilt(torus, N_med)
+##-## plt.plot_date(mpds, torus_med, ',', linestyle='-')
+##-## axes = plt.gca()
+##-## legend_list = ['5 < Rj < 15 nightly median',
+##-##                str(N_med) + '-day running median']
+##-## if onoff == 'AP':
+##-##     legend_list.append('linear extrapolation')
+##-##     axes.set_ylim([0, 50])
+##-##     #axes.set_ylim([0, 1000])
+##-##     ylabel = ''
+##-## else:
+##-##     if onoff == 'On':
+##-##         axes.set_ylim([0, 3000])
+##-##     else:
+##-##         axes.set_ylim([0, 1500])
+##-##     ylabel = onoff + '-band'
+##-## axes.set_xlim([T0.plot_date, T1.plot_date])
+##-## plt.legend(legend_list, loc='upper right')
+##-## plt.xlabel('UT Date')
+##-## plt.ylabel(line + ' ' + ylabel + ' Surface Brightness (R)')
+##-## plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-## plt.savefig('Torus_vs_T_hires.png', transparent=True, dpi=1200)
+##-## plt.show()
+
 
 ##-## ######### Check offsets and scaling for final reduced images
 ##-## if onoff == 'AP':
@@ -231,17 +337,17 @@ plt.show()
 ##-## plt.gcf().autofmt_xdate()  # orient date labels at a slant
 ##-## plt.show()
 
-##--## ###### Plot OFFSCALE
-##--## 
-##--## plt.plot_date(pds,
-##--##               #[(2.1 - row['OFFSCALE'])*500 for row in rlist], 'g,')
-##--##               [row['OFFSCALE'] for row in rlist])
-##--## axes = plt.gca()
-##--## axes.set_ylim([0.75, 1.75])
-##--## plt.xlabel('UT Date')
-##--## plt.ylabel(line + ' OFFSCALE')
-##--## plt.gcf().autofmt_xdate()  # orient date labels at a slant
-##--## plt.show()
+##-## ###### Plot OFFSCALE
+##-## 
+##-## plt.plot_date(pds,
+##-##               #[(2.1 - row['OFFSCALE'])*500 for row in rlist], 'g,')
+##-##               [row['OFFSCALE'] for row in rlist])
+##-## axes = plt.gca()
+##-## #axes.set_ylim([0.75, 1.75])
+##-## plt.xlabel('UT Date')
+##-## plt.ylabel(line + ' OFFSCALE')
+##-## plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-## plt.show()
 
 ## ######### Plot results of scatter plot linear regression
 ## plt.plot_date(mpds, 

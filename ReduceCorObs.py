@@ -2,6 +2,7 @@
 import os
 import re
 import time
+import datetime
 from multiprocessing import Pool
 import csv
 import argparse
@@ -9,20 +10,28 @@ import argparse
 import numpy as np
 from scipy import ndimage
 from scipy.interpolate import UnivariateSpline
-from skimage import exposure
 from astropy import log
 from astropy import units as u
 from astropy.time import Time, TimeDelta
+from astropy.coordinates import Angle, SkyCoord
+from astropy.coordinates import EarthLocation
+from astropy.coordinates import solar_system_ephemeris, get_body
+from skimage import exposure
+
 # Using source for now
 from astroquery.jplhorizons import Horizons
 #from jplhorizons import Horizons
 #from photutils import CircularAperture, aperture_photometry
+#from photutils import RectangularAperture
 
 import ccdproc
 import matplotlib.pyplot as plt
 import moviepy.editor as mpy
 
-from precisionguide import get_HDUList
+# Working on replacing this
+#from precisionguide import get_HDUList
+from astropy.io import fits
+
 import IoIO
 #from IoIO import CorObsData, run_level_default_ND_params
 import define as D
@@ -37,8 +46,13 @@ plate_scale = 1.56/2 # arcsec/pix
 # [SII] 6731A 10A FWHM
 # Na continuum 50A FWHM
 # [SII] continuum 40A FWHM
-line_associations = [{'line': '[SII]', 'cwl': '6731'},
-                     {'line': 'Na',    'cwl': '5890'}]
+# Thu Mar 07 18:33:06 2019 EST  jpmorgen@snipe
+# Indeed, tweaked filter names, ending up with SII_on, SII_off, Na_on,
+# Na_off, but had some intermediate ones in the mean time, in
+# particular Na 5892A (design center of filter) vs 5890A (brighter of
+# the 5890, 5896 Na doublet).  That should match as 589
+line_associations = [{'line': 'SII',   'cwl': '6731'},
+                     {'line': 'Na',    'cwl': '589'}]
 # These are the equavalent widths of the filters in angstroms
 SII_eq_width = 9.95
 Na_eq_width = 11.22
@@ -46,7 +60,8 @@ Na_eq_width = 11.22
 # Aperture photometry didn't fix it, so this is my guess at the
 # magnitude of the problem
 SII_on_loss = 0.95
-Na_on_loss = 0.8
+#Na_on_loss = 0.8
+Na_on_loss = 0.6
 # Tue Jul 24 17:37:12 2018 EDT  jpmorgen@snipe
 # See notes in ioio.notebk of this day
 global_bias = 1633 # ADU
@@ -79,7 +94,8 @@ astrometry = [('2017-03-03', 57),
               ('2017-04-17', 4),
               ('2017-05-18', 178-180),
               ('2018-01-15', 358),
-              ('2018-01-24', 359)]
+              ('2018-01-24', 359),
+              ('2019-01-01', 3)]
 
 def get_astrometry_angle(date_obs):
     Tin = Time(date_obs, format='fits')
@@ -93,6 +109,9 @@ def get_astrometry_angle(date_obs):
             return(alast[1])
         alast = a
     return(alast[1])
+
+# --> Create something like get_astrometry_angle for
+# --> run_level_default_ND_params 
 
 def get_filt_band(header):
     f = header['FILTER'] 
@@ -116,6 +135,12 @@ def get_filt_band(header):
 def get_filt_name(collection, line=None, band='None'):
     assert line is not None
     assert band is not None
+    # Beware 2019 filter names SII_on and SII_off.  This breaks
+    # searching for '[SII]', which I do a bunch in calling code.  To
+    # enable calling with line='SII' or '[SII]', strip off the [ and ]
+    # here, since 'SII' is unique enough in the filter name.
+    # https://stackoverflow.com/questions/3939361/remove-specific-characters-from-a-string-in-python
+    line = line.translate({ord('['): None, ord(']'): None})
     band = band.lower()  
     # unique has problems when biases are in the directory because
     # their missing FILTER keywords results in a masked value being
@@ -164,19 +189,20 @@ def get_ND_params_1flat(fname):
         log.error('Skipping: ' + fname + '. ' + str(e))
     return iter_ND_params
 
-def get_default_ND_params(directory='.',
+def get_default_ND_params(directory=None,
                           collection=None,
                           maxcount=None,
                           num_processes=None):
     """Derive default_ND_params from up to maxcount flats in directory.  Returns None if no (good) flats are found
     """
-    assert os.path.isdir(directory), "Specify directory to search for flats and derive default_ND_params"
+    if collection is None:
+        if not os.path.isdir(directory):
+            raise ValueError('Specify either a collection or directory containing flats')
+        collection = ccdproc.ImageFileCollection(directory)
     if maxcount is None:
         maxcount = 10
     if num_processes is None:
         num_processes=int(os.cpu_count()/threads_per_core)
-    if collection is None:
-        collection = ccdproc.ImageFileCollection(directory)
     if not 'imagetyp' in collection.keywords:
         log.warning('IMAGETYP keyword not found in any files: ' + directory)
         return None 
@@ -200,9 +226,11 @@ def get_default_ND_params(directory='.',
             np.median(ND_params_array[:, 1, 1])))
     return np.asarray(default_ND_params)
 
+# -->I think this is obsolete too
 def cmd_get_default_ND_params(args):
     print(get_default_ND_params(args.directory, args.maxcount))
 
+# --> This is obsolete
 def ND_params_dir(directory=None, default_ND_params=None):
     """Calculate ND_params for all observations in a directory
     """
@@ -260,6 +288,8 @@ def ND_params_dir(directory=None, default_ND_params=None):
 
     return((count, torus_count, Na_count, elapsed, count/elapsed))
 
+# --> Eventually put this into cor_obs_data.py (or whatever I call it)
+# --> and make it have prettier output
 def ND_params_tree(args):
     """Calculate ND_params for all observations in a directory tree
     """
@@ -327,6 +357,103 @@ def surf_bright(im, coord, minrad=3.):
         print(sb)
         r += 1
 
+def is_jupiter(hdr):
+    """Returns True if hdr describes an observation of Jupiter
+    Parameters
+    ----------
+    hdr : dictionary-like
+        FITS header or ccdproc.ImageFileCollection
+    """
+    imagetyp = hdr['imagetyp']
+    if imagetyp.lower() != 'light':
+        # BIAS, DARK, FLAT, etc. are obviously not Jupiter
+        return False
+    object = hdr['object']
+    # These are slam-dunks from either ACP [--> hopefully!] or MaxIm
+    # autosaves in 2017
+    # --> remember to set OBJECT to Jupiter before final write of file
+    objlist = ['Jupiter', 'IPT', 'Na', 'Na_IPT', 'Na_IPT_R']
+    if object.lower() in [o.lower() for o in objlist]:
+        return True
+    # IoIO.py ACP_IPT_Na_R was run from an ACP plan as a shell-out and
+    # usually didn't have a MaxIm telescope connection.  This is
+    # pretty much the only case where OBJCTRA and OBJCTDEC are not
+    # defined since Bob defines these in ACP and MaxIm sets them
+    # whenever the telescope is connected.  Unless I was doing
+    # debugging, this shell-out was only called when the telescope was
+    # pointed at Jupiter.  Call that certain enough.
+    try:
+        # ccdproc.ImageFileCollection does not have the analogy of
+        # hdr.get(), but it always has a column named objctra so it
+        # never fails the try.  I use the try for the case of the FITS
+        # header...
+        objctra = hdr['objctra']
+        # ... and check for the case of a masked value in
+        # ccdproc.ImageFileCollection
+        if objctra is np.ma.masked:
+            return True
+    except:
+        return True
+    # Similar to above, the OBJECT keyword is not set in observations
+    # recorded by ioio.py, IoIO.py, etc., so we can use its *presence*
+    # to rule out non-Jupiter objects like stars and Mercury
+    # https://stackoverflow.com/questions/9573244/most-elegant-way-to-check-if-the-string-is-empty-in-python
+    if not object:
+        return False
+    # If we made it here, we have an unlabeled observation of
+    # something.  We can use the telescsope coordinates, which are
+    # generally good to a few arcminutes, but certainly good to 5
+    # degrees, and compare it to a basic ephemeris, to determine
+    # whether or not we are pointed at Jupiter
+    objctdec = hdr['objctdec']
+    T = Time(hdr['date-obs'], format='fits')
+    # These are MaxIm keywords
+    lat = Angle(hdr['sitelat'], unit=u.deg)
+    lon = Angle(hdr['sitelong'], unit=u.deg)
+    try:
+        alt = hdr['alt-obs']
+    except:
+        # MaxIm does not record the altitude in the FITS header even
+        # though it has access to it in the settings....  IoIO1 altitude
+        # should be safe default, since hopefully by the time there are
+        # more IoIOs, ACP will be running them all
+        alt = 1180 * u.m
+    else:
+        # ACP does record altitude, so use it
+        alt = alt * u.m
+    loc = EarthLocation(lat=lat, lon=lon, height=alt)
+    # Just in case we want to use another ephemeris system
+    with solar_system_ephemeris.set('builtin'):
+        jup = get_body('jupiter', T, loc)
+    ra = Angle(objctra, unit=u.hour)
+    dec = Angle(objctdec, unit=u.deg)
+    # Beware the default frame of SkyCoord is ICRS, which is relative
+    # to the solar system Barycenter and jup is returned in GCRS,
+    # which is relative ot the earth's center-of-mass.  separation()
+    # is not commutative when the two different frames are used, when
+    # one includes a solar system object (e.g. Jupiter), since the 3D
+    # position of the point of reference and one of the objects is
+    # considered.  Specifying the GCRS frame of jup for our telescope
+    # RA and DEC SkyCoord does no harm for non-solar system objects
+    # (distance is too far to matter) but does set the observing time,
+    # which also does us no harm in this case, since it happens to be
+    # the actual observing time.
+    this_pointing = SkyCoord(frame=jup.frame, ra=ra, dec=dec)
+    if this_pointing.separation(jup) < Angle(5, unit=u.deg):
+        return True
+    return False    
+
+##log.setLevel('DEBUG')
+##HDUL = fits.open('/data/io/IoIO/raw/2018-06-06/SII_off-band_010.fits')
+##hdr = HDUL[0].header
+###print(is_jupiter(hdr))
+###directory = '/data/io/IoIO/raw/2018-06-06'
+##directory = '/data/io/IoIO/raw/20190424/'
+##collection = ccdproc.ImageFileCollection(directory)
+##summary_table = collection.summary
+##for l in summary_table:
+##    print(l["file"], is_jupiter(l))
+
 class Background():
     """Class for measuring and providing CCD background as a function of time using [SII] on-band images"""
     def __init__(self,
@@ -386,9 +513,9 @@ class Background():
         return
 
     def worker_get_back_level(self, f):
-        HDUL = get_HDUList(f)
-        T = Time(HDUL[0].header['DATE-OBS'], format='fits')
-        b = IoIO.back_level(HDUL[0].data)
+        with fits.open(f) as HDUL:
+            T = Time(HDUL[0].header['DATE-OBS'], format='fits')
+            b = IoIO.back_level(HDUL[0].data)
         return (T.jd, b)
     
     def background(self, header):
@@ -535,6 +662,28 @@ def Rj_box_sum(ang_width, im, center, Rj_ap_side, imtype, header, row):
     row[key] = asum
     return key        
 
+def torus_box_sum(ang_width, im, center, ew, Rj_it, Rj_ot, Rj_h, imtype, header, row):
+    """Take aperture sums -- expressed as average pixel values -- for a square box Rj_ap_side Rj on a side.  Rj_ap_side = 0 whole image, Rj_ap_side > 0 box of that side and width in Rj centered on center of image, Rj_ap_side < 0 area outside of box.  ang_width is the angular diameter of Jupiter in arcsec"""
+    Rjpix = ang_width/2/plate_scale # arcsec / (arcsec/pix)
+    #D.say('Rj = ', Rj, ' pixels')
+    it = int(Rj_it * Rjpix)
+    ot = int(Rj_ot * Rjpix)
+    ho2 = int(Rj_h/2 * Rjpix) # half height
+    center = center.astype(int)
+    if ew == 'east':
+        asum = np.sum(im[center[0]-ot:center[0]-it,
+                         center[1]-ho2:center[1]+ho2])
+    elif ew == 'west':
+        asum = np.sum(im[center[0]+it:center[0]+ot,
+                         center[1]-ho2:center[1]+ho2])
+    else:
+        raise ValueError('Expect ew east or west')
+    asum /=(ot-it)*ho2*2
+    key = f'{imtype}_IPT_{ew}_{Rj_it}_{Rj_ot}_{Rj_h}'
+    header[key] = (asum, f'average {ew} IPT')
+    row[key] = asum
+    return key        
+
 def aperture_sum(im, center, y, x, r, imtype, header, row):
     """Take aperture sums of im.  y, x relative to center"""
     r2 = int(r/2)
@@ -563,353 +712,388 @@ def Rj_aperture_sum(ang_width, im, center, yRj, xRj, rpix, imtype, header, row):
     row[key] = asum
     return key        
 
-def reduce_pair(OnBand_HDUList_im_or_fname=None,
-                OffBand_HDUList_im_or_fname=None,
+def reduce_pair(OnBand_fname=None,
+                OffBand_fname=None,
                 back_obj=None,
                 default_ND_params=None,
                 NPole_ang=None,
                 ang_width=None,
                 outfname=None,
                 recalculate=False):
-    # Let these raise errors if our inputs have problems
-    OnBand_HDUList = get_HDUList(OnBand_HDUList_im_or_fname)
-    OffBand_HDUList = get_HDUList(OffBand_HDUList_im_or_fname)
-    log.debug(OnBand_HDUList.filename() + ' ' + OffBand_HDUList.filename())
-    # Check to see if we want to recalculate & overwrite.  Do this
-    # in general so we can be called at any directory level
-    # (though see messages for issues)
-    header = OnBand_HDUList[0].header
-    if outfname is None:
-        rawfname = OnBand_HDUList.filename()
-        if rawfname is None:
-            log.warning('On-band image was not associated with any filename and outfname is not specified, writing to current directory, ReducedCorObs.fits')
-            outfname = 'ReducedCorObs.fits'
-        elif not os.path.isabs(rawfname):
-            log.warning("Outfname not specified and on-band image fname was not an absolute path and outfname is not specified.  I can't deconstruct the raw to reduced path structure, writing to current directory, ReducedCorObs.fits")
-            outfname = 'ReducedCorObs.fits'
+     with fits.open(OnBand_fname) as OnBand_HDUList, \
+        fits.open(OffBand_fname) as OffBand_HDUList:
+        log.debug(OnBand_HDUList.filename() + ' ' + OffBand_HDUList.filename())
+        # Check to see if we want to recalculate & overwrite.  Do this
+        # in general so we can be called at any directory level
+        # (though see messages for issues)
+        header = OnBand_HDUList[0].header
+        if outfname is None:
+            rawfname = OnBand_HDUList.filename()
+            if rawfname is None:
+                log.warning('On-band image was not associated with any filename and outfname is not specified, writing to current directory, ReducedCorObs.fits')
+                outfname = 'ReducedCorObs.fits'
+            elif not os.path.isabs(rawfname):
+                log.warning("Outfname not specified and on-band image fname was not an absolute path and outfname is not specified.  I can't deconstruct the raw to reduced path structure, writing to current directory, ReducedCorObs.fits")
+                outfname = 'ReducedCorObs.fits'
+            else:
+                # Expect raw filenames are of the format
+                # /data/io/IoIO/raw/2018-05-20/Na_on-band_001.fits
+                # Create reduced of the format
+                # /data/io/IoIO/reduced/2018-05-20/Na_on-band_001r.fits
+                # --> Consider making the filename out of the line and on-off
+                # We should be in our normal directory structure
+                basename = os.path.basename(rawfname)
+                # Insert "r" so no collisions are possible
+                (fbase, ext) = os.path.splitext(basename)
+                redbasename = fbase + 'r' + ext
+                # --! This is an assumtion
+                rawdatepath = os.path.dirname(rawfname)
+                datedir = os.path.split(rawdatepath)[1]
+                red_data_root = os.path.join(data_root, 'reduced')
+                reddir = os.path.join(data_root, 'reduced', datedir)
+                outfname = os.path.join(reddir, redbasename)
+    
+        # Return if we have nothing to do.
+        if (not recalculate
+            and os.path.isfile(outfname)):
+            log.debug('skipping -- output file exists and recalculate=False: '
+                      + outfname)
+            return
+    
+        # Use IoIO.CorObsData to get basic properties like background level
+        # and center.
+        OnBandObsData = IoIO.CorObsData(OnBand_HDUList,
+                                        default_ND_params=default_ND_params,
+                                        edge_mask=reduce_edge_mask)
+        if OnBandObsData.quality < 5:
+            log.warning('Skipping: poor quality center determination for '
+                        + OnBand_HDUList.filename())
+            return
+        OffBandObsData = IoIO.CorObsData(OffBand_HDUList,
+                                         default_ND_params=default_ND_params,
+                                         edge_mask=reduce_edge_mask)
+        if OffBandObsData.quality < 5:
+            log.warning('Skipping: poor quality center determination for '
+                        + OffBand_HDUList.filename())
+            return
+        if back_obj is None:
+            rawfname = OnBand_HDUList.filename()
+            if rawfname is None:
+                back_obj = Background(OnBand_HDUList)
+            else:
+                back_obj = Background(os.path.dirname(rawfname))
+        bias_dark = back_obj.background(OnBandObsData.header)
+        on_im = OnBand_HDUList[0].data -  bias_dark
+        header['ONBSUB'] = (bias_dark,
+                             'on-band back (bias, dark) value subtracted')
+        header['DONBSUB'] = (bias_dark - OnBandObsData.back_level,
+                             'on-band back - ind. est. back via histogram')
+    
+        on_back = np.mean(on_im)
+        if on_back > background_light_threshold:
+            log.warning('On-band background level too high: ' + str(on_back)
+                        + ' for ' + OnBand_HDUList.filename())
+            return
+        bias_dark = back_obj.background(OffBandObsData.header)
+        off_im = OffBand_HDUList[0].data - bias_dark
+        #D.say('Off-band difference between bias+dark and first hist peak: ' ,
+        #      bias_dark - OffBandObsData.back_level)
+        off_back = np.mean(off_im)
+        if off_back > background_light_threshold:
+            log.warning('Off-band background level too high: ' + str(off_back)
+                        + ' for ' + OffBand_HDUList.filename())
+            return
+        if abs(on_back - off_back) > background_light_threshold:
+            log.warning('Off-band minus off-band background level too high for '
+                        + OnBand_HDUList.filename() + ' '
+                        + OffBand_HDUList.filename())
+            return
+        header['OFFBSUB'] = (bias_dark,
+                             'off-band back (bias, dark) value subtracted')
+        header['DOFFBSUB'] = (bias_dark - OffBandObsData.back_level,
+                             'off-band back - ind. est. back via histogram')
+        # --> Worry about flat-fielding later
+        # --> Make all these things FITS keywords
+        # Get ready to shift off-band image to match on-band image
+        # --> consider making a better center finder with correlation with
+        # 90 degree flip method that Carl suggested
+        on_center = OnBandObsData.obj_center
+        off_center = OffBandObsData.obj_center
+        if OnBandObsData.header['OBJ2NDC'] > max_ND_dist:
+            log.error('on-band image: obj too far off center of ND filter: '
+                      + str(OnBandObsData.header['OBJ2NDC']))
+            return
+        if OffBandObsData.header['OBJ2NDC'] > max_ND_dist:
+            log.error('off-band image: obj too far off center of ND filter'
+                      + str(OffBandObsData.header['OBJ2NDC']))
+            return
+        shift_off = on_center - off_center
+        d_on_off = np.linalg.norm(shift_off)
+        OnBandObsData.header['D_ON-OFF'] = (d_on_off, 'dist in pix between on and off centers')
+        if d_on_off > 5:
+            log.warning('On- and off-band image centers are > 5 pixels apart')
+                
+        # on_jup and off_jup are the average brightness over 1 pixel.
+        # Call that a pixel-averaged surface brightness.
+        # --> Tried fancy surf_bright method and that didn't seem to
+        # help Na over-subtraction problem  
+        #surf_bright(on_im, on_center)
+        #surf_bright(off_im, off_center)
+    
+        # Wed Oct 31 13:19:25 2018 EDT  jpmorgen@snipe
+        # --> Email discussion of yesterday and today suggests better
+        # on/off calibration is done using ratio of identically exposed
+        # on-and off-band images of sources away from the ND filter.  I
+        # think I have stars that can oblige, maybe even day sky.
+        on_center = np.round(on_center).astype(int)
+        off_center = np.round(off_center).astype(int)
+        on_jup = np.average(on_im[on_center[0]-5:on_center[0]+5,
+                                  on_center[1]-5:on_center[1]+5])
+        off_jup = np.average(off_im[off_center[0]-5:off_center[0]+5,
+                                    off_center[1]-5:off_center[1]+5])
+        # See if I can increase this to get better on-off for the
+        # early 2019 data that were badly out of focus
+        # No, that seems to cause more problems
+        #on_jup = np.average(on_im[on_center[0]-25:on_center[0]+25,
+        #                          on_center[1]-25:on_center[1]+25])
+        #off_jup = np.average(off_im[off_center[0]-25:off_center[0]+25,
+        #                            off_center[1]-25:off_center[1]+25])
+        off_im = ndimage.interpolation.shift(off_im, shift_off)
+        # Note transpose for FITS/FORTRAN from C world
+        header['OFFS0'] = (shift_off[1], 'off-band axis 0 shift to align w/on-band')
+        header['OFFS1'] = (shift_off[0], 'off-band axis 1 shift to align w/on-band')
+        # Beware new filter name SII_on
+        if 'SII' in OnBandObsData.header['FILTER']:
+            # But we can still have the line look right in our table
+            line = '[SII]'
+            eq_width = SII_eq_width
+            on_loss = SII_on_loss
+        elif 'Na' in OnBandObsData.header['FILTER']:
+            line = 'Na'
+            eq_width = Na_eq_width
+            on_loss = Na_on_loss
         else:
-            # Expect raw filenames are of the format
-            # /data/io/IoIO/raw/2018-05-20/Na_on-band_001.fits
-            # Create reduced of the format
-            # /data/io/IoIO/reduced/2018-05-20/Na_on-band_001r.fits
-            # --> Consider making the filename out of the line and on-off
-            # We should be in our normal directory structure
-            basename = os.path.basename(rawfname)
-            # Insert "r" so no collisions are possible
-            (fbase, ext) = os.path.splitext(basename)
-            redbasename = fbase + 'r' + ext
-            # --! This is an assumtion
-            rawdatepath = os.path.dirname(rawfname)
-            datedir = os.path.split(rawdatepath)[1]
-            red_data_root = os.path.join(data_root, 'reduced')
-            reddir = os.path.join(data_root, 'reduced', datedir)
-            outfname = os.path.join(reddir, redbasename)
-
-    # Return if we have nothing to do.
-    if (not recalculate
-        and os.path.isfile(outfname)):
-        log.debug('skipping -- output file exists and recalculate=False: '
-                  + outfname)
-        return
-
-    # Use IoIO.CorObsData to get basic properties like background level
-    # and center.
-    OnBandObsData = IoIO.CorObsData(OnBand_HDUList,
-                                    default_ND_params=default_ND_params,
-                                    edge_mask=reduce_edge_mask)
-    if OnBandObsData.quality < 5:
-        log.warning('Skipping: poor quality center determination for '
-                    + OnBand_HDUList.filename())
-        return
-    OffBandObsData = IoIO.CorObsData(OffBand_HDUList,
-                                     default_ND_params=default_ND_params,
-                                     edge_mask=reduce_edge_mask)
-    if OffBandObsData.quality < 5:
-        log.warning('Skipping: poor quality center determination for '
-                    + OffBand_HDUList.filename())
-        return
-    if back_obj is None:
-        rawfname = OnBand_HDUList.filename()
-        if rawfname is None:
-            back_obj = Background(OnBand_HDUList)
+            raise ValueError('Improper filter ' +
+                             OnBandObsData.header['FILTER'])
+        header['ON_LOSS'] \
+            = (on_loss, 'on-band scat. light loss for discrete sources')
+        off_im[OffBandObsData.ND_coords] = 0
+        # X--> Temporarily fix offscale and add MOFFSCL to header
+        #moffscale = on_jup/off_jup
+        #header['MOFFSCL'] = (moffscale, 'measured on/off Jupiter intensity')
+        #if line == '[SII]':
+        #    offscale = 1.1
+        #elif line == 'Na':
+        #    offscale = 1.18
+        #offscale = moffscale
+        offscale = on_jup/off_jup
+        off_im = off_im * offscale * on_loss
+        scat_sub_im = on_im - off_im
+        ## DEBUGGING
+        #bad_idx = np.where(on_im > 100)
+        #on_im[bad_idx] = 0
+        #impl = plt.imshow(on_im, origin='lower',
+        #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
+        #plt.show()
+        #bad_idx = np.where(off_im > 100)
+        #off_im[bad_idx] = 0
+        #impl = plt.imshow(on_im, origin='lower',
+        #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
+        #plt.show()
+        # Get an on-band ObsData that has the ND_coords inside the edge of
+        # the ND filter and use that to define the good ND filter pixels
+        O = IoIO.CorObsData(OnBand_HDUList, default_ND_params=default_ND_params)
+        good_ndpix = scat_sub_im[O.ND_coords]
+        # Blank out our ND filter with the reduce_edge_mask
+        scat_sub_im[OnBandObsData.ND_coords] = 0
+        # Poke back in good pixels
+        scat_sub_im[O.ND_coords] = good_ndpix
+        header['OFFFNAME'] = (OffBand_HDUList.filename(),
+                              'off-band file')
+        header['OFFSCALE'] = (offscale, 'scale factor applied to off-band im')
+        # Establish calibration in Rayleighs.  Brown & Schneider 1981
+        # Jupiter is 5.6 MR/A
+        # --> This is between the Na lines, so it is not quite right.  The
+        # Na lines will knock it down by 10-20%
+    
+        # Tue Nov 13 11:30:03 2018 EST  jpmorgen@snipe
+    
+        # Carl's calculations in an email of yesterday with code delivered
+        # last week (~/pro/IoIO/Ioio_flux_cal.pro) incorporate the
+        # spectra, albedo, etc. suggest that for Na, the effective
+        # continuum is 52.6 MR to 54.0 MR.  Since the bandpass is 11.22,
+        # the calculations below end up using 62.832E6 or 1.17 too high.
+        MR = 5.6E6 * eq_width
+        ADU2R = on_jup * 1000 / MR
+        # 1000 is ND filter
+        # Tue Nov 13 11:38:04 2018 EST  jpmorgen@snipe
+        # See notes of today in ~/IoIO_reduction.notebk which measure ND
+        # filter to be more like 734 instead of 1000
+        scat_sub_im = scat_sub_im / ADU2R
+        header['BUNIT'] = ('rayleighs', 'pixel unit')
+        header['ADU2R'] = (ADU2R, 'conversion factor from ADU to R')
+        # --> will want to check this earlier for proper pairing of
+        # on-off band images
+        pier_side = OnBandObsData.header.get('PIERSIDE')
+        if pier_side is not None and pier_side == 'EAST':
+            gem_flip = 180
         else:
-            back_obj = Background(os.path.dirname(rawfname))
-    bias_dark = back_obj.background(OnBandObsData.header)
-    on_im = OnBand_HDUList[0].data -  bias_dark
-    header['ONBSUB'] = (bias_dark,
-                         'on-band back (bias, dark) value subtracted')
-    header['DONBSUB'] = (bias_dark - OnBandObsData.back_level,
-                         'on-band back - ind. est. back via histogram')
-
-    on_back = np.mean(on_im)
-    if on_back > background_light_threshold:
-        log.warning('On-band background level too high: ' + str(on_back)
-                    + ' for ' + OnBand_HDUList.filename())
-        return
-    bias_dark = back_obj.background(OffBandObsData.header)
-    off_im = OffBand_HDUList[0].data - bias_dark
-    #D.say('Off-band difference between bias+dark and first hist peak: ' ,
-    #      bias_dark - OffBandObsData.back_level)
-    off_back = np.mean(off_im)
-    if off_back > background_light_threshold:
-        log.warning('Off-band background level too high: ' + str(off_back)
-                    + ' for ' + OffBand_HDUList.filename())
-        return
-    if abs(on_back - off_back) > background_light_threshold:
-        log.warning('Off-band minus off-band background level too high for '
-                    + OnBand_HDUList.filename() + ' '
-                    + OffBand_HDUList.filename())
-        return
-    header['OFFBSUB'] = (bias_dark,
-                         'off-band back (bias, dark) value subtracted')
-    header['DOFFBSUB'] = (bias_dark - OffBandObsData.back_level,
-                         'off-band back - ind. est. back via histogram')
-    # --> Worry about flat-fielding later
-    # --> Make all these things FITS keywords
-    # Get ready to shift off-band image to match on-band image
-    # --> consider making a better center finder with correlation with
-    # 90 degree flip method that Carl suggested
-    on_center = OnBandObsData.obj_center
-    off_center = OffBandObsData.obj_center
-    if OnBandObsData.header['OBJ2NDC'] > max_ND_dist:
-        log.error('on-band image: obj too far off center of ND filter')
-        return
-    if OffBandObsData.header['OBJ2NDC'] > max_ND_dist:
-        log.error('off-band image: obj too far off center of ND filter')
-        return
-    shift_off = on_center - off_center
-    d_on_off = np.linalg.norm(shift_off)
-    OnBandObsData.header['D_ON-OFF'] = (d_on_off, 'dist in pix between on and off centers')
-    if d_on_off > 5:
-        log.warning('On- and off-band image centers are > 5 pixels apart')
+            gem_flip = 0
             
-    # on_jup and off_jup are the average brightness over 1 pixel.
-    # Call that a pixel-averaged surface brightness.
-    # --> Tried fancy surf_bright method and that didn't seem to
-    # help Na over-subtraction problem  
-    #surf_bright(on_im, on_center)
-    #surf_bright(off_im, off_center)
-
-    # Wed Oct 31 13:19:25 2018 EDT  jpmorgen@snipe
-    # --> Email discussion of yesterday and today suggests better
-    # on/off calibration is done using ratio of identically exposed
-    # on-and off-band images of sources away from the ND filter.  I
-    # think I have stars that can oblige, maybe even day sky.
-    on_center = np.round(on_center).astype(int)
-    off_center = np.round(off_center).astype(int)
-    on_jup = np.average(on_im[on_center[0]-5:on_center[0]+5,
-                              on_center[1]-5:on_center[1]+5])
-    off_jup = np.average(off_im[off_center[0]-5:off_center[0]+5,
-                                off_center[1]-5:off_center[1]+5])
-    off_im = ndimage.interpolation.shift(off_im, shift_off)
-    # Note transpose for FITS/FORTRAN from C world
-    header['OFFS0'] = (shift_off[1], 'off-band axis 0 shift to align w/on-band')
-    header['OFFS1'] = (shift_off[0], 'off-band axis 1 shift to align w/on-band')
-    if '[SII]' in OnBandObsData.header['FILTER']:
-        line = '[SII]'
-        eq_width = SII_eq_width
-        on_loss = SII_on_loss
-    elif 'Na' in OnBandObsData.header['FILTER']:
-        line = 'Na'
-        eq_width = Na_eq_width
-        on_loss = Na_on_loss
-    else:
-        raise ValueError('Improper filter ' +
-                         OnBandObsData.header['FILTER'])
-    header['ON_LOSS'] \
-        = (on_loss, 'on-band scat. light loss for discrete sources')
-    off_im[OffBandObsData.ND_coords] = 0
-    offscale = on_jup/off_jup
-    off_im = off_im * offscale * on_loss
-    scat_sub_im = on_im - off_im
-    ## DEBUGGING
-    #bad_idx = np.where(on_im > 100)
-    #on_im[bad_idx] = 0
-    #impl = plt.imshow(on_im, origin='lower',
-    #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
-    #plt.show()
-    #bad_idx = np.where(off_im > 100)
-    #off_im[bad_idx] = 0
-    #impl = plt.imshow(on_im, origin='lower',
-    #                  cmap=plt.cm.gray, filternorm=0, interpolation='none')
-    #plt.show()
-    # Get an on-band ObsData that has the ND_coords inside the edge of
-    # the ND filter and use that to define the good ND filter pixels
-    O = IoIO.CorObsData(OnBand_HDUList, default_ND_params=default_ND_params)
-    good_ndpix = scat_sub_im[O.ND_coords]
-    # Blank out our ND filter with the reduce_edge_mask
-    scat_sub_im[OnBandObsData.ND_coords] = 0
-    # Poke back in good pixels
-    scat_sub_im[O.ND_coords] = good_ndpix
-    header['OFFFNAME'] = (OffBand_HDUList.filename(),
-                          'off-band file')
-    header['OFFSCALE'] = (offscale, 'scale factor applied to off-band im')
-    # Establish calibration in Rayleighs.  Brown & Schneider 1981
-    # Jupiter is 5.6 MR/A
-    # --> This is between the Na lines, so it is not quite right.  The
-    # Na lines will knock it down by 10-20%
-
-    # Tue Nov 13 11:30:03 2018 EST  jpmorgen@snipe
-
-    # Carl's calculations in an email of yesterday with code delivered
-    # last week (~/pro/IoIO/Ioio_flux_cal.pro) incorporate the
-    # spectra, albedo, etc. suggest that for Na, the effective
-    # continuum is 52.6 MR to 54.0 MR.  Since the bandpass is 11.22,
-    # the calculations below end up using 62.832E6 or 1.17 too high.
-    MR = 5.6E6 * eq_width
-    ADU2R = on_jup * 1000 / MR
-    # 1000 is ND filter
-    # Tue Nov 13 11:38:04 2018 EST  jpmorgen@snipe
-    # See notes of today in ~/IoIO_reduction.notebk which measure ND
-    # filter to be more like 734 instead of 1000
-    scat_sub_im = scat_sub_im / ADU2R
-    header['BUNIT'] = ('rayleighs', 'pixel unit')
-    header['ADU2R'] = (ADU2R, 'conversion factor from ADU to R')
-    # --> will want to check this earlier for proper pairing of
-    # on-off band images
-    pier_side = OnBandObsData.header.get('PIERSIDE')
-    if pier_side is not None and pier_side == 'EAST':
-        gem_flip = 180
-    else:
-        gem_flip = 0
+        # --> consider just storing this in the header and letting
+        # --> subsequent reduction & analysis do things in native
+        # --> coordinates
         
-    # --> consider just storing this in the header and letting
-    # --> subsequent reduction & analysis do things in native
-    # --> coordinates
+        # Calculate NPole_ang if we weren't passed it, but store it in
+        # property so it can be used for the next file in this day.
+        # Also truncate to the integer so that astroquery caching can
+        # work --> might want to loosen this for nth degree
+        # calculations when I am ready for those
+        if NPole_ang is None:
+            # V09 is the Moka observatory at Benson, which looks like
+            # the San Pedro Valley observatory
+            T = Time(header['DATE-OBS'], format='fits')
+            # --> eventually I might want to be general with the object
+            jup = Horizons(id=599,
+                           location='V09',
+                           epochs=np.round(T.jd),
+                           id_type='majorbody')
+            NPole_ang = jup.ephemerides()['NPole_ang'].quantity.value[0]
+            ang_width = jup.ephemerides()['ang_width'].quantity.value[0]
+        # Save off original center of image for NDparams update, below
+        o_center = np.asarray(scat_sub_im.shape)/2
+        on_shift = o_center - OnBandObsData.obj_center
+        aangle = get_astrometry_angle(header['DATE-OBS'])
+        on_angle = aangle - NPole_ang + gem_flip
+        # interpolation.rotate rotates CW for positive angle
+        scat_sub_im = ndimage.interpolation.shift(scat_sub_im, on_shift)
+        scat_sub_im = ndimage.interpolation.rotate(scat_sub_im, on_angle)
     
-    # Calculate NPole_ang if we weren't passed it, but store it in
-    # property so it can be used for the next file in this day.
-    # Also truncate to the integer so that astroquery caching can
-    # work --> might want to loosen this for nth degree
-    # calculations when I am ready for those
-    if NPole_ang is None:
-        # V09 is the Moca observatory at Benson, which looks like
-        # the San Pedro Valley observatory
-        T = Time(header['DATE-OBS'], format='fits')
-        # --> eventually I might want to be general with the object
-        jup = Horizons(id=599,
-                       location='V09',
-                       epochs=np.round(T.jd),
-                       id_type='majorbody')
-        NPole_ang = jup.ephemerides()['NPole_ang'].quantity.value[0]
-        ang_width = jup.ephemerides()['ang_width'].quantity.value[0]
-    # Save off original center of image for NDparams update, below
-    o_center = np.asarray(scat_sub_im.shape)/2
-    on_shift = o_center - OnBandObsData.obj_center
-    aangle = get_astrometry_angle(header['DATE-OBS'])
-    on_angle = aangle - NPole_ang + gem_flip
-    # interpolation.rotate rotates CW for positive angle
-    scat_sub_im = ndimage.interpolation.shift(scat_sub_im, on_shift)
-    scat_sub_im = ndimage.interpolation.rotate(scat_sub_im, on_angle)
-
-    # Update centers and NDparams
-    center = np.asarray(scat_sub_im.shape)/2
-    header['OBJ_CR0'] = (center[1], 'Object center X')
-    header['OBJ_CR1'] = (center[0], 'Object center Y')
-    header['DES_CR0'] = (center[1], 'Desired center X')
-    header['DES_CR1'] = (center[0], 'Desired center Y')
-    # Tried to do this in the general case but I got confused by
-    # the geometry or a rolling cube.  Plus I am not set up to
-    # deal with the ND filter in the horizontal position
-    on_angle -= gem_flip
-    ron_angle = np.radians(on_angle)
-    # Offsets
-    ND01 = header['NDPAR01']
-    ND11 = header['NDPAR11']
-    # Note on_shift is y,x
-    xshift = np.dot(on_shift, np.asarray(((0,1))))
-    ND01 += xshift
-    ND11 += xshift
-    ND01 = (o_center[0] * abs(np.sin(ron_angle))
-            + ND01 * np.cos(ron_angle))
-    ND11 = (o_center[0] * abs(np.sin(ron_angle))
-            + ND11 * np.cos(ron_angle))
-    header['NDPAR01'] = ND01
-    header['NDPAR11'] = ND11
-    # Angles
-    ND00 = header['NDPAR00']
-    ND10 = header['NDPAR10']
+        # Update centers and NDparams
+        center = np.asarray(scat_sub_im.shape)/2
+        header['OBJ_CR0'] = (center[1], 'Object center X')
+        header['OBJ_CR1'] = (center[0], 'Object center Y')
+        header['DES_CR0'] = (center[1], 'Desired center X')
+        header['DES_CR1'] = (center[0], 'Desired center Y')
+        # Tried to do this in the general case but I got confused by
+        # the geometry or a rolling cube.  Plus I am not set up to
+        # deal with the ND filter in the horizontal position
+        on_angle -= gem_flip
+        ron_angle = np.radians(on_angle)
+        # Offsets
+        ND01 = header['NDPAR01']
+        ND11 = header['NDPAR11']
+        # Note on_shift is y,x
+        xshift = np.dot(on_shift, np.asarray(((0,1))))
+        ND01 += xshift
+        ND11 += xshift
+        ND01 = (o_center[0] * abs(np.sin(ron_angle))
+                + ND01 * np.cos(ron_angle))
+        ND11 = (o_center[0] * abs(np.sin(ron_angle))
+                + ND11 * np.cos(ron_angle))
+        header['NDPAR01'] = ND01
+        header['NDPAR11'] = ND11
+        # Angles
+        ND00 = header['NDPAR00']
+        ND10 = header['NDPAR10']
+        
+        # Tricky!  Swapped image so north is up
+        header['NDPAR00'] = -np.tan(np.arctan(ND00) + ron_angle)
+        header['NDPAR10'] = -np.tan(np.arctan(ND10) + ron_angle)
     
-    # Tricky!  Swapped image so north is up
-    header['NDPAR00'] = -np.tan(np.arctan(ND00) + ron_angle)
-    header['NDPAR10'] = -np.tan(np.arctan(ND10) + ron_angle)
+        # Coronagraph flips images N/S.  Transpose alert
+        scat_sub_im =np.flipud(scat_sub_im)
+    
+        # Get ready to write some output to the reduced directory
+        if not os.path.exists(red_data_root):
+            os.mkdir(red_data_root)
+        if not os.path.exists(reddir):
+            os.mkdir(reddir)
+    
+        # Do some quick-and-dirty aperture sums
+        # --> improve on this
+        #fieldnames = ['TMID', 'ANGDIAM', 'EXPTIME', 'FNAME', 'LINE', 'ONBSUB', 'OFFBSUB', 'DONBSUB', 'DOFFBSUB']
+        this_ap_sum_fname = os.path.join(reddir, ap_sum_fname)
+        tmid = (get_tmid(header)).fits
+        header['TMID'] = (tmid, 'Midpoint of observation')
+        header['ANGDIAM'] = (ang_width, 'Angular diameter of Jupiter (arcsec)')
+        row = {'FNAME': outfname,
+               'LINE': line,
+               'TMID': tmid,
+               'EXPTIME': header['EXPTIME'],
+               'ONBSUB': header['ONBSUB'],
+               'DONBSUB': header['DONBSUB'],
+               'OFFBSUB': header['OFFBSUB'],
+               'DOFFBSUB': header['DOFFBSUB'],
+               'OFFSCALE': header['OFFSCALE'],
+               'ADU2R': ADU2R,
+               'ANGDIAM': ang_width}
+        fieldnames = list(row.keys())
+        # Remember to shift, rotate, and calibrate On and Off images
+        for imtype in ['AP', 'On', 'Off']:
+            if imtype == 'AP':
+                im = scat_sub_im
+            elif imtype == 'On':
+                on_im = ndimage.interpolation.shift(on_im, on_shift)
+                on_im = ndimage.interpolation.rotate(on_im, on_angle)
+                im = on_im / ADU2R
+            elif imtype == 'Off':
+                off_im = ndimage.interpolation.shift(off_im, on_shift)
+                off_im = ndimage.interpolation.rotate(off_im, on_angle)
+                im = off_im / ADU2R
+            else:
+                raise ValueError('Unknown imtype ' + imtype)
+            center = np.asarray(im.shape)/2
+            #for ap_height in [0, 1200, 600, 300, -300, -600, -1200]:
+            #    key = strip_sum(im, center, ap_height, imtype, header, row)
+            #    fieldnames.append(key)
+            for ap_box in [0, 150, 140, 130, 120, 110, 100, 90, 80, 70, 60, 50, 40, 30, 15, 10, 5]:
+                key = Rj_box_sum(ang_width, im, center, ap_box, imtype, header, row)
+                fieldnames.append(key)
+            # --> Add torus columns
+            for ew in ['east', 'west']:
+                for ot in [8, 7, 6]:
+                    for it in [1, 2, 3, 4, 5]:
+                        for h in [1, 2, 3, 4, 5]:
+                            key = torus_box_sum(ang_width, im,
+                                                center, ew,
+                                                it, ot, h,
+                                                imtype, header, row)
+                            fieldnames.append(key)
+                
 
-    # Coronagraph flips images N/S.  Transpose alert
-    scat_sub_im =np.flipud(scat_sub_im)
 
-    # Get ready to write some output to the reduced directory
-    if not os.path.exists(red_data_root):
-        os.mkdir(red_data_root)
-    if not os.path.exists(reddir):
-        os.mkdir(reddir)
 
-    # Do some quick-and-dirty aperture sums
-    # --> improve on this
-    #fieldnames = ['TMID', 'ANGDIAM', 'EXPTIME', 'FNAME', 'LINE', 'ONBSUB', 'OFFBSUB', 'DONBSUB', 'DOFFBSUB']
-    this_ap_sum_fname = os.path.join(reddir, ap_sum_fname)
-    tmid = (get_tmid(header)).fits
-    header['TMID'] = (tmid, 'Midpoint of observation')
-    header['ANGDIAM'] = (ang_width, 'Angular diameter of Jupiter (arcsec)')
-    row = {'FNAME': outfname,
-           'LINE': line,
-           'TMID': tmid,
-           'EXPTIME': header['EXPTIME'],
-           'ONBSUB': header['ONBSUB'],
-           'DONBSUB': header['DONBSUB'],
-           'OFFBSUB': header['OFFBSUB'],
-           'DOFFBSUB': header['DOFFBSUB'],
-           'OFFSCALE': header['OFFSCALE'],
-           'ADU2R': ADU2R,
-           'ANGDIAM': ang_width}
-    fieldnames = list(row.keys())
-    # Remember to shift, rotate, and calibrate On and Off images
-    for imtype in ['AP', 'On', 'Off']:
-        if imtype == 'AP':
-            im = scat_sub_im
-        elif imtype == 'On':
-            on_im = ndimage.interpolation.shift(on_im, on_shift)
-            on_im = ndimage.interpolation.rotate(on_im, on_angle)
-            im = on_im / ADU2R
-        elif imtype == 'Off':
-            off_im = ndimage.interpolation.shift(off_im, on_shift)
-            off_im = ndimage.interpolation.rotate(off_im, on_angle)
-            im = off_im / ADU2R
-        else:
-            raise ValueError('Unknown imtype ' + imtype)
-        center = np.asarray(im.shape)/2
-        #for ap_height in [0, 1200, 600, 300, -300, -600, -1200]:
-        #    key = strip_sum(im, center, ap_height, imtype, header, row)
-        #    fieldnames.append(key)
-        for ap_box in [0, 150, 140, 130, 120, 110, 100, 90, 80, 70, 60, 50, 40, 30, 15, 10, 5]:
-            key = Rj_box_sum(ang_width, im, center, ap_box, imtype, header, row)
-            fieldnames.append(key)
-        #for y in [600, 150, 0, -150, -600]:
-        #    for x in [-600, -500, -400, -300, -200, 200, 300, 400, 500, 600]:
-        #        key = aperture_sum(im, center, y, x, 60, imtype, header, row)
-        #        fieldnames.append(key)
-        #for y in [30, 20, 10, 5, 0, -5, -10, -20, -30]:
-        #    for x in [30, 20, 10, 5, 0, -5, -10, -20, -30]:
-        #        key = Rj_aperture_sum(ang_width, im, center, y, x, 60, imtype, header, row)
-        #        fieldnames.append(key)
-    rdate = (Time.now()).fits
-    header['RDATE'] = (rdate, 'UT time of reduction')
-    header['RVERSION'] = (rversion, 'Reduction version')
-    row['RDATE'] = rdate
-    row['RVERSION'] = rversion
-    fieldnames.extend(['RDATE', 'RVERSION'])
-    if not os.path.exists(this_ap_sum_fname):
-        with open(this_ap_sum_fname, 'w', newline='') as csvfile:
+
+
+
+            #for y in [600, 150, 0, -150, -600]:
+            #    for x in [-600, -500, -400, -300, -200, 200, 300, 400, 500, 600]:
+            #        key = aperture_sum(im, center, y, x, 60, imtype, header, row)
+            #        fieldnames.append(key)
+            #for y in [30, 20, 10, 5, 0, -5, -10, -20, -30]:
+            #    for x in [30, 20, 10, 5, 0, -5, -10, -20, -30]:
+            #        key = Rj_aperture_sum(ang_width, im, center, y, x, 60, imtype, header, row)
+            #        fieldnames.append(key)
+        rdate = (Time.now()).fits
+        header['RDATE'] = (rdate, 'UT time of reduction')
+        header['RVERSION'] = (rversion, 'Reduction version')
+        row['RDATE'] = rdate
+        row['RVERSION'] = rversion
+        fieldnames.extend(['RDATE', 'RVERSION'])
+        if not os.path.exists(this_ap_sum_fname):
+            with open(this_ap_sum_fname, 'w', newline='') as csvfile:
+                csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
+                                       quoting=csv.QUOTE_NONNUMERIC)
+                csvdw.writeheader()
+        with open(this_ap_sum_fname, 'a', newline='') as csvfile:
             csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
                                    quoting=csv.QUOTE_NONNUMERIC)
-            csvdw.writeheader()
-    with open(this_ap_sum_fname, 'a', newline='') as csvfile:
-        csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
-                               quoting=csv.QUOTE_NONNUMERIC)
-        csvdw.writerow(row)
-
-    # Get ready to write
-    OnBand_HDUList[0].data = scat_sub_im
-    OnBand_HDUList.writeto(outfname, overwrite=recalculate)
+            csvdw.writerow(row)
+    
+        # Get ready to write
+        OnBand_HDUList[0].data = scat_sub_im
+        OnBand_HDUList.writeto(outfname, overwrite=recalculate)
 
 class ReduceDir():
     def __init__(self,
@@ -918,6 +1102,7 @@ class ReduceDir():
                  recalculate=False,
                  back_obj=None,
                  default_ND_params=None,
+                 # --> I may not be able to pass ephemeris this way
                  NPole_ang=None,
                  ang_width=None,
                  num_processes=None,
@@ -955,6 +1140,8 @@ class ReduceDir():
         self._default_ND_params \
             = get_default_ND_params(self.directory, self.collection)
         if self._default_ND_params is None:
+            # --> I am going to eventually want to make a function out
+            # --> of run_level_default_ND_params
             log.warning('No (good) flats found in directory '
                         + self.directory + ' using run_level_default_ND_params')
             self._default_ND_params = IoIO.run_level_default_ND_params
@@ -989,11 +1176,12 @@ class ReduceDir():
         except Exception as e:
             log.error(str(e) + ' skipping ' + self.directory)
             return
-
         self.default_ND_params
 
         # Create a list of on-band off-band pairs that are closest in
         # time for each of our science lines
+        # --> for 2019, use exposure time > 20s to make sure the short
+        # exposures don't mess up proper 300s/60s on/off pairs
         line_names = ['[SII]', 'Na']
         on_off_pairs = []
         for line in line_names:
@@ -1003,14 +1191,16 @@ class ReduceDir():
                       if (l['filter'] == on_filt
                           and l['imagetyp'].lower() == 'light'
                           and l['xbinning'] == 1
-                          and l['ybinning'] == 1)]
+                          and l['ybinning'] == 1
+                          and l['exptime'] > 10)]
             if len(on_idx) == 0:
                 break
             off_idx = [i for i, l in enumerate(summary_table)
                        if (l['filter'] == off_filt
                            and l['imagetyp'].lower() == 'light'
                            and l['xbinning'] == 1
-                           and l['ybinning'] == 1)]
+                           and l['ybinning'] == 1
+                           and l['exptime'] > 10)]
 
             if len(off_idx) == 0:
                 break
@@ -1037,14 +1227,14 @@ class ReduceDir():
             # properly formatted date for astroquery.  Use UT00:00,
             # since astroquery caches and repeat querys for the whole
             # day will therefore benefit
-            HDUL = get_HDUList(on_off_pairs[0][0])
-            T = Time(HDUL[0].header['DATE-OBS'], format='fits')
-            jup = Horizons(id=599,
-                           location='V09',
-                           epochs=np.round(T.jd),
-                           id_type='majorbody')
-            self.NPole_ang = jup.ephemerides()['NPole_ang'].quantity.value[0]
-            self.ang_width = jup.ephemerides()['ang_width'].quantity.value[0]
+            with fits.open(on_off_pairs[0][0]) as HDUL:
+                T = Time(HDUL[0].header['DATE-OBS'], format='fits')
+                jup = Horizons(id=599,
+                               location='V09',
+                               epochs=np.round(T.jd),
+                               id_type='majorbody')
+                self.NPole_ang = jup.ephemerides()['NPole_ang'].quantity.value[0]
+                self.ang_width = jup.ephemerides()['ang_width'].quantity.value[0]
         
         # Get our summary file(s) ready.
         this_ap_sum_fname = os.path.join(reduced_dir, ap_sum_fname)
@@ -1076,30 +1266,95 @@ class ReduceDir():
                 log.error(str(e) + ' skipping movie for ' + self.directory)
         return
 
-def get_dirs(directory, filt_list=None):
-    """get sorted list of subdirectories excluding dirs containing strings in filt_list"""
+def get_dirs(directory,
+             filt_list=None,
+             start=None,
+             stop=None):
+    """Returns list of date-formated subdirectories sorted by date
+    Handles two cases of date formatting YYYYMMDD (ACP) YYYY-MM-DD (MaxIm)
+
+    Parameters
+    ----------
+    directory : string
+        Directory in which to look for subdirectories
+    filt_list : list of strings 
+        Used to filter out bad directories (e.g. ["cloudy", "bad"]
+        will omit listing of, e.g., 2018-02-02_cloudy and
+        2018-02-03_bad_focus) 
+    start : string YYYY-MM-DD
+        Start date (inclusive).  Default = first date
+    stop : string YYYY-MM-DD
+        Stop date (inclusive).  Default = last date
+    """
     assert os.path.isdir(directory)
-    return [os.path.join(directory, d) for d in sorted(os.listdir(directory))
+    # Filter out bad directories first
+    dirs = [d for d in os.listdir(directory)
             if (os.path.isdir(os.path.join(directory, d))
                 and (filt_list is None
                      or not np.any([filt in d for filt in filt_list])))]
-    
+    # Prepare to pythonically loop through date formats, trying each on 
+    date_formats = ["%Y-%m-%d", "%Y%m%d"]
+    ddlist = []
+    for thisdir in dirs:
+        d = thisdir
+        dirfail = True
+        for idf in date_formats:
+            # The date formats are two characters shorter than the
+            # length of the strings I am looking for (%Y is two
+            # shorter than YYYY, but %M is the same as MM, etc.)
+            d = d[0:min(len(d),len(idf)+2)]
+            try:
+                thisdate = datetime.datetime.strptime(d, idf).date()
+                ddlist.append((thisdir, thisdate))
+                dirfail = False
+            except:
+                pass
+        if dirfail:
+            log.debug('Skipping non-date formatted directory: ' + thisdir)
+    # Thanks to https://stackoverflow.com/questions/9376384/sort-a-list-of-tuples-depending-on-two-elements
+    ddsorted = sorted(ddlist, key=lambda e:e[1])
+    if start is None:
+        start = ddsorted[0][1]
+    else:
+        start = datetime.datetime.strptime(start, "%Y-%m-%d").date()
+    if stop is None:
+        stop = ddsorted[-1][1]
+    else:
+        stop = datetime.datetime.strptime(stop, "%Y-%m-%d").date()
+    ddsorted = [dd for dd in ddsorted
+                if start <= dd[1] and dd[1] <= stop]
+    dirs, dates = zip(*ddsorted)
+    return [os.path.join(directory, d) for d in dirs]
 
+#print(get_dirs('/data/io/IoIO/raw', start='2018-01-01', stop='2019-01-01'))
+                
 def reduce_cmd(args):
     if args.tree is not None:
         top = args.directory
         if top is None:
             top = os.path.join(data_root, 'raw')
         persistent_default_ND_params = None
-        for directory in reversed(get_dirs(top)):
+        # --> Improve this to get real dates from directories
+        print(args.start, args.stop)
+        for directory in reversed(get_dirs(top,
+                                           start=args.start,
+                                           stop=args.stop)):
             collection = ccdproc.ImageFileCollection(directory)
             log.info(collection.location)
             if args.default_ND_params is None:
+                # --> Improve this to make run-level ND_params by date
                 # We usually expect this, since we are going to run on
                 # a wide range of directories with different ND
                 # parameters
+                autoflat_subdir = os.path.join(directory, 'AutoFlat') 
+                if os.path.isdir(autoflat_subdir):
+                    log.debug('ACP AutoFlat subdirectory detected.  Ignoring any flats in ' + directory)
+                    flat_collection = \
+                        ccdproc.ImageFileCollection(autoflat_subdir)
+                else:
+                    flat_collection = collection
                 default_ND_params \
-                    = get_default_ND_params(directory, collection)
+                    = get_default_ND_params(directory, flat_collection)
                 if (default_ND_params is None
                     and persistent_default_ND_params is None):
                     # First time through no flats.  Presumably this is
@@ -1186,12 +1441,13 @@ class MovieCorObs():
         self.dt_cur = None
         self.HDUCur = None
         self.HDUNext = None
+        self.HDUfailsafe = None
         self.persist_im = None
         self.last_persist_im = None
         self.next_f()
-        HDULast = get_HDUList(flist[-1])
-        self.Tstop = Time(HDULast[0].header['DATE-OBS'], format='fits')
-        last_exp = HDULast[0].header['EXPTIME']
+        with fits.open(flist[-1]) as HDULast:
+            self.Tstop = Time(HDULast[0].header['DATE-OBS'], format='fits')
+            last_exp = HDULast[0].header['EXPTIME']
         # This is the calculated duration
         self.duration = ((self.Tstop - self.Tstart).sec + last_exp)/self.speedup
 
@@ -1201,7 +1457,7 @@ class MovieCorObs():
         self.HDUNext = self.HDULcur
         self.dt_next = self.dt_cur
         self.fnum -= 1
-        self.HDULcur = get_HDUList(self.flist[self.fnum])
+        self.HDULcur = fits.open(self.flist[self.fnum])
         T = Time(self.HDULcur[0].header['DATE-OBS'], format='fits')
         self.dt_cur = (T - self.Tstart).sec
 
@@ -1212,8 +1468,14 @@ class MovieCorObs():
         if self.fnum is None:
             # Initialize here, since we have shared code
             self.fnum = 0
-            self.HDULcur = get_HDUList(self.flist[self.fnum])
-            if '[SII]' in self.HDULcur[0].header['FILTER']:
+            self.HDULcur = fits.open(self.flist[self.fnum])
+            # Save off a zeroed out version of the first image in case
+            # we have no images
+            self.HDUfailsafe = self.HDULcur.copy()
+            self.HDUfailsafe[0].data[:] = 0
+            # Beware new filter name SII_on and SII_off
+            if 'SII' in self.HDULcur[0].header['FILTER']:
+                # But string name can be proper notation
                 self.filt = '[SII]'
             elif 'Na' in self.HDULcur[0].header['FILTER']:
                 self.filt = 'Na'
@@ -1231,7 +1493,7 @@ class MovieCorObs():
         else:
             self.dt_cur = (T - self.Tstart).sec
         if self.fnum < len(self.flist) - 1:
-            self.HDUNext = get_HDUList(self.flist[self.fnum + 1])
+            self.HDUNext = fits.open(self.flist[self.fnum + 1])
             T = Time(self.HDUNext[0].header['DATE-OBS'], format='fits')
             self.dt_next = (T - self.Tstart).sec
         else:
@@ -1248,12 +1510,29 @@ class MovieCorObs():
         # read the next one and pretend it is the first until we find
         # a good one
         if self.HDUNext is None:
-            raise ValueError ('No good images')
+            log.warning('No good images, returning 0ed version of first image')
+            # Do operations from make_frame that 
+            im = self.HDUfailsafe[0].data
+            im = self.do_crop(im)
+            self.persist_im = np.stack((im,)*3, axis=-1)
+            return self.persist_im
+        # If we made it here there are still some more images to try
         self.next_f()
         self.dt_cur = 0
         return(self.make_frame(t))
-        
+                   
+    def do_crop(self, im):
+        if self.crop is not None:
+            c = (np.asarray(im.shape)/2).astype(int)
+            ll = (c - self.crop/2).astype(int)
+            ur = (c + self.crop/2).astype(int)
+            im = im[ll[0]:ur[0], ll[1]:ur[1]]
+        return(im)
+
     def make_frame(self, t):
+        """Make a frame for mpy.VideoClip.  
+        The frame is a 3-layer color image, with shape [nx, ny, 3] and
+        (0,0) in the upper left corner. """
         # Make a general backward-forward iterator since sometimes we
         # run the object backward to get back to the beginning of a
         # movie.  The idea is we read a frame in and store it in
@@ -1268,18 +1547,22 @@ class MovieCorObs():
             return self.persist_im
         # If we made it here, we need to create our image
         # Do some checks to see if it is crummy
-        if self.HDULcur[0].header['D_ON-OFF'] > 5:
-            log.warning('on & off centers too far apart '
+        if self.HDULcur[0].header['D_ON-OFF'] > 7:
+            log.warning('on & off centers too far apart' 
                         + self.HDULcur.filename())
             return(self.get_good_frame(t))
         im = self.HDULcur[0].data
         if abs(np.mean(im)) > movie_background_light_threshold:
-            log.warning('background light too large or small for '
+            log.warning('background light '
+                        + str(abs(np.mean(im)))
+                        + ' too large or small for '
                         + self.HDULcur.filename())
             return(self.get_good_frame(t))
         # --> playing with these on 2018-04-21 [seem good in general]
         if self.filt == '[SII]':
-            chop = 2000
+            #chop = 2000
+            # Change for 2019
+            chop = 10000
             scale_jup = 100
         else:
             chop = 8000
@@ -1327,7 +1610,7 @@ class MovieCorObs():
         #plt.show()
         
         # Thanks to https://stackoverflow.com/questions/39463019/how-to-copy-numpy-array-value-into-higher-dimensions
-        self.persist_im = np.stack((im,) * 3, axis=-1)
+        self.persist_im = np.stack((im,)*3, axis=-1)
         return self.persist_im
 
 def make_movie(directory,
@@ -1426,8 +1709,6 @@ def movie_concatenate(directory):
     animation.write_videofile(os.path.join(directory, 'Na_movie.mp4'),
                               fps=global_frame_rate)
 
-# https://stackoverflow.com/questions/16878315/what-is-the-right-way-to-treat-python-argparse-namespace-as-a-dictionary
-# Trying to use
 class PoolWorker():
     """Get multiprocess to work with argparse.  Function is the function to call, iterable is a string indicating the argparse namespace element that will become the iterable for multiprocess, and args is the argparse args namespace"""
     def __init__(self, function, iterable, args):
@@ -1436,11 +1717,13 @@ class PoolWorker():
         self.args = args
     def worker(self, arg):
         """Method used by multiprocess"""
-        # Extract the dictionary from the argparse args namespace
+        # https://stackoverflow.com/questions/16878315/what-is-the-right-way-to-treat-python-argparse-namespace-as-a-dictionary
+        # Extract the dictionary __dict__ from the argparse args namespace
         d = vars(self.args)
-        # Insert the multiprocess-supplied arg into argparse args for
-        # the function call
+        # Insert the multiprocess-supplied arg into that __dict__
         d[self.iterable] = arg
+        # Call the function, which expects an argparse namespace with
+        # the amended __dict__
         self.function(self.args)
 
 def movie_cmd(args):
@@ -1470,6 +1753,8 @@ def movie_cmd(args):
                    speedup=args.speedup)
     except Exception as e:
         log.error(str(e) + ' skipping movie for ' + args.directory)
+        log.error(str(e) + ' trying again without try for ' + args.directory)
+
 
 if __name__ == "__main__":
     # --> Figure out how to do this with a command-line switch that
@@ -1502,6 +1787,10 @@ if __name__ == "__main__":
     reduce_parser.add_argument(
         '--tree', action='store_const', const=True,
         help='Reduce all data files in tree rooted at directory')
+    reduce_parser.add_argument(
+        '--start', help='start directory/date')
+    reduce_parser.add_argument(
+        '--stop', help='stop directory/date')
     reduce_parser.add_argument(
         '--num_processes', type=int, default=os.cpu_count()/threads_per_core,
         help='number of subprocesses for parallelization')

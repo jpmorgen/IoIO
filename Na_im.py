@@ -7,7 +7,7 @@ import matplotlib.patches as patches
 from matplotlib.colors import LogNorm
 from skimage.measure import block_reduce
 
-from precisionguide import get_HDUList
+from astropy.io import fits
 # Eventually I want to get propert C* WCS keywords into headers
 from ReduceCorObs import plate_scale
 
@@ -16,15 +16,23 @@ from read_ap import ADU2R_adjust
 # Number of images to plot
 ims = 1
 apertures = True
+#apertures = False
 
 origin = 'lower'
 vmin = 10
 vmax = 3000
 if ims == 1:
+    block_size = 2
     binning = 2
     linewidth = 2
 else:
+    # Increased from 4 to 5 to make smaller for arXiv e-print
+    block_size = 4
     binning = 4
+    linewidth = 1
+    # Pamela wants hi-res
+    block_size = 2
+    binning = 2
     linewidth = 1
 
 # https://scipy-cookbook.readthedocs.io/items/Rebinning.html
@@ -83,39 +91,40 @@ def plot_ims(ims):
     # Background getting brighter
     #fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_072r.fits'
     #fname = '/data/io/IoIO/reduced/2018-03-02/IPT_Na_R_089r.fits'
-    
-    plt.title('2018-03-02')
-    HDUList = get_HDUList(fname)
-    header = HDUList[0].header
-    im = HDUList[0].data
-    im = im * ADU2R_adjust
-    im = block_reduce(im, block_size=(binning, binning), func=np.median)
-    im = rebin(im, np.asarray(im.shape)/binning)
-    badc = np.where(im < 0)
-    im[badc] = 1
-    Rjpix = header['ANGDIAM']/2/plate_scale / binning**2 # arcsec / (arcsec/pix) / (pix/bin)
-    nr, nc = im.shape
-    x = (np.arange(nc) - nc/2) / Rjpix
-    y = (np.arange(nr) - nr/2) / Rjpix
-    X, Y = np.meshgrid(x, y)
-    #plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='YlOrRd')
-    plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='gist_heat')
-    if apertures:
-        ax.add_patch(rect15)
-        ax.add_patch(rect30)
-        ax.add_patch(rect40)
-        ax.add_patch(rect50)
-    plt.ylabel('Rj')
-    plt.xlabel('Rj')
-    # https://stackoverflow.com/questions/2934878/matplotlib-pyplot-preserve-aspect-ratio-of-the-plot
-    plt.axis('scaled')
-    #cbar = plt.colorbar()
-    #cbar.ax.set_ylabel('Surface brightness (approx. R)')
-    if ims == 1:
-        cbar = plt.colorbar()
-        cbar.ax.set_ylabel('Surface brightness (R)')
-        plt.show()
-        return ()
+
+    # --> Find a way to grep this out of the header to avoid errors
+    with fits.open(fname) as HDUList:
+        header = HDUList[0].header
+        plt.title(header['DATE-OBS'].split('T')[0])
+        im = HDUList[0].data
+        im = im * ADU2R_adjust
+        im = block_reduce(im, block_size=(block_size, block_size), func=np.median)
+        im = rebin(im, np.asarray(im.shape)/binning)
+        badc = np.where(im < 0)
+        im[badc] = 1
+        Rjpix = header['ANGDIAM']/2/plate_scale / (block_size*binning) # arcsec / (arcsec/pix) / (pix/bin)
+        nr, nc = im.shape
+        x = (np.arange(nc) - nc/2) / Rjpix
+        y = (np.arange(nr) - nr/2) / Rjpix
+        X, Y = np.meshgrid(x, y)
+        #plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='YlOrRd')
+        plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='gist_heat')
+        if apertures:
+            ax.add_patch(rect15)
+            ax.add_patch(rect30)
+            ax.add_patch(rect40)
+            ax.add_patch(rect50)
+        plt.ylabel('Rj')
+        plt.xlabel('Rj')
+        # https://stackoverflow.com/questions/2934878/matplotlib-pyplot-preserve-aspect-ratio-of-the-plot
+        plt.axis('scaled')
+        #cbar = plt.colorbar()
+        #cbar.ax.set_ylabel('Surface brightness (approx. R)')
+        if ims == 1:
+            cbar = plt.colorbar()
+            cbar.ax.set_ylabel('Surface brightness (R)')
+            plt.show()
+            return ()
     
     ax = plt.subplot(gs[1])
     rect15 = patches.Rectangle((-7.5,-7.5),15,15,linewidth=linewidth,edgecolor='C0',facecolor='none')
@@ -145,48 +154,49 @@ def plot_ims(ims):
     #fname = '/data/io/IoIO/reduced/2018-06-12/Na_on-band_010r.fits'
     
     #fname = '/data/io/IoIO/noCrashPlan/reduced.previous_versions/sent_to_coauthors/2018-06-12/Na_on-band_005r.fits'
-    plt.title('2018-06-12')
-    HDUList = get_HDUList(fname)
-    header = HDUList[0].header
-    im = HDUList[0].data
-    im = im * ADU2R_adjust
-    im = block_reduce(im, block_size=(binning, binning), func=np.median)
-    im = rebin(im, np.asarray(im.shape)/binning)
-    badc = np.where(im < 0)
-    im[badc] = 1
-    Rjpix = header['ANGDIAM']/2/plate_scale / binning**2 # arcsec / (arcsec/pix) / (pix/bin)
-    nr, nc = im.shape
-    x = (np.arange(nc) - nc/2) / Rjpix
-    y = (np.arange(nr) - nr/2) / Rjpix
-    X, Y = np.meshgrid(x, y)
-    #plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='YlOrRd')
-    plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='gist_heat')
-    if apertures:
-        ax.add_patch(rect15)
-        ax.add_patch(rect30)
-        ax.add_patch(rect40)
-        ax.add_patch(rect50)
-    plt.xlabel('Rj')
-    plt.axis('scaled')
-    cbar = plt.colorbar()
-    cbar.ax.set_ylabel('Surface brightness (R)')
-    
-    
-    #badc = np.where(np.logical_or(im < 10, im > chop))
-    #im[badc] = 0
-    
-    # https://matplotlib.org/examples/pylab_examples/pcolor_log.html
-    
-    #plt.pcolor(X, Y, im, norm=LogNorm(vmin=im.min(), vmax=im.max()), cmap='PuBu_r')
-    #plt.subplot(2, 1, 1)
-    #plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=1, vmax=5000), cmap='hsv')
-    #plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=1, vmax=5000), cmap='autumn')
-    
-    #plt.subplot(2, 1, 2)
-    #plt.pcolor(X, Y, im, norm=LogNorm(vmin=0, vmax=8000), cmap='PuBu_r')
-    #plt.colorbar()
-    
-    plt.show()
+    with fits.open(fname) as HDUList:
+        header = HDUList[0].header
+        plt.title(header['DATE-OBS'].split('T')[0])
+        im = HDUList[0].data
+        im = im * ADU2R_adjust
+        im = block_reduce(im, block_size=(block_size, block_size), func=np.median)
+        im = rebin(im, np.asarray(im.shape)/binning)
+        badc = np.where(im < 0)
+        im[badc] = 1
+        Rjpix = header['ANGDIAM']/2/plate_scale / (block_size*binning) # arcsec / (arcsec/pix) / (pix/bin)
+        nr, nc = im.shape
+        x = (np.arange(nc) - nc/2) / Rjpix
+        y = (np.arange(nr) - nr/2) / Rjpix
+        X, Y = np.meshgrid(x, y)
+        #plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='YlOrRd')
+        plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=vmin, vmax=vmax), cmap='gist_heat')
+        if apertures:
+            ax.add_patch(rect15)
+            ax.add_patch(rect30)
+            ax.add_patch(rect40)
+            ax.add_patch(rect50)
+        plt.xlabel('Rj')
+        plt.axis('scaled')
+        cbar = plt.colorbar()
+        cbar.ax.set_ylabel('Surface brightness (R)')
+        
+        
+        #badc = np.where(np.logical_or(im < 10, im > chop))
+        #im[badc] = 0
+        
+        # https://matplotlib.org/examples/pylab_examples/pcolor_log.html
+        
+        #plt.pcolor(X, Y, im, norm=LogNorm(vmin=im.min(), vmax=im.max()), cmap='PuBu_r')
+        #plt.subplot(2, 1, 1)
+        #plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=1, vmax=5000), cmap='hsv')
+        #plt.pcolormesh(X, Y, im, norm=LogNorm(vmin=1, vmax=5000), cmap='autumn')
+        
+        #plt.subplot(2, 1, 2)
+        #plt.pcolor(X, Y, im, norm=LogNorm(vmin=0, vmax=8000), cmap='PuBu_r')
+        #plt.colorbar()
+        
+        plt.savefig('Na_Ims_transparent.png', transparent=True)    
+        plt.show()
 
 plot_ims(ims)
 

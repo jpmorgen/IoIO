@@ -89,9 +89,10 @@ horizon_limit = 8.5
 
 
 # --> I may improve this location or the technique of message passing
-if socket.gethostname() == "snipe":
+hostname = socket.gethostname()
+if hostname == "snipe" or hostname == "byted":
     raw_data_root = '/data/io/IoIO/raw'
-elif socket.gethostname() == "puppy" or socket.gethostname() == "gigabyte":
+elif hostname == "puppy" or hostname == "gigabyte":
     # --> This doesn't work.  I need Unc?
     #raw_data_root = '//snipe/data/io/IoIO/raw'
     raw_data_root = r'\\snipe\data\io\IoIO\raw'
@@ -682,6 +683,8 @@ class MaxImControl():
         #    raise EnvironmentError('MaxIm link to telescope failed.  Is the power on to the mount?')
         # --> ACP doesn't like MaxIm being connected to the focuser,
         # but some of my IoIO things do need that for the time being
+        # --> This is really at the wrong level -- I should have
+        # ACP_IPT_Na_R take care of this as an object
         self.focuser_previously_connected = self.Application.FocuserConnected 
         self.getCCDCamera()
         self.CCDCamera.LinkEnabled = True
@@ -2100,7 +2103,8 @@ guide_box_log_file : str
 
     def diff_flex(self):
         """-->Eventually this is going to read a map/model file and calculate the differential flexure to feed to GuideBoxCommander.  There may need to be an additional method for concatenation of this flex and the measured flexure.  THIS IS ONLY FOR JUPITER DEC RIGHT NOW"""
-        #plate_ratio = 4.42/(1.56/2)
+        plate_ratio = 4.42/(1.56/2)
+        # 2018
         #if (-40 < self.MC.Telescope.Declination
         #    and self.MC.Telescope.Declination < +10
         #    and self.MC.Telescope.Altitude < 30):
@@ -2108,8 +2112,17 @@ guide_box_log_file : str
         #    dec_pix_rate = -0.020/10 * plate_ratio
         #    # Note Pythonic transpose
         #    return self.GuideBoxCommander(np.asarray((dec_pix_rate, 0)))
-        # For now, don't guess, though I could potentially put
-        # Mercury in here
+        # 2019 post 9-position filter wheel.  Jupiter only got up to
+        # 35 and this was variable near the meridian but never much larger.
+        # Thu May 09 10:28:09 2019 EDT  jpmorgen@snipe
+        # This may be messing up flips for ACP
+        #if (-40 < self.MC.Telescope.Declination
+        #    and self.MC.Telescope.Declination < +10
+        #    and self.MC.Telescope.Altitude < 35):
+        #    # Change from guider pixels per 10s to main camera pixels per s
+        #    dec_pix_rate = -0.005/10 * plate_ratio
+        #    # Note Pythonic transpose
+        #    return self.GuideBoxCommander(np.asarray((dec_pix_rate, 0)))
         return self.GuideBoxCommander(np.asarray((0, 0)))
 
     # --> I'll probably want a bunch of parameters for the exposure
@@ -3116,45 +3129,45 @@ def cmd_guide(args):
 # --> a guidebox command
 def GuideBoxMover(args):
     log.debug('Starting GuideBoxMover')
-    MC = MaxImControl()
-    last_modtime = 0
-    while True:
-        if MC.horizon_limit():
-            log.error('GuideBoxMover: Horizon limit reached')
-            return False
-
-        # --> Make this sleep time variable based on a fraction of the
-        # --> expected motion calculated below
-        time.sleep(1)
-        # Wait until we have a file
-        # --> Consider making lack of file an exit condition
-        if not os.path.isfile(args.command_file):
-            continue
-        # Check to see if the file has changed.  --> Note, when this
-        # starts up, it will grab the rate from the last file write
-        # time time unless a GuideBoxCommander() is done to zero out
-        # the file
-        this_modtime = os.path.getmtime(args.command_file)
-        if this_modtime != last_modtime:
-            # Check to see if the MaxIm guider is on
-            last_modtime = this_modtime
-            with open(args.command_file, 'r') as com:
-                rates_list = json.loads(com.read())
-            dra_ddec_rate = np.array(rates_list)
-            # Rates were passed in arcsec/hour.  We need degrees/s
-            dra_ddec_rate /= 3600**2
-            lastt = time.time()
-        # Only move when we have a move of more than 0.5 arcsec --> Make
-        # this a constant or something poassibly in MC
-        now = time.time()  
-        dt = now - lastt
-        if np.linalg.norm(dra_ddec_rate) * dt >= 0.5/3600:
-            log.debug('GuideBoxMover dt(s) = ' + str(dt))
-            log.debug('GuideBoxMover is moving the guidebox by ' +
-                      str(dra_ddec_rate * dt*3600) + ' arcsec')
-            if not MC.move_with_guide_box(dra_ddec_rate * dt ):
-                log.error('GuideBoxMover MC.move_with_guide_box failed')
-            lastt = now
+    with MaxImControl() as MC:
+        last_modtime = 0
+        while True:
+            if MC.horizon_limit():
+                log.error('GuideBoxMover: Horizon limit reached')
+                return False
+    
+            # --> Make this sleep time variable based on a fraction of the
+            # --> expected motion calculated below
+            time.sleep(1)
+            # Wait until we have a file
+            # --> Consider making lack of file an exit condition
+            if not os.path.isfile(args.command_file):
+                continue
+            # Check to see if the file has changed.  --> Note, when this
+            # starts up, it will grab the rate from the last file write
+            # time time unless a GuideBoxCommander() is done to zero out
+            # the file
+            this_modtime = os.path.getmtime(args.command_file)
+            if this_modtime != last_modtime:
+                # Check to see if the MaxIm guider is on
+                last_modtime = this_modtime
+                with open(args.command_file, 'r') as com:
+                    rates_list = json.loads(com.read())
+                dra_ddec_rate = np.array(rates_list)
+                # Rates were passed in arcsec/hour.  We need degrees/s
+                dra_ddec_rate /= 3600**2
+                lastt = time.time()
+            # Only move when we have a move of more than 0.5 arcsec --> Make
+            # this a constant or something poassibly in MC
+            now = time.time()  
+            dt = now - lastt
+            if np.linalg.norm(dra_ddec_rate) * dt >= 0.5/3600:
+                log.debug('GuideBoxMover dt(s) = ' + str(dt))
+                log.debug('GuideBoxMover is moving the guidebox by ' +
+                          str(dra_ddec_rate * dt*3600) + ' arcsec')
+                if not MC.move_with_guide_box(dra_ddec_rate * dt ):
+                    log.error('GuideBoxMover MC.move_with_guide_box failed')
+                lastt = now
 
 def uniq_fname(basename=None, directory=None, extension='.fits'):
     if directory is None:
