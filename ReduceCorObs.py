@@ -59,8 +59,11 @@ Na_eq_width = 11.22
 # There is a noticeable scattered light loss in the Na on-band filter.
 # Aperture photometry didn't fix it, so this is my guess at the
 # magnitude of the problem
-SII_on_loss = 0.95
+#SII_on_loss = 0.95
+# 2019
+SII_on_loss = 1.1
 #Na_on_loss = 0.8
+# 2019
 Na_on_loss = 0.6
 # Tue Jul 24 17:37:12 2018 EDT  jpmorgen@snipe
 # See notes in ioio.notebk of this day
@@ -847,10 +850,16 @@ def reduce_pair(OnBand_fname=None,
         # think I have stars that can oblige, maybe even day sky.
         on_center = np.round(on_center).astype(int)
         off_center = np.round(off_center).astype(int)
-        on_jup = np.average(on_im[on_center[0]-5:on_center[0]+5,
-                                  on_center[1]-5:on_center[1]+5])
-        off_jup = np.average(off_im[off_center[0]-5:off_center[0]+5,
-                                    off_center[1]-5:off_center[1]+5])
+        #on_jup = np.average(on_im[on_center[0]-5:on_center[0]+5,
+        #                          on_center[1]-5:on_center[1]+5])
+        #off_jup = np.average(off_im[off_center[0]-5:off_center[0]+5,
+        #                            off_center[1]-5:off_center[1]+5])
+        # See if I can increase this to get agreement between 2019 and
+        # the other years with a slightly bigger aperture on Jupiter
+        on_jup = np.average(on_im[on_center[0]-10:on_center[0]+10,
+                                  on_center[1]-10:on_center[1]+10])
+        off_jup = np.average(off_im[off_center[0]-10:off_center[0]+10,
+                                    off_center[1]-10:off_center[1]+10])
         # See if I can increase this to get better on-off for the
         # early 2019 data that were badly out of focus
         # No, that seems to cause more problems
@@ -931,7 +940,7 @@ def reduce_pair(OnBand_fname=None,
         # filter to be more like 734 instead of 1000
         scat_sub_im = scat_sub_im / ADU2R
         header['BUNIT'] = ('rayleighs', 'pixel unit')
-        header['ADU2R'] = (ADU2R, 'conversion factor from ADU to R')
+        header['ADU2R'] = (ADU2R, 'ADU/R')
         # --> will want to check this earlier for proper pairing of
         # on-off band images
         pier_side = OnBandObsData.header.get('PIERSIDE')
@@ -967,6 +976,8 @@ def reduce_pair(OnBand_fname=None,
         on_angle = aangle - NPole_ang + gem_flip
         # interpolation.rotate rotates CW for positive angle
         scat_sub_im = ndimage.interpolation.shift(scat_sub_im, on_shift)
+        # --> rotation by small NPole_ang gives a slight pincushion
+        # effect.  This is why we want to do all calcs without rotating!
         scat_sub_im = ndimage.interpolation.rotate(scat_sub_im, on_angle)
     
         # Update centers and NDparams
@@ -1547,7 +1558,8 @@ class MovieCorObs():
             return self.persist_im
         # If we made it here, we need to create our image
         # Do some checks to see if it is crummy
-        if self.HDULcur[0].header['D_ON-OFF'] > 7:
+        hdr = self.HDULcur[0].header
+        if hdr['D_ON-OFF'] > 7:
             log.warning('on & off centers too far apart' 
                         + self.HDULcur.filename())
             return(self.get_good_frame(t))
@@ -1560,10 +1572,15 @@ class MovieCorObs():
             return(self.get_good_frame(t))
         # --> playing with these on 2018-04-21 [seem good in general]
         if self.filt == '[SII]':
-            #chop = 2000
-            # Change for 2019
-            chop = 10000
-            scale_jup = 100
+            # --> check date
+            T = Time(hdr['date-obs'], format='fits')
+            if T >= Time('2019-04-01', format='fits'):
+                # Temporarily fix problem with Jupiter scaling
+                chop = 10000
+                scale_jup = 500
+            else:
+                chop = 2000
+                scale_jup = 100
         else:
             chop = 8000
             scale_jup = 50
@@ -1688,23 +1705,26 @@ def movie_concatenate(directory):
     clips = []
     Na_clips = []
     # --> eventually I want to have the data themselves indicate this
-    filt_list = ['cloudy', 'marginal', 'dew', 'bad']
+    filt_list = ['cloudy', 'marginal', 'dew', 'bad', 'stuck']
     for d in get_dirs(directory, filt_list=filt_list):
+        if len(clips) == 120 or len(Na_clips) == 120:
+            break
         try:
             c = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
-        except:
-            log.warning('Bad movie in ' + d)
-            continue
-        clips.append(c)
+            clips.append(c)
+        except Exception as e:
+            log.error(str(e) + ' Bad Na_SII movie in ' + d)
         try:
             c = mpy.VideoFileClip(os.path.join(d, 'Na_movie.mp4'))
-        except:
-            log.warning('Bad Na movie in ' + d)
-            continue
-        Na_clips.append(c)
+            Na_clips.append(c)
+        except Exception as e:
+            log.error(str(e) + ' Bad Na movie in ' + d)
+        # --> temporary test
+    log.debug(str(len(clips)) + ' good [Na_SII] movies found')
     animation = mpy.concatenate_videoclips(clips)
     animation.write_videofile(os.path.join(directory, 'Na_SII.mp4'),
                               fps=global_frame_rate)
+    log.debug(str(len(clips)) + ' good [Na] movies found')
     animation = mpy.concatenate_videoclips(Na_clips)
     animation.write_videofile(os.path.join(directory, 'Na_movie.mp4'),
                               fps=global_frame_rate)
@@ -1759,7 +1779,7 @@ def movie_cmd(args):
 if __name__ == "__main__":
     # --> Figure out how to do this with a command-line switch that
     # --> works for everything
-    #log.setLevel('DEBUG')
+    log.setLevel('DEBUG')
     parser = argparse.ArgumentParser(
         description="IoIO-related instrument image reduction")
     # --> Update this with final list once settled

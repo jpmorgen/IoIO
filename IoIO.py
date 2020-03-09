@@ -43,7 +43,6 @@ run_level_default_ND_params \
     = [[1.40749551e-02, 2.36320869e-02],
        [1.24240593e+03, 1.33789081e+03]]
 
-
 def hist_of_im(im, readnoise=None):
     """Returns a tuple of the histogram of image and index into centers of
 bins."""
@@ -190,8 +189,10 @@ class CorObsData(pg.ObsData):
         # Define y pixel value along ND filter where we want our
         # center --> This may change if we are able to track ND filter
         # sag in Y.
+        # --> in 2019, move this a little to get around a piece of
+        # dust and what looks like a fold in the ND filter        
         if self.y_center is None:
-            self.y_center = self.HDUList[0].data.shape[0]*self._binning[0]/2
+            self.y_center = self.HDUList[0].data.shape[0]*self._binning[0]/2 + 70
 
         # See if our image has already been through the system.  This
         # saves us the work of using self.get_ND_params, but allow
@@ -307,7 +308,10 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         
         sum_on_ND_filter = np.sum(im[boost_NDc0, boost_NDc1])
         #log.debug('sum of significant pixels on ND filter = ' + str(sum_on_ND_filter))
-        if num_sat > 1000 or sum_on_ND_filter < 1E6:
+        print('sum_on_ND_filter = ', sum_on_ND_filter)
+        #if num_sat > 1000 or sum_on_ND_filter < 1E6:
+        # Vega is 950,000
+        if num_sat > 1000 or sum_on_ND_filter < 0.75E6:
             log.warning('Jupiter outside of ND filter?')
             # Outside the ND filter, Jupiter should be saturating.  To
             # make the center of mass calc more accurate, just set
@@ -948,6 +952,75 @@ def ACP_IPT_Na_R(args):
             P.center_loop()
             downloadtime = 10
             # Jupiter observations
+            log.info('Collecting [SII] and Na calibration images')
+            if ((time.time() + downloadtime*4*3) > Tend):
+                log.info('Exposure would extend past end of ACP exposure, returning') 
+                return
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('SII_on_cal_07_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=1)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('SII_on_cal_071_', d),
+                                exptime=0.71,
+                                binning=1,
+                                filt=1)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('SII_on_cal_10_', d),
+                                exptime=10,
+                                binning=1,
+                                filt=1)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('SII_on_cal_15_', d),
+                                exptime=15,
+                                binning=1,
+                                filt=1)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('SII_on_cal_20_', d),
+                                exptime=20,
+                                binning=1,
+                                filt=1)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('SII_off_cal_07_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=2)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('SII_off_cal_071_', d),
+                                exptime=0.71,
+                                binning=1,
+                                filt=2)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_off_cal_07_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=3)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_off_cal_071_', d),
+                                exptime=0.71,
+                                binning=1,
+                                filt=3)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_07_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=6)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_071_', d),
+                                exptime=0.71,
+                                binning=1,
+                                filt=6)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_10_', d),
+                                exptime=10,
+                                binning=1,
+                                filt=6)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_15_', d),
+                                exptime=15,
+                                binning=1,
+                                filt=6)
             while True:
                 #fname = pg.uniq_fname(basename, d)
                 #log.debug('data_collector preparing to record ' + fname)
@@ -977,24 +1050,24 @@ def ACP_IPT_Na_R(args):
                 if ((time.time() + downloadtime*3*3) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
                     return
-                for ifilt in range(3):
+                for ifilt in range(2):
                     P.MC.acquire_im(pg.uniq_fname('V_', d),
                                     exptime=0.7,
                                     binning=1,
                                     filt=7)
-                for ifilt in range(3):
-                    P.MC.acquire_im(pg.uniq_fname('U_', d),
-                                    exptime=0.7,
-                                    binning=1,
-                                    filt=8)
-                for ifilt in range(3):
+                #for ifilt in range(2):
+                #    P.MC.acquire_im(pg.uniq_fname('U_', d),
+                #                    exptime=0.7,
+                #                    binning=1,
+                #                    filt=8)
+                for ifilt in range(2):
                     # Note to get exposure time of 2.8, we need 1.3s expo
                     # because of additional time of 1.5s added to exposures > 0.7s
                     P.MC.acquire_im(pg.uniq_fname('U_2.8_', d),
                                     exptime=1.3,
                                     binning=1,
                                     filt=8)
-                for ifilt in range(3):
+                for ifilt in range(2):
                     P.MC.acquire_im(pg.uniq_fname('R_', d),
                                     exptime=0.1, # Was 0.02
                                     binning=1,
@@ -1023,17 +1096,24 @@ def ACP_IPT_Na_R(args):
                     if ((time.time() + downloadtime*3*3) > Tend):
                         log.info('Exposure would extend past end of ACP exposure, returning') 
                         return
-                    for ifilt in range(3):                                
+                    for ifilt in range(1):                                
                         P.MC.acquire_im(pg.uniq_fname('V_', d),
                                         exptime=0.7,
                                         binning=1,
                                         filt=7)
-                    for ifilt in range(3):
+                    for ifilt in range(1):
                         P.MC.acquire_im(pg.uniq_fname('U_', d),
                                         exptime=0.7,
                                         binning=1,
                                         filt=8)
-                    for ifilt in range(3):
+                    for ifilt in range(1):
+                        # Note to get exposure time of 2.8, we need 1.3s expo
+                        # because of additional time of 1.5s added to exposures > 0.7s
+                        P.MC.acquire_im(pg.uniq_fname('U_2.8_', d),
+                                        exptime=1.3,
+                                        binning=1,
+                                        filt=8)
+                    for ifilt in range(1):
                         P.MC.acquire_im(pg.uniq_fname('R_', d),
                                         exptime=0.1, # Was 0.02
                                         binning=1,
@@ -1059,6 +1139,36 @@ def ACP_IPT_Na_R(args):
         except Exception as e:
             log.error('Received the following error.  Attempting to return gracefully: ' + str(e))
             return
+
+# --> this is hacked in here.  Should be modified to not need args.ObsClassName
+# And also maybe have a try
+def cmd_center(args):
+    with pg.PrecisionGuide("CorObsData", "IoIO") as P:
+        # --! Daniel found this, which would have saved a lot of pain
+        # --! years ago!  It keeps MaxIm connected to the camera after
+        # --! the last object de-references
+        P.MC.CCDCamera.DisableAutoShutdown = True
+        P.center_loop()
+        # Upset the centering a bit
+        log.debug("jogging telescope a bit to force guidebox centering")
+        P.MC.move_with_guider_slews(np.asarray([10,2])/3600)
+        P.MC.guider_start() 
+        P.center_loop()
+        for i in np.arange(8):
+            P.MC.acquire_im(pg.uniq_fname('test_', r"c:\Users\PLANETARY SCIENCE\Documents\MaxIm DL 6\Temporary"),
+                            exptime=20,
+                            filt=0)
+        P.center_loop()
+    #default_ND_params = None
+    #if args.ND_params is not None:
+    #    default_ND_params = get_default_ND_params(args.ND_params, args.maxcount)
+    #    P = pg.PrecisionGuide(args.ObsClassName,
+    #                       args.ObsClassModule,
+    #                       default_ND_params=default_ND_params) # other defaults should be good
+    #else:
+    #    P = pg.PrecisionGuide(args.ObsClassName,
+    #                       args.ObsClassModule) # other defaults should be good
+    #P.center_loop()
 
 def ACP_status(args):
     # Just ignore the args and make a MaxImControl to print out info
@@ -1098,6 +1208,22 @@ if __name__ == "__main__":
         'fname', help='single fname from ACP -- will extract path and use own fnames')
     ACP_status_parser.set_defaults(func=ACP_status)
 
+    center_parser = subparsers.add_parser(
+        'center', help='Record image and center object')
+    center_parser.add_argument(
+        '--ObsClassName', help='ObsData class name')
+    center_parser.add_argument(
+        '--ObsClassModule', help='ObsData class module file name')
+    # These are specific to the coronagraph --> thinking I might be
+    # able to pass package-specific arguments to subclass init in a
+    # clever way by capturing the rest of the command line in one
+    # argument and then parsing it in init
+    center_parser.add_argument(
+        '--ND_params', help='Derive default_ND_params from flats in this directory')
+    center_parser.add_argument(
+        '--maxcount', help='maximum number of flats to process -- median of parameters returned')
+    center_parser.set_defaults(func=cmd_center)
+    
     # Final set of commands that makes argparse work
     args = parser.parse_args()
     # This check for func is not needed if I make subparsers.required = True

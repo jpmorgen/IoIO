@@ -2287,7 +2287,7 @@ did it with guider_move, since that matched MaxIm!
 
 http://www.ascom-standards.org/Help/Developer/html/P_ASCOM_DriverAccess_Telescope_GuideRateDeclination.htm
 
-PIERSIDE =EAST/WESTin hdr
+PIERSIDE =EAST/WEST in hdr
 SideOfPier =pierEast pierWest in ASCOM
 
 So guider_move takes a ddec_dra pair
@@ -2459,7 +2459,7 @@ both X and Y axes when doing CDELT and friends.  That reflects that
 the telecsope tube is physically rotated through 180 degrees on pier
 flip.  But what happens to the axes?
 
---> Ah, when through the pole, the sense of the DEC axis gets flipped,
+--! Ah, when through the pole, the sense of the DEC axis gets flipped,
     so it happens to match the flipped sense of the DEC direction on
     the CCD.  But RA doesn't.
 
@@ -2590,8 +2590,8 @@ But now I am still going in the wrong direction
     calibrated on side 1 = west.  I am on east now.  Numbers are 
     search back on "Right now, the calibration is"
 
-West side, the calibration was (+3.407, -3.384) at -178.4 deg
-East side, the calibration is  (+3.405, -3.205) at 0.825 deg
+West side, the calibration was (+3.407, -3.384) at -178.4 deg [looking east]
+East side, the calibration is  (+3.405, -3.205) at 0.825 deg [looking west]
 
 plus x went to the right, plus Y went up
 
@@ -4019,6 +4019,34 @@ Looks like
 V09 249.74202 0.849537 +0.526080 Moka Observatory, Benson
 might be the closest 
 
+name, Lon, Cos, Sin
+
+Lon = 249.74202 east = 110.25798
+Cos = 0.849537 = rho cos(lat)
+Sin = +0.526080 = rho sin(lat)
+
+rho = Sin/sin(lat)
+Cos = Sin/sin(lat) * cos(lat)
+Cos/Sin = cos(lat)/sin(lat)
+
+cos(lat) = Cos/Sin*sin(lat)
+Cos = rho * Cos/Sin*sin(lat)
+
+... Well, this code is not going to change, so it is OK to use it.
+
+I have longitude = 110.257500 west, they have 110.25798
+
+110.25798 - 110.257500
+0.00048000000001025
+
+1 min = 1 nautical mile = 6076.12 ft
+1 second of lat = 6076.12/60 = 101.26866666666666
+
+0.00048000000001025*60 * 6076.12
+174.9922560037368
+
+That is accurate enough for me!
+
 Tue Jun 26 11:44:02 2018 EDT  jpmorgen@snipe
 
 Ack!  They don't collect everything!  They jhust collect things that
@@ -5270,3 +5298,4909 @@ Maybe I can use a draft release...
 =======
 on a permanent repository as suggested by the Data Editor
 >>>>>>> 802ae64de9920ea30545f83e3306cab52ac681ca
+
+Wed Jan 16 14:13:13 2019 EST  jpmorgen@snipe
+
+Looking back at
+
+/data/PSIScope/observing/AcquireImages.js
+
+and thoughts about how to use that
+
+--> consider an ACP-ScriptFail script
+http://solo.dc3.com/ar/RefDocs/HelpFiles/ACP81Help/addtologic.htm#scriptfail
+
+So it looks like TargetStart() is what I want to do to do an offset
+for the upcomming target.
+
+ImageStart() might do it too, but it is used for all things like
+pointing exposures, biases and darks.  I don't want to mess up
+pointing exposures, since I need to know at some point where I am.
+
+OK, so how do I mess with TargetStart()?
+
+Trying to get UserActions registered by reading
+http://solo.dc3.com/ar/RefDocs/HelpFiles/ACP81Help/addtologic.htm#acqimg
+
+got error: scrobs.dll laded by call to DllRegisterServerEx failed 0x800c0005
+
+Oops, I think that might be because I don't have any UserActions
+defined!
+
+I need to take the template and do something with it.
+
+
+OK, there is /cygdrive/c/Program Files (x86)/ACP Obs Control/UserActionsJS-template.wsc
+
+JavaScript is better to work with
+
+OK, so that UserAction is called in AcquireImages with
+SUP.UserActions.TargetStart(Pl, Tc, Tn)
+
+Where Pl = plan, Tc = current target, and Tn = next target
+
+So I want to offset.  I don't think I even need the actual target
+coordinates, since I can just read the telecope.  But maybe best to do
+it with what ACP thinks is the target.  Whatever is easier, really....
+
+OK, so there is Tc.RA which I want to add to and then reposition the telescope
+
+    SUP.StartSlewJ2000(Tgt.Name, Tgt.RA, Tgt.Dec);                          // MUST SLEW ALWAYS
+    if(SUP.HaveRotator) 
+    {
+        Console.PrintLine("  (rolling rotator over 180 deg...)");           // This can be really slow so do it first
+        SUP.StartRotateToPA(Tgt.PA, Tgt.RA);                                // Rotator will flip here
+    }
+    WaitForSlews();                                                         // Wait for all of that
+
+This is from line 3016+ of AcquireImages.js, which is after
+TargetStart.  So it looks like really all I need to do is just change
+the Tc.RA and ACP will do the rest.  The target RA then will be offset
+from the true target, but the real answer comes from the astrometric
+solution later on.
+
+If I can get access to this:
+
+Prefs.PointingUpdates.MaximumError / 60
+
+that would be great!  [Util.Prefs...]
+
+what are the units of RA? [hours]  SUP.EquDist2 might help.  See
+        return (SUP.EquDist2(Tgt.RA, Tgt.Dec, Telescope.RightAscension, Telescope.Declination) <= 
+                (Prefs.PointingUpdates.MaximumError / 60));
+
+which implies it is probably hours unless the answer is in degrees
+Probably I just need to try it with a simulator and PrintLine
+
+-->  Next step is to see if I can get to Prefs....
+
+OK, it is there.  Now I just need to figure out how to run it.....
+
+1/1/1970
+2440587.500000
+2458500
+
+17912.  Not equal to 019016.82075
+
+2458500 - 19016.82075
+2439483.17925
+
+Friday, A.D. 1966 Dec 23
+
+Sat Jan 19 10:10:02 2019 EST  jpmorgen@snipe
+
+OK, got that working more or less with the developer.
+
+Now on to more UserActions
+
+--> Eventually, I may wish to make the TargetStart figure out which
+    way to offset, or have a user-configurable offset
+
+But of more importance is getting PrecisionGuide & IoIO to work!
+
+So now I am seeing AcquireImage() in a new light.  I could
+potentially make it like the MaxIm version of PrecisionGuide I was
+thinking about.  The advantage of this is that I could make plans that
+have image sets that do all of the filter changing I want & have
+PrecisionGuide independently monitor the position of Jupiter and make
+sure it is OK.  But that monitoring stuff was hard.  For the sake of
+development, I should probably avoid the fancy data stream version and
+just concentrate on R-band for now.  Also, I need to do guiding + I am
+not sure if that will be interupted by going to another image... no,
+that should remain the same, since images are different than targets.
+Jupiter will be my target + no guiding is done anyway....  OK, things
+are shaping up....
+
+So I think the first thing I need to do is set up logic to call a
+Python script
+
+--> 
+
+Sun Jan 20 16:44:23 2019 EST  jpmorgen@snipe
+
+Looking at IPT_Na_R.
+
+OK, I do all kinds of stuff with the telescope and camera, which
+might cause problems given:
+
+                To control the telescope and camera, you MUST use Util.ScriptTelescope 
+                and Util.ScriptCamera. DO NOT CREATE INSTANCES OF ACP.TELESCOPE, 
+                MAXIM.CCDCAMERA, OR ACP.CAMERA! This will prevent access locks from 
+                working properly.
+
+Bob recommends
+
+https://www.sapien.com/software/primalscript
+
+I am guessing it lets me figure out what is going on with the
+underlying variable namespace.  There is a 45-day trial.  Otherwise,
+it costs $400!
+
+First lets use the simulators so I can get somewhere without crashing
+the telescope.
+
+Oh, but first I should check that the RA really was tweaked.  
+
+OBJCTRA = '06 00 14.00'        / [hms J2000] Target right ascension
+OBJCTDEC= '+00 00 00.0'        / [dms +N J2000] Target declination 
+
+Indeed,
+3.5/60*24/360*60*60
+14.0
+
+OK, so we are in business with standard objects, but what about the
+coronagraph?  Am I going to be able to use precisionguide.py and IoIO.py
+
+At the very least, I might be able to subclass the Maxim methods to
+use ACP-speak when in ACP mode.
+
+--> setting up simulator.  Might want to re-enable guide rates and
+    RA/Dec Rates
+
+Got a simulated plan to work
+
+OK, Prefs. is not working in the UserActions.  But Util.Prefs does!
+
+OK, next step is to see if I can invoke some sort of Python script
+form the .js code.
+
+I am not sure if that works.  I think the whole WSC has to be python,
+which is not that big a deal
+
+http://forums.dc3.com/showthread.php?10699-Imaging-Geosynchronous-Satellites-with-ACP-(rev-Jan-2018)
+
+May have some hints
+
+Looks like they shell out to Python code with command-line parameters,
+write the results to files and read those files back into the .js.
+That is not what I want.
+
+Sun Jan 20 23:23:42 2019 EST  jpmorgen@snipe
+
+Ah HA!  I can have IoIO.py be a WSC that is called from UserActions.
+It can pop up like MaxIm does and then run as a separate process that
+the UserActions talks to.  There would only be a few things to do and
+possibly a few variables to keep track of in the global section of one
+or the other WSC
+
+OK, pythoncom
+    # https://www.pythonstudio.us/introduction-2/implementing-com-objects-in-python.html
+    # http://timgolden.me.uk/pywin32-docs/contents.html
+    # import pythoncom
+
+But the simpler thing to do is what Bob recommended (and I have
+thought of), which is to just shell out and have IoIO.py do all the
+work.  Now that I know I can kill IoIO.py with the weather safety
+script, that helps a lot!
+
+Eventually, the thing to do is make a Python COM server as per the
+website above and have ACP pass the code one image request at a time.
+If a non-coronagraph image request comes by, the code needs to be told
+to shut down gracefully -- at least operations to MaxIm.  But still,
+in that ideal endstate, I might want to have the program started up in
+StartupObs and shut down by the weather safety or at least ShutdownObs
+scripts.
+
+In any case, the overhead of starting IoIO from the command line for
+30 minutes of observations is not much.  Oh, there is the issue of the
+meridian, but if I synchronize the exposure time and the time with
+IoIO, all should be well.
+
+Installing Anaconda with Python 3.7 on Gigabyte.  Chose not to install
+with PATH, but I think this is a mistake.  Though it does force me to
+explicitly enter the path
+
+C:\ProgramData\Anaconda3\python.exe is where it is.  Looking online
+and find that I am just better off uninstalling and reinstalling,
+although there was a SETX option at
+https://medium.com/@GalarnykMichael/install-python-on-windows-anaconda-c63c7c3d1444
+that might have been faster
+
+setx PYTHONPATH \\snipe\homes\py;\\snipe\homes\py\IoIO
+
+Worked!  It looks like I am not able to get python running
+
+Well, it seems like the prefered way to do this is with
+
+python script_name arg1 arg2 etc
+
+But now it is working the other way.
+
+OK, so what I want is a simple command-line that does ...
+
+Mon Jan 21 12:11:04 2019 EST  jpmorgen@snipe
+
+Talking with Bob
+
+Satellite thing has tag facility #Jupiter
+
+imagestart could change guide tyo 600s to get guider
+
+Util.ScriptCamera = MaxIM's CCDCamera
+locking for multi-user protection in ACP
+just leave Python alone
+
+--> ACP weather = weather safety script to kill python script
+--> Kill like Maxim
+
+
+Tue Jan 22 09:35:54 2019 EST  jpmorgen@snipe
+
+Hmm.  Looking back at AcquireImages.js and find that AcquireImage does
+just one image at a time, like I want.  Ah, but I can have it actually
+write lots of images.  And the flip logic precedes it
+
+/cygdrive/c/Program Files (x86)/ACP Obs Control/UserActions.wsc
+
+/data/io/IoIO/observing/ACP/UserActionsGeosyncSatellites/UserActionsGeosyncSatellites.wsc
+
+Very important example, as is shows how to use the Util.ShellExec feature
+
+Wed Jan 23 14:53:57 2019 EST  jpmorgen@snipe
+
+OK, I am getting it to work a little bit with a hello_world.py test
+case.
+
+--> Not getting console output when I just print from the Python script
+
+https://docs.python.org/3.3/using/windows.html
+
+ftype Python.File=C:\Path\to\pythonw.exe "%1" %*
+
+Thu Jan 24 09:16:42 2019 EST  jpmorgen@snipe
+
+Python window does not appear in front of other windows, but it is
+there so there is visible logging!
+
+OK, now I need to get a command line for the process.  So ACP is
+giving me a single image file.  I need to hack that filename apart and
+make my desired filenames
+
+C:\Users\jpmorgen\Documents\ACP Astronomy\Images\20190123\Test1-S012-R001-C001-R.fts
+
+python \\snipe\jpmorgen\py\hello_world.py ACP_IPT_Na_R "C:\Users\jpmorgen\Documents\ACP Astronomy\Images\20190123\Test1-S012-R001-C001-R.fts"
+
+OK, the double quotes take care of binding spaces into one string
+
+OK, getting that to work better
+
+\\snipe\jpmorgen\wsh\AcquireImage.js
+
+cscript.exe \\snipe\jpmorgen\wsh\AcquireImage.js
+
+Whew.  Got the basic command line passed.  Now I want to decide how I
+am going to deal with the filenames.
+
+OK, right now I am using my own uniq_fname function in
+precisionguide.py.  That just takes the directory.  It also adds
+.fits, which I prefer, but emacs can now deal with .fts
+
+OK, so all I need is the path.  I think I got that.
+
+Now I need to work on the logic for the timing.  "#interval" is the
+plan notation for exposure time.
+
+Looking at /data/PSIScope/observing/Plan.js which I grabbed out of
+Plan.wsc
+
+IMG.Interval is what I want, where IMG is an ImageSet
+
+OK, that is working.  Now I want to run a test script that uses the
+exptime and 
+
+
+python \\snipe\jpmorgen\py\IoIO\IoIO.py ACP_IPT_Na_R 1800 "C:\Users\jpmorgen\Documents\ACP Astronomy\Images\20190123\Test1-S012-R001-C001-R.fts"
+
+Thu Jan 31 03:59:16 2019 EST  jpmorgen@snipe
+
+Ack.  timedelta objects are more complicated
+
+Thu Jan 31 05:06:53 2019 EST  jpmorgen@snipe
+
+WORKING!
+
+Thu Feb 07 16:35:22 2019 EST  jpmorgen@snipe
+
+Hmm.  Maybe not so quick.  While collecting Na, MaxIm disconnected
+from the camera and now it is stuck for a long time just "Collecting Na"
+
+
+python \\snipe\jpmorgen\py\IoIO\IoIO.py ACP_IPT_Na_R 60 "C:\Users\jpmorgen\Documents\ACP Astronomy\Images\20190123\Test1-S012-R001-C001-R.fts"
+
+OK, improved info logging and try to see if having ACP on stops python
+exit from disconnecting camera
+
+GREAT!  So if ACP is connected, Python exit does not disconnect
+camera!  That makes life much easier.
+
+Guider is still going after script exit, which is what I think I want.
+
+
+python \\snipe\jpmorgen\py\IoIO\IoIO.py ACP_IPT_Na_R 1800 "C:\Users\jpmorgen\Documents\ACP Astronomy\Images\20190207\Test1-S012-R001-C001-R.fts"
+
+OK, seems to be working reasonably well.  Collecting the different
+filters and stopping itself when time limit is reached.
+
+What is the next step?  Calling it within ACP with reasonable tags
+
+--> Need run-level ND_params
+
+--> Oops, I need some pin point solutions....
+
+--> consider using ioio.py for now and later go to production on IoIO
+
+cd Desktop\IoIO\Scripts
+ioio.py ND_params "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\data\2019-02-07"
+
+run_level_default_ND_params \
+    = [[  4.65269008e-03,   8.76050569e-03],
+       [  1.27189987e+03,   1.37717911e+03]]
+
+--> check filtger names in IoIO.py & associated for space to _
+    transition, include this 
+
+ioio.py center
+ioio.py guide --filter 3
+ioio.py center
+
+Oops, I need a better center, with the proper CorObsData
+
+Fri Feb 08 19:36:16 2019 EST  jpmorgen@snipe
+
+Get ready for IoIO replacement on IoIO1U1
+
+put in run_level_default_params and updated PinPointSolution* stuff.
+
+I want an rsync process to be able to copy things over properly
+
+There are a bunch of things in the Scripts directory.  I might want a
+specific one for python.  Or just copy over the couple I need 
+
+--> rsync
+eval `ssh-agent` 
+ssh-add
+rsync -auv jpmorgen@cpe-184-153-135-44.maine.res.rr.com:/home/jpmorgen/py/IoIO/IoIO.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
+rsync -auv jpmorgen@cpe-184-153-135-44.maine.res.rr.com:/home/jpmorgen/py/IoIO/precisionguide.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
+
+Works!
+
+Fri Feb 08 22:13:34 2019 EST  jpmorgen@snipe
+
+disabling auto-center for faster testing [re-enabled]
+
+"C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py" ACP_IPT_Na_R 1800 C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190209\Aldebaran-S001-R001-C001-R.fts"
+
+Working!  When I abort run, however, the script does not abort
+
+--> Got "Abort Failed" dialog box
+--> Even when I crash with making the weather server die, the program keeps running
+
+This would be reason to have server with individual exposures so
+weather events are less of a risk.  But for now, this is workable
+
+--> There may be some scripts that run on abort and weather which
+    would kill a program
+--> Consider making a simple shell script that would stay running so
+    Python process would be easy to find and kill
+
+Sat Feb 09 08:07:10 2019 EST  jpmorgen@snipe
+
+--> Didn't turn off the guider when switched to a different object
+
+--> Other programs were still running instead of killing themselves!
+
+-->  Guider moves going in wrong direction to center Jupiter
+--> worked for west of meridian, check for west again
+
+--> wasn't on non-siderial tracking
+
+So it looks like Bob messes with things possibly
+
+
+--> Last flat filter is Na on-band, not [SII]
+
+Sat Feb 09 21:07:25 2019 EST  jpmorgen@snipe
+
+--> Wondering if my real problem with with MaxImData not surrendering
+    its COM object properly when it exits 
+
+Sun Feb 10 19:19:29 2019 EST  jpmorgen@snipe
+
+--> Check pier_flip_sign logic.  I think I want an absolute not
+    relative sense
+
+Sun Feb 10 20:51:35 2019 EST  jpmorgen@snipe
+
+Slewing to alpha ari, mag 2 which is on the west side of the meridian
+right now (pierside East)
+
+Focus using [SII]
+01:56:11  Focus position = 30450  Avg HFD =  4.57  Avg FWHM =  3.73
+01:56:11  Temperature: 6.8  Filter: [SII]_6731A_10A_FWHM (slot 2)
+
+Good focus!
+
+02h 08m 15s 23° 33' 11"
+
+<ack, weather became unsafe with gust>
+Doing it Ok on this side of the meridian, which I think I saw before.
+
+While waiting for weather to improve, look at side logic.  So for the
+Astro-Physics mount, north button actually moves the telescope north
+from a non through-the-pole position when the scope is on the west
+side pointed east.  The guider pinpoint likes to be WestofPier, not
+EastofPier to have the
+
+Now try Sirius
+--> disabling autocenter
+
+Hmm.  Seems to be OK!
+
+So the problem may have been concurrent running Python processes,
+which is really my lazy programming.
+
+Try another Sirius to see if that is really the issue (though a fresh
+start is no different than just starting the first time).  Indeed,
+still works.
+
+--> Hints on how to clean up objects
+
+https://stackoverflow.com/questions/865115/how-do-i-correctly-clean-up-a-python-object
+
+ACP-ScriptFail.js (or .vbs) runs when a script failes
+
+Weather safety script at http://solo.dc3.com/ar/ACPRefGuide.html has
+an example of creating a FocusMax object and Halting it.
+
+--> put this in
+--> Make a separate shell script for calling my stuff, or make
+--> client/server out of my stuff.
+
+Sub Main()
+    Dim FMX
+
+    On Error Resume Next  ' Call both of these "best efforts" (scope may not be connected, etc.)
+    Set FMX = CreateObject("FocusMax.FocusControl")
+    FMX.Halt
+    Util.WaitForMilliseconds 1000
+    Telescope.Park
+End Sub
+[says that ACP 8 and later stops FocusMax.  Hopefully latest FocusMax obeys]
+
+This is all daytime stuff when I am more awake.
+
+Jupiter rises at 10:16 UT = 5:16
+Above 15 at 11:40 UT = 6:40
+
+Mon Feb 11 08:01:21 2019 EST  jpmorgen@snipe
+
+Too humid
+
+http://timgolden.me.uk/pywin32-docs/html/com/win32com/HTML/QuickStartClientCom.html
+
+--> win32com.clients.constants might have the ASCOM and MaxIm
+constants I have been loooking for!
+
+C:\ProgramData\Anaconda3\Lib\site-packages\win32com\client\makepy.py
+
+Chose random library
+
+C:\ProgramData\Anaconda3\Lib\site-packages\win32com\client\makepy.py
+Generating to C:\Users\jpmorgen\AppData\Local\Temp\gen_py\3.7\CBD71DF4-5AED-11D2-BC74-0060979C3633x0x1x0.py
+Building definitions from type library...
+Generating...
+Importing module
+
+So I should consider doing this for MaxIM
+
+And if I want to grab the code, I think it goes 
+
+python C:\ProgramData\Anaconda3\Lib\site-packages\win32com\client\makepy.py -i
+MaxIm Objects
+ {B4955EC7-F7F2-11D2-AA9C-444553540000}, lcid=0, major=1, minor=0
+ >>> # Use these commands in Python code to auto generate .py support
+ >>> from win32com.client import gencache
+ >>> gencache.EnsureModule('{B4955EC7-F7F2-11D2-AA9C-444553540000}', 0, 1, 0)
+
+So the gencash prefix is the Guid
+
+Ahh.  So that will generate the cache _at runtime_ so I can distribute
+this with the code and then get my constants to work right.
+
+
+https://groups.google.com/forum/#!topic/comp.lang.python/YUJOEGVJsRs
+
+OK, of more pressing issue  is cleaning up my object
+
+So as soon as the Python object gets set to None, the camera
+disconnects.  Having ACP running seems to alleviate this.
+
+Reading more about multiprocessing.  The p.join() seems to be good
+form to allow the child process to finish, but it is not necessary to
+make the process actually do anything.
+
+So I need to change the design of the GuideBoxCommander system a
+little bit.  Maybe it should be an object?  It could even be a whole
+separate system of its own?
+
+Keeping it in precisionguide for now, the object sounds good in that
+when it is given a
+
+Wait a minute!  I already have a terminate process, which isn't very
+nice, but might be a good start.  I would use it with pg.GuideBoxMoving = False
+
+So there may be a solution with with
+
+https://stackoverflow.com/questions/865115/how-do-i-correctly-clean-up-a-python-object
+
+Mon Feb 11 18:38:34 2019 EST  jpmorgen@snipe
+
+Looks like it is working!
+
+So how to I write a plan for Jupiter?
+
+waituntil
+
+--> changed filter names back to having spaces
+
+Tue Feb 12 06:57:42 2019 EST  jpmorgen@snipe
+
+--> Having trouble recognizing when guider is centered to 1/2 pixel
+
+--> This is something I will need to check with the conditions are
+    better
+
+--> note ioio.py is being grabbed as IoIO.py!
+
+--> There seems to be a problem with guider_settle
+
+--> Work on guider_settle waiting longer.  Doesn't seem to be waiting 
+    guider_settle_cycle times for first calculation
+
+Tue Feb 12 08:35:31 2019 EST  jpmorgen@snipe
+
+Let's try ACP flats with 2-way wheel off.  Also put back spaces in
+filter names
+
+--> AutoFlats are going to be a problem unless I do background differently
+
+In AutoFlat.vbs:
+
+        Set P = CreateObject("PinPoint.Plate")
+        Call P.AttachFITS(workFile)
+        BG = P.SimpleBackgroundMean                              ' Get fast mean background ADU
+
+I would need to tweak that
+
+--> And even when filters only going in one direction (at least on
+    ASCOM setup), [SII] on-band is coming up as Na on-band!
+
+
+python \\snipe\jpmorgen\py\IoIO\IoIO.py ACP_IPT_Na_R 1800 "C:\Users\jpmorgen\Documents\ACP Astronomy\Images\20190212\Test1-S012-R001-C001-R.fts"
+
+Tue Feb 12 16:56:54 2019 EST  jpmorgen@snipe
+
+might need to call the Close() method of the MaxIm stuff [no, I don't
+think so]
+
+--> CCDCamera.AbortExposure()
+
+Wed Feb 13 18:42:39 2019 EST  jpmorgen@snipe
+
+Moved to do list to later instantiation
+
+Thu Feb 14 13:28:54 2019 EST  jpmorgen@snipe
+
+Hmm.  Scheduler uses a different
+/cygdrive/c/Program Files (x86)/ACP Scheduler/AcquireScheduler.vbs
+
+It doesn't seem to have a new AcquireImage user action
+
+Ah HA!  Here is how I can do some checking in user actions
+
+InStr(LCase(IMG.Description), "#nosolve")
+
+Fri Feb 15 12:23:49 2019 EST  jpmorgen@snipe
+
+--> So I am looking at inserting some code just before SUP.TakePicture
+in /cygdrive/c/Program Files (x86)/ACP Scheduler/AcquireScheduler.vbs
+[maybe near line 1289.  Before would have the guider running even ]
+
+which would do the checking in some sort of description and set up the
+PrecisionGuide system.  Based on my experience with restarting the
+guider, I definitely want to have the PrecisionGuide system run in the
+background so it can smoothly guide between exposures.  So I
+definitely need a COM server with a stored global variable, if
+possible.
+
+First start with global variable.  Actually, if I am just doing this
+in Scheduler, I can just create a global variable there.  I am going
+to do something like
+
+P = CreateObject("precisionguide.PrecisionGuide")
+
+http://timgolden.me.uk/pywin32-docs/html/com/win32com/HTML/QuickStartServerCom.html
+
+\\snipe\jpmorgen\py\HelloCOMServer.py
+\\snipe\jpmorgen\wsh\HelloCOMClient.js
+
+
+\\snipe\jpmorgen\py\HelloCOMServer.py --debug
+
+python C:\ProgramData\Anaconda3\Lib\site-packages\win32com\client\combrowse.py
+
+python C:\ProgramData\Anaconda3\Lib\site-packages\win32com\server\win32traceutil.py
+
+Not working but getting some ideas that running as administrator might work
+
+Copy over to Desktop\IoIO\Scripts
+cscript HelloCOMClient.js
+
+Might need python 3.6.4
+Anaconda2-5.1.0 might have what I want
+
+I have Anaconda3-4.3.1 on IoIO1U1
+
+WORKED!
+
+So this is a bug in Python at the moment.
+
+So it doesn't stay running just by invoking it, but that is because I
+don't have an infinite/event loop that would enable that.
+
+So now I need to think about that.  
+
+--> uninstall latest Python and install older Python.  Looks like I
+    need to stay with 3.6 for now.
+
+It looks like  I migh tneed to learn about event loops.  They are
+designed for asyncio, which I sort of have.  Right now, GuideBoxMover
+is a completely independent task that could potentially be moved into
+an event loop in the main code?
+
+AbstractEventLoop.call_later(delay, callback, *args)
+
+Would be a good one for waking up the GuideBoxMover
+
+The other thing that needs to happen is centering, which is a one-time
+task that really depends on the state of MaxIm
+
+Sat Feb 16 08:23:57 2019 EST  jpmorgen@snipe
+
+Uninstalled latest Python from 2018-12, which hasn't been updated and
+installed Anaconda3-4.3.1 on gigabyte
+
+\\snipe\jpmorgen\py\HelloCOMServer.py
+cscript \\snipe\jpmorgen\wsh\HelloCOMClient.js
+
+--> Autofocus refused because target within 5 deg of horizon.
+
+--> add another target first!
+
+Lambda oph
+RA: 16h 31m 53s Dec: 01° 56' 38"
+But I need to use an R-band object 
+
+DEBUG: GUIDER SETTLED TO 0.5 GUIDER PIXELS [__main__]
+DEBUG: Saved file: C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190217\Na_off-band_001.fits [precisionguide]
+
+Oops, I thought I fixed that.  I guess I copied over a version that
+doesn't have that [yet]
+
+All this time, ACP thinks that it is collecting 1/1s, which I guess is
+why it is hard for it to be interruptable
+
+Oops, I had the wrong version of IoIO.py in there with no with.
+Stopped just as I was about to start another process.  Fixed (I
+hope)...
+
+Oh, that was handy!  Resume plan started me back up where I left off!
+
+Sun Feb 17 15:40:36 2019 EST  jpmorgen@snipe
+
+--> So how do I want to handle shutting down the observatory in this
+interim state?  Killing the script at nautical twilight is not that
+bad an idea 
+
+Ah Ha!  JUpiter is now going the wrong way.
+
+Disconnect ACP, reconnect
+
+python "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py" ACP_IPT_Na_R 1800 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190218\Jupiter-S001-R001-C001-R.fts"
+
+"attempt to start guiding failed..."
+
+So Bob has really mucked with things somehow.
+
+Indeed, when I restart with just MaxIm, it behaves the way I want.
+
+--> consider re-instituting longer R exposure so I can get Jupiter
+
+Mon Feb 18 12:14:54 2019 EST  jpmorgen@snipe
+
+on gigabyte after mucking with ASCOM. -> win32com.client.constants. change
+
+python "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py" ACP_IPT_Na_R 1800 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190218\Jupiter-S001-R001-C001-R.fts"
+
+
+python \\snipe\jpmorgen\py\IoIO\IoIO.py ACP_IPT_Na_R 1800 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190218\Jupiter-S001-R001-C001-R.fts"
+
+Seems to be happy so far.
+
+Tue Feb 19 14:45:23 2019 EST  jpmorgen@snipe
+
+GEM: Looking west No Auto Pier Flip -5.139, -3.018, -0.25
+
+GEM looking east, no Auto Pier Flip -5.333, -3.025, -0.231
+
+
+GEM: Looking west YES Auto Pier Flip -5.586, -3.006, +0.345
+
+GEM: Looking east YES Auto Pier Flip +5.586, -2.994, -0.208
+
+Hmm.  Not what I think
+
+Try guider angle 45 deg on setup camera
+
+GEM: East Looking west YES Auto Pier Flip -5 -3 +44
+
+GEM: West Looking east YES Auto Pier Flip +5 -3 +45
+
+GEM: East Looking west NO Auto Pier Flip -5 -3 +45
+
+GEM: West Looking east NO Auto Pier Flip -5 -3 +45
+
+So the auto pier flip just flips the X axis (or whatever is indicated
+in Guider Motor Control).  The flip in guider angle of 180 may have
+been from something else, or it may be that the camera really does flip
+
+But based on recent experiments on Feb 12:
+
+east looking west: [AutoPierFlip on, MaxIm reference]
+
+X Speed = -3.426 Y Speed 3.4498, angle -179
+
+west looking east: [AutoPierFlip on, MaxIm flip operating]
+
+X Speed 3.4284 Y Speed -3.384 angle = 1.097
+
+The three cases I have tested, "Right now, the calibration is" from
+2018, the one on Feb 21 2019 and the simulator are not consistent in
+my brain yet.  However, re-reading the documentation, it is pretty
+clear that the X Speed and Y Speed are pixels per second that result
+from the X and Y motor motion, presumably assuming square pixels or
+otherwise correcting for that.
+
+http://acp.dc3.com/RotatedGuiding.pdf
+
+There is a note that that ACP requires calibration with telescope
+looking east, PierFlip off.  And there is also talk of turning 
+ PierFlip/GuiderReverseX on when scope is looking east (on west)
+
+This is back from 2007, so things may have changed....
+
+No, it looks like with 8.2, Bob still wants to do things his way....
+
+Bob recommends using CalibrateGuider.vbs
+
+Bob says that MaxIm must be calibrated with scope looking east and
+Pier Flip off.  But what does Auto Pier Flip do?  It looks like it
+automatically flips X when looking east.  So in Bob's PDF, he admits
+he did non-standard but won't change "because it would cause
+confusion."
+
+So the question is, can I turn Auto Pier flip back on after
+calibration?  Well, maybe, since Bob talks of turning PierFlip on when
+scope is looking east.
+
+Tue Feb 19 21:07:23 2019 EST  jpmorgen@snipe
+
+Indeed, I had an ah ha moment: I was going the wrong way the other
+night because MaxIm was not attached to apply the pier flip!  I think
+that is why Bob doesn't want to have MaxIm attached to the 'scope.
+
+OK, the current logic in precisionguide.MaxIm_pier_flip_state has
+Application.TelescopeConnected in the logic mix, so that should fix
+the problem.  
+
+        if (self.alignment_mode == win32com.client.constants.algGermanPolar
+            and self.Application.TelescopeConnected
+            and self.CCDCamera.GuiderAutoPierFlip
+            and self.Telescope.SideOfPier == win32com.client.constants.pierWest):
+            flip = -1
+
+--> But what if MaxIm is not connected to the telescope?  I should test that.
+
+So we are facing east, scope is on west side of pier.  Turn off Auto
+Pier Flip
+
+Main:
+
+RA 07h 46m 24.3s,  Dec +18° 32' 00.1"
+Pos Angle +02° 53.5', FL 1196.6 mm, 1.56"/Pixel
+
+Guider:
+
+RA 07h 46m 36.1s,  Dec +18° 30' 52.2"
+Pos Angle +359° 06.1', FL 400.7 mm, 4.43"/Pixel
+
+west looking east no auto pier flip:
+X Speed -3.403 Y Speed -3.528 Angle = 1.24
+
+Pretty much the same as before, but with X Speed negated, presumably
+because the sense of X is not flipped by MaxIm.
+
+So I start tracking without auto pier flip and it works OK.  I do auto
+pier flip and it starts to run away in X.  Sigh.
+
+Do a pier flip
+
+With auto pier flip on, runs away.
+
+With auto pier flip off, it runs away.  So there is no way to use
+MaxIm guiding with ACP autoguide setup.
+
+Let's double check that.
+
+Disconnect MaxIm and use ACPs scripts. 
+
+03:11:09  Focus position = 30261  Avg HFD =  5.60  Avg FWHM =  4.41
+03:11:09  Temperature: 0.5  Filter: R (slot 1)
+
+--> Ah HA moment revisited.  So MaxIm does its guiding based on
+AutoPier flip.  If I don't have the telescope connected in MaxIm, it
+doesn't know what the pier flip state should be, so I have to handle
+that for it!
+
+Calibration failed because scope was not looking east
+
+So Bob calibrated the guider angle to 1.4 and slightly different
+speeds, but still -3.4 and -3.5.
+
+So I think I am going to need a separate profile.  Got that.
+
+So now I have a MaxIm indicator of whether or not ACP is involved:
+CCDCamera.GuiderAutoPierFlip.  I should also check for MaxIm telescope
+connected state: Application.TelescopeConnected.  That would indicate
+ACP is in control.
+
+So if I have an ACP in control state, I need to assume I am guiding
+with calibration on the west looking east and no pier flip.  I then
+have to track the telescope pier state so that I can flip the guider
+X.  that would probably be the CCDCamera.GuiderReverseX.
+
+So all I need to do is set CCDCamera.GuiderReverseX = True when I am
+on the east side looking west.  I should probably set it to False as
+part of the cleanup of precisionguide.
+
+This is going to take some thinking and testing, since the guide stuff
+is in MaxImData.  I can also revisit my sign error.
+
+For now, as long as I have MaxIm connected and am using the IoIO MaxIM
+Guiding profile in MaxIm, all will be well.
+
+--> Disabled ACP guiding
+
+Ack, the profiles don't save Auto Pier Flip status!  But the Manual
+Calibration is saved
+
+Wed Feb 20 14:00:20 2019 EST  jpmorgen@snipe
+
+Looking back at which GuiderPinPointSolution worked best: WestofPier
+(looking east).  OK, I now know that is the setup for which
+Astro-Physics mounts work as expected: from the equator, N points the
+tube toward torward N.  That is the piece I missed.  To confuse
+matters more, MaxIm AutoPierFlip operates in this configuration,
+except when Bob wants to turn it off....
+
+--> consider replacing MaxIm_pier_flip_state with MaxIm_motor_flip_state
+
+--> how/where to keep track of CCDCamera.GuiderReverseX?  (or whatever
+    Bob tweaks)
+
+python \\snipe\jpmorgen\py\IoIO\IoIO.py ACP_status 1800 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190218\Jupiter-S001-R001-C001-R.fts"
+
+Works.
+
+Do a guider cal.  Angle is 44.6, as expected.
+
+GuiderReverseX was False while on west pointed east.  Also false when
+pointing west.  Both XY speeds are negative.  GuiderAngle also 44
+
+Even on other side of meridian getting
+
+INFO: GuiderReverseX: False [__main__]
+INFO: Xspeed, Yspeed: -4.443930149078369, -4.443930149078369 [__main__]
+INFO: GuiderAngle: 44.60260009765625 [__main__]
+
+So I am not sure what Bob is doing
+
+TakePicture is in AcquireSupport.wsc!  So is AutoGuide!
+
+And it doesn't do this logic for the simulator...
+
+                ' Unrotated guider (angle calibrated and constant)...
+                ' On west, effect is to reverse Dec motion, which reverses Y, 
+                ' combined with the imager being rolled over 180 deg, which 
+                ' reverses both X and Y. The net effect is just reverse X 
+                ' (reverse Ys cancel out!)... unless the mount does a reverse
+                ' Y on flip... in which case we need to re-reverse that too. 
+                ' (more brain burning)
+                '
+                Camera.GuiderReverseX = Util.GEMWestOfPier      ' Reverse X if [looking] west
+                If Util.Prefs.AutoGuiding.ReverseYonFlip Then
+                    Camera.GuiderReverseY = Util.GEMWestOfPier
+                End If
+ 
+
+So Bob uses GuiderReverseX and does it on the reverse side of MaxIm.
+AutoGuide is not called within AcquireSupport.  So my thinking on that
+is correct.
+
+So I have guider_start and guider_stop.  Those should probably check
+for the pier flip stuff.
+
+And I need some property that determines if I am in need of handling
+them.
+
+Do I really need to turn off pier flip?
+
+Wed Feb 20 21:54:55 2019 EST  jpmorgen@snipe
+
+On Rigel which is just to the west of meridian
+
+IoIO.py ACP_IPT_Na_R 1800 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\2019021\Jupiter-S001-R001-C001-R.fts"
+
+Moved Jupiter OK, but guider went off to the right
+
+
+IoIO.py ACP_status 1800 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\2019021\Jupiter-S001-R001-C001-R.fts"
+
+INFO: GuiderReverseX: True [__main__]
+INFO: Xspeed, Yspeed: 3.3900599479675293, 3.3900599479675293 [__main__]
+INFO: GuiderAngle: 1.3748899698257446 [__main__]
+
+Oops, I had the MaxIm state on.  Try connecting telescope to see if it
+works OK.  Nope, moving the wrong way.  Oops, that might be because I
+have guiderReverseX on from before.
+
+So do we want to clear that?  Well, for debugging do so and it works OK.
+
+Pier flip to Sirius.  Moves OK, guides OK!
+
+--> Ack!  Scope DEC is going to be messed up
+
+Load ACP config.  Already Auto Pier Flip is not checked (my angst
+about this). [XY]Speed looks OK.  Not connected to anything.
+
+Moving to the right in RA, not to the left
+
+Was down and to the right and wanted to move  [-34.66596838 -21.76758005]
+
+Previously was to the right and wanted to move [-17.61828752   6.30562391]
+
+These are pre-flip printouts
+
+But I am not pier flipping now, so I think it should want to move +34.
+So where is the missing pier flip?  Or actually, the guider
+calibration was effectively reversed, so I need to apply that to my
+motion, but not to the guider
+
+Well, that assumption worked on the east side.  I suspect if I do a
+pinpoint solution west of pier for the main, I will even things out...
+
+04:11:55  Focus position = 30347  Avg HFD =  6.91  Avg FWHM =  5.36
+04:11:56  Temperature: 0.4  Filter: R (slot 1)
+
+Main West
+RA 07h 43m 28.9s,  Dec +05° 11' 14.7"
+Pos Angle +02° 44.4', FL 1198.1 mm, 1.56"/Pixel
+
+Going back over to east looking west, Capella
+--> check guiding DEC is near 46
+
+But first get guider astrometry east looking west
+
+RA 05h 16m 04.6s,  Dec +46° 02' 35.9"
+Pos Angle +178° 58.3', FL 400.7 mm, 4.42"/Pixe
+
+Now try IoIO....
+
+Moved the wrong way!
+
+So I don't need a consistent minus, I just need one when I am on the
+west side looking east.  Oh wait, that means I just don't need a pier
+flip at all!  
+
+Ah HA!  CCDCamera.GuiderReverseX is not set yet when I check it for my
+motion!
+
+So we really need to check for this both when we are starting to guide
+and when we are about to move.  So make a method out of it.  Maybe ACP_mode
+
+replace guider_manage_flip with ACP_mode
+
+Ack.  Still went in the wrong direction.
+
+OK, this might be better, since it would give me a full minus for both sides.
+
+I was arguing for the minus because Bob turns off the pier flip and
+gets the RA calibration going in the other direction.  OK, this is
+starting to gel.  What was working before was
+GuiderPinPointSolutionWestofPier.fit.  That 
+
+Hmm.  Now guidebox mover is backward....
+
+So there is a fumdamental sign difference between when the guider is
+calibrated on the east looking west (MaxIm) or West looking east (ACP)
+and my routines, particularly scope_wcs feel these.
+
+--> This means I need to work on scope_wcs!  Figure out how to do this
+    with simulator when I am awake! 
+
+
+Thu Feb 21 10:34:22 2019 EST  jpmorgen@snipe
+
+Looking at scope_wcs.  I have no idea why the pier_flip_sign is
+there.  It makes more sense to change CDELT, but 
+
+            if 'RA' in header['CTYPE1']:
+                header['CRVAL1'] = RA / 24*360 * pier_flip_sign
+                header['CRVAL2'] = DEC * pier_flip_sign
+            elif 'DEC' in header['CTYPE1']:
+                header['CRVAL2'] = RA / 24*360 * pier_flip_sign
+                header['CRVAL1'] = DEC * pier_flip_sign
+
+Tricky here, since move_with_guide_box is called with dra_ddec, which
+has alreday been through scope_wcs
+
+OK, so I need to come up with some tests that work on gigabyte
+
+On east looking west
+
+Brightest star is on the lower right (1503, 1228)
+
+python \\snipe\jpmorgen\py\IoIO\precisionguide.py center
+
+INFO: Seconds to move guider in RA and DEC: [-20.10508303  -5.64066179] [__main__]
+
+So that is in the same sense as the real scope, as if (0,0) is at the
+top left.
+
+Interesting.  After failed to center target exit, MaxIm froze.  But on
+fresh restart after pier flip did not
+
+Pier flip gives similar seconds to move guider in RA and DEC.  That
+has always bugged me and I think it is incorrect.  RA and DEC are both
+flipped and if I am in true coordinates, my true dra_ddec should
+reflect that.  When I get to doing motion, that is when I figure out
+what the scope wants.  In that case, GuiderReverseX or AutoPierFlip
+takes care of RA, but I think I need to take care of DEC!
+
+So right now, how does it work?  I have this weird minus sign on RA
+and DEC if I have a flip.
+
+West looking east
+DEBUG: world coordinates of obj_center and desired_center: array([[-298.21254273,  -29.43216061],
+[-298.30211075,  -29.45571522]]) [__main__]
+
+East looking west
+
+DEBUG: world coordinates of obj_center and desired_center: array([[ 284.95007883,   32.74325672],
+       [ 284.8573623 ,   32.71968646]]) [__main__]
+
+OK, so that is proof that I am totally out of whack here.  
+
+West looking east dra
+-298.21254273 - (-298.30211075)
+0.08956802000000152
+
+West looking east ddec
+-29.43216061 - (-29.45571522)
+0.023554609999997922
+
+East looking west dra
+284.95007883 - 284.8573623
+0.09271653000001834
+
+East looking west ddec
+32.74325672 - 32.71968646
+0.02357025999999962
+
+But had I not done anything:
+
+298.21254273 - (298.30211075)
+-0.08956802000000152
+
+29.43216061 - (29.45571522)
+-0.023554609999997922
+
+So this was a tricky way of flipping both coordinates without dealing
+with the cdelts, even though I don't think I knew what I was doing!
+
+East looking west looks same
+West looking east now looks more sensible, but the  seconds to move
+guider in RA and DEC are now negated!
+
+DEBUG: Object center (X, Y; binned) = (1503, 1228) [__main__]
+DEBUG: world coordinates of obj_center and desired_center: array([[ 321.28409865,   36.55662902],
+       [ 321.38121654,   36.58018134]]) [__main__]
+DEBUG: CENTERING TARGET WITH GUIDER SLEWS [__main__]
+DEBUG: IN GUIDER_MOVE [__main__]
+INFO: Seconds to move guider in RA and DEC: [ 23.24465173   5.63712109] [__main__]
+DEBUG: GuiderReverseX set to False [__main__]
+DEBUG: Guider DEC set to 37 [__main__]
+DEBUG: MaxIm_pier_flip_state = 1 [__main__]
+
+OK, so now we need to really determine which way is up!
+
+For that we have the guider speed and the knowledge of which side of
+the pier they were calibrated on.
+
+I already have self.calculated_guide_rates, but I do it with abs and
+then don't use it anywhere.  What if I preserved sign and used it.
+
+So I have Guider[XY]Speed in pixels/s of guider motor motion,
+presumably assuming square pixels.  I calculate that into guide_rates,
+which is in deg/s
+
+I was really close to doing this correctly with guider_cal_pier_side
+
+West looking east
+
+WARNING: Calculated RA guide rate is off by more than 10% (scope reported, calculated): (0.004178074616551509, 0.0068473464135742294).  Have you specified the correct guider astrometery image?  Have you changed the guide rates changed since calibrating the guider?  Assuming reported telescope guide rates are correct. [__main__]
+WARNING: Calculated DEC guide rate is off by more than 10% (scope reported, calculated): (0.004178074616551509, -0.0010688369820278432).  Have you specified the correct guider astrometery image?  Have you changed the guide rates changed since calibrating the guider?  Assuming reported telescope guide rates are correct. [__main__]
+
+East looking west
+
+WARNING: Calculated RA guide rate is off by more than 10% (scope reported, calculated): (0.004178074616551509, 0.0068473464135742294).  Have you specified the correct guider astrometery image?  Have you changed the guide rates changed since calibrating the guider?  Assuming reported telescope guide rates are correct. [__main__]
+WARNING: Calculated DEC guide rate is off by more than 10% (scope reported, calculated): (0.004178074616551509, -0.0010688369820278432).  Have you specified the correct guider astrometery image?  Have you changed the guide rates changed since calibrating the guider?  Assuming reported telescope guide rates are correct. [__main__]
+
+Note both XSpeed and YSpeed are negative, but the RA guide rate comes
+out positive because +RA is to the east (left on the sky)
+
+Moving forward, I have self.guider_cal_pier_side and
+self.calculated_guide_rates as my new standards
+
+East looking west
+
+INFO: Seconds to move guider in RA and DEC: [ 24.12814855   5.63688234] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [ 14.72237549 -22.03452482] [__main__]
+
+Difference in absolute values is difference of guider speed from mount
+vs simulated value.  Difference in DEC sign suggests a flip
+
+West looking east
+
+INFO: Seconds to move guider in RA and DEC: [-24.0991814  -5.6419528] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [-14.70470048  22.05434521] [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [-14.70470048  22.05434521] [__main__]
+
+Keep in mind I am already flipping the old RA and DEC movement due to
+absolute dra_ddec calculations.  The final answer I am looking for is
+minus and minus as input to a final pier flip.
+
+Oops, the above was with AutoPierFlip on.  Also may make a difference if
+I use the hub or not how the pier flip works!
+
+ACP mode
+East looking west
+X Speed -4.443 Y Speed -3.014 Angle = 44
+
+INFO: Seconds to move guider in RA and DEC: [-28.59928052  -5.64301926] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [-17.45054519  22.058514  ] [__main__]
+DEBUG: GuiderReverseX set to True [__main__]
+DEBUG: Guider DEC set to 49 [__main__]
+DEBUG: MaxIm_pier_flip_state = -1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [ 17.45054519 -22.058514  ] [__main__]
+DEBUG: GuiderReverseX set to True [__main__]
+DEBUG: Guider DEC set to 49 [__main__]
+DEBUG: MaxIm_pier_flip_state = -1 [__main__]
+
+West looking east (ACP's calibration)
+
+INFO: Seconds to move guider in RA and DEC: [ 28.58563401   5.63582481] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [ 17.44221844 -22.03039094] [__main__]
+DEBUG: GuiderReverseX set to False [__main__]
+DEBUG: Guider DEC set to 49 [__main__]
+DEBUG: MaxIm_pier_flip_state = 1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [ 17.44221844 -22.03039094] [__main__]
+DEBUG: GuiderReverseX set to False [__main__]
+DEBUG: Guider DEC set to 49 [__main__]
+DEBUG: MaxIm_pier_flip_state = 1 [__main__]
+
+So when the picture remains the same but when the mount flips, we
+rightfully flip absolute dra_ddec.  The guider command remains the
+same regardless of pier flip.  I am used to seeing a star in the same
+position in the guider and being able to press the N/S buttons without
+respect to flip to get the star back where it belongs.  This is what
+we have here and it goes in the same sense that previous motion has
+(minus moves up).  RA looks like it might be backward.  Normally by the time I
+see "Seconds to move guider" it looks negative.  But we are in ACP
+mode, so that might be the reason.
+
+MaxIm mode
+East looking west (MaxIm's calibration)
+X Speed +3.443 Y Speed -3.014 Angle = 44 [+4.443 was too large]
+
+INFO: Seconds to move guider in RA and DEC: [-28.59928052  -5.64301926] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [-17.45054519  22.058514  ] [__main__]
+DEBUG: MaxIm_pier_flip_state = 1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [-17.45054519  22.058514  ] [__main__]
+DEBUG: MaxIm_pier_flip_state = 1 [__main__]
+
+West looking east
+
+INFO: Seconds to move guider in RA and DEC: [ 28.58563401   5.63582481] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [ 17.44221844 -22.03039094] [__main__]
+DEBUG: MaxIm_pier_flip_state = -1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [-17.44221844  22.03039094] [__main__]
+DEBUG: MaxIm_pier_flip_state = -1 [__main__]
+
+So they are flipped.  What do we expect?
+
+Maybe we need to change the 
+
+Oops.  I have the guider angle to contend with in a way I may not be
+expecting.  By using the mounts guider_rates, I was getting
+perpendicular motion.  By using the guide angle, I am foreshortening
+that.
+
+So the guider rate of 4:3 is interesting, but I don't see it telling
+me about pixel size.  They seem pretty square.
+
+OK, so I need to rethink this.  XSpeed and YSpeed are mount motion in
+pixel coordinates.  GuiderAngle is the orientation of the guide camera
+with respect to the mount.  I can get GuiderAngle with better accuracy
+from PinPoint solutions.  And the mount knows its guide rates.  This
+is how I did it before.  What I have been lacking is knowledge of
+which way north really is and on what side.  For that, we can just 
+
+Ah Ha.  I need to know north/south in cal but also the pier side it
+was on at that time.  Also use CROTA1
+
+CROTA1 in Guider WestofPier = 8.16320904052E-001
+CROTA1 in Guider EastofPier =  1.02909934506E+000
+
+Oops, I really do need to look at the CDELT
+
+East
+CDELT1  	= 1.22916298234E-003 / [deg/pixel] X-axis plate scale                 
+CROTA1  	= 1.02909934506E+000 / [deg] Roll angle wrt X-axis                    
+CTYPE2  	= 'DEC--TAN'           / Y-axis coordinate type                         
+CRVAL2  	= 4.60432944960E+001 / Y-axis coordinate value                        
+CRPIX2  	= 2.90000000000E+002 / Y-axis reference pixel                         
+CDELT2  	= 1.18662982061E-003 / [deg/pixel] Y-Axis Plate scale                 
+
+West
+CDELT1  	= -1.22944067206E-003 / [deg/pixel] X-axis plate scale                 
+CROTA1  	= 8.16320904052E-001 / [deg] Roll angle wrt X-axis                    
+CTYPE2  	= 'DEC--TAN'           / Y-axis coordinate type                         
+CRVAL2  	= 1.81555203362E+001 / Y-axis coordinate value                        
+CRPIX2  	= 2.90000000000E+002 / Y-axis reference pixel                         
+CDELT2  	= -1.18722362974E-003 / [deg/pixel] Y-Axis Plate scale                 
+
+OK, worked on some diagnositcs, but I am still wondering if I can grep
+absolute north out of the guider calibration.  I don't know the camera
+angle a priori.  I could do a thought experiment or maybe some
+simulation experiments.  One possible reason that north ends up being
+up-side-down on my mount is that the mount runs the DEC axis the other
+way relative to other mounts.
+
+Oh, wait a minute, their Y always goes down.  I guess you would expect
+that if you had north up.  When you press north, the star goes down
+
+Try a 180 calibration
+
+GEM: East Looking west No Auto Pier Flip -5, -3, 180
+
+GEM West looking east, no Auto Pier Flip -5, -3, 180
+
+GEM: East Looking west YES Auto Pier Flip 5 -3 -180
+
+GEM: West Looking east YES Auto Pier Flip -5 -3 -180
+
+But I am not seeing the camera really rotate, hence the fact that the
+angle stays at 180.  The auto pierflip is what flips the XSpeed sign.
+
+But it is a good sign that both MaxIm and
+
+Think about calibration of plane camera on GEM: E, N
+
+East side looking west right and down
+
+West side looking east, left and down
+
+OK, so based on the buttons and the L, you can tell what the flips and
+angles are and therefore believe the camera angle.   And it all boils
+down to the E/W.  Hence the 180 camera angle case has the opposite
+signs of Guider X Speed.
+
+Ultimately, I want to make sure I am pressing the correct button when
+I want to go north.  If I trust guider calibration camera angle, it is
+telling me which direction is N on the CCD.  I can grep the same thing
+out of the astrometry.  The key thing the guider calibration doesn't
+give me is which side of the pier it was on.  That I can get from the
+astrometry
+
+So if I want to emulate IoIO, I need to have the guider calibration
+agree
+
+west looking east: [AutoPierFlip on, MaxIm flip operating], no camera rotation
+X Speed 4 Y Speed -3 angle = -0.2
+
+Whew!  Finally getting negative and negative, as per expected.  This
+came out as a opposite pier, presumably because I was using a west of
+pier looking east astrometry
+
+Same side gives undesired +Y.  Also not getting same absolute  RA and
+DEC.  Oh, that might be a problem!  Getting positive
+
+Pinpoint Same side of guider calibration (Pier east, looking west)
+Scope is Pier west looking east, pier flip state, auto pier flip is on
+
+DEBUG: pinpoint_N_is_up = 1 [__main__]
+INFO: Seconds to move guider in RA and DEC: [-22.50423895  -5.64150908] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [-10.80269058  -6.79256445] [__main__]
+DEBUG: MaxIm_pier_flip_state = -1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [ 10.80269058  -6.79256445] [__main__]
+D
+
+Flip to pier east looking west (no pier flip)
+
+INFO: Seconds to move guider in RA and DEC: [-24.76281224  -5.64212361] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [-11.88687159  -6.79330437] [__main__]
+DEBUG: MaxIm_pier_flip_state = 1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [-11.88687159  -6.79330437] [__main__]
+DEBUG: MaxIm_pier_flip_state = 1 [__main__]
+D
+
+Pinpoint Opposite side of guider calibration (Pier West looking east)
+Scope is Pier west looking east, pier flip state, auto pier flip is on
+
+DEBUG: pinpoint_N_is_up = -1 [__main__]
+INFO: Seconds to move guider in RA and DEC: [ 23.28643556   5.63710945] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [ 15.28119533   6.77433184] [__main__]
+DEBUG: MaxIm_pier_flip_state = -1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [-15.28119533  -6.77433184] [__main__]
+DEBUG: MaxIm_pier_flip_state = -1 [__main__]
+
+pier east looking west (no pier flip)
+
+INFO: Seconds to move guider in RA and DEC: [-24.76281224  -5.64212361] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [-16.25003405  -6.78035755] [__main__]
+DEBUG: MaxIm_pier_flip_state = 1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [-16.25003405   6.78035755] [__main__]
+DEBUG: MaxIm_pier_flip_state = 1 [__main__]
+
+So this is all messed up.  In absolute terms, dra_ddec should flip
+between pier flips
+
+I think I understand the reason absolute rates are changing a little:
+scope_wcs and the cdelts
+
+Hey!  Are we going through this too many times?  Don't seem to be
+
+Pinpoint Opposite side of guider calibration (Pier West looking east)
+Scope is Pier west looking east, pier flip state, auto pier flip is on
+
+Scope is Pier west looking east, pier flip state, auto pier flip is on
+
+DEBUG: forcing pinpoint_N_is_up = 1 [__main__]
+DEBUG: self.calculated_guide_rates: array([ 0.00636681,  0.00347669]) [__main__]
+DEBUG: pier_flip_sign: -1 [__main__]
+DEBUG: world coordinates of obj_center and desired_center: array([[ 154.52251258,   42.79189526],
+       [ 154.62882584,   42.81544519]]) [__main__]
+INFO: Seconds to move guider in RA and DEC: [ 26.54961238   5.63628529] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [ 17.42258112   6.77334141] [__main__]
+DEBUG: MaxIm_pier_flip_state = -1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [-17.42258112   6.77334141] [__main__]
+
+pier east looking west (no pier flip)
+
+DEBUG: forcing pinpoint_N_is_up = 1 [__main__]
+DEBUG: self.calculated_guide_rates: array([ 0.00636681,  0.00347669]) [__main__]
+DEBUG: pier_flip_sign: 1 [__main__]
+DEBUG: world coordinates of obj_center and desired_center: array([[ 102.4501471 ,   41.08716901],
+       [ 102.34668622,   41.0635958 ]]) [__main__]
+INFO: Seconds to move guider in RA and DEC: [-24.76281224  -5.64212361] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [-16.25003405  -6.78035755] [__main__]
+DEBUG: MaxIm_pier_flip_state = 1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [-16.25003405  -6.78035755] [__main__]
+
+Going back to what I expect.  Negative, negative is what I expect,
+since I have to bring the star up & that doesn't change with pier
+flip.  And when I have pier flip X on, I command MaxIm and it flips is back
+
+Am I not understanding the effect of tweaking CDELTs on multiple coordinates?
+
+Looking at the pattern: OK = no pier flip, same side cal and opposite w/pier flip
+And the sense of RA and DEC minus error is flipped between the others
+
+Pinpoint Same side of guider calibration (Pier east, looking west)
+Scope is Pier west looking east, pier flip state, auto pier flip is on
+
+WARNING: forcing pinpoint_N_is_up = 1 [__main__]
+WARNING: pier_flip_sign forced to: 1 [__main__]
+INFO: Seconds to move guider in RA and DEC: [-21.87996696  -5.64131725] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [-21.87996696  -5.64131725] [__main__]
+DEBUG: MaxIm_pier_flip_state = -1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [ 21.87996696  -5.64131725] [__main__]
+
+pier east looking west (no pier flip)
+
+WARNING: forcing pinpoint_N_is_up = 1 [__main__]
+WARNING: pier_flip_sign forced to: 1 [__main__]
+INFO: Seconds to move guider in RA and DEC: [-22.4905105  -5.641505 ] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [-22.4905105  -5.641505 ] [__main__]
+DEBUG: MaxIm_pier_flip_state = 1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [-22.4905105  -5.641505 ] [__main__]
+
+Pinpoint Opposite side of guider calibration (Pier West looking east)
+Scope is Pier west looking east, pier flip state, auto pier flip is on
+
+WARNING: forcing pinpoint_N_is_up = 1 [__main__]
+WARNING: pier_flip_sign forced to: 1 [__main__]
+INFO: Seconds to move guider in RA and DEC: [-21.87996696  -5.64131725] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [-21.87996696  -5.64131725] [__main__]
+DEBUG: MaxIm_pier_flip_state = -1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [ 21.87996696  -5.64131725] [__main__]
+
+pier east looking west (no pier flip)
+
+WARNING: forcing pinpoint_N_is_up = 1 [__main__]
+WARNING: pier_flip_sign forced to: 1 [__main__]
+INFO: Seconds to move guider in RA and DEC: [-25.44992557  -5.64229422] [__main__]
+INFO: Seconds to move guider in absolute RA and DEC: [-25.44992557  -5.64229422] [__main__]
+DEBUG: MaxIm_pier_flip_state = 1 [__main__]
+INFO: Seconds to command MaxIm to move guider in RA and DEC: [-25.44992557  -5.64229422] [__main__]
+
+Well, how 'bout that!  It looks like if I get rid of all the flips, I
+get the right answer!
+
+Ah HA!  It is the main camera that needs the flip
+
+Fri Feb 22 11:02:21 2019 EST  jpmorgen@snipe
+
+So main East of pier looking west was what worked as expected.  That
+happens to be the normal up state of the mount for what it is worth.
+It is also the up state of the camera up, which agrees with the
+guider.
+
+Consider doing flip _before_ going in
+
+Whew!  That seems to work.  The next brave frontier is to flip
+everything
+
+--> first check into revision control
+
+OK, I see where the issue may be.  guider_move goes straight from
+dra_ddec, not pixel coordinates, so it doesn't get re-flipped.  So if
+we do a coordinate flip in scope_wcs, we need to do it back in
+guider_move.  In that case, we need to have our own flip property that
+is relative to our preferred calibration direction.
+
+Before I get into that, check the move_with_guide_box.  That uses
+scope_wcs to change back to guider pixel coordinates.  So if I am
+doing flipping in scope_wcs, I would not need to do anything special
+for that.
+
+But how is AutoPierFlip handled there?  Not sure.  I am moving the
+position of the guide box, so it is not clear why it was backward with
+Bob's pier flip issues, other than that I was having my own!
+
+OK, thinking more about cameras not being oriented in a cardinal
+direction.
+
+It is important that the astrometry for the main and guide cameras be
+on the same side of the pier (now that I am not flipping anything).
+
+But other than that, their relative angles can be anything.
+
+So if we have gotten things so that the north button goes north in
+guider, even if the main camera is up-side-down relative to that, the
+astrometry will tell us
+
+python \\snipe\jpmorgen\py\IoIO\precisionguide.py test_center 1000 1000
+
+Fri Feb 22 23:16:55 2019 EST  jpmorgen@snipe
+
+Whew!  Got guider_move to work OK.  Next up is center with guide box.
+
+Sat Feb 23 12:03:42 2019 EST  jpmorgen@snipe
+
+Hope that will work since I flip twice.
+
+How can I test guiding?
+
+DEBUG: Object center (X, Y; binned) = (1503, 1228) [__main__]
+
+python \\snipe\jpmorgen\py\IoIO\precisionguide.py center 1503 1228
+
+Do COM server for a bit.  Util.Script is where
+
+// Use Util.Script.xxx to access AcquireImages/AcquireScheduler globals, etc.
+
+What does that really mean?
+
+Sat Feb 23 22:13:19 2019 EST  jpmorgen@snipe
+
+Doing some tests and finally getting things to work OK with my test
+code set up properly.  
+
+Recalibrated guider
+Telescope connected, Pier Flip on, east looking west (not MaxIm flipped)
+X Speed -5.217 Y Speed -2.994 Angle -0.357
+
+Ahh!  Auto pier flip isn;t going to work because the camera actually
+doesn't flip!
+
+So I need to test this live
+
+Oops, I overwrote ioio.py.safe with IoIO.py.  Well, I have copies of
+everything
+
+rsync IoIO and precisionguide over
+
+"C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py" ACP_IPT_Na_R 1800 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190224\Aldebaran-S001-R001-C001-R.fts"
+
+Worked east side pointing west, standard MaxIm guiding
+
+West side pointing east is going the wrong way.
+
+--> Oops, had a double negative bug in code for ACP_mode.  Check this
+    during day
+
+Oops, humidity too high!  Star was really starting to cloud over.  86%
+So maybe 75% is not that bad....
+
+Wed Feb 27 13:02:58 2019 EST  jpmorgen@snipe
+
+Testing Util.Script.test_global.  Seems to work in a single plan run,
+but when I abort a plan, the global goes away, presumably because the
+AcquireSupport is finished.  I was hoping the global could stick
+around in ACP somehow, but that would probably invovle actually
+programming the guts of ACP.
+
+So to go with the current reality, in plain old ACP, I would need to
+have everything in a plan that had access to a single run of
+PrecisionGuide.  This is reasonable, since I would do that anyway.
+Single target, lots of filters and exposures.  I could even have
+different targets in the plan, like the 10 degree offsets I was
+thinking of.
+
+--> I could use Target End and look for no next to do a graceful
+    shutdown of the object
+
+Take a look at
+/cygdrive/c/Program Files (x86)/ACP Scheduler/AcquireScheduler.vbs
+line 836 for some code about OBS.Description
+
+More looking at AcquireScheduler.vbs and find "'Announce start of run"
+Looks like this is a target-oriented thing because of when
+SUP.UserActions.TargetEnd is called.
+
+--> Bob assumes offset tracking (non-sidereal tracking) can't be on
+    when autoguiding is on, so I would have to turn the guider off in
+    TargetEnd
+
+So in Scheduler, it goes
+
+User
+Project
+   . Plan [this is where priority is set,
+     	  use Best Efforts so plan runs until constraint fails]
+      . Observation [effectively an ACP Target, can do Repeat Count]
+         . ImageSet [all of the exposures]
+
+So a plan might have many observations, like Jupiter and 10 degree
+offsets or just one, like a comet, or maybe comet center and offsets
+
+Eventually I could have a comet project which would contain all the
+comet plans.  This might be handy because I could copy plans within a
+project and just edit the ephemeris.  But can I enter Jupiter?  Yes!
+
+OK, recalling how Aspasia all night worked.  I had a plan with many
+observations and the observations had "Time from previous" = 300 and
+time spacing tol = 60.  But the plan dominated all the time.  There
+was no way to interleave any other plan from any other project.  To
+interleave, I had to make a project that had many plans.  Each of
+those plans had observations with large repeat counts (because of
+short exposures).
+
+So for Jupiter, I want a project with at least one plan, presumably
+called Jupiter.  In that Plan I need at least one Observation of
+Jupiter.  In the Observation I need at least one Image Set.
+Currently, my image set looks something like
+
+[check center]
+R
+Na_off
+Na_on
+repeat of 5
+    [check center]
+    SII_on
+    SII_off
+
+When I expand the filter wheel I would add U and V and maybe UV and B
+
+I would also like to add the +/- 10 deg points --> Maybe those should
+be standards near Jupiter.  But those would have to be in separate
+Observations, since they are pointed somewhere else.  But it makes
+sense to have them in the same Plan so they get executed at the right
+time, either right before or, if I move them to the very end, right
+after the Na obesrvations.
+
+Ah AH!  I could have the offsets go first, since at least one of them
+is going to be above the 5 degree horizon autofocus limit.
+
+OK, new plan might be
+
+Offset W 10 deg These can be special Jupiter commands with offset in Description
+Offset E 10 deg Run these as a separate Observation or Plan
+Offset N 10 deg
+Offset S 10 deg
+
+Na_on			5
+Na_off			1
+Repeat 2 or 3		12 or 18
+    SII_on
+    SII_off
+R
+V
+B
+U			5
+UV			10
+short exposures
+   SII_on
+   Na_on
+   SII_off
+   Na_off		1
+Repeat 2 or 3		12 or 18
+    SII_on
+    SII_off
+			46 or 58
+
+
+--> conisder a general offset UserActions command
+
+Hmm.  The offsets would have to be long exposures + I would not want
+them to take too much time away from the IPT.  I really just want to
+do them once at local midnight, or if worse comes to worse, just once
+when Jupiter is at a certain airmass.  Maybe I should do them once per
+side of sky.  So I can take hour angle ranges to make that work plus
+avoid mount flips!  They could be separate high priority plans that
+would then interleave effectively with the drone of the normal observations
+
+So how do I get the periodic centering to work?  Ideally I do a closed
+loop on what comes in, but I worry about filter offsets
+
+--> I can check in the reduction to see if those are real at this
+    point.
+
+I could have a simple timer that would check and recenter with guider moves
+
+Thu Feb 28 06:22:03 2019 EST  jpmorgen@snipe
+
+--> Now Io seems to be going north in move_with_guidebox
+
+--> Looking at logic in move_with_guide_box and seeing that some
+update may be necessary with new understanding of coordinate flips
+
+This is a problem for telescope on oppostite side of astrometry (west
+looking east)
+
+At least it centers it on the ND filter, but just high
+
+So it is easy to see the move is coming in negative Y in pixels when it
+should be positive Y to move the box down
+
+So I should be able to test this out with the simulator pretty easily
+
+
+I use to_world in both center and move_with_guide_box.  In center, it
+is using astrometry_from = None, which defaults to main.  That
+establishes a dw_coords which works in guider_move, but requires a
+full flip of both axes through astrometry_pier_flip_state logic,
+because absolute astrometry is flipped relative to camera axes when
+the camera is flipped across the pier, but for the guider buttons to
+bring the relative position of the star back, only E/W is flipped, so
+we flip it again just on E/W
+
+Move_with_guide_box takes the same dra_ddec that guider_move does, so
+at some level, with respect to the scene in the guider camera, it
+needs to be negated on pier flip.  Where I think this shouldn't matter
+is that I also do the flip of the current guide box position.  So that
+comes out at a both-axes-negated 
+
+
+guider_move actually pushes the buttons for relative motion that only
+flips E/W, which is why I need to 
+
+when we are on the guider, world coodinates are similarly flipped
+relative to the center of the CCD, though I don't calculate that relative
+
+Thu Feb 28 17:37:23 2019 EST  jpmorgen@snipe
+
+Print some debugging statements with new logic
+
+normal pointing state (east looking west)
+
+python \\snipe\jpmorgen\py\IoIO\precisionguide.py test_center 1503 1228
+
+No difference, since this is the real center
+
+
+python \\snipe\jpmorgen\py\IoIO\precisionguide.py test_center 1500 1226
+
+So that seems to be resulting in the negative, negative that we want,
+since we are specifying a desired center that is at smaller
+coordinates.  Now pier flip
+
+Here is where I have had trouble getting the guider to work.  Turn off
+Auto Pier Flip and it seemed to be happier.  We are on the west
+looking east, which is where ACP wants to be calibrated, so we don't
+pier flip.  
+
+Looks like we are getting minus minus on both sides of the pier.  So
+somehow this new solution should work, though I don't understand why.
+
+Yeah, I really expect there to be some sort of pier flip thing showing
+up.  In the case of guider_move, we were pressing buttons that MaxIm
+had reversed.
+
+Thu Feb 28 20:38:09 2019 EST  jpmorgen@snipe
+
+Back to the issue of making Scheduler work with PrecisionGuide.  So
+each Observation is going to be a pointing at Jupiter.  It will start
+PrecisionGuide and do an initial center.  I can have a timer in
+PrecisionGuide to check for elapse time and maybe neighbor filters so
+that centering happens when I want it.
+
+--> Consider collecting a separate log file of center motions
+
+Thu Feb 28 22:17:21 2019 EST  jpmorgen@snipe
+
+Doing some testing at night of latest PrecisionGuide stuff.
+
+On Betelguse which is east looking west
+
+
+python "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py" ACP_IPT_Na_R 1800 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190228\Jupiter-S001-R001-C001-R.fts"
+
+Worked
+
+Try Procyon
+
+Focus was really bad
+
+03:36:32  31794, 09.88, 1025, 988, 298195, 5020,  1, 07.88
+03:36:32  Focus position = 31794  Avg HFD =  7.93  Avg FWHM =  6.27
+
+Try again to see if it uses move_with_guide_box
+
+Still too well centered!  See if I can move guide box by hand +3 pixels
+in X
+
+Filter is twitchy!
+
+Reporting need to move in minus X!
+
+WORKED!
+
+Mon Mar 04 05:47:49 2019 EST  jpmorgen@snipe
+
+!! Need to select a calibration star that is farther west
+
+Moving Jupiter with guide slews in the wrong direction
+
+We are west looking east.  Should be natural ACP calibration, no flip
+needed, but X is going the wrong way.
+
+Looks like, as one might expect, if guider is calibrated the reverse
+of the previous value, all guider slews have to be reversed
+
+But that begs the question: why was it correct for MaxIm?
+
+--> Figure this out and document it in MaxIm_pier_flip_state.
+    Possibly rename this function to reflect a more absolute sense
+    --> Take out ACP flip in calling code
+
+--> Ooops, cooler may have been off
+
+--> Consider doing full guider direction logic in __init__ since I
+    think I know it at this point.  When testing, keep in mind
+    commanded direction is backward from what I expect for west
+    looking east
+
+Wed Mar 06 09:02:29 2019 EST  jpmorgen@snipe
+
+--> APCC is still kept running by something.  Probably the Python
+    connection?
+
+Wed Mar 06 13:00:57 2019 EST  jpmorgen@snipe
+
+If I wanted to take care of APCC connection to Python, I could
+potentially do MaxImData as a with, but that is not exactly what I
+want.  __del__ might be better
+
+--> generally clean up memory, links, etc.
+
+https://stackoverflow.com/questions/40536821/python-enter-exit-vs-init-or-new-del
+
+__del__ is called when all references are removed and might not get
+called depending on the order in which things are deleted.  Worry
+about this later
+
+As far as the direction of RA motors go, that is something that
+surprised me, though it shouldn't have.  West looking east like Bob
+wants it results in the opposite sign.  So it looks like I get some
+sort of absolute E/W too!
+
+So N is clearly pushed, but then is it W or E?
+
+East looking west has CDELT[12]
+
+WAIT A MINUTE!  PA is position angle, which is the same thing as
+camera angle, so CROTA[12] is not necessarily needed and my hack with 
+
+https://fits.gsfc.nasa.gov/standard40/fits_standard40aa-le.pdf
+
+PA is not an official WCS and CROTA is depreciated
+
+CDi_j are the new way to do CROTA.  They are a linear transformation
+matrix (with scale) to go from pixel axis j to intermediate coordinate
+axis i.  It might be easier to just use their transformations
+
+proj_plane_pixel_scales(wcs).  This is in astropy.wcs.utils, or just
+do the full thing
+
+GuiderPinPointSolutionEastofPier.fit
+
+has positive CDELT values
+
+Thu Mar 07 06:36:35 2019 EST  jpmorgen@snipe
+
+Ack!  PA shows reminds me that Y is negative compared to what I think
+of in MaxIm (0,0 at top left, not bottom left)
+
+--> how does this affect all my thinking?
+
+Thu Mar 07 07:23:43 2019 EST  jpmorgen@snipe
+
+Calibration on pier flip goes right left, down up, resulting in
+East pointing west (normal state, pier flip or not)
+minus minus
+
+West pointing East no pier flip
+right left, down up (minus minus)
+
+Pier flip
+right left, down up (plus minus)
+
+So I can guess the  +X = west for normal pointing state
+
+So before I re-read the documentaton and get re-confused let me write
+down where I think I am know.
+
+I see the star move to the right, toward +X during calibration.  The
+result is a -X speed.  Assuming calibration is telling us the
+_response_ of the buttons, then +X must be E, _assuming_ a N up E left
+camera orientation.  I certainly know that N is up, since I set the
+camera angle to that.
+
+Since MaxIm has Y starting at the top, N up means _decreasing_ Y, so
+measuring the _response_, it makes sense that we get negative Y when N
+is pressed.
+
+OK, so the new info, which I think I tried unsuccessfully to grep out
+of the documentation before is that +X is actually E.  And I have been
+getting confused as to which direction is up because +Y is down.  I
+was confused about whether [XY]speed was to move star back to where it
+belonged, or the speed measured for motor push.  I now see it is the
+latter.  As a result, I had enough minus signs to add up to a positive
+plus I ignored another one.  Best to start over with good
+documentation in populate_object
+
+Thu Mar 07 16:25:53 2019 EST  jpmorgen@snipe
+
+Saved reduction directory off to /data/io/IoIO/NO_BACKUP/reduced.previous_versions/Morgenthaler_et_al_201901_ApJL
+
+ReduceCorObs.py reduce --tree --movie
+
+--> for reduction, I need to figure out how to deal with autoflat
+
+no [SII] images are found
+
+Problem is [SII] is now called SII.  I could just intercept that at
+get_filt_name and convert [SII] to SII, since I think it will work
+just as well
+
+--> need to change ND_params_dir, though I don't think I am using
+    ND_params_tree any more
+
+So get_filt_name is the abstraction layer that lets me feed a general
+name and come back with the actual filter name.  So it would stand to
+reason I would want to tolerate [SII] as an input as well as SII
+
+OTOH, I use statements like
+if '[SII]' in OnBandObsData.header['FILTER']:
+
+which get me into trouble
+
+ReduceCorObs.py reduce --directory /data/io/IoIO/raw/20190306
+
+collection = ccdproc.ImageFileCollection('/data/io/IoIO/raw/20190306')
+filt_names = collection.values('filter')#, unique=True)
+filt_names = list(set(filt_names))
+line_assoc = [la for la in line_associations if line in la['line']]
+
+get_filt_name(collection, line='[SII]', band='ON')
+
+Got it to run.  Average per file 0.68s.  This is after doing memory
+interleaving in BIOS [but there were more calibration files, so I
+think this is biased to a lower value]
+
+ReduceCorObs.py movie /data/io/IoIO/reduced/20190306
+
+WORKED!
+
+ReduceCorObs.py reduce --tree --movie
+
+Interestingly, it is going through all the old files that didn't work,
+but not writing any since they don't work
+
+Fri Mar 08 10:50:17 2019 EST  jpmorgen@snipe
+
+GuiderAutoPierFlip is something I can use to check or turn on the
+AutoPierFlip box
+
+--> Hey, GuiderNewMeasurement is how I want to check for guider new
+    measurement, not the way I am doing it!
+
+Fri Mar 08 14:55:23 2019 EST  jpmorgen@snipe
+
+Back to  pier flip stuff.  MaxIm standardizes to pierEast and flips
+for pierWest.  So I expect a flip if calibration happens to fall on
+pierWest.  But for pierEast, I am not sure.  For ACP, pierWest should
+be non-flipped and I have to manage the flip myself on the for pierEast
+
+So I want to have some sort of state variable that tells me what side
+of pier I need to pier flip on.  self.pier_flip_on_side seems like a
+good name for that.  MaxIm already does pier flip on 
+
+Sat Mar 09 05:15:02 2019 EST  jpmorgen@snipe
+
+-->  Getting move with guidebox fail on second move, maybe in guidebox mover
+'2019-03-09 10:13:45,235', '__main__', 'DEBUG', 'move_with_guide_box: old, bad guider dpix (X, Y): [  -2.7597519 -159.5059903]'
+
+Seems tp be working now, but this is the same bug I saw before
+
+--> consider cleaning up get_HDUList, since that is the only thing
+    holding open precisionguide across platforms
+
+Mon Mar 11 20:23:23 2019 EDT  jpmorgen@snipe
+
+ReduceCorObs.py movie --recalculate /data/io/IoIO/reduced/20190306 
+
+Tue Mar 12 16:57:39 2019 EDT  jpmorgen@snipe
+
+Ack!  E and W and N and S could be attached to wherever the user
+wants, so all my trials of pier flipping are somewhat in vain
+
+Hmm.  Reading the MaxIm documentation and seeing that I am setting things up
+to be pretty specific to ASCOM Direct.  Control via Telescope Control
+requires MaxIm's Observatory Control to be connected to the telescope,
+which is a no-no for ACP.  This suggests that when Bob turns on the
+guider, he tweaks it himself. 
+
+--> Long term, it looks like I am going to have to integrate with ACP
+    guiding to support multiple setups
+
+Wed Mar 13 13:55:52 2019 EDT  jpmorgen@snipe
+
+Thinking about making check_guider_rates the right way.  Can I
+incorporate the code I am using for determining directions?  Probably,
+since I am just interested in absolute value
+
+OK, instead of going 1 arcmin, I should go a prescribed amount of time
+* guiderXSpeed 
+
+
+On PSIScope random locations
+
+CTYPE1  = 'RA---TAN'           / X-axis coordinate type
+CRVAL1  =   2.80195133471E+002 / X-axis coordinate value
+CRPIX1  =   1.37500000000E+003 / X-axis reference pixel
+CDELT1  =   3.79880748802E-004 / [deg/pixel] X-axis plate scale
+CROTA1  =   3.00279928042E+000 / [deg] Roll angle wrt X-axis
+CTYPE2  = 'DEC--TAN'           / Y-axis coordinate type
+CRVAL2  =   2.10750572556E-002 / Y-axis coordinate value
+CRPIX2  =   1.10000000000E+003 / Y-axis reference pixel
+CDELT2  =  -3.79813696704E-004 / [deg/pixel] Y-Axis Plate scale
+CROTA2  =   3.00279928042E+000 / [deg] Roll angle wrt Y-axis
+
+CTYPE1  = 'RA---TAN'           / X-axis coordinate type
+CRVAL1  =   3.25235161849E+002 / X-axis coordinate value
+CRPIX1  =   1.37500000000E+003 / X-axis reference pixel
+CDELT1  =   3.79860503864E-004 / [deg/pixel] X-axis plate scale
+CROTA1  =   3.02318045891E+000 / [deg] Roll angle wrt X-axis
+CTYPE2  = 'DEC--TAN'           / Y-axis coordinate type
+CRVAL2  =   4.50063375789E-001 / Y-axis coordinate value
+CRPIX2  =   1.10000000000E+003 / Y-axis reference pixel
+CDELT2  =  -3.79619226848E-004 / [deg/pixel] Y-Axis Plate scale
+CROTA2  =   3.02318045891E+000 / [deg] Roll angle wrt Y-axis
+
+CTYPE1  = 'RA---TAN'           / X-axis coordinate type
+CRVAL1  =   1.21337432907E+002 / X-axis coordinate value
+CRPIX1  =   1.37500000000E+003 / X-axis reference pixel
+CDELT1  =  -3.79718113486E-004 / [deg/pixel] X-axis plate scale
+CROTA1  =  -1.04308112188E+001 / [deg] Roll angle wrt X-axis
+CTYPE2  = 'DEC--TAN'           / Y-axis coordinate type
+CRVAL2  =   2.94533460285E+001 / Y-axis coordinate value
+CRPIX2  =   1.10000000000E+003 / Y-axis reference pixel
+CDELT2  =   3.79684174965E-004 / [deg/pixel] Y-Axis Plate scale
+CROTA2  =  -1.04308112188E+001 / [deg] Roll angle wrt Y-axis
+
+So wi th CRVAL2 = DEC at two drastically different values, CDELT2 is
+the same and is the same as CDELT1 modulo sign.
+
+Wed Mar 13 22:13:28 2019 EDT  jpmorgen@snipe
+
+python \\snipe\jpmorgen\py\IoIO\precisionguide.py test_center
+
+Getting a little confused by all the detailed guider stuff now.
+Possibly because of a flip error somewhere.
+
+In ACP mode, I am calibrating on pierWest and getting -3, -3, 0 for X
+Speed, Y Speed and Angle
+
+Presumably if we flip to pierEast and did a MaxIm calibration, we
+would get +3, -3, 180
+
+Simulator:
++4, -3, 180 pierWest (pier flip)
+
+Want to get that on pierEast, but I get
+-4, -3, 180 pierEast
+
+So just try putting it in by hand.  That seemed to work!
+
+OK, now go to move_with_guide_box
+
+python \\snipe\jpmorgen\py\IoIO\precisionguide.py test_center 1500 1226
+
+--> somehow, when I am flipping guider astrometry, I am also flipping
+    something I shouldn't, since sense of ACP vs MaxIm mode switches.
+    In other words, motor reversals are detected that shouldn't be
+    there.
+
+Is it the CD[1..9]*_?
+
+GuiderPinPointSolutionEastofPier.fit
+
+CTYPE1  = 'RA---TAN'           / X-axis coordinate type
+CRVAL1  =   7.90190538984E+001 / X-axis coordinate value
+CRPIX1  =   3.76000000000E+002 / X-axis reference pixel
+CDELT1  =   1.22916298234E-003 / [deg/pixel] X-axis plate scale
+CROTA1  =   1.02909934506E+000 / [deg] Roll angle wrt X-axis
+CTYPE2  = 'DEC--TAN'           / Y-axis coordinate type
+CRVAL2  =   4.60432944960E+001 / Y-axis coordinate value
+CRPIX2  =   2.90000000000E+002 / Y-axis reference pixel
+CDELT2  =   1.18662982061E-003 / [deg/pixel] Y-Axis Plate scale
+CROTA2  =   1.02909934506E+000 / [deg] Roll angle wrt Y-axis
+CD1_1   =   1.22896472141E-003 / Change in RA---TAN along X-Axis
+CD1_2   =  -2.13121162536E-005 / Change in RA---TAN along Y-Axis
+CD2_1   =   2.20760206085E-005 / Change in DEC--TAN along X-Axis
+CD2_2   =   1.18643842017E-003 / Change in DEC--TAN along Y-Axis
+
+CTYPE1  = 'RA---TAN'           / X-axis coordinate type
+CRVAL1  =   1.98277220537E+002 / X-axis coordinate value
+CRPIX1  =   3.76000000000E+002 / X-axis reference pixel
+CDELT1  =  -1.22944067206E-003 / [deg/pixel] X-axis plate scale
+CROTA1  =   8.16320904052E-001 / [deg] Roll angle wrt X-axis
+CTYPE2  = 'DEC--TAN'           / Y-axis coordinate type
+CRVAL2  =   1.81555203362E+001 / Y-axis coordinate value
+CRPIX2  =   2.90000000000E+002 / Y-axis reference pixel
+CDELT2  =  -1.18722362974E-003 / [deg/pixel] Y-Axis Plate scale
+CROTA2  =   8.16320904052E-001 / [deg] Roll angle wrt Y-axis
+CD1_1   =  -1.22931589154E-003 / Change in RA---TAN along X-Axis
+CD1_2   =   1.69143816006E-005 / Change in RA---TAN along Y-Axis
+CD2_1   =  -1.75158480353E-005 / Change in DEC--TAN along X-Axis
+CD2_2   =  -1.18710313398E-003 / Change in DEC--TAN along Y-Axis
+
+Other than very small numbers for CD1_2 and CD2_1, everything I expect
+to be negated is
+
+<sigh> I can even print out the astrometry header before and after I
+pier flip it and things are negated.
+
+Ah Ha!  I am using aang from a previous orientation
+
+FIXED!  OK.  That is ACP mode, with -3.39 -3.5, 0
+
+Try flipping to MaxIm mode by changing to +3.  Oops, that is where I
+was. <sigh>
+
+Wait a minute ACP mode for real is -3.39 -3.5, 1.3748.  And ACP for
+real is calibrated on the WEST side of the pier (with no MaxIm pier
+flip).
+
+So the N angle is not working the way I expect.
+
+Fixed that.  Problem was negative Y in MaxIm
+
+Now I am getting GUuiderReverseX being set unexpectedly,
+admittedly I am tweaking the guider without resetting MaxIm.  No, it
+is actaully working correctly.  I am flipping on the correct side of
+the pier!
+
+Still it would be great to test, but the weather is crummy.
+
+Hmm.  I think I am missing a pier flip when I calibrate on pierWest
+for MaxIm
+
+
+python "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py" ACP_IPT_Na_R 1800 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190314\Jupiter-S001-R001-C001-R.fts"
+
+Thu Mar 14 01:43:31 2019 EDT  jpmorgen@snipe
+
+!! Shock of all shocks!  It worked, at least on pierWest.  Worked on
+   pierEast!
+
+
+Thu Mar 14 07:13:37 2019 EDT  jpmorgen@snipe
+
+Well, my script worked, but for some reason, ACP is not shelling out
+properly.  This has happened before after a Windows upgrade and i got
+it to work by just re-running it.  But now a re-run just does the same thing
+
+Hmm..  The first problem was a wait in limits which then did a slew
+that was below the configured observatory horizons.  That sounds like
+a Bob problem 
+
+The next problem was that UserActions recognized a tag, but didn't
+execute the code, like it didn't recognize the tag value.
+
+It may be time to update ACP on the observatory computer....
+
+Looks like move_with_guidebox is working OK!
+
+Thu Mar 14 07:39:36 2019 EDT  jpmorgen@snipe
+
+Maybe that Disable auto-center is my problem for the target below
+horizon, though that shouldn't matter.  Uncheck that anyway, since I
+want more accurate centers and I am done testing for now
+
+--> it might also be a refraction thing in the model.  Either Bob does
+    this or APCC, not both
+
+Think about rebooting before upgrading
+
+Fri Mar 15 05:51:44 2019 EDT  jpmorgen@snipe
+
+--> failure to close APCC seems to be my script still connected
+
+I think I would like to change MaxImData to MaxImControl and abbrviate
+it as MC
+
+Next up is thinking about integrating with Scheduler.
+
+if not pg:
+    load pg however that is done, using the proper ObsData and module call
+    
+pg.center_loop or maybe some other center thing that has a time limit.
+My paranoia here is the on and off-band for a given line should be on
+the same side of a center_loop call.
+
+Ultimately, I am thinking that subclassing all of precisionguide to
+ioio might be the right thing to do.  That way I could tweak things
+for the filters rather than having an ugly interleave.  This would
+also solve some of the ugly interleave problems I have been having
+with precision guide and its command line parameters
+
+Right now I have create_ObsData and the ObsDataClass property of
+precision guide, which is a pretty ugly hack.  If I have
+precisionguide deal with the simplest ObsData and a subsequent chile
+of precisionguide could be something like cor_guide.  cor_guide could
+have the CorObsData overwrite ObsData in the definition such that the
+name CorObsData goes away.  I would like to have RedCorObsData be for
+reduction, so ultimately it would be nice to have all three names and
+then some.
+
+Go back to create_ObsData.  That is a hack in the sense that it deals
+with a variety of arguments - either passed explicitly, stored in the
+object at init time or no args.  This is reasonable, so not that hacky
+
+It is self.ObsDataClass that is a little more hacky.  The dynamic part
+is the hack.  Really if I have a different way to get the center, I am
+finding that I should build the whole precision guide system around
+that.
+
+As far as names go for the ObsData, it looks like I can name them
+different things, but then I am back to the hacky method of referring
+to them.  But based on the number of upvotes of
+https://stackoverflow.com/questions/3061/calling-a-function-of-a-module-by-using-its-name-a-string,
+I am not the only one thinking in these terms.  So I could have
+different versions of precisionguide and to insert different names for
+the ObsData I would still need to have the sort of hacky way to get
+the vlaue of the ObsDataClass inserted into the PrecisionGuide class.
+
+Wait a minute, I don't think it would be hacky at all.  I can have
+ObsData and its subclasses as separate modules.  I can import the one
+I want and then when it comes time to define it in my code
+
+class ObsData(ObsDataIWant):
+    pass
+
+Then I have ObsDataBaseClass which has the minimum stuff in it and
+then different ObsData with more descriptive names about what they do,
+like CorObsData, BrightestPointObsData, BrightestStarObsData,
+PinPointObsData.  The latter of these would take the desired RA and
+DEC of the desired center, run PinPoint on the image and return the
+pixel of the desired center.  So those could all be inherited on their
+own line.  The precisionguide line would have a
+PrecisionGuideBaseClass in the precisionguide base module.  Other
+modules could be named cor_guide, pinpoint_guide, etc. and would be
+create children of PrecisionGuideBaseClass.
+
+THe only possible disadvantage of all of this is that the WCS stuff
+would need to be different.  But that is probably not a bad thing
+because the arguments would need to be different too.
+
+Sat Mar 16 06:19:23 2019 EDT  jpmorgen@snipe
+
+--> I need to catch all crashes and make sure the error is reported to
+the astropy log
+
+Sun Mar 17 08:34:27 2019 EDT  jpmorgen@snipe
+
+Hmm.  APCC didn't exit even though my scripts didn't run
+
+Mon Mar 18 14:52:41 2019 EDT  jpmorgen@snipe
+
+Go back to trying to make scheduler work for IoIO.  In
+/cygdrive/c/Program Files (x86)/ACP Scheduler/AcquireScheduler.vbs
+near line 1289 is where I was thinking of doing it before.  But I see
+that for some reason, Bob does the AutoFlipIf _after_ guiding has been
+set up.  He turns guiding back on in that code, but the problem with
+this is I don't get to tweak it.  So I need to call my code after
+AutoFlipIf on line 1345.  The one on line 1596 is after the image is
+recorded and is a safety in case new updated coordinates are on the
+other side of a flip.
+
+/cygdrive/c/Program Files (x86)/ACP Obs
+Control/Scripts/AcquireImages.js has the ability to return OK, which
+allows things to continue as if nothing happened, even though I may
+have lined up the guider the way I want.  THere is some code that
+mentions guiding right below UserAction.AcquireImage, but that would
+not be executed if I am not guiding with ACP's guiding, or if I am
+guiding with it and the guider is running OK, it would be fine.
+
+Hmm.  Next set of code seems to be a hurtle as well....  but if I have
+orbital tracking rates, it would seem to be skipped.  But what even if
+I am not orbital tracking, it sets up curAG, which a boolean that is
+True if ACP should autoguide.  Then it checks to see if SUP.Guiding.
+
+So the question is, how does SUP.Guiding work?  Do I have to use
+SUP.AutoGuide to get it to work?
+
+Because I may be able to pass SUP as an object to my Python script, it
+may not matter, but it would be nice if I didn't have to deal with
+it.  I can certainly write some test code to check.
+
+To review, I have determined that it may be possible to be gentler
+with the ACP non-scheduler AcquireImages.js if I do the guiding stuff
+and just return OK.  ACP would then take the picture.  I might have to
+use ACP's guiding stuff for at least part of the logic, but that
+might not be the end of the world since I would get cool stuff like
+the web-based guiding image and graph
+
+Hey, I can answer this question by looking at AcquireSupport.wsc,
+which I can display in vbscript-mode....  Looks like Bob just uses
+MaxIm Camera stuff!  and GuiderNewMeasurement, like I should!
+
+So this is potentially really cool!  It means I might be able to have
+the drop-in UserAction.AcquireImage that, when doing the picture
+taking, gets all the guiding display stuff.
+
+The only thing is, I need to have it in AcquireScheduler.vbs.  Doing
+it right is a think for Bob.  For me, I think I can just call out to
+my same (updated) user action script and make sure that returning OK
+will work.
+
+Feature request: AcquireImage User Action in AcquireScheduler
+
+Hi Bob,
+
+First of all, thanks for phone chat about this issue when you were
+feverishly quashing the last few bugs in preparation for the 8.2
+release.
+
+Since that time, I have done a little more research into the issue and
+find that I may be able to get more mileage out of the "AcquireImage"
+User Action than I had previously thought possible: It looks like if I
+use AcquireImage to turn on and tweak the guider myself to precisely
+position my target where it needs to be in the focal plane, and then
+return True, ACP (1) does all the work of taking the pictures I want
+and (2) does not turn off or otherwise tweak the guider until I need
+to move away from my target, even if the target is being tracked
+non-sidereally.  It was thinking your code turned the non-sidereal later issue and the expectation that if I
+did anything in my
+
+
+The problem I am facing now is that AcquireScheduler does not
+implement the "AcquireImage" User Action and I would really like to
+use Scheduler so I can get the most out of the system.
+
+Is implementing the "AcquireImage" User Action in Scheduler something
+you can do?  Based on my read of the code, it would go after the
+AutoFlipIf on line 1345 of AcquireScheduler.vbs.
+
+Thanks for considering it.
+
+Why this might have general interest is that the system I use to solve
+my high precision pointing problems can be expanded to do non-sidereal
+_guiding_ and correct for differential flexure between a bore-site
+mounted (external) guide scope and the main scope (whether or not you
+are guiding non-sidereally).  It works by making a closed-loop guiding
+system by inspecting main camera images and using the relative
+astrometry solutions of the main and guide camera systems to instruct
+the guider to make the appropriate adjustments.  Large adjustments are
+made before the guider is started by pressing the guider slew buttons
+(MaxIm's CCDCamera.GuiderMove).  Small adjustments are made after the
+guider is started by moving the guide star position.
+
+So here is what I do:
+
+(1) Point the telescope at Jupiter
+
+(1a) Position Jupiter in the main camera image to extremely high
+precision on a focal plane that contains something that looks a little
+like a spectrograph slit but is really a coronagraph (some background
+info and a movie are at http://www.psi.edu/news/iosodium and
+https://www.psi.edu/sites/default/files/ftp/Na_SII_best_0.mp4)
+
+(2) Auto-focus every hour, making sure to avoid the central
+obstruction (FocusMax Script Mapping makes programming a jog to the
+side possible)
+
+(3) Record calibration images of standard stars through various
+filters -- some of them long enough to require guiding -- making sure
+to avoid central obstruction (ACP TargetStart User Action makes
+programming a coordinate offset easy)
+
+(4) A couple times per night, point 10 degrees away from Jupiter E, W,
+N and S to record background images (another job for TargetStart &
+some hour angle constrain to avoid the meridian for my GEM)
+
+(5) Point the telescope at whatever else is interesting to me (e.g.,
+comets, asteriods, extrasolar planets) when Jupiter is down.
+
+(6) Do all of this with Scheduler so I can maximize time on the sky,
+sleep at night and analyze data during the day
+
+
+Well, all that is nice, but I think I should implement it myself to
+see if it works the way I think.  Then I can ask for the feature for
+a future release.
+
+OK, so what stands in the way of this and what I have been
+procrastinating is pulling apart all my code to implement cor_guide
+and friends.  Ultimately, this will clean up the reduction and
+analysis stuff, so now is a good time to do it.
+
+
+python "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py" ACP_IPT_Na_R 90 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190410\Jupiter-S001-R001-C001-R.fts"
+
+
+Mon Apr 01 14:44:26 2019 MST  jpmorgen@byted
+
+--> I need to connect to the focuser in my ACP scripts!
+
+Sun Apr 07 20:44:18 2019 EDT  jpmorgen@snipe
+
+TODO:
+
+. Check see if I can use WAITINLIMITS for an offset
+
+. Offset Jupiter initially then bring it in with script -- avoid
+problems with Jupiter in FOV
+
+. Incorportate weather into precisionguide so that it quits too
+
+. remember where the ADU2R change really came from (not change in
+on-band guiding accuracy if memory serves!)  Oh, maybe ADU2R _and_
+OFFSCALE changed
+
+. When I use stellar calibration, make sure to take into account
+Jupiter distance!
+
+. spot bad files by off-band 25 Rj aperture being much above 0
+
+. --> finish testing satellite calibration exposure times
+
+. --> weather safety abort
+
+. Work on flats center of gravity idea
+
+. Consider finishing context management with ObsData
+
+. Figure out why APCC is not exiting even though it has just one
+client left --> it is guidebox_mover.  Do a better job with the whole
+context block system
+
+. Check good centers before I do ephemeris requests to avoid excessive
+HORIZONS calls.  Bummer I don't write that, but made that decision
+before I had confidence in the center finding stuff.  COnsider
+buffering headers in reduction scheme
+
+. Figure out how to deal with date directories and ACP when combining
+movies.  http://solo.dc3.com/comctr/filecust.htm shows ACP only
+outputs YYYYMMDD, MaxIm does YYYY-MM-DD.  Probably need a file with
+the date, or just a routine that sorts the date directories, since
+they are all output that way (thus far).  Make that able to do
+backward and forwrad and date range
+
+. uninstall latest Python and install older Python just downloaded
+
+. Python COM server
+
+. Find global variable location in ACP
+
+. Background-subtract [SII] off-band with Na off-band to see if we can
+live with one off-band filter
+
+. investigate multiprocessing, threading or coroutines as a way to get
+precisionguide to do more than one thing at once
+
+    . Let ACP make call even when guidebox system is running (not too
+    hard?)
+
+    . Have ACP send signal to stop and/or quit
+
+    . expose and then wait for exposure to end or an abort signal to
+    come through
+
+    . display info on status
+
+. Fix guider calibration astrometry parity issues
+
+. Make a separate PSIScope user (or whatever) for non-Io observations
+
+. Implement run_level_default_ND_params as a function of time
+
+--> figure out where focus is failing [check that I have fixed this]
+
+. fix motor reversal on different connection states (currently MaxIm
+  has to be disconnected from telescope in AutoFlip state)
+
+--> consider optical design change to see if that is why filter looks bad
+
+. have guide filter wheel go back to clear when precisionguide
+finishes?
+
+. Catch errors so can __exit__ gracefully in all cases, including
+timeouts
+
+. Consider how much of ACP I am doing
+
+. Improve filter wait times
+
+X fix failure to find guide star by selecting lower filter number.
+Was timing issue, I think
+
+/ Install latest ACP 
+  . Report sky flat bug
+
+Fri Apr 12 15:00:58 2019 EDT  jpmorgen@snipe
+
+Start to reduce latest batch.  Do I have the latest run-level flats?
+I don't think so
+
+ReduceCorObs.py ND_params /data/io/IoIO/raw/20190407/AutoFlat
+[[1.40749551e-02 2.36320869e-02]
+ [1.24240593e+03 1.33789081e+03]]
+
+ReduceCorObs.py reduce --movie --directory /data/io/IoIO/raw/20190411
+
+ReduceCorObs.py movie --recalculate /data/io/IoIO/reduced/20190411
+
+--> implement binning
+
+Sat Apr 13 04:53:08 2019 EDT  jpmorgen@snipe
+
+python "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py" ACP_IPT_Na_R 990 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190413\Jupiter-S001-R001-C001-R.fts"
+
+--> consider that too manny stars might be hard for current center
+    finding alogrithm
+
+--> Debug binning.  The problem is actually in checking
+        while not self.CCDCamera.ImageReady:
+
+Sat Apr 13 12:26:51 2019 EDT  jpmorgen@snipe
+
+ReduceCorObs.py reduce --tree --movie
+
+WARNING:py.warnings:/usr/lib/python3/dist-packages/scipy/stats/stats.py:1713: FutureWarning: Using a non-tuple sequence for multidimensional indexing is deprecated; use `arr[tuple(seq)]` instead of `arr[seq]`. In the future this will be interpreted as an array index, `arr[np.array(seq)]`, which will result either in an error or a different result.
+  return np.add.reduce(sorted[indexer] * weights, axis=axis) / sumval
+
+https://github.com/scipy/scipy/issues/9086
+
+Says it is fixed with scipy 1.2.0:
+
+
+
+This is probably from my use of signal.find_peaks_cwt in IoIO.py
+
+
+WARNING: Bad movie in /data/io/IoIO/reduced/20190411 [__main__]
+WARNING:astropy:Bad movie in /data/io/IoIO/reduced/20190411
+WARNING: Bad movie in /data/io/IoIO/reduced/20190413 [__main__]
+
+Sat Apr 13 17:23:47 2019 EDT  jpmorgen@snipe
+
+What is wrong with the movies?
+
+ReduceCorObs.py movie --recalculate /data/io/IoIO/reduced/20190407
+
+Ahh, focus is really horrible in on-band
+
+Sigh.  3/23/2019 is about the last usable one.  Everything since then
+is unusable
+
+ReduceCorObs.py movie --recalculate /data/io/IoIO/reduced/20190411
+
+ReduceCorObs.py movie --recalculate --tree
+
+oops, I meant
+
+ReduceCorObs.py movie --concatenate
+
+But I am finding the error I saw before.  The problem is if there are
+no good images in the directory.  I am not handling that exception well.
+
+Sun Apr 14 07:03:42 2019 EDT  jpmorgen@snipe
+
+I think I may be making process on the guider failure.  The complaint
+is that the star is less than 16 pixels from the edge of the FOV.  But
+the guider does not actually take a picture.  It is using the previous
+picture.  So it is probably a timing issue in waiting for the guider
+to acquire its first image.  Fix that
+
+Sun Apr 14 16:35:23 2019 EDT  jpmorgen@snipe
+
+OK, so the problem I am having with bad focus might be fixed by using
+a fixed number for the offscale
+
+[SII] OFFSCALE is really bad, worse than Na
+
+But during May and June 2018, it looks like it ran consistenyly around
+1.11 with a spread of about 0.05.
+
+Hmm.  I am seeing Na differently now.  [SII] should have had the same
+OFFSCALE 20% spread if it was guiding.  It has a lot more variability
+per night, but it is systematically more consistent.
+
+So the other thing that was changing in 2018 April-May was that I was
+starting to do temperature compensation.  I would focus on SII_on.
+SII_off was -30
+
+108.6 - (-242.4) # Na_on
+351.0
+108.6 - (-220.6) # Na_off
+329.2
+
+So that is a pretty significant defocus.  Not sure if the slightly
+larger defocus of Na_on would make a difference.  It actually goes the
+wrong way, since I argued that Na_on was fuzzier before April.  What
+can we argue from defocus in general?
+
+So I need to see if I can salvage any of the data from this year.  I
+could do this by setting a constant offscale and then having a
+measured offscale as a quality indicator
+
+Tested new CCDCamera.GuiderRunning code:
+
+python \\snipe\jpmorgen\py\IoIO\precisionguide.py test_center 1500 1226
+
+Want to get to the bottom of reversal problem
+
+python \\snipe\jpmorgen\py\IoIO\precisionguide.py test_center
+
+ReduceCorObs.py reduce --movie --directory /data/io/IoIO/raw/20190415
+
+having a hard time finding offending directory
+
+ReduceCorObs.py reduce --movie --tree --num_processes 1
+
+
+                             f-band_004.fits [__main__]
+ERROR:astropy:could not broadcast input array from shape (0) into shape (212) skipping /data/io/IoIO/raw/20190414/SII_on-band_004.fits /data/io/IoIO/raw/20190414/SII_off-band_004.fits
+
+
+self.back_obj
+
+ReduceCorObs.py reduce --recalculate --movie --num_processes 1 --directory /data/io/IoIO/raw/20190411
+
+Thu Apr 18 11:48:24 2019 EDT  jpmorgen@snipe
+
+ReduceCorObs.py reduce /data/io/IoIO/raw/20190411/Na_on-band_001.fits /data/io/IoIO/raw/20190411/Na_off-band_001.fits
+
+Fixed error of not adding center
+
+
+--> I might need to set the run-level defaults by date as well
+
+ReduceCorObs.py reduce --tree --movie
+
+  File "/home/jpmorgen/py/IoIO/IoIO.py", line 610, in ND_params
+    = im[ypt_top+rowpt, left:right]
+IndexError: index 1540 is out of bounds for axis 0 with size 1540
+
+ReduceCorObs.py reduce --recalculate --movie --num_processes 1 --directory /data/io/IoIO/raw/20190415
+
+Probably the 14th after all
+
+ReduceCorObs.py reduce --recalculate --movie --num_processes 1 --directory /data/io/IoIO/raw/20190414
+
+ERROR: can only concatenate str (not "NoneType") to str skipping movie for /data/io/IoIO/raw/20190414 [__main__]
+
+--> Another error!
+
+Wondering if I have the SII_on and SII_off reversed
+
+ReduceCorObs.py reduce --recalculate --movie --num_processes 1 --directory /data/io/IoIO/raw/20190413
+
+ERROR: can only concatenate str (not "NoneType") to str skipping movie for /data/io/IoIO/raw/20190413 [__main__]
+
+OK, fix that one first...
+
+Got zeroed out movie OK
+
+But now I need to 
+
+ReduceCorObs.py reduce --recalculate --movie --directory /data/io/IoIO/raw/20190414
+
+try 15th and 16th.
+
+There is definitely something funny going on.  The 16th should have a
+torus but has a negative torus
+
+On-band Na is definitely more blobby with scattered light.  But I
+think that was tried both ways this year and it doesn't seem to make a
+difference.
+
+I think the problem I am having is OFFBAND.
+
+But lets see first if I can find the torus in an SII_on image!
+
+I do see the torus in an on-band image
+
+One thing I am noticing is that the quality of the image on the ND
+filter is not that great right now.  It may be that I have not focused
+properly.  It may be that I need to focus on the left side of the
+image instead of the right
+
+atv, '/data/io/IoIO/reduced/20190416/SII_on-band_010r.fits
+
+But I thought I did that....  I seem to recall spending an extra
+effort getting that to 1 pixel sharpness.
+
+In any case, it looks like the center is getting messed up and that is
+possibly messing up OFFSCALE.  I had wanted to work on that anyway.
+
+I do see a torus in '/data/io/IoIO/reduced/20190416/SII_on-band_010r.fits
+
+it is just that the rest of the image is pretty crummy
+
+Hmm.  Does moving the camera back necessitate changing the ND filter
+size?  I shouldn't because that is determined by the telecsope focal
+plane.
+
+It really does look much more out of focus right now than what I left it.
+
+It was already out of focus on 20190405
+
+--> check any joints for loosening
+
+This is about the same out of focus for park 4 and Jupiter
+
+So what do I want to do for the [SII] analysis?
+
+. Better Jupiter center (this will help some of this year's bad data)
+
+. satellite X Y positions
+
+. Aperture tool that _measures_ optocenter of ansas
+
+
+python "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py" ACP_IPT_Na_R 10 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190419\Jupiter-S001-R001-C001-R.fts"
+
+Fri Apr 19 09:29:28 2019 EDT  jpmorgen@snipe
+
+--> Ah Ha!  There is a problem!  The initial guider start doesn't have
+    the pier flip in the right direction
+
+--> Adjust guider rates by pixel size ratio?
+
+'2019-04-19 07:49:03,305', 'precisionguide', 'DEBUG', 'MaxIm is not managing pier flip...'
+'2019-04-19 07:49:03,311', 'precisionguide', 'DEBUG', '... flip detected...'
+'2019-04-19 07:49:03,313', 'precisionguide', 'DEBUG', 'CCDCamera.GuiderReverseXY = (True, False)'
+'2019-04-19 07:49:03,317', 'precisionguide', 'DEBUG', 'MaxIm is not connected to the telescope, so inspecting GuiderReverseXY...'
+'2019-04-19 07:49:03,319', 'precisionguide', 'DEBUG', '... GuiderReverseX is set'
+'2019-04-19 07:49:03,322', 'precisionguide', 'DEBUG', 'Motor reversal state = array([-1,  1])'
+
+--> large move
+'2019-04-19 08:00:45,026', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-2.59518613  1.88088789]'
+'2019-04-19 08:00:45,027', 'precisionguide', 'DEBUG', 'norm_dp: 3.20511003317'
+
+--> only collected 2 SIIs early on
+
+Ah Ha!  Centering with Guider slews if I am within 5 pixels, the flip
+logic is not triggered
+
+I think I need a:
+
+self.set_guider_motor_reverse_and_DEC()
+
+somewhere.  I did but forgot to have the ()!
+
+ReduceCorObs.py reduce --recalculate --movie --directory /data/io/IoIO/raw/20190419
+
+OK, torus is still blanked out.  Maybe it is too bright?
+
+--> check NP angle
+
+atv, '/data/io/IoIO/reduced/20190419/SII_on-band_005r.fits
+
+So the problem is that chop needs to change for some reason
+--> Looks like the OFFSCALE is too low this year
+
+Indeed, it is 1 for this day
+
+Fri Apr 19 17:15:59 2019 EDT  jpmorgen@snipe
+
+--> I think this whole thing will get better when I get better centers
+    for Jupiter
+
+Well, it really does work better if I use the 5x5 on the cente rof
+Jupiter.  For some reason, SII background is just a lot brighter
+
+atv, '/data/io/IoIO/reduced/20190419/SII_on-band_005r.fits
+atv, '/data/io/IoIO/reduced/2018-05-18/SII_on-band_010r.fits
+
+There is a little bit of a positive bias to the off-band subtracted
+image this year
+
+And the noise in the data are much larger this year
+ +/- 200 max last year
+
++/- 2000 this year.  It is almost as if I am missing a factor of 10
+somewhere.
+
+Bias levels are different, but the T = -15 in May, I can do to -20 now
+
+I suppose it could be ral variations from stars shifted a bit?
+
+Sun Apr 21 05:14:40 2019 EDT  jpmorgen@snipe
+
+Traceback (most recent call last):
+  File "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\precisionguide.py", line 3302, in <module>
+    args.func(args)
+  File "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\precisionguide.py", line 3142, in GuideBoxMover
+    rates_list = json.loads(com.read())
+  File "C:\ProgramData\Anaconda3\lib\json\__init__.py", line 354, in loads
+INFO: Guide box rate: 2019-04-21T09:11:27.360(UTC) [0.0, 0.0] [precisionguide]
+    return _default_decoder.decode(s)
+  File "C:\ProgramData\Anaconda3\lib\json\decoder.py", line 339, in decode
+INFO: Collecting V, U, and R [IoIO]
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+  File "C:\ProgramData\Anaconda3\lib\json\decoder.py", line 357, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+D
+
+Mon Apr 22 05:29:00 2019 EDT  jpmorgen@snipe
+
+Failed possibly because of clouds or Jupiter being nearby
+--> need those catches!
+
+DEBUG: Let MaxIm manage pier flip state: it is connected to the telescope and Auto Pier Flip is on. [precisionguide]
+Traceback (most recent call last):
+  File "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py", line 1124, in <module>
+    args.func(args)
+  File "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py", line 924, in ACP_IPT_Na_R
+    P.MC.guider_start(filter=3)
+  File "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\precisionguide.py", line 1779, in guider_start
+    raise EnvironmentError('Attempt to start guiding failed.  Guider configured correctly?')
+OSError: Attempt to start guiding failed.  Guider configured correctly?
+
+
+Looks like guider image failed -- there was nothing there -- image was
+all zeros.  Possible MaxIm startup issue with filter wheel?
+
+--> Possible timing issue again?  Need to have a catch that kicks like
+    I did -- I took a regular image with the guide camera
+
+45 minutes right now
+
+
+--> add catch to all of ACP_stuff & possibly to Guide start
+
+turn off access through separate thread [done]
+
+Tue Apr 23 15:03:05 2019 EDT  jpmorgen@snipe
+
+Looks like I use the same logic with GuiderAutoSelectStar,
+GuiderExpose and all that that Bob does in
+/cygdrive/c/Program Files (x86)/ACP Obs Control/AcquireSupport.wsc
+So I think that means the error I have been having has to do with
+either the separate threading, which I have turned off in both cameras
+(not sure I needed it in guider) or the filter wheel timing issues,
+which I have hopefully fixed by setting the wait time to 30s
+
+Before I completely re-arange my code to the latest pythonic
+structure, I want to work a little on ReduceCorObs.py ephemerides.
+sat_X and sat_Y are the things I want for each satellite.  I need this
+for each image.
+
+Currently, I ask for the Jupiter NPole_ang in reduce_dir and in
+reduce_pair.
+
+It is more efficient to query a list of epochs, so I should keep that
+in the reduce_dir code.  But I should probably pull the code out to
+its own subroutine
+
+So reduce_pair really needs an ephemeris object input, maybe a
+dictionary, that I can generate with
+
+Wed Apr 24 12:18:41 2019 EDT  jpmorgen@snipe
+
+Refreshing my memory on reduciton scheme.  ReduceDir is what does the work
+
+Within that, reduce_dir(self) has the code that makes the
+on_off_pairs.  But I don't check to see if the pairs have Jupiter in them
+
+It looks like jup = Horizons(id=...) returns an object that doesn't do
+anything until you call jup.ephemerides().
+
+I am rounding to the nearest JD for Jupiter.  With the new full query
+by astrometry, I think I will need to re-do all the queries to
+HORIZONS, but just once.
+
+https://en.wikipedia.org/wiki/Horizontal_coordinate_system
+Note that the above considerations are strictly speaking true for the geometric horizon only. That is, the horizon as it would appear for an observer at sea level on a perfectly smooth Earth without an atmosphere. In practice, the apparent horizon has a slight negative altitude due to the curvature of Earth, the value of which gets more negative as the observer ascends higher above sea level. In addition, atmospheric refraction causes celestial objects very close to the horizon to appear about half a degree higher than they would if there were no atmosphere.
+
+Wed Apr 24 15:55:47 2019 EDT  jpmorgen@snipe
+
+So with the HORIZONS stuff, I need to get Jupiter and each of the four
+satellites for each exposure.
+
+sometimes
+OBJECT  = 'Jupiter '
+OBJECT  = 'IPT     '
+OBJECT  = 'Na      '
+OBJECT  = 'Na_IPT  '
+OBJECT  = 'Na_IPT_R'
+OBJECT  = '        '
+
+All MaxIm telescope connected images have
+OBJCTRA = '13 02 34' /          Nominal Right Ascension of center of image      OBJCTDEC= '-04 56 13' /         Nominal Declination of center of image          OBJCTALT= ' 53.0080' /          Nominal altitude of center of image             OBJCTAZ = '177.8102' /          Nominal azimuth of center of image              OBJCTHA = ' -0.0882' /          Nominal hour angle of center of image           
+
+Bob puts these things in plus if there is an astrometric solution, RA and DEC
+
+OBJECT  = '        ' is the most painful, but the ones that have no
+OBJCTRA are certainly recorded by ACP_IPT_Na_R
+The ones with OBJCTRA can be compared to a quick calculation of
+Jupiter's RA and DEC
+
+Wed Apr 24 19:53:00 2019 EDT  jpmorgen@snipe
+
+ReduceCorObs.py reduce --recalculate --movie --directory /data/io/IoIO/raw/20190424
+
+--> This is pausing.  Not sure why.  
+
+Thu Apr 25 04:15:53 2019 EDT  jpmorgen@snipe
+
+--> Best solution is for UpdateEphemeris to take a time argument
+
+Jupiter alt is first column
+18 '2019-04-25 07:25:31,147', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.79855284  0.61107432]'
+19 '2019-04-25 07:36:01,724', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.38791843  1.55364797]'
+22 '2019-04-25 07:55:19,933', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.81187688  0.46951262]'
+27 '2019-04-25 08:30:04,327', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-1.13502302  0.89928309]'
+29 '2019-04-25 08:48:51,524', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.2680752  -1.26936867]'
+30 '2019-04-25 09:00:32,584', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.89061986 -0.56043549]'
+30'2019-04-25 09:01:24,382', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.71259768 -0.74756338]'
+32 '2019-04-25 09:20:09,554', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.55830345 -0.74880316]'
+35 '2019-04-25 10:18:58,803', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.19377229 -1.22796793]'
+35 '2019-04-25 10:29:49,852', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.00295894 -0.98630829]'
+35 '2019-04-25 11:07:12,948', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.45760597 -1.17472971]'
+34 '2019-04-25 11:26:32,367', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.84620009 -1.16530135]'
+33 '2019-04-25 11:54:37,188', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.94122021 -0.73663555]'
+
+Guider is 4.43"/Pixel, so our movements are typically a max of
+
+1.2 * 4.43 # arcsec
+5.316
+
+in ~20 minutes.  Or a max of 
+
+1.5 * 4.43 / (20*60) # arcsec/sec
+0.0055375
+
+1.5 * 4.43 / (20/60) # arcsec/hour
+19.935
+
+back to guider pix to compare to previous years
+
+1.5 / (20*60) # pix/sec
+0.00125
+0.0125 # pix/10 sec
+
+So that is within the realm of where I was doing corrections in the
+past, but just barely
+
+Make it a little on the slow side
+
+1 / (20*60) # pix/sec
+0.0008333333333333334
+0.008333333333333334
+
+call it 0.010.
+
+Thu Apr 25 14:42:20 2019 EDT  jpmorgen@snipe
+
+Whew!  Got get_dirs up and running.  Now on to something like
+"is_jupiter" 
+
+This would be used by ReduceDir.reduce_dir().  I would feed it a list
+of all the files in the directory and determine which ones are Jupiter
+--> update the OBJECT keyword to reflect Jupiter
+This is now going to have some U, V and R files as well, which I can
+do bias subtraction on, but which I am not prepared to do anything
+else.  Note these will have poor centers, though cross-correlating may
+fix this.
+
+ReduceDir.reduce_dir() has a collection and summary_table which might
+make if_jupiter easier.
+
+--> Ah Ha!  If I restrict myself to 2018, I don't need to worry about
+    if_jupiter quite yet.
+
+19 '2019-04-26 07:31:07,336', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.78569616  1.86634647]'
+25 '2019-04-26 08:15:58,268', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.65140744  0.92150863]'
+29 '2019-04-26 08:43:43,105', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.07834445 -1.11017025]'
+31 '2019-04-26 09:04:46,671', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.2794705  -1.92090952]'
+34 '2019-04-26 09:54:16,767', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.62451494 -1.03641919]'
+35 '2019-04-26 10:13:11,279', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.11087296 -1.46333113]'
+35 '2019-04-26 10:52:16,673', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.24743107 -1.05657617]'
+35 '2019-04-26 11:14:55,700', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 1.37367415 -0.17719617]'
+35 '2019-04-26 11:15:32,955', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.53203669 -0.74965815]'
+34 '2019-04-26 11:25:21,130', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.91471169 -0.10925151]'
+
+
+After             dec_pix_rate = -0.010/10 * plate_ratio
+
+
+'2019-04-29 07:07:46,527', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.61705685  1.43587035]'
+'2019-04-29 07:09:38,533', '__main__', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.01235891 -0.11714305]'
+'2019-04-29 07:11:30,667', '__main__', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.01232776 -0.11684821]'
+'2019-04-29 07:13:22,230', '__main__', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.01227257 -0.11632496]'
+'2019-04-29 07:15:14,702', '__main__', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.01236353 -0.11718757]'
+....
+'2019-04-29 07:18:27,766', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.31636239  1.84877267]'
+...
+'2019-04-29 07:25:18,727', '__main__', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.01228087 -0.11640935]'
+...
+'2019-04-29 07:28:44,810', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.04703182  1.36665628]'
+...
+'2019-04-29 07:38:46,829', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.80128193  0.69369392]'
+...
+'2019-04-29 07:49:24,832', '__main__', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.01229487 -0.11655342]'
+...
+'2019-04-29 08:04:12,149', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.08876755  1.04181059]'
+...
+'2019-04-29 08:15:41,544', '__main__', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.01227348 -0.11635073]'
+...
+'2019-04-29 08:49:55,169', '__main__', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.29992981 -0.13244343]'
+...
+'2019-04-29 09:32:06,178', '__main__', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.01228697 -0.11648837]'
+...
+'2019-04-29 09:43:39,052', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.73293954 -1.13151686]'
+...
+'2019-04-29 09:51:39,200', '__main__', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.01226435 -0.11628187]'
+...
+'2019-04-29 10:05:49,738', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-1.4182493  -0.73902071]'
+'2019-04-29 10:16:49,331', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-0.91255781 -0.28934517]'
+'2019-04-29 10:17:34,902', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [ 0.85670599  0.88713037]'
+
+Do we need to flip the sign?  Or just make it slower?  Was getting -1.
+Now getting +1.  So it was going down and we had to pull it up.
+-0.010/10 pulled it up too fast by a factor of 2
+
+Fri Apr 26 07:51:45 2019 EDT  jpmorgen@snipe
+
+Hmm.  Even after 5 minute wait still has 5 clients connected to AP V2
+driver. :-(
+
+Bias looks pretty good even though there is dawn in the air
+
+But during biases went down to 4 clients!  And shut down gracefully!
+
+Fri Apr 26 10:04:19 2019 EDT  jpmorgen@snipe
+
+Thinking I could avoid is_jupiter, but that would mess up the graceful
+astroquery stuff
+
+So if I do is_jupiter on a header, I get a boolean answer.  If I do
+is_jupiter on a collection, I get a list answer
+
+Fri Apr 26 13:08:48 2019 EDT  jpmorgen@snipe
+
+Looks like I can have a list representing times
+
+Fri Apr 26 15:01:33 2019 EDT  jpmorgen@snipe
+
+Whew!  Finished is_jupiter.
+
+Looking at ReduceDir.reduce_dir and thinking the best place to put
+that is just after the background stuff.  Hmm.  Or maybe before.  At
+the moment, I am ignoring all calibration objects like stars, but it
+would be handy to prepare for that in this.
+
+So how does this collection.summary thing work?  It looks like it
+makes a line where each line is sort of like a FITS header
+
+Ack.  Don't have interoperability between FITS headers and
+ccdproc.ImageFileCollection
+
+Hmm.  This is causing problems.  Masking works at the column level,
+but I am having trouble at the row level.  And I am wondering if I
+want to make an iterator out of this rather than do all the work at
+once, which is slow....
+
+Nevertheless, I think I have to make it work on one at a time.  The
+iterator is an object that just does that at the command of the
+
+So rows have no masks but the table as a whole does.  Ah Ha!  I needed
+to use if objctra is np.ma.masked.
+
+OK, that seems to be happy.  How am I going to use it?  I want to
+create a list of valid Jupiter observation TMIDs to send to HORIZONS
+
+Fri Apr 26 22:51:21 2019 EDT  jpmorgen@snipe
+
+So maybe I should do all my work with the summary_table.  I could
+change the OBJECT names from the various ones I used to Jupiter and
+fill in the blanks for the ones that I am sure are Jupiter.  Then I
+can call the HORIZONS stuff selecting for OBJECT=Jupiter and using an
+off-the calculation of TMID.
+
+Sun Apr 28 19:28:28 2019 EDT  jpmorgen@snipe
+
+Look on todays date for info in IoIO.notebk for precise IoIO_1
+coordinates.
+
+How do I convey these to astroquery?  I can enter it naturally enough
+as 
+
+statue_of_liberty = {'lon': -74.0466891,
+                     'lat': 40.6892534,
+                     'elevation': 0.093}
+
+Mon Apr 29 12:47:03 2019 EDT  jpmorgen@snipe
+
+Playing with WAITINLIMITS for a minute.  Posted a reply with some
+pseudo code.
+
+OK, ReduceDir is currently an object that does my directory-level
+reduction.  reduce_pair is callable from the command line, but really
+needs to be passed a bunch of stuff, like the Background object and
+ephemeris stuff.
+
+Since the Background needs the whole directory, I might as well
+have reduce_pair call ephemeris stuff for the whole directory too.
+That will ensure we only have have one cached call per directory!
+
+OK, so reduce_pair needs to accept the ImageFileCollection, which has
+as property the SummaryTable.  I was thinking of putting ephemeris
+stuff into the SummaryTable as extra columns.  I was also thinking of
+storing the whole ImageFileCollection (or whatever) in my own object
+that has property for keeping track of which header keys I want to
+update or create (and their comment strings) in files as I write
+them.  Hmm.  This sounds like I might want to subclass ImageFileCollection!
+
+Maybe not, since "The generator methods use simple filtering syntax
+and can automate storage of any FITS files modified in the loop using
+the generator."  SO the loop does the work, not ImageFileCollection.
+But I can have an object that has as property the ImageFileCollection
+and keeps track of things I want to modify when the time comes.
+
+It is almost like the ReduceDir needs to be inside-out.  Ah.  Just
+make ReduceDir store the stuff and then have separate methods to run
+on a pair or on the whole directory.  And really, I don't want a pair,
+but just one on-band image and let it find the closest off-band image,
+or at least to have that option.  I also want to have the option to
+use other off-band filters
+
+OK, so how am I going to make this transition?  I should PEP-ify my
+module names, so ReduceCorObs.py should not be camel case.
+
+"Modules should have short, all-lowercase names. Underscores can be
+used in the module name if it improves readability. Python packages
+should also have short, all-lowercase names, although the use of
+underscores is discouraged."
+
+So precisionguide is good.  cor_precisionguide is OK.  obsdata and
+cor_obsdata are I guess what I should aim for.  pinpoint_obsdata along
+those lines.
+
+Ah Ha.  reduce_cor_data is a little broad, since I am eventually going
+to want to do photometry.  I am going to get the ephemeris cached to
+disk.  I could start to do background subtraction and flatfielding
+by writing those to disk somewhere.  Possibly having them in the same
+file as the final image, though that gets a little over-bearing.  I am
+not interested in doing detailed bias subtraction or flatfielding
+right now.  Instead of reduce_cor_obs, I could have it be reduce_nas?
+No.  Do I want it to not have reduce?  r?
+
+Well, rdata would be short for reduce data.  Or even reduce.  Or
+better yet ioio_reduce or r_ioio.  Or cor_reduce.  I like that one.
+OK, I don't feel like I can re-arrange everything to be PEP Pythonic,
+but I can at least move forward with cor_reduce by copying stuff over
+from RedCorObs 
+
+Tue Apr 30 09:37:49 2019 EDT  jpmorgen@snipe
+
+Thinking of having a ccdchar for storing the characteristic
+readnoise and gain parameters I need, rather than having them stored
+in precisionguide
+
+Tue Apr 30 13:50:22 2019 EDT  jpmorgen@snipe
+
+Copied over a couple of directories to byted
+
+it wants ffmpeg
+
+Whew!  byted is really slow compared to snipe!
+
+But got it to work, including editing the
+/etc/ImageMagick-6/policy.xml for moviepy
+
+Tue Apr 30 15:41:56 2019 EDT  jpmorgen@snipe
+
+So deciding to move forward on work here, though getting any real
+results in th etime I have before MOP seems unlikely.
+
+Liked the idea of making a some sort of program that returns CCD
+characteristics like the gain and readnoise of a system based on other
+header attributes.  Currently I have that as global variables in
+IoIO.py.  I could call the module ccdchar.py.  It would return a
+dictionary of the info I would like to add to the header, but not add
+it (or maybe it would).  The idea is that the return value could be
+kept track of in a parallel object to an ImageFileCollection.summary
+which would then write the stuff when the final file is being written.
+
+Either that, or I write the files gradually as I go.  but it is so
+easy to collect and manage info with Python that doing it via
+excessive disk writes seems like a bad idea.  Wait a minute, I think
+an astropy Table object lets me store objects too.....
+
+Ah, I want column metadata.  Not sure how to do that.
+
+But I can add columns with time and SkyCoord!
+
+http://docs.astropy.org/en/stable/table/
+
+So what I want to do is collect into the Table and then when it comes
+time to write the FITS files, write out certain table elements as FITS
+keywords.  That was going to be in ReduceDir, but it is really a
+general thing.  I don't see how the Table class is going to get me
+there, though.
+
+Ah.  The Meta keyword of the table has the FITS keywords.  But that is
+not used in collection.summary, since it is a table of keywords!
+
+s.show_in_browser(jsviewer=True)
+
+Totally cool!
+
+But it doesn't have the column metadata.  So if I add, I either add a
+column with it (probably best bet) or have some sort of object keep
+track of it (also OK, but might as well use the Table if I can).  So I
+still haven't seen how I can have metadata on each column other than
+name and units
+
+And the mixin columns don't really have the ability to be separate
+objects like calculations, at least that I can understand.  They eed
+name, dtype, unit, format and description.  Hey, what is description?!
+
+Ah Ha!  There is a column description which should really be set to
+the FITS description
+
+s['bitpix'].info.description = '8 unsigned int, 16 & 32 int, -32 & -64 real'
+
+So I can store the description there.  Then I just need a list of
+columns that I want to update in the FITS file 
+
+There is also the option to put a key in a particular place
+
+hdr.set('newkey', 666, before='TARGET')  # comment is optional
+
+This can insert a new card or move an existing one.  That would take
+specific code.
+
+Tue Apr 30 21:55:58 2019 EDT  jpmorgen@snipe
+
+have a list of objects.  Each object has calculate and header_write
+methods (maybe more).  The methods take a Table and a header (maybe
+more).  If they need more than the Table and header, I could
+potentially pass the self of the reduction object, whatever I am going
+to call that.  That just becomes an object with property, which I
+would call something like __calling_self.
+
+Wed May 01 11:00:49 2019 EDT  jpmorgen@snipe
+
+OK.  Now to the hist_of_im issue.  Basically, it is just np.histogram
+except with centers instead of edges
+
+https://www.mathworks.com/matlabcentral/answers/422000-matlab-histogram-connecting-bin-centers-to-make-a-curve
+
+Recommends doing a convolve of the edges on 0.5, 0.5 to get to the centers
+
+Being inspired with context management.  Finding bug in back_level.
+But I still haven't figured out the best place to put the gain and
+readnoise.  readnoise stuff.  I had those in ioio.py -> IoIO.py.  But
+I want to re-arrange that to cor_obsdata, cor_precisionguide and
+cor_reduce.  Fundamentally, cor_obsdata was the earliest I used gain
+and readnoise, so that is probably where I want to set it.
+
+--> Ahh!  What the flats really need is the center of gravity of the
+    histogram. histogram * value / total of all bins
+    If you have 1 ADU bins, i, 1/Sigma_i N_i * Sigma_i N_i*i
+
+Can I simplify that?  N_i*i = need to find all pixels of that
+intensity.  But that is also i+i+i.... N_i times
+
+No, this is working out to be the mean.  What I am looking for is the
+weighted mean
+
+In any case, I am feeling like the best place to put the functions for
+readnoise and gain is in cor_reduce, since I might change the way
+those are done in cor_obsdata & I can always move them then
+
+Thu May 02 03:44:49 2019 MST  jpmorgen@byted
+
+Really want the gain function, wherever I put it, to return gain and
+optionally a FITS card with all the metadata in it.  Well, to be truly
+general, I don't necessarily want a FITS card.  I just want the
+documentation.  So that would be a dictionary return value, which is
+what I was thinking of anyway.  But I am handing it the hdr, so might
+as well put it there
+
+Thu May 02 07:49:08 2019 MST  jpmorgen@byted
+
+Hey!  I might want Gain and Readnoise to be objects with methods value
+calculate (or derive, batch, etc.), Table and hdr.  These could be in
+the cor_ccdchar file
+
+Hmm...  Now I am playing with things and it looks like I am
+subclassing Card.  But I am also having the Table option....  At some
+level I just need to write code.
+
+Sat May 04 07:30:05 2019 MST  jpmorgen@byted
+
+So things are coming together.  ccdproc is the general package for
+tools that help with ccd data processing.  I see a reduceccd package
+on GitHub that someone has put up (Ruben Garcia-Benito (RGB)) 2 years
+ago.  Doesn't seem to make too much sense to me based on the
+documentation, but the basic way of going about it seems similar.
+There is even older stuff from 2010 which looks like the start of
+CCDproc.  So it looks like I am pretty much on my own for a pipeline,
+which is OK.
+
+I was going to call it ccdred and corred
+
+Tue May 07 12:25:03 2019 MST  jpmorgen@byted
+
+OK,  working on cor_red.  Should I make CorRed one object that handles
+all levels of reduction?  Or should I have a separate one for the
+directory?  I was thinking that I would have the single file handled
+sort of at the same level as the directory, since I want to have the
+ephemeris there.  Do I also want to handle the whole directory
+structure and movie and all of that?  Don't know until I try.
+
+I could do everything with property decorators so things only
+calculate when they need to 
+
+Thu May 09 14:49:54 2019 EDT  jpmorgen@snipe
+
+Wonder if it would be better to have colred and rowred or something
+like that to indicate that columns or rows are going to be added.
+
+At the very least, I want col_oplist and row_oplist
+
+OK, so I want something that puts the rawdir and reddir into the
+summary Table but doesn't necessarily put them into the header --
+though it is not the end of the world if it does.
+
+I guess if it is something simple that operates on a column of the
+table and doesn't need a header write, I can just operate on the
+column!
+
+OK, now when I want to add a row that has a corresponding column, like
+reddir, I also need to do that in two chunks, adding the column to the
+Table first.  Hence the two types of operations.  What should I call
+them?
+
+Package that uses ccdproc
+ccdred or ccd_red
+colred	  col_red
+rowred	  row_red
+
+Actually, ccdred could be the module and ColRed and RowRed would be
+the classes for operating on rows and columns
+
+Wait a minute, a rowred ads a row but if I have it add a column at
+that point to just that row before adding the whole column to the
+table, it barfs.  So I need rowred to have a method that adds to the
+col_oplist any columns that need to be appended to the table.  All
+this was to try to get into one place the code that is necessary to
+maintain the summary table and the FITS header.  It is being a little
+painful to do so, but lets see if we can do this last part....
+
+So rowred needs to have a method that is just like col_red, which I
+currently call table.  But maybe I should call it column whole_column,
+or new_column.  Or I could have an addtable object that does
+everything.
+
+In the end, I really need to have the table have all the columns (at
+least blank) first and then I can add rows
+
+ccdproc is designed to go through individual files in the list and do
+things with them.  I am pushing that.
+
+So if I stick with everything as going into a single oplist, I could
+call all of the (full) column methods first and then the row methods.
+I guess there may be two types of row methods:
+
+(1) Add a row that starts as a duplicate of another row
+(2) Modify columns in a particular (set of) row(s)
+
+http://docs.astropy.org/en/stable/table/modify_table.html
+notes that I need to use table[column][row] if I want to use things
+like np.where to index the row.
+
+Whew!  OK, so maybe I need a more generic object that can be ready to
+do rows and columns
+
+ccdred
+ccdproc_multicolumn
+ccdproc_table
+ccdproc_table_proc
+
+Ack.  Now I am getting a little worn out on all this generalization.
+If I really continue down this route, ccdred is probably going to need
+to assume that it is interfacing with an astropy Table at the very
+least possibly ccdproc.ImageFileCollection.  I was trying to keep it
+totally general with dictionary stuff.
+
+So if I use summary as property, when I instantiate the first CCDred
+object, there is a long pause while the directory is read and the
+summary table is generated.  If I use the ccdproc.ImageFileCollection
+as the property, I can instantiate a whole bunch of objects and there
+is no pause until there is a .calculate or .column or .row method that
+uses the summary table.  In cor_red I was keeping track of the image
+file collection as property there and then passing the summary table
+to the object.  I am not sure it is good form to separate the object
+that is being worked on and the worker.
+
+Another issue is that the ccdred is getting pretty involved and will,
+of necessity, include calls to astropy Table and ccdpro stuff.  But I
+guess that is through methods of the objects themselves.  I don't
+think I'll need to do any imports of those things
+
+Fri May 10 12:37:54 2019 EDT  jpmorgen@snipe
+
+OK, I have a basic ccdred.py now 
+
+I can add features like before, COMMENT, and HISTORY at some later
+date if I want to.  No, those were easy to add.
+
+Getting stuck with parameters for value and it being @property.  For
+the simple case of just storing things, it works OK.  If I need to
+calculate, I was thinking that would all be done at once and
+everything necessary for that would be in the object.  But *args,
+**kwargs for all calculate methods seems safe.  If the object cares
+about a summary table, that will be tweaked and things will be
+available through the collection.summary object.  Value becomes
+degenerate.  That is possibly why this whole thing is a bad idea,
+unless value becomes the whole column.....  Well, since I have
+@property, that is not too hard....
+
+ReduceCorObs.py reduce --tree --movie --start 2019-05-01
+
+Put on/off scale back to the way I had it in 2018 and just live with
+it for now.
+
+ReduceCorObs.py reduce --tree --movie --start 2019-01-01 --recalculate
+
+
+ReduceCorObs.py reduce --recalculate --movie --directory /data/io/IoIO/raw/20190508
+
+Looks like Na_on_loss is more exaggerated this year
+--> Think of a way to spot that in real time, since it looks pretty
+easy to spot by eye.
+
+SII_on_loss = 0.95
+#Na_on_loss = 0.8
+Na_on_loss = 0.6
+
+0.6 looks good.
+
+
+ReduceCorObs.py reduce --tree --start 2019-01-01 --recalculate --movie 
+
+Mon May 13 16:30:13 2019 EDT  jpmorgen@snipe
+
+OK, things are starting to gell a little.  The lower Na_on_loss made
+things look a little better.  Starting 20190407, there is a higher
+section that steadily goes down to 20190426
+
+On the [SII] side of thigns, there is a clear division between
+<20190329 and after.  It is a total mess now, possibly because
+SII_on_loss needs to change. Possibly because the filter wheel doesn't
+move into the same place repeatably?
+
+Mon May 13 22:19:21 2019 EDT  jpmorgen@snipe
+
+Add torus aperture sums
+
+ReduceCorObs.py reduce --recalculate --movie --directory /data/io/IoIO/raw/20190508
+
+Move reduced tree to /data/io/IoIO/NO_BACKUP/reduced.previous_versions/2019_before_IPT_aperture/
+
+ReduceCorObs.py reduce --tree --movie
+
+Tue May 14 07:57:07 2019 EDT  jpmorgen@snipe
+
+ran from 22:39 or so until 04:56, or about 6 hours.
+
+No harm done to Na or regular [SII] aperture sums
+
+OK, AP_IPT_east_3_7_3 decreases over time and west increases.  They
+cross at mid April.  This could very well be an alignment issue.
+
+Indeed, _4_7_3 looks totally different, with a slight bump in mid
+may.  Same for _4_7_2
+
+But clearly the fact that I am getting negative values for the torus
+in these apertures suggests that there is something else going on:
+background subtraction.  Or maybe the satellites
+
+Thu May 16 20:05:45 2019 EDT  jpmorgen@snipe
+
+--> there seems to be a fixed pattern noise in the reduced file that
+    is on all scales, the easiest to see is ~100 pixel pincushion
+
+Fri May 17 08:13:11 2019 EDT jpmorgen@snipe
+
+Try to do calculation without rotating to see if that helps with what
+I think is an aliasing issue....
+
+ReduceCorObs.py reduce --recalculate --movie --directory
+/data/io/IoIO/raw/20190508
+
+Rotation was 0.3 degrees!  Pin cushion definitely goes away
+
+In 2018, preak to oeak is genrally 200+, with occational spikes to 400
+
+In 2019, there is still larger hash, with spikes up to +2000, -1000,
+and hash more like +/-500
+
+--> not subtracting enough.  Fixing that up with SII_on_loss 1.2 was
+    too much subtraction
+
+There is a high pixel-to-pixel variation even in the ND filter, which
+is slightly over 100 pixels.  Off ND filter is consistently not more
+than +/-200 
+
+--> not getting flip since I have turns off small-angle rotation
+
+this is some sort of on-off subtraction, since raw images in 2019 have
+only +/-20 ADU
+
+There is something weird going on since inside the ND filter in the
+raw is +/-20 ADU
+
+
+        off_im[OffBandObsData.ND_coords] = 0
+        offscale = on_jup/off_jup
+        off_im = off_im * offscale * on_loss
+        scat_sub_im = on_im - off_im
+
+Oops, ADU2RAY is in there too.  Could it be because on_jup is extra high?
+
+moving by 1, 80 pixels
+
+Still +/- 1000
+2019
+ADU2R   =  0.02168766244115172 / conversion factor from ADU to R
+
+2018
+ADU2R   =    0.119791856171764 / conversion factor from ADU to R 
+
+Ha!  That is a huge difference!  And explains the factor of 5 in the
+noise peak-to-peak.  It is not that the noise is any different!
+
+So what is the real Jupiter brightness?
+
+Well, on_jup must be recorded as much dimmer in 2019
+
+OK, what is ONBSUB doing?
+
+Ah Ha!  It looks like the ONBSUB values is increasing each year.  in
+2017, it was ~1480, in 2019 it was decreasing from 1780 to 1670
+(mostly 1670) and in 2019 it is a steady 1880 or so.
+
+DONBSUB is a little better behaved.  For the Na, it is trending to -40
+for Na.  Somewhat concerning: I see the negative envelope of the
+enhancement, but that could actually be real, since the edges got brighter
+and DONBSUB is calculated: bias_dark - OnBandObsData.back_level
+
+As expected DONBSUB for [SII] is very small.  Interestingly clumped at
++2 and -2.
+
+Back to Na DONBSUB for 2019.  It was very nicely 0 until I tweaked the
+instrument.  Then it went to -50, which is consistent with the low
+value I had in 2018 and then it suddenly went up to ~-30 or so, which
+looks like the inverse of the aperture stuff.  But still, there are
+pretty small numbers.
+
+OK, now looks at the value for Jupiter in the raw files
+
+cd, '/data/io/IoIO/raw/2018-05-18
+atv, 'SII_on-band_008.fits
+
+Jupiter
+8700 max, bias 1630
+
+cd, '/data/io/IoIO/raw/20190508
+atv, 'SII_on-band_008.fits
+
+Jupiter
+3160 max!  bias 1880
+
+Where have all the photons gone?
+
+Could this be a sign that I zapped my CCD with the sun?
+
+CCD temperature in both 2018 and 2019 = -15,
+EXPTIME 300
+
+2018
+OBJCTALT= ' 32.5554' /          Nominal altitude of center of image             
+Ap Mag -2.50
+
+2019
+Ack, no telescope....
+DATE-OBS= '2019-05-08T08:14:48' /YYYY-MM-DDThh:mm:ss observation start, UT      
+Alt = 30
+Ap Mag -2.50
+
+Call Starizona about this [Scott suggested f-stop...]
+
+also check to see if stars are the same calibration [...did and they are]
+
+So for Na ADU2R followed the expected distance envelope in 2017 and 2018,
+with a high at ~0.38.  It was wacky in 2019 up to late March, probably
+because of weather.  There are some very low points in late March
+probably because of bad focus.  Since April it has been steady at 0.1.
+
+Physically, the filter wheel got thicker and an adapter was put in
+that spaced the start of the filter wheel even farther back.  What
+didn't change was the ND filter at the focus of the telescope, since
+the focuser aranges for that.
+
+I have to therefore change the focus of the camera, which shortened
+the total focal length by 10-15mm.  Not sure I understand that.  Oh, I
+have gotten shorter focal lengths with the old system.  That seems to
+be a temperature sensitive thing on the main scope.  OK.  So I am
+moving the camera farther away from the focal plane by up to 0.5",
+which is really not much compared to the total length of the instrument.
+
+For [SII] ADU2R has a rattier curve and lots of 0s.  But is about
+0.125.  Now it is about 0.02!  on_jup is the thing that is changing
+
+For Na, it changed by a factor of 3.8 for [SII] it changed by 6.25.
+What are the off-band doing?
+
+cd, '/data/io/IoIO/raw/2018-05-18
+atv, 'SII_off-band_008.fits
+
+Jupiter
+7700 max, bias 1630
+
+cd, '/data/io/IoIO/raw/20190508
+atv, 'SII_off-band_008.fits
+
+Jupiter
+3280 max!  bias 1880
+
+>>> 7700 - 1630
+6070
+>>> 3280 - 1880
+1400
+       4.3357143
+
+cd, '/data/io/IoIO/raw/2018-05-18
+atv, 'Na_off-band_008.fits
+20000
+cd, '/data/io/IoIO/raw/20190508
+atv, 'Na_off-band_003.fits
+5700
+
+(20000. - 1630) / (5700 - 1880.)
+       4.8089004
+       
+F-stop?
+
+So I must have a Nikon 60mm f/2.8 Micro-NIKKOR AF-D
+
+http://download.nikonimglib.com/archive2/6Vex200Zt1ox02k1UZm06GC9j487/AFMicro60_2.8D_(27_DL)02.pdf
+
+So if I am down
+
+6070/1400
+4.335714285714285
+
+f = np.asarray([2.8, 4, 5.6, 8, 11, 16, 22, 32])
+
+f/2.8
+array([ 1.        ,  1.42857143,  2.        ,  2.85714286,  3.92857143,
+        5.71428571,  7.85714286, 11.42857143])
+
+So if I had to say, it got stopped down to f/11.
+
+That is a pretty serious loss, as I have seen.  It might also mess up
+my exposures on the satellites.  To the later point, if I need another
+factor of 6 shorter exposure time, R-band would need to be 0.003,
+which is doable.  0.002 not, but 0.003 yes.
+
+Transfer notes to IoIO.notebk.
+
+Ah Ha.
+
+There is a funny twist in the ND filter or something now that didn't
+used to be there.  It may be a ghost.  See IoIO.notebook for
+measurement that says that ghost is a factor of 20%, which I can live
+with.
+
+think my intensity problem might be with finding center of Jupiter
+
+Ack, I don't think so, because when I take a profile of Jupiter, I see
+it is much less bright!  [Astrometry tool in MaxIm gives the same maxima]
+
+spot-check on a few more days, also check that bias is working right
+[did and see that ADU2R is consistent with spot-checking]
+
+Gain and linearity check was after change & indicated CCD was OK
+
+Sat May 18 10:30:39 2019 EDT  jpmorgen@snipe
+
+[20190326 is the first day of HD 110411 and it was a little cloudy as
+per Jupiter observations]
+20190301 HD 006530 SII_on 0.7s 43000
+20190318 HD 132052-S001-R001-C002-SII_on 0.7	Sat
+20190326 HD 110411-S001-R001-C001-SII_on 0.7 26000 
+20190326 HD 110411-S001-R001-C002-SII_on 0.7 27000
+20190326 HD 110411-S001-R001-C003-SII_on 0.7 27700
+20190326 other filters
+Na_on	54000
+Na_off 	263000
+R	151000
+SII_on	27000
+SII_off	131000
+
+-- change instrument--
+20190404 HD 110411-S001-R001-C001-SII_on 0.7 34000
+20190404 HD 110411-S001-R001-C002-SII_on 0.7 34000
+20190413 HD 110411-S001-R001-C002-SII_on 0.7 35000
+20190413 other filters
+Na_on	69000
+Na_off	322000
+R	200000
+SII_on	35000
+SII_off	165000
+
+FWHM is generally larger on 20190413, but there are some values of 3,
+suggesting seeing might be bad -- these are all short exposures
+
+
+Sat May 18 21:27:47 2019 EDT  jpmorgen@snipe
+
+Try with a bigger patch of Jupiter.  Keep in mind that I don't need to
+bother to change ADU2R for R, since I am working in pixels for R, but
+it would affect relative ADU if pixel scale changes [but pixel scale
+only changes negligibly]
+
+python3 -W ignore ReduceCorObs.py reduce --tree --start 2019-01-01 --recalculate --movie 
+
+python3 -W ignore ReduceCorObs.py reduce --num_processes 1 --tree --start 2019-01-01 --recalculate --movie 
+
+I wonder if having the filter farther from the focus might be
+decreasing the bandpass?  But that doesn't explain why the HD was the
+same brightness, 
+
+check that flats are flat -- yes, still very flat, so it is not
+Jupiter falling into some weird whole on the CCD.  Although not
+perfect, the ND filter was reasonably flat + things look about the
+same when I move Jupiter up and down on it.
+
+--> is Jupiter falling into some sort of Fraunhofer feature? 
+Even on 20190426, which I label as a beautiful night, Jupiter is the
+same wimpy 3000 max!
+
+The flux just off the ND filter seems to be comparable, which is why I
+suspected the ND filter, but ND filter tests show that it is still
+ND3, more or less.
+
+What if it is a camera focus problem?  The ADU2R was even lower, when
+I had a very bad focus.  It is better now, but not as good as it was
+last year.  Jupiter is focusing above or below the ND filter.  In
+either case, the rays are spread out more than I want.  But each ray
+gets attenuated the same amount
+
+Sun May 19 08:02:01 2019 EDT  jpmorgen@snipe
+
+--> test to see if a very bright star in [SII] or Na is same on ND
+    filter?
+
+That doesn't seem likely, since R-band includes these lines.
+
+Sun May 19 14:29:24 2019 EDT  jpmorgen@snipe
+
+OK finally have a good focus on 2019-04-11, but the instrument is
+clearly out of focus with the ND filter.  The max is still just 3300.
+
+--> So it doesn't seem to depend on the instrument focus.  Even very
+bad telescope focuses have maxes around 3000 pixels.
+
+Verify that in 2019-03-06 & others, the [SII] max looks just like in 2018.
+
+So the fundamental change came not with minor instrument focus, but
+with a more major movement of the camera back from the focal plane of
+<=0.5"
+
+We are at 1.58"/Pixel instead of 1.56"/Pixel from 2018 (bin 2x).  So
+that is not the change.
+
+20x20 box for Jupiter surface brightness didn't change the [SII] or Na
+ADU2R behavior.  
+
+Mon May 20 09:19:30 2019 EDT  jpmorgen@snipe
+
+Let's review change.  Moved filters back by <0.5" and everything back
+from there back by ~0.5"
+
+f/ = 11 = f/d ; d = diameter of aperture, f = focal length
+
+11 = l/2r ; r = radius at distance l from focal plane; l = 0.5"
+
+r = l/(2*11)
+r = 0.5/22
+0.022727272727272728
+
+As expected, the small change in filter wheel thickness results in
+only a small change in where a patch of light is subtended.
+
+But for Jupiter, this ends up being a large change in filter area.
+And it is different for the [SII] and Na filter because of how they
+are mounted in the wheel.  Looking at the wheel on the SX website, I
+think the [SII] is generally closer than the Na.  Actually not
+necessarily.  If they are recessed (which they are) and the filters are
+mounted deep in the rings (which they are), the [SII] could be farther
+along the optical axis.
+
+But wait a minute.  The wheel is weird.  The original USB mounts the
+filters on the same side as the magnetic pegs.  The Maxi does it the
+same way as well, but runs the light the other way, since it puts the
+prism for the off-axis guider on the other side of the wheel.  So
+which way did Scott mount things?  I recall working with the filters
+on the opposite side of the numbers and having the taller ones scrape
+in the hole when it was trying to move all the way around.  I have
+vague recollection that was the hole from the telescope, as it had the
+ND filter on it, which propped the whole wheel up.  The rest of the
+instrument came off easily with the 7 thumb screes around the wheel,
+so I didn't need to deal with taking that off.
+
+So in that configuration, the Maxi is upside-down with respect to the
+prism, but it keeps the filters as close as possible to the ND
+filter.
+
+From: Scott Tucker <stucker88@charter.net>
+Date: Wed, 6 Feb 2019 11:59:43 -0700
+> The easiest and least expensive way to make the adapter plates for the
+> filter wheel to the coronagraph is to make thin plates that will bolt
+> between the existing lens/ND holders.  That way we don't have to
+> remake those parts which are the most complicated to machine. And we
+> avoid having to remount the lens and remake the ND filter strip.  It
+> will add 1/4" to the overall length and should require a slight
+> refocusing of the Nikon lens to bring the ND strip into focus.
+
+Based on my recollection of verbal conversation with Scott, the
+adapters themselves are each 1/8".  So we have added 0.125" to the
+distance between the ND filter and the Na filters.  The [SII] filters
+might be slightly further back because of the deep adapters.
+
+--> they are tipped because of the large stress on the large filter wheel
+    from the drive wheel.  I think that makes the central wavelength
+    redder
+
+Maxi wheel Thickness between input and output adaptors: 41.6mm (1.63
+inches)
+
+Standard USB wheel drawing looks like 29-4*2 = 21 mm basic casing
+thickness
+
+(41.6 - 21) / 25.4 # filter wheel thickness difference in inches
+0.8110236220472442
+
+Full accounting of stack
+
+ND filter at focus of telescope (no change)
+0.125" adapter (new)
+Filter position in new wheel very close to scope-side face BUT
+ filters may be slightly tilted relative to normal incidence
+0.811" fatter filter wheel (new)
+0.125" adapter (new)
+Field lens
+Camera
+
+Total motion of 
+
+2*0.125 + 0.811
+1.061
+
+
+r = l/(2*11) # from above, now l = 1"
+r = 1/(2*11)
+0.045454545454545456
+
+That is not very much, so it seems unlikely that the field lens
+position change made much difference.
+
+Mon May 20 13:43:05 2019 EDT  jpmorgen@snipe
+
+look at Jupiter in the other filters....  Oops, I can't do that
+since I didn't have any!  But R maybe
+
+R-band
+2019-03-20 2000 (looks like OK focus)
+2019-03-23 2100 bad focus
+2019-03-26 2000 (looks cloudy & bad focus)
+2019-04-06 2100
+
+OK, so it looks like R-band has no change.
+
+[SII] on-band	~6
+[SII] off-band	~4
+Na on-band	~4
+Na off-band	~5
+
+How big an angle are we talking about them being tilted?  The filter
+wheel housing diameter is 10.8", so the wheel itself is no more than
+10".  1.25 filter holders are about 7.7mm long.  Say 1/2 of that fell
+into the hole, though that is generous.  Call it 3mm
+
+np.rad2deg(np.arctan((3/25.4)/5))
+1.3531919537796906
+
+f/11 beam angle is
+
+np.rad2deg(np.arctan(1/11))
+5.194428907734806
+
+So this is a non-trivial component of that, but still within that angle.
+
+Jupiter up-down on ND filter didn't affect it.
+
+Mon May 20 20:54:48 2019 EDT  jpmorgen@snipe
+
+Hmm.  Thinking about the fact that the ND filter looked more twisted
+and bowed than I remembered it.  If it is bowed inward, this could
+spread rays out and give them a bigger than f/11 angle.  But I can't
+see that changing thigns with distance on the filter, since angle is angle
+
+Tue May 21 08:31:56 2019 EDT  jpmorgen@snipe
+
+Jeff Baumgardner is encouraging me to look for a center effect.  I
+don't see that in the new filter wheel, but could it be there in the
+old?  Also, as I move Jupiter up and down with the new wheel, I do see
+evidence of reflections.  Could it be these just lined up in the old
+
+do absolute calibrations of stars, since I don't have a good night
+for HD 110411.  No, have R for intercomparison.
+
+Look into 20190515 to see if I can figure out where all the
+retroreflections are coming from.  Check for these in smaller filter
+wheel data
+
+SII_on-band_021.fits: Below center, shadow of ND filter above, near center
+
+SII_on-band_018.fits: Above center, shaddow of ND filter on another
+set of ND filter fuzz.
+
+In neither case is there evidence of shaddowing below Jupiter
+
+\\SNIPE\data\io\IoIO\raw\2018-05-18\SII_on-band_012.fits hard to tell,
+but I'd say we are seeing the same thing.  Fuzz looks sharper below
+than above, --> but the effect is not nearly as exaggerated
+
+Ahh, that is probably because the reflection from which it derives --
+off the front surface of the narrow-band filters -- occurs further
+back in the new arrangement.  The fact that it is centered in a
+similar place relative to Jupiter is suggestive that the angle hasn't
+changed much -- probably the focus tube angle
+
+Lets look at the torus itself with atv....
+
+cd, '/data/io/IoIO/raw/20190508
+atv, 'SII_on-band_010.fits
+
+Tours is ratty and 150 above background nearby
+
+cd, '/data/io/IoIO/raw/2018-05-18
+atv, 'SII_on-band_010.fits
+
+Torus is also a bit ratty and 150 above background nearby
+
+So the spot check of torus seems OK.
+
+--> there was some sort of specular reflection looking thing on the ND
+    filter toward the edge.  It could be that dominated in the old
+    configuration?  It would only be an issue on the narrow-band
+    filters
+
+--> I could potentially take a bright flat with the narrow-band filters
+
+The idea is that the ND filter might not have good AR coating (Jeff
+reported nasty reflections).  The ND filter is at the focus of the
+telescope.  The camera lens is effectively at the telescope pupil.
+There could be a reflection between the two?  But I don't see bad
+ghosts between telescope pupil and ND filter, so I don't think there
+would be much in the other direction.  The difference is that the
+narrow-band filters are in there.  They have AR coating that should be
+good, but say they are extra shiny, or maybe extra not shiny!
+
+Jeff's thinking about a bright spot in the center is where I am going
+with this now.  I see the evidence of pretty significant shadowing of
+the ND filter in off-axis light that has bounced off the narrow-band
+filter.  That means that reflection is non-trivial.  For a Fabry-Perot
+filter I would expect that.  So if the ND filter has specular
+reflection off its surfaces, that light bounces right back.  It is
+less intense as related by the 1/r^2 effect.
+
+So if this correct, I might find that Jupiter is a more exaggerated
+central peak pre-switch..
+
+cd, '/data/io/IoIO/raw/20190508
+atv, 'SII_on-band_010.fits
+
+(3200-1884)/2+1884
+
+FWHM
+67-23 =  44
+
+cd, '/data/io/IoIO/raw/2018-05-18
+atv, 'SII_on-band_010.fits
+
+(8650 - 1651)/2+1651
+5150
+
+68 - 25
+43
+
+So FWHM is the same.  They look the same.  Last year is just scaled by
+4 -- 6 depending on the filter
+
+So the transmissivity of the filters is measured at near 100% in-band
+
+OD is not coming out well in measurements, but seems to be better than
+1E-4 and probably better than that.
+
+My hypothesis is falling apart since Jupiter's shape is no different
+in the two cases and I don't see where the extra photons can come
+from, though there is a possibility they are off-band.
+
+OK, go with the off-band hypothesis.  Since Jupiter is very close to
+the center of the FOV, that keeps all the rays together as they go
+through the ND filter and hit the narrow-band filter.  On-band light
+goes through with near 100% transmissivity because of the tuning of
+the coatings, matching the index of refraction in air gradually to the
+subtrate, where it mystically turns into a mirror for outbound photons
+& does the Fabry-Perot effect.  The reflection for on-band light in
+the narrow-band filters is relatively small.  Reflection in off-band
+light has to be very high, since otherwise where would that light go?
+Plus, I see it.  The ND filter may not have good AR properties.  So
+all the light bouncing back from the narrow-band filter is prone to
+reflection.  OK, maybe not all.  Normal glass is 4%.  Having trouble
+finding a value for Wratten gelatine
+
+Filters were specified: Out of Band Blocking: T<0.001% 350-1000 nm.
+
+So I have ~1nm primary bandpass and am getting a x6 boost from
+off-band?
+
+OD Blocking
+     OD bandwidth
+1E-5*700
+0.007
+
+Even if I am getting 100% reflection from the front of the narrow-band
+filter, 100% off the bottom of the ND filter, I am still only getting
+0.7% transmission through the narrow-band filter.  That is not a
+factor of 4 -- 6.
+
+Still a little skeptical of this calculation, but it does seem that my
+boost/attenuation has to be from on-band light.
+
+Go back to the simplest thing it could be: some sort of change in the
+optical properties of the ND filter such that in yellow/red light, it
+got aged, say by a zap from the sun.  But I would presumably see that
+in the R-band filter.  5890 is just below that, 6731 is right in the
+middle of that.  Those show comparable effect, but R doesn't.
+
+OK, back to reflection between the ND filter and the narrow-band (-->
+could also be between narrow-band and lens).  But start with upper
+reflection.  I ruled that out with the single reflection giving 0.007%
+transmission.  How many to give our factor of 6? (assuming shape
+difference is negligible).  The 0.04 reflection of ND filter kills
+this idea.
+
+What if we are working on the edges of the ND filter transmissivity?
+There is a point at which it is 50%, so 50% goes through and 50%
+bounces.  The 50% bounce.
+
+How wide are the transitions?
+
+Wed May 22 01:46:21 2019 EDT  jpmorgen@snipe
+
+--> check SII and Na calibrating exposures.  Looks like they could be
+    a little brighter
+
+Na_off_cal is really dim even when no clouds, like I really want 0.5
+
+Hmm.  All exposure times on the narrow-band filters would need to be
+greater than 0.7 to have decent S/N.
+
+figure out best way to do exposure time.  Possibly just doing 0.7
+and 0.71 on one or all of the filters.  SInce this is at the
+beginning of the observations, I can take some time for it.
+
+--> finish testing satellite calibration exposure times 
+
+Wed May 22 14:07:08 2019 EDT  jpmorgen@snipe
+
+Looking with atv and seeing there is pretty considerable structure in
+the ND filter response relative to the noise.  In particular, there is
+a large peak just above the middle.  This is on 
+
+cd, '/data/io/IoIO/raw/2019-05-18_ND_filter/
+atv, 'ND_filter_ghost08.fit
+
+bias = 1870, so subtract that
+
+im = readfits('ND_filter_ghost08.fit') - 1870
+
+ND filter at high Y is ~350.  It continues up to a peak near the
+center of ~625.  So over the 
+625./350
+1.7857142857142858
+
+Across goes from min of 500 at center quickly to 600
+600/500
+1.2
+
+cd, '/data/io/IoIO/raw/2018-04-04/'
+atv, 'Sky_Flat-0005_Na_off-band.fit'
+
+Wow.  As I reacalled, that looks totally different, with the ND filter
+looking very uniform.
+
+This suggests that the ND filter has either been damaged, or the
+position of the field lens makes its structure more visible.
+
+Although the image of Jupiter doesn't look distorted, if this wierd
+structure in the ND filter somehow causes light to go at different
+angles (?) or refract (?).  Or it could be ghosting from somewhere
+else.  Jupiter doesn't change much when I move it around
+
+im = readfits('Sky_Flat-0005_Na_off-band.fit') - 1740 very nice,
+uniform peak in middle at about 160, down to ~120 toward low Y.  But
+the noise is much more, comparable to the variation
+
+160/120
+1.3333333333333333
+
+and there is a hint of the extra peak in the middle.  So we might just
+not be seeing enough signal.
+
+atv, 'Sky_Flat-0002_SII_on-band_bright.fit
+im = readfits('Sky_Flat-0002_SII_on-band_bright.fit')
+im -= 1740
+
+very nice 150 -- 250 and back again arch
+
+So it looks like the ND filter was either damaged in the transfer,
+which is consistent with my noticing more exaggerated twists, or the
+ghosts are more prevalent with the spacing change 
+
+It is suspicous that the ghosts are along the ND filter, which would
+be consistent with some sort of twisting damage
+
+I can test for ghosts... no, if the ghost is related to the ND filter
+just being there and relfecting off of a lower or upper surface, it is
+being expresed on the ND filter.  I don't have another surface at that
+level to check, but look anyway....  Looks really flat just off the ND
+filter.
+
+So this could potentially be a reflection of the diffraction of the ND
+filter off of the curve of the plano-convex lens.
+
+It could be sun damage.
+
+If we take the response at face value as transmission and not ghost,
+it is a little less toward the left.
+
+Wed May 22 18:27:19 2019 EDT  jpmorgen@snipe
+
+Could this be front-surface reflection up the tube and back?  Hmm.
+Never saw evidence of this when ND filter was clocked at 15 degrees.
+That could be because the tilt was enough to put it off the FOV.  Here
+we might be seeing the end of the ND filter in the middle.  Does that
+go in the right direction?  Yes.  The instrument tilts back and light
+from the bottom shows up on the top.  The slight waviness could be the
+slight twist, which is only a fraction of a degree.
+
+The problem with that hypothesis is that I don't see the effect in the
+2018 data in the regular flatfield.  I would expect a bright patch up
+and to the right.  I see none.
+
+Go back to May 15 and measure Jupiter in the different positions more
+carefully.  In fact, I can use read_ap to do that....
+
+OK, read_ap suggests Na ADU2R was 0.07 at the beginning of the night,
+then up to 0.09 at , then 0.12 for the last three.  But that is not a
+whole lot different than the previous nights, suggesting an airmass effect
+
+For [SII], something was very bad on the 16th, but that might have
+been clouds.  Looks like ADU2R is affected by airmass mostly.
+
+PSIScope biases
+5C   1658
+0C   1650
+-5C  1640
+-15C 1632
+-20C 1630
+
+So there is no change in bias level with temperature of the CCD.
+Probably the difference is the temperature of the amplifier, which is
+ambient.  Looks like it might go down with higher temperatures.
+Overall up-trend suggests wear in amplifier.  I would expect that
+would go to hotter, but there might be yet another thing going on.
+
+Thu May 23 08:33:31 2019 EDT  jpmorgen@snipe
+
+Time to calibrate Jupiter
+
+HD 110411
+Wavelength (Å)
+	Flux (photons/cm² /Å /s)
+5875	9.50
+5900	9.43
+
+6725	7.47
+6750	7.43
+
+\\SNIPE\data\io\IoIO\raw\20190411
+Bad ND focus but night looks clear, decent focus on SII_on-band_004
+Hey, bad focus shows shadows in ND filter below Jupiter.  Suggesting
+that is a focus effect of the camera lens, not ghosts
+
+Jupiter typical 3376 max - ND nearby 1880
+(3376 - 1880) / (300 + 1.5) # ADU/pix/s
+4.961857379767827
+
+HD 110411 intensity 33000 in 0.7s
+
+33000/0.7 # ADU/s
+47142.857142857145
+
+Physical units of Jupiter flux are in surface brightness
+
+1R = ${10^6 \over 4\pi}$\,photons~s$^{-1}$\,cm$^{-1}$\,sr$^{-1}$
+
+(oops, error in paper!  Should be cm$^{-2}$)
+Add a 1/Å if this is spectroscopic
+
+Physical units of star flux are 
+
+photons~s$^{-1}$\,cm$^{-2}$
+Again, add a 1/Å if this is spectroscopic
+
+So basically they are the same except the sr.  So does it work to just
+multiply by sr/pix to blow the flux in one pix up to full-blown flux?
+
+http://deep-red.sr.unh.edu/starflux/starcalib/starcalib.htm
+
+suggests the answer to that is not quite or maybe I am on the right
+track.  No sense re-deriving their nice work.  Their equation 5 and 6
+is what we need.
+
+7.47 * 9.95 # photons/cm² /Å /s * Å
+
+Calculate theta = pixel size in radians
+
+0.79 / (3600*360/(2*np.pi)) # (arcsec/pix) / ((arcsec/deg/(deg/circle))/(radians/circle))
+3.830028080765334e-06
+
+So effective star surface brightness in R is
+4*np.pi * 7.47 * 9.95 / 3.83E-6**2 * 1E-6 # photons/cm² /Å /s * Å  R/(photons/cm²/s)
+63673100.60523741
+
+So their equation 6:
+
+imageRayleighs = imageDN * (t1/t2) * (I/S)
+
+t1 = 0.7 # exposure time of cal 
+t2 = 300 + 1.5 # exposure time of image I want in R
+I = 63673100.60523741 # standard star apparent surface brightness
+S = 33000 # standard star measured brightess 20190411, 34000 20190410
+imageDN = (3376 - 1880) # bias-subtracted ADU of Jupiter 
+
+imageRayleighs
+6701.690633077503
+
+Oops, I need an additional 1000 because of the ND filter.  So we are
+close to 6 MR.  That is a familiar number....  And this is for a
+crummy measurement in 2019.
+
+OK, that is major news.  It means that something made the flux between
+the ND filter and the narrow-band filters much brighter when they were
+closer to each other.
+
+Thu May 23 20:47:42 2019 EDT  jpmorgen@snipe
+
+Pause this and figure out how to kill python process.  Can do that,
+but have problems even before then.  Really need to use ACP's image
+taking stuff...
+
+OK, back to amplification of signal between ND filter and narrow-band
+filters.  Just realized that I don't need to get extra photons, but
+rather loose some of the ones that are already there, being
+attenutated by 1000.  This might get into the details of the physics
+of how the ND filter works and what would happen if a near
+monochromatic signal is bounced back up toward it.  Or maybe any
+signal of the same wavelength that happens to be coming down.
+
+Because Jupiter doesn't change shape, the original down-going rays
+must be the ones that are stimulated to avoid the
+scattering/attenuating process in the ND filter by the upcoming rays.
+
+Fri May 24 10:33:38 2019 EDT  jpmorgen@snipe
+
+Hey, wait a minute!  Although I didn't take calibration of the
+Galilean satellites through non narrow-band filters last year, I did
+take lots of exposures of Jupiter reasonably exposued through R!  But
+really all I probably need is a one-time transfer calibration
+
+Back to figuring out what might be going on
+
+OD Blocking
+     OD bandwidth
+1E-5*700
+0.007
+
+Now if I have a stimulated emission that makes the ND filter
+completely transparent
+
+1E-5*700*1000
+7.0
+
+Hmm.  What do you know!
+
+Fri May 24 15:38:29 2019 EDT  jpmorgen@snipe
+
+No, that is not quite right.  Out of band blocking is 1E-5
+integrated.  It is an ND5 filter.  So on-band, we have 10A that are
+1E-3.  Off-band, we have, say 7000A, that are 1E-5
+
+10*1E-3 = 1E-2 # equivalent width
+7000*1E-5 = 7E-2 # equivalent width
+
+Still a familiar number!
+
+Tue May 28 10:30:20 2019 EDT  jpmorgen@snipe
+
+Jeff thinks it is resonant cavity
+
+Bertrand Bonfond is asking about Na cloud because they had May 26 very
+bright auroral footprint.  Looking at aperture results, we could have
+had a sharp, bright outburst just when I changed the instrument.  This
+seems unlikely, but the tail does make sense and I was having trouble
+with focus before that.
+
+How does ADU2R calibration change affect the final answer?  ADU2R went
+down by factor of 4 for Na.  It is divided into pixel flux, so that
+ends up boosting flux by 4.
+
+This makes some sense in terms of seeing another outburst which I
+missed pre instrument change.  Try to see individual nights with
+movies and it is hard to note 
+
+Tue May 28 11:11:26 2019 EDT  jpmorgen@snipe
+
+OK, programmed the change in calibration into read_ap.  Inner
+apertures get disproportionately dimmer, since they include Jupiter.
+
+Working with just the 25 Rj aperture.  There are some critical points
+that might define the onset of the outburst that are at -200R.  These
+are in the period 20190304--20190322
+
+cd, '/data/io/IoIO/raw/20190321/
+atv, 'Na_on_15_003.fits
+atv, 'Na_on_15_010.fits
+atv, 'SII_on_15_010.fits
+
+Focus looks pretty doughty
+
+But these are true calibration sources!
+
+OK, if focus is poor, surface brightness at focal plane is going to be
+artificially low.  And our amplification systems for underneath the ND
+filter will also be low.  Sure enough, Na ADU2R is 0.23 instead of
+0.28, except when it is pretty much 0, presumably due to very bad
+focus.  Take those out
+
+OFFSCALE has an intermediate value of 1.3 on 20190407-09.  OFFSCALE is
+really low on those days that ADU2R <0.04 in 2019.  So that is junk
+that is caught by the ADU2R filter.  Other than that, OFFSCALE is sort
+of tri-modal.  low in 2017 to mid-late April 2018, high in the rest of
+2018, (say 20180418+)  Then back to low in early 2019, intermediate on 
+20190407-09, then high after that
+
+Taking out those bad points really helps things!
+
+So 1/3.5 looks like a good match, but I measured something closer to
+4.  Doesn't really seem to affect things and the points still go below
+0 near the current time.
+
+Look at other trends.  There is a hint of a down-trend from 201704-6.
+Definitely see downtrend 201804-6.  Now big downtrend 201904-6
+
+Look at off-band.  Looking at 11-day running median of nightly median
+of 25 Rj aperture, was high at beginning of 2019, then lower after
+wheel change.  But lower envelope post wheel change looks like a
+decent match to previous year's lower envelope.  Lower envelope is
+pretty consistent with bias level & upper is only 50 R, so we are
+probably not too far away from 
+
+On-band raw is at least 100, but the drop might have an effect.
+
+So in 2018 and 2019, raw on-band and off-band followed the same basic
+trend.  High at first then a sharp drop.  In both cases, they are much
+smaller than the on-band.  In the aperture sums, these are scaled by
+ADU2R, so affected by any systematics in that quantity.  OFFSCALE is
+just the ratio of the images
+
+--> start to think about a iPython/Spyder notebook for this to keep
+    track of all of these plots.
+
+In any case, if the off-band goes down, off-band subtraction should go up.
+
+ReduceCorObs.py reduce --tree --movie --start 2019-04-01
+
+Oops forgot the python3 -W 
+
+Thu Jun 06 13:40:34 2019 EDT  jpmorgen@snipe
+
+python3 -W ignore ReduceCorObs.py reduce --tree --movie --start 2019-05-29
+
+Sun Jun 09 15:40:42 2019 EDT  jpmorgen@snipe
+
+Looking at doing offset +/- 10 degrees.  This would be a WAITZENDIST
+or equivalent object with a TargetStart user action of something like
+offset n e
+
+Target.Tags.Offset
+
+Mon Jun 10 07:48:00 2019 EDT  jpmorgen@snipe
+
+Maybe the easier way is 
+
+TAG DECoffset=600
+TAG RAoffset=600
+
+And then I intercept it with
+Target.Tags.RAoffset
+Target.Tags.DECoffset
+
+Sat Jun 15 01:29:23 2019 EDT  jpmorgen@snipe
+
+Trying to see when IoIO.py stopped talking to guidebox moving system
+in MaxIm
+
+python3 -W ignore ReduceCorObs.py reduce --tree --movie --start 2019-06-07
+
+--> Need to test this with the latest version of MaxIm more carefully
+
+Here is when the problem started.  So I have had bad data through the
+height of opposition
+
+'2019-05-21 09:27:20,331', 'precisionguide', 'ERROR', 'Failed to center target to 5 pixels after 3 tries'
+
+Interestingly, this is a week _before_ I installed the new MaxIm.
+Though there are just lots there.  Seems more consistant after 2019-05-28
+
+--> Is this after I changed my settle logic?
+
+Wait a minute, it looks like it is Setting to a value and that gets
+set back rather than moved forward!
+
+'2019-05-30 08:54:07,876', 'precisionguide', 'DEBUG', 'move_with_guide_box: total guider dpix (X, Y): [-3.39641997  0.02939587]'
+'2019-05-30 08:54:07,877', 'precisionguide', 'DEBUG', 'norm_dp: 3.39654717748'
+'2019-05-30 08:54:07,878', 'precisionguide', 'DEBUG', 'Number of steps: 6'
+'2019-05-30 08:54:07,880', 'precisionguide', 'DEBUG', 'Delta per step (X, Y): [-0.56606999  0.00489931]'
+'2019-05-30 08:54:07,884', 'precisionguide', 'DEBUG', 'Setting to: [ 342.00390681  268.00846987]'
+'2019-05-30 08:54:18,846', 'precisionguide', 'DEBUG', 'guider AV, RMS = (0.31722304181632055, 0.43297858489057556)'
+'2019-05-30 08:54:18,847', 'precisionguide', 'DEBUG', 'GUIDER SETTLED TO 0.5 GUIDER PIXELS'
+'2019-05-30 08:54:18,851', 'precisionguide', 'DEBUG', 'Setting to: [ 341.43002376  267.99641542]'
+'2019-05-30 08:54:32,542', 'precisionguide', 'DEBUG', 'guider AV, RMS = (0.23236243567748174, 0.2960933516362686)'
+'2019-05-30 08:54:32,545', 'precisionguide', 'DEBUG', 'GUIDER SETTLED TO 0.5 GUIDER PIXELS'
+'2019-05-30 08:54:32,558', 'precisionguide', 'DEBUG', 'Setting to: [ 342.00390681  268.00846987]'
+'2019-05-30 08:54:46,276', 'precisionguide', 'DEBUG', 'guider AV, RMS = (0.23094810103125013, 0.27700698222427078)'
+'2019-05-30 08:54:46,277', 'precisionguide', 'DEBUG', 'GUIDER SETTLED TO 0.5 GUIDER PIXELS'
+'2019-05-30 08:54:46,279', 'precisionguide', 'DEBUG', 'Setting to: [ 341.43002376  267.99641542]'
+'2019-05-30 08:55:00,080', 'precisionguide', 'DEBUG', 'guider AV, RMS = (0.28032411799176443, 0.34570170714765858)'
+'2019-05-30 08:55:00,081', 'precisionguide', 'DEBUG', 'GUIDER SETTLED TO 0.5 GUIDER PIXELS'
+'2019-05-30 08:55:00,088', 'precisionguide', 'DEBUG', 'Setting to: [ 342.00390681  268.00846987]'
+'2019-05-30 08:55:13,884', 'precisionguide', 'DEBUG', 'guider AV, RMS = (0.23200027976447513, 0.30992809207033467)'
+'2019-05-30 08:55:13,886', 'precisionguide', 'DEBUG', 'GUIDER SETTLED TO 0.5 GUIDER PIXELS'
+'2019-05-30 08:55:13,891', 'precisionguide', 'DEBUG', 'Setting to: [ 341.43002376  267.99641542]'
+'2019-05-30 08:55:27,625', 'precisionguide', 'DEBUG', 'guider AV, RMS = (0.22743476262584633, 0.28390310674008146)'
+
+So I am using
+        log.debug('move_with_guide_box: total guider dpix (X, Y): ' + str(dp_coords[::-1]))
+        log.debug('norm_dp: ' + str(norm_dp))
+        log.debug('Number of steps: ' + str(num_steps))
+        if num_steps > self.max_guide_num_steps:
+            # We can't do this, so just bomb with a False return
+            # and let the caller (usually center) handle it
+            log.error('Maximum number of steps (' + str(self.max_guide_num_steps) + ') exceeded: ' + str(num_steps))
+            return False
+        log.debug('Delta per step (X, Y): ' + str(step_dp[::-1]))
+        for istep in range(num_steps):
+            # Just in case someone else is commanding the guide
+            # box to move, use its instantaneous position as the
+            # starting point of our move !!! TRANSPOSE !!!
+            cp_coords = np.asarray((self.CCDCamera.GuiderYStarPosition,
+                                    self.CCDCamera.GuiderXStarPosition))
+            tp_coords = cp_coords + step_dp
+            log.debug('Setting to: ' + str(tp_coords[::-1]))
+            # !!! TRANSPOSE !!!
+            self.CCDCamera.GuiderMoveStar(tp_coords[1], tp_coords[0])
+            if self.horizon_limit():
+                log.error('Horizon limit reached')
+                return False
+            self.guider_settle()
+
+--> when did I turn off the guidebox mover?
+
+Last entry in log:
+
+'2019-05-09 11:53:38,624', '__main__', 'DEBUG', 'GuideBoxMover is moving the guidebox by [-0.03328314 -0.50103594] arcsec'
+
+The next failure was
+
+'2019-05-21 09:27:20,331', 'precisionguide', 'ERROR', 'Failed to center target to 5 pixels after 3 tries'
+
+So turning off GuidBboxMover is not the proximal cause of the problem.
+
+Points to MaxIm
+
+Can I get around this just by staring up old MaxIm?
+
+Try that tonight.  Send off a MaxIm forum post
+
+Thu Jun 20 20:39:01 2019 EDT  jpmorgen@snipe
+
+Still waiting for MaxIm response
+
+Work on logic for offset 
+
+Target is an object that may have property .Tags
+http://solo.dc3.com/ar/RefDocs/HelpFiles/ACP81Help/planfmt.html
+#TAG mytag=value with spaces
+
+When I check for it, do I use null or undefined?  Null comes from an
+assigned value.  Undefined comes from not being defined yet.
+
+Bob seems to define Target.Tags === null by default and then tags are
+inserted into the structure.  So when I check for 
+
+(Target.Tags.IoIO === undefined)
+
+that is the right thing to do, since there may be Tags, but IoIO has
+not been assigned.
+
+So in TargetStart, I want Target.Tags === null all tags other than
+
+Target.Tags.RAoffset
+Target.Tags.DECoffset
+Target.Tags.IoIO
+
+to default to the current eastward offset
+
+Maybe the easiest way to do that is by checking for the tags that need
+processing first, having them return true, and then
+
+Fri Jun 21 08:47:24 2019 EDT  jpmorgen@snipe
+
+Target.DEC is not working for me.  That is because it is Target.Dec
+
+OK, that works, but how am I going to indicate that the target is
+Jupiter but the coordinates are really for an offset?  I could try to
+add a FITS card to the file in ImageEnd or perhaps better
+ImageComplete in UserActions.  Or I could recognize what is going on
+in the reduction script, since the OBJECT would be Jupiter but I would
+be 10 degrees away.  The later disrupts my logic for making sure
+objects labeled as Jupiter are really close to Jupiter.
+
+Looking at AcquireSupport.wsc and see
+
+Set plate = CreateObject("PinPoint.Plate")
+
+plate.AttachFITS File
+plate.WriteFITSDouble "FOCALLEN", fl * 1000.0, 1
+plate.UpdateFITS
+
+Where presumably File is the filename
+
+or maybe
+plate.writeFITS(imagePath);    
+plate.DetachFITS();                                     // Done with image file
+
+Sun Jun 23 14:01:29 2019 EDT  jpmorgen@snipe
+
+Ack.  Offset is not working for ephemeris-calculated bodies.  Seems to
+be because Bob calls 
+
+Target.UpdateEphem()
+
+in lots of places
+
+line 874
+line 912 UserActions.TargetStart
+Log said it looked OK there
+
+Next UpdateEphem is 1295 in the pointing update request logic
+
+It is almost like I would need to trick ACP into have Jupiter be the
+target until the initial TargetStart but then turn off its Jupiterness
+
+/cygdrive/c/Program Files (x86)/ACP Obs Control/Plan.wsc
+Line 2982 and line 2507 suggests that if I set the target type to 1
+(however that is done), it might stick as a J2000 object with a
+tracking rate
+
+TargetStart: Original RA =  5.179223398738063
+TargetStart: added = -600 arcmin RA
+TargetStart: New RA: 4.512556732071396
+TargetStart: Original DEC =  22.50553228918602
+TargetStart: added = -600 arcmin DEC
+TargetStart: New DEC: 12.505532289186021
+TargetStart: turning off subsequent ephemeris calculations so offset calculated correctly
+
+Wait a bit
+
+TargetStart: Original RA =  5.179402913005819
+TargetStart: added = -600 arcmin RA
+TargetStart: New RA: 4.512736246339152
+TargetStart: Original DEC =  22.505826538531312
+TargetStart: added = -600 arcmin DEC
+TargetStart: New DEC: 12.505826538531312
+TargetStart: turning off subsequent ephemeris calculations so offset calculated correctly
+
+OK, so ephemeris is changing between runs
+
+OBJECT  = 'Venus   '           / Target object name
+RA      = '04 30 45.20'        / [hms J2000] Target right ascension
+OBJCTRA = '04 30 45.20'        / [hms J2000] Target right ascension
+DEC     = '+12 30 19.9'        / [dms +N J2000] Target declination
+OBJCTDEC= '+12 30 19.9'        / [dms +N J2000] Target declination
+
+OBJECT  = 'Venus   '           / Target object name
+RA      = '04 30 45.85'        / [hms J2000] Target right ascension
+OBJCTRA = '04 30 45.85'        / [hms J2000] Target right ascension
+DEC     = '+12 30 21.0'        / [dms +N J2000] Target declination
+OBJCTDEC= '+12 30 21.0'        / [dms +N J2000] Target declination
+
+Works!
+
+Wed Jun 26 21:11:56 2019 EDT  jpmorgen@snipe
+
+Hey!  I might be able to use WAITINLIMITS for Jupiter offsets instead
+of WAITZENDIST!  The target setup does the Tc.UpdateEphem() and then
+calls the UserActions.TargetStart, which tweaks the coordinates
+Target.RA and Target.Dec
+
+python3 -W ignore ReduceCorObs.py reduce --tree --movie --start 2019-06-14
+
+Wed Jul 03 14:32:59 2019 EDT  jpmorgen@snipe
+
+ReduceCorObs.py movie --concatenate
+
+Still has a problem.  Debug later
+
+Fri Jul 05 10:19:06 2019 EDT  jpmorgen@snipe
+
+Ah Ha!  It looks like I need to update
+ERROR: MoviePy error: failed to read the first frame of video file /data/io/IoIO/reduced/20190618/Na_SII.mp4. That might mean that the file is corrupted. That may also mean that you are using a deprecated version of FFMPEG. On Ubuntu/Debian for instance the version in the repos is deprecated. Please update to a recent version from the website. Bad Na_SII movie in /data/io/IoIO/reduced/20190618 [__main__]
+
+No.  I am up-to-date.  The real problem seems to be when I tweaked
+some parameters in the movie for 2019.  
+
+python3 -W ignore ReduceCorObs.py reduce --tree --movie --start 2019-07-04
+
+If that works, so a 
+
+ReduceCorObs.py movie --recalculate --tree
+
+That didn't work.  The break seems to happen at 
+
+ERROR: MoviePy error: failed to read the first frame of video file /data/io/IoIO/reduced/20190321/Na_movie.mp4. That might mean that the file is corrupted. That may also mean that you are using a deprecated version of FFMPEG. On Ubuntu/Debian for instance the version in the repos is deprecated. Please update to a recent version from the website. Bad Na movie in /data/io/IoIO/reduced/20190321 [__main__]
+
+DEBUG: 128 good [Na_SII] movies found [__main__]
+
+Maybe I can only have 2**7 movies concatenated at a time?
+
+Tried to stop at 128 + that still got 20190321
+
+"C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py" center --ObsClassName CorObsData
+Doesn' work any more
+
+
+python "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py" ACP_IPT_Na_R 1200 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190717\Jupiter-S001-R001-C001-R.fts"
+
+When target was centered, just started guider.  Perterbid
+
+Flip is on. [precisionguide]
+ERROR: Received the following error.  Attempting to return gracefully: (-2147352567, 'Exception occurred.', (65535, 'MaxIm DL 6', 'Cannot Start Guider', None, 0, 0), None) [IoIO]
+
+Well, that is not encouraging, but I did see the center moving.  I
+think the above error is from Jupiter being in the clouds and too dim
+to select as a guide star.  Sets it to 0,0
+
+Sat Jul 20 01:43:24 2019 EDT  jpmorgen@snipe
+
+python "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py" ACP_IPT_Na_R 1200 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20190720\Jupiter-S001-R001-C001-R.fts"
+
+
+Confirmed on other side of meridian.  Increasing Y, Y error goes up,
+but Jupiter noticeably moves up, not down 
+
+Sat Jul 20 20:36:21 2019 EDT  jpmorgen@snipe
+
+Daniel's ~/py/IoIO/foster2clarityII.py
+
+python "\\snipe\jpmorgen\py\IoIO\foster2clarityII.py"
+
+
+AstroAlert.Weather
+ACP.BoltwoodFile
+
+Sun Jul 21 21:32:17 2019 EDT  jpmorgen@snipe
+
+python "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\foster2clarityII.py"
+
+Thu Jul 25 21:07:41 2019 EDT  jpmorgen@snipe
+
+Heard back from MaxIm people and they insist that the MaxIm 6.13 way
+of doing things was an error and they really meant to do it the way it
+is currently, which seems like it is moving the guide point to X and Y
+that are not correct
+
+"\\snipe\data\io\IoIO\observing\MaxIm DL\test_GuiderMoveStar.vbs"
+
+Hmm.  It does look like it is doing the right thing
+
+Weird.  Trying to run the second time didn't work.  Maybe I have a
+non-square guider...  Fixed initial positioin 
+
+Script says guide star position
+503, 418
+
++10, +5
+Move guide star position to
+513 423
+
+but final 493, 413
+and window still indicates 503, 418
+
+Guide star does flash to the left suddenly and slightly up
+
+Wait, I have the old version, not beta
+
+OK, the old version and the beta behave in the opposite way.
+
+Final GuideStarXYPosition (515, 423), but GUI reporting 505, 418
+
+Fri Jul 26 07:54:12 2019 EDT  jpmorgen@snipe
+
+use old MaxIm
+
+Guide star 503, 418
+Move to 513, 423
+GUI reports 506, 418
+Final GuidestarXYPostiion 516, 423
+
+But now new version is not consistent!
+
+Mon Jul 29 18:11:41 2019 EDT  jpmorgen@snipe
+
+With Beta version
+
+Guide star postiion (504, 418)
+
+Thu Aug 01 21:03:38 2019 EDT  jpmorgen@snipe
+
+Latest patch from Owen.  I confirm that the guide box now moves in the
+correct direction, down and to the right, leaving the star up and to
+the left before it is brought in.  And the script reads and reports
+the expected XY values.  However, the GUI does not.
+
+The first time I ran it, the GUI values were stuck on 503, 418.  The
+second time, they were 513, 423 until I quit, in which case they went
+back to 503, 418
+
+Thu Aug 15 18:39:41 2019 EDT  jpmorgen@snipe
+
+--> made a change in precisionguide that fixes issue with MaxIm
+    resetting where the guide star is when the guider is stopped.  I
+    don't need it in my current activity, but it is nice to keep track
+    of the issue.  --> have not uploaded this, since I am first trying
+    the beta version of MaxIm to make sure offset guiding works
+
+--> copied new precisionguide over.  Make sure it doesn't mess things up
+Compiled OK but new guider_stop not yet called
+
+-->
+http://forums.dc3.com/showthread.php?12432-W10-Update-1903-and-8-2-Critical-Issues&p=77254#post77254
+If you want to do some hacking, you can add a line to register your UserActions. Edit it into C:\Program FIles (x86) ACP Obs Control\RegisterWSC.bat. Part of the self-repair is to run that shell script.
+
+Mon Aug 19 00:19:27 2019 EDT  jpmorgen@snipe
+
+Ack!  MaxIm crashed because guide star too dim because of clouds.  But
+didn't seem to be because of the new logic in script
+
+Mon Aug 19 12:09:13 2019 EDT  jpmorgen@snipe
+
+python3 -W ignore ReduceCorObs.py reduce --tree --movie --start 2019-07-06
+
+Sat Nov 02 20:53:14 2019 EDT  jpmorgen@snipe
+
+--> disable autoshutdown = True is what I need to keep camera from
+    shutting down!  Daniel is a genius
+
+Sun Nov 03 20:43:18 2019 EST  jpmorgen@snipe
+
+python "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\IoIO.py" ACP_IPT_Na_R 1200 "C:\Users\Public\Documents\ACP Web Data\Doc Root\images\jpmorgen\20191103\Jupiter-S001-R001-C001-R.fts"
+
+
+Still not doing it.  Try to make guider work harder when first taking images
+
+Sun Nov 03 20:54:39 2019 EST  jpmorgen@snipe
+
+Near guider trackintg 89
+
+sum_on_ND_filter =  952794.761179
+
+        P.MC.move_with_guider_slews(np.asarray([10,2])/3600)
+
+Got it to move 4 steps
+
+Only seemed to be a problem on the first short exposure.
+
+1s exposures are not doing it
+10s exposures are not doing it, but I am on a Vega, not Jupiter.
+
+Mon Nov 04 20:20:43 2019 EST  jpmorgen@snipe
+
+10s on Jupiter not doing it
+
+20s on Jupiter didn't seem to do it
+
+Try adding a center_loop after
+
+Mon Nov 04 20:33:33 2019 EST  jpmorgen@snipe
+
+Might get a good Io next to Jupiter!
+
+Tue Nov 05 10:47:37 2019 EST  jpmorgen@snipe
+
+So
+
+Date	Mag	Dia
+Aug 20	-2.3	40
+Nov 5	-1.9	33
+
+(M1-M2) = -2.5*np.log(f1/f2)
+
+10**((-2.3 + 1.9)/-2.5)
+1.4454397707459274
+
+rsync -auvn  "/cygdrive/c/Users/PLANETARY SCIENCE/Documents/MaxIm DL 6/GuiderTrackingImages" "jpmorgen@cpe-184-153-135-44.maine.res.rr.com:/data/io/IoIO/observing/MaxIm DL/"
+
+Fri Dec 13 22:01:25 2019 EST  jpmorgen@snipe
+
+Looking a little more carefully at AcquireImages.js and finding that
+it will probably work OK.  Not positive above how it will handle
+autoguiding initiated in precisionguide, but if it looks to MaxIm, it
+should be no problem
+
+Mon Feb 24 19:08:54 2020 EST  jpmorgen@byted
+
+Check on latest ccdproc version.
+
+In any case, I think I want to do things in stages rather than all at
+once. 
+
+Sat Feb 29 16:04:52 2020 EST  jpmorgen@byted
+
+Look into checking in last IoIO.py version before updating filter
+positions for correct placement since 4/1/2019.
+
+IoIO.py looks reasonable
+precisionguide.py looks reasonable
+read_ap.py is OK
+Daniel's foster2clarityII stuff is OK
+
+Commit message might be:
+2019 V, U filters were really H2O+, RC (affects 4/1/2010--3/1/2020)
+
+Then I correct the filters as of this year and recommit:
+2020 Filters and slot numbers confirmed to line up
+
+It is a separate question to figure out what to do about reduction
+. Copy all raw data from 2019 into separate directory and re-copy
+fixed to working raw
+. Copy only affected files
+
+I think I might prefer the later.  It also gets me some practice with
+the incremental way of doing things.
+
+
+

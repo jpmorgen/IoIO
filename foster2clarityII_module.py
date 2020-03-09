@@ -90,7 +90,7 @@ w = WeatherFixer()
 #w.ReadFoster('2019- 1-16 19:41:53.00 C M -22     18   18      0      41  8      000 0 0 000 5 019016.82075 1 1 1 3 1 0')
 #print(w.DateFix('2019- 1-16'))
 #wstr = '2019- 1-16 19:41:53.00 C M -22     18   18      0      41  8      000 0 0 000 5 019016.82075 1 1 1 3 1 0'
-x = 1
+x = 0
 if x == 1:
 
     with open('/cygdrive/c/cygwin64/home/Puppy/JavaScript/F2CIIFile.txt', 'r') as f:

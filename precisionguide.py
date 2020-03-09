@@ -1301,7 +1301,7 @@ class MaxImControl():
                             dra_ddec,
                             dec=None,
                             guider_astrometry=None):
-        """Moves the telescope by moving the guide box.  Guide box position is moved gradually relative to instantaneous guide box position, resulting in a delta move relative to any other guide box motion
+        """Moves the telescope by moving the guide box.  Guide box position is moved gradually relative to instantaneous guide box position, resulting in a delta move relative to any other guide box motion.  NOTE: use guider_stop to make sure guider position is properly set after guider is stopped (see that function's documentation).
 
         Parameters
         ----------
@@ -1312,6 +1312,7 @@ class MaxImControl():
             parameters appropriate for the guider (mainly
             CDELT*).  Defaults to guider_astrometry property 
         """
+
         # --> Don't bother checking to see if we have commanded 
         if not self.CCDCamera.GuiderRunning:
             log.error('Guider not running, move not performed')
@@ -1332,6 +1333,8 @@ class MaxImControl():
         D.say('world coords of old guidebox: ' + repr(w_coords))
         # In world coords, we know how far we want to move our guide
         # box.  Calculate the new guidebox position
+# --> I think this is where the MaxIm people and I differ by a minus
+# sign in MaxIm 6.20
         p_coords = self.scope_wcs(w_coords + dra_ddec,
                                   to_pix=True,
                                   astrometry=guider_astrometry)
@@ -1786,12 +1789,34 @@ class MaxImControl():
         self.guider_commanded_running = True
 
     def guider_stop(self):
+        """Stops the guider, sets the guider position to the last position used by move_with_guidebox and sets GuiderReverse[XY] values to previous.  Returns value of CCDCamera.GuiderStop unless guider wasn't running, in which case False is returned
+        The guider position update is required as per discussion in https://forum.diffractionlimited.com/threads/ccdcamera-guiderxstarposition-guiderystarposition-no-longer-updated-after-ccdcamera-guidermovestar.6048/page-2 """
+        retval = False
         self.guider_commanded_running = False
+        if self.CCDCamera.GuiderRunning:
+            # As per documentation above, turning off the guider makes
+            # the guide point revert to the original position before
+            # any GuiderMoveStar was done
+            x = self.CCDCamera.GuiderXStarPosition
+            y = self.CCDCamera.GuiderYStarPosition
+            autoselect = self.CCDCamera.GuiderAutoSelectStar
+            retval = self.CCDCamera.GuiderStop
+            if autoselect:
+                # MaxIm won't GuiderSetStarPosition when AutoSelectStar is on
+                self.CCDCamera.GuiderAutoSelectStar = False
+            # Set our guide star position to the actual position we
+            # have just moved the star to, just in case we want to
+            # turn the guider back on again
+            self.CCDCamera.GuiderSetStarPosition(x, y)
+            if autoselect:
+                # If, instead, our next step is to take an exposure
+                # with the guider, the AutoSelectStar algorithm will
+                # be used instead of the old star position
+                self.CCDCamera.GuiderAutoSelectStar = True
+        # Reset reverse to previous values in case we are handing off to ACP(?)
         self.CCDCamera.GuiderReverseX = self.previous_GuiderReverseX
         self.CCDCamera.GuiderReverseY = self.previous_GuiderReverseY
-        if self.CCDCamera.GuiderRunning:
-            return self.CCDCamera.GuiderStop
-        return False
+        return retval
     
     def get_im(self):
         """Puts current MaxIm image (the image with focus) into a FITS HDUList.  If an exposure is being taken or there is no image, the im array is set equal to None"""
@@ -2253,6 +2278,7 @@ guide_box_log_file : str
                     return False                        
                 log.debug('TURNING GUIDER OFF AND CENTERING WITH GUIDER SLEWS')
                 self.MC.guider_stop()
+                # --> Consider using center here instead of move_with_guider_slews
                 self.MC.move_with_guider_slews(dw_coords)
                 # --> Need to add logic to capture guider stuff,
                 # though filter should be the same.  It is just

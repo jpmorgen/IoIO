@@ -2,6 +2,7 @@
 from pathlib import Path
 from datetime import datetime as dt
 import time
+
 class WeatherFixer():
     def __init__(self):
         pass
@@ -57,6 +58,10 @@ class WeatherFixer():
         if str(d)[5] == '.':
             d = f'0{d}'
         read['Now()'] = str(d)[:12]
+        #print(read)
+        for i in read:
+            read[i] = read[i].lstrip()
+        #print(read)
         fin = read['Date']
         for i in range(100):
             fin = fin + ' '
@@ -93,12 +98,16 @@ if __name__ == '__main__':
     while True:
         try:
             print('\n \n')
-            time.sleep(2)
             #    with open('/cygdrive/c/cygwin64/home/Puppy/JavaScript/F2CIIFile.txt', 'r') as f:
-        
             with open(Path(foster_dropbox, 'OneLineFmt.txt'), 'r') as f:
                 wstr = f.read()
-                print(f'I {wstr}')
+            owstr = wstr
+            while owstr == wstr:
+                time.sleep(2)
+                with open(Path(foster_dropbox, 'OneLineFmt.txt'), 'r') as f:
+                    wstr = f.read()
+                    print(f'I {wstr}')
+            owstr = wstr
             read = w.ReadFoster(wstr)
             d = float(read['Now()']) - 1104
             if str(d)[5] == '.':
@@ -112,9 +121,10 @@ if __name__ == '__main__':
             else:
                 c = w.FosterToClarityII(wstr)
             print(f'O {c}')
-            with open(Path(foster_dropbox, 'ClarityII.log'), 'a') as wf:
-            # x = 1
-        except FileNotFoundError:
-            print('File not found. Checking again...')
+            # --> make log file
+            with open(Path(foster_dropbox, 'ClarityII.log'), 'w') as wf:
+                wf.write(c + '\n')
+        except Exception as e:
+            print(f'{e}. Checking again in 5 seconds...')
             time.sleep(5)
 
