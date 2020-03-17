@@ -1037,14 +1037,14 @@ def ACP_IPT_Na_R(args):
     
                 # Large filter wheel
                 # 0 R  			full 0.4 deg field
-                # 1 [SII] on-band 		~0.25 deg
-                # 2 [SII] off-band 		~0.25 deg
-                # 3 Na off-band  		full 0.4 deg field ** upside-down **
-                # 4 Hale-Bopp H20+  	~0.25 deg
-                # 5 Hale-Bopp Red Continuum ~0.25 deg
-                # 6 Na on-band  		full 0.4 deg field
-                # 7 V 			~0.25 deg
-                # 8 U		  	~0.25 deg
+                # 1 [SII] on-band 	~0.25 deg
+                # 2 [SII] off-band	~0.25 deg
+                # 3 Na off-band		full 0.4 deg field ** upside-down **
+                # 4 V 			~0.25 deg
+                # 5 U		  	~0.25 deg
+                # 6 Na on-band 		full 0.4 deg field
+                # 7 B 			~0.25 deg
+                # 8 R		  	~0.25 deg
         
                 log.info('Collecting V, U, and R')
                 if ((time.time() + downloadtime*3*3) > Tend):
@@ -1054,7 +1054,7 @@ def ACP_IPT_Na_R(args):
                     P.MC.acquire_im(pg.uniq_fname('V_', d),
                                     exptime=0.7,
                                     binning=1,
-                                    filt=7)
+                                    filt=4)
                 #for ifilt in range(2):
                 #    P.MC.acquire_im(pg.uniq_fname('U_', d),
                 #                    exptime=0.7,
@@ -1066,7 +1066,7 @@ def ACP_IPT_Na_R(args):
                     P.MC.acquire_im(pg.uniq_fname('U_2.8_', d),
                                     exptime=1.3,
                                     binning=1,
-                                    filt=8)
+                                    filt=5)
                 for ifilt in range(2):
                     P.MC.acquire_im(pg.uniq_fname('R_', d),
                                     exptime=0.1, # Was 0.02
@@ -1100,19 +1100,19 @@ def ACP_IPT_Na_R(args):
                         P.MC.acquire_im(pg.uniq_fname('V_', d),
                                         exptime=0.7,
                                         binning=1,
-                                        filt=7)
+                                        filt=4)
                     for ifilt in range(1):
                         P.MC.acquire_im(pg.uniq_fname('U_', d),
                                         exptime=0.7,
                                         binning=1,
-                                        filt=8)
+                                        filt=5)
                     for ifilt in range(1):
                         # Note to get exposure time of 2.8, we need 1.3s expo
                         # because of additional time of 1.5s added to exposures > 0.7s
                         P.MC.acquire_im(pg.uniq_fname('U_2.8_', d),
                                         exptime=1.3,
                                         binning=1,
-                                        filt=8)
+                                        filt=5)
                     for ifilt in range(1):
                         P.MC.acquire_im(pg.uniq_fname('R_', d),
                                         exptime=0.1, # Was 0.02
