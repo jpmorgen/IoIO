@@ -995,36 +995,38 @@ class MaxImControl():
         # connected when astrometry was recorded.  Save it for later...
         guider_astrometry_pierside = self.guider_astrometry.get('PIERSIDE')
 
-        # Find the N angle in the astrometry.  This is very confusing
-        # because for MaxIm, in a nominal N up, E left configuration,
-        # N is toward -Y, since MaxIm plots Y increasing down.  In the
-        # FITS standard, if the cardinal directions are aligned to
-        # pixel X, Y, increasing Y means moving N.  Ultimately, which
-        # direction N is plotted doesn't really matter: the user
-        # tweaks things so N is up for them and the FITS CDELT will
-        # adjust.  If plotted in Cartesian coordinates (e.g. IDL,
-        # IRAF), the user will align N up so CDELT2 is positive.  For
-        # MaxIm and other (0,0) top left oriented displays the user
-        # will align N up so CDELT2 is negative.  But here it matters!
-        # We need to emulate a MaxIm N vector so we can get the proper
-        # angle from N astrometry angle.  In terms of the FITS WCS
-        # coordinate system a MaxIm N up vector is negative.
-        dp = self.scope_wcs((0, -1/60),
+        # Find the angle of N in the astrometry image relative to
+        # MaxIm's N = -Y convention.  This is very confusing because
+        # for MaxIm, in a nominal N up, E left configuration, N is
+        # toward -Y, since MaxIm plots Y increasing down.  In the FITS
+        # standard, if the cardinal directions are aligned to pixel X,
+        # Y, increasing Y means moving N.  Ultimately, which direction
+        # N is plotted doesn't really matter: the user tweaks things
+        # so N is up for them and the FITS CDELT will adjust.  If
+        # plotted in Cartesian coordinates (e.g. IDL, IRAF), the user
+        # will align N up so CDELT2 is positive.  For MaxIm and other
+        # (0,0) top left oriented displays the user will align N up so
+        # CDELT2 is negative.  But here it matters!  We need to
+        # emulate a MaxIm N vector with the FITS standard so we can
+        # compare our astrometry image to MaxIm's guider calibration.
+        # Start with the regular FITS WCS standard, using a
+        # healthy-size angle to avoid numeric problems
+        dp = self.scope_wcs((0, 10.),
                             to_pix=True,
                             astrometry=self.guider_astrometry,
                             absolute=True,
                             delta=True)
-        # NOTE!  The Y pixel direction in MaxIm increases DOWN, yet
-        # the nominal north direction is UP.  So if dp[1] is
-        # increasing, it is really going S according to MaxIm.  Fix
-        # that
-        dp[1] *= -1        
-        # Note output of scope_wcs is y,x and arctan2 is normal math
-        # angle definition
+        # Now negate Y to align with MaxIm's -Y = up standard, keeping
+        # in mind that scope_wcs returns Y,X.
+        dp[0] *= -1
+        # arctan2 takes y, x and uses the normal math angle definition
+        # (+X axis = 0 deg)
         aang = np.degrees(np.arctan2(dp[0], dp[1]))
         # Convert angle to N up, +/-180 (already increasing CCW)
         aang = angle_norm(aang-90, 180)
-        # Now compare to guider calibration N up angle
+        # Now compare to guider calibration N up angle.  This has yet
+        # to match precisely on, probably because Bob has private
+        # distortions
         gang = angle_norm(self.CCDCamera.GuiderAngle, 180)
         log.debug("PinPoint solution angle: " + repr(aang))
         log.debug("GuiderAngle: " + repr(gang))
@@ -1054,9 +1056,8 @@ class MaxImControl():
             log.debug('non-GEM mount, guider astrometry and guider cal are lined up')
             return
 
-        # If we made it here, we are a GEM.  Rotate our guider
+        # If we made it here, we are a GEM Rotate our guider
         # astrometry to line up with the guider calibration direction
-        # (--> this might be dangerous)
         if guider_astrometry_pierside is None:
             raise EnvironmentError('Currently connected mount reports it is a GEM, but PIERSIDE was not recorded in guider astrometry FITS header.  Was MaxIm connected to the telescope when the astrometry was recorded?')
         if guider_cal_astrometry_aligned:
@@ -1068,6 +1069,7 @@ class MaxImControl():
                 self.guider_cal_pierside = 'WEST'
             if guider_astrometry_pierside == 'WEST':
                 self.guider_cal_pierside = 'EAST'
+            # --> this tweaks our guider image header in memory
             self.guider_astrometry \
                 = pier_flip_astrometry(self.guider_astrometry)
             # Don't forget to flip aang, our astrometry N angle, since
@@ -1075,13 +1077,17 @@ class MaxImControl():
             aang = angle_norm(aang+180, 180)
         log.debug('guider calibrated on pier ' + self.guider_cal_pierside)
 
-        # Now see what direction E turns out to be
-        # Go east 1 arcmin
-        dp = self.scope_wcs((1/60, 0),
+        # Now see what direction E turns out to be relative to N.
+        dp = self.scope_wcs((10., 0),
                             to_pix=True,
                             astrometry=self.guider_astrometry,
                             absolute=True,
                             delta=True)
+        # Just in case there is a sizable component of up/down in E,
+        # make sure we cast our synthetic E vector onto our MaxIm
+        # coordinate system, where Y is in the opposite sense from the
+        # WCS conventions
+        dp[0] *= -1
         eang = np.degrees(np.arctan2(dp[0], dp[1]))
         # Convert angle to N up, +/-180 (already increasing CCW)
         eang = angle_norm(eang-90, 180)
@@ -1107,7 +1113,7 @@ class MaxImControl():
                 log.debug('Assuming normal motor connections of E = -X, N = +Y, motor reversal(s) detected on pierWest guider cal.  Setting to pier flip on pierWest.  This is almost certainly MaxIm mode.')
                 self.pier_flip_on_side = win32com.client.constants.pierWest
             else:
-                log.debug('Assuming normal motor connections of E = -X, N = +Y, no motor reversals were detected on pierWest guider cal.  Setting to pier flip on pierEest.  This is almost certainly ACP mode.')
+                log.debug('Assuming normal motor connections of E = -X, N = +Y, no motor reversals were detected on pierWest guider cal.  Setting to pier flip on pierEast.  This is almost certainly ACP mode.')
                 self.pier_flip_on_side = win32com.client.constants.pierEast
 
         if self.guider_cal_pierside == 'EAST':
@@ -1115,6 +1121,7 @@ class MaxImControl():
                 log.warning('Pier flip detected for pierEast guider cal.  This is not a valid MaxIm pier flip state and ACP does not allow calibration on pierEast.  Do you have your motor control leads hooked up in the normal way: E = -X, N = +Y?  For now I will assume the connections are normal and just set pier_flip_onside pierEast.  If the guider pushes the star out or precision guide moves the telecsope in the wrong way and it is not possible for you to change the motor control leads, contact the developer and ask for an abstraction layer to be added')
                 self.pier_flip_on_side = win32com.client.constants.pierEast
             else:                
+                log.debug('Assuming normal motor connections of E = -X, N = +Y, no motor reversal(s) detected on pierEast guider cal.  Setting to pier flip on pierWest.  This is almost certainly MaxIm mode.')
                 self.pier_flip_on_side = win32com.client.constants.pierWest
 
     def set_guider_motor_reverse_and_DEC(self):
@@ -1186,7 +1193,9 @@ class MaxImControl():
         # Do this by creating synthetic guider calibrations.  CDELT*
         # are the same regardless of DEC, but DEC must be considered
         # when doing coordinate transformation from pixels to world,
-        # so just set the guider astrometry DEC to 0 
+        # so just set the guider astrometry DEC to 0, saving current
+        # value so we can put it back later
+        save_crval2 = self.guider_astrometry['CRVAL2']
         self.guider_astrometry['CRVAL2'] = 0
         # Create a notional time to move in pixel space.  It would be
         # great to use the actual guider cal times, which defaults to
@@ -1207,13 +1216,19 @@ class MaxImControl():
         self.guide_rates = guider_cal_guide_rates
         if self.telescope_connectable and self.Telescope.CanSetGuideRates:
             # Always assume telescope reported guide rates are
-            # correct, but warn if guider rates are off by 10%
+            # correct, but warn if guider rates are off by 10%,
+            # keeping in mind that MaxIm seems to consider a pixel
+            # size to be its diameter
             self.guide_rates \
                 = np.asarray((self.Telescope.GuideRateRightAscension,
                               self.Telescope.GuideRateDeclination))
-            dr = np.abs(self.guide_rates - guider_cal_guide_rates)
-            if np.any(dr > 0.1 * self.guide_rates):
-                log.warning('Guider calibration rate is off by more than 10% of the scope reported rate: ' + repr((self.guide_rates, np.abs(guider_cal_guide_rates))) + '.  Have you specified the correct guider astrometery image?  Have you changed the guide rates changed since calibrating the guider?  Assuming reported telescope guide rates are correct.')
+            dgrp = np.linalg.norm(self.guide_rates)
+            dgcgrp = np.linalg.norm(guider_cal_guide_rates)
+            dr = np.abs(dgrp - dgcgrp)
+            if dr > 0.1 * dgrp:
+                log.warning('Guider calibration rate is off by more than 10% of the scope reported rate: ' + repr((self.guide_rates, np.abs(guider_cal_guide_rates))) + '.  Norm of these: ' + repr((np.linalg.norm(self.guide_rates), np.linalg.norm(guider_cal_guide_rates))) + '.  Have you specified the correct guider astrometery image?  Have you changed the guide rates changed since calibrating the guider?  Assuming reported telescope guide rates are correct.')
+
+        self.guider_astrometry['CRVAL2'] = save_crval2
 
     def horizon_limit(self):
         return (not self.Telescope.Tracking
