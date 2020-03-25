@@ -1046,7 +1046,7 @@ def ACP_IPT_Na_R(args):
                 # 7 B 			~0.25 deg
                 # 8 R		  	~0.25 deg
         
-                log.info('Collecting V, U, and R')
+                log.info('Collecting V, U, B, and R')
                 if ((time.time() + downloadtime*3*3) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
                     return
@@ -1067,6 +1067,11 @@ def ACP_IPT_Na_R(args):
                                     exptime=1.3,
                                     binning=1,
                                     filt=5)
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('B_', d),
+                                    exptime=0.1,
+                                    binning=1,
+                                    filt=7)
                 for ifilt in range(2):
                     P.MC.acquire_im(pg.uniq_fname('R_', d),
                                     exptime=0.1, # Was 0.02
@@ -1092,32 +1097,37 @@ def ACP_IPT_Na_R(args):
                 
                 for i in range(4):
                     P.diff_flex()
-                    log.info('Collecting V, U, and R')
-                    if ((time.time() + downloadtime*3*3) > Tend):
-                        log.info('Exposure would extend past end of ACP exposure, returning') 
-                        return
-                    for ifilt in range(1):                                
-                        P.MC.acquire_im(pg.uniq_fname('V_', d),
-                                        exptime=0.7,
-                                        binning=1,
-                                        filt=4)
-                    for ifilt in range(1):
-                        P.MC.acquire_im(pg.uniq_fname('U_', d),
-                                        exptime=0.7,
-                                        binning=1,
-                                        filt=5)
-                    for ifilt in range(1):
-                        # Note to get exposure time of 2.8, we need 1.3s expo
-                        # because of additional time of 1.5s added to exposures > 0.7s
-                        P.MC.acquire_im(pg.uniq_fname('U_2.8_', d),
-                                        exptime=1.3,
-                                        binning=1,
-                                        filt=5)
-                    for ifilt in range(1):
-                        P.MC.acquire_im(pg.uniq_fname('R_', d),
-                                        exptime=0.1, # Was 0.02
-                                        binning=1,
-                                        filt=0)
+                    #log.info('Collecting V, U, B, and R')
+                    #if ((time.time() + downloadtime*3*3) > Tend):
+                    #    log.info('Exposure would extend past end of ACP exposure, returning') 
+                    #    return
+                    #for ifilt in range(1):                                
+                    #    P.MC.acquire_im(pg.uniq_fname('V_', d),
+                    #                    exptime=0.7,
+                    #                    binning=1,
+                    #                    filt=4)
+                    ##for ifilt in range(1):
+                    ##    P.MC.acquire_im(pg.uniq_fname('U_', d),
+                    ##                    exptime=0.7,
+                    ##                    binning=1,
+                    ##                    filt=5)
+                    #for ifilt in range(1):
+                    #    # Note to get exposure time of 2.8, we need 1.3s expo
+                    #    # because of additional time of 1.5s added to exposures > 0.7s
+                    #    P.MC.acquire_im(pg.uniq_fname('U_2.8_', d),
+                    #                    exptime=1.3,
+                    #                    binning=1,
+                    #                    filt=5)
+                    #for ifilt in range(1):
+                    #    P.MC.acquire_im(pg.uniq_fname('B_', d),
+                    #                    exptime=0.1,
+                    #                    binning=1,
+                    #                    filt=7)
+                    #for ifilt in range(1):
+                    #    P.MC.acquire_im(pg.uniq_fname('R_', d),
+                    #                    exptime=0.1, # Was 0.02
+                    #                    binning=1,
+                    #                    filt=0)
                     log.info('Collecting [SII]')
                     exptime=300
                     if ((time.time() + exptime) > Tend):
@@ -1141,24 +1151,24 @@ def ACP_IPT_Na_R(args):
             return
 
 # --> this is hacked in here.  Should be modified to not need args.ObsClassName
-# And also maybe have a try
 def cmd_center(args):
     with pg.PrecisionGuide("CorObsData", "IoIO") as P:
-        # --! Daniel found this, which would have saved a lot of pain
-        # --! years ago!  It keeps MaxIm connected to the camera after
-        # --! the last object de-references
-        P.MC.CCDCamera.DisableAutoShutdown = True
-        P.center_loop()
-        # Upset the centering a bit
-        log.debug("jogging telescope a bit to force guidebox centering")
-        P.MC.move_with_guider_slews(np.asarray([10,2])/3600)
-        P.MC.guider_start() 
-        P.center_loop()
-        for i in np.arange(8):
-            P.MC.acquire_im(pg.uniq_fname('test_', r"c:\Users\PLANETARY SCIENCE\Documents\MaxIm DL 6\Temporary"),
-                            exptime=20,
-                            filt=0)
-        P.center_loop()
+        try:
+            P.center_loop()
+            # Upset the centering a bit
+            log.debug("jogging telescope a bit to force guidebox centering")
+            P.MC.move_with_guider_slews(np.asarray([10,2])/3600)
+            P.MC.guider_start() 
+            P.center_loop()
+            for i in np.arange(8):
+                P.MC.acquire_im(pg.uniq_fname('test_', r"c:\Users\PLANETARY SCIENCE\Documents\MaxIm DL 6\Temporary"),
+                                exptime=20,
+                                filt=0)
+                P.center_loop()
+        except Exception as e:
+            log.error('Received the following error.  Attempting to return gracefully: ' + str(e))
+            return
+            
     #default_ND_params = None
     #if args.ND_params is not None:
     #    default_ND_params = get_default_ND_params(args.ND_params, args.maxcount)

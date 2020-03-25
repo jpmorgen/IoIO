@@ -101,6 +101,13 @@ elif socket.gethostname() == "IoIO1U1":
     raw_data_root = r'C:\Users\PLANETARY SCIENCE\Desktop\IoIO\data'
     # --> Eventually, it would be nice to have this in a chooser
     default_telescope = 'AstroPhysicsV2.Telescope'
+#weather_server = 'ACP.BoltwoodFile'
+#weather_server = 'ACP.Weather'
+#weather_server = 'ACPWeather.Weather'
+#weather_server = 'AAG.Weather'
+# Doesn't seem to have IsSafe
+#weather_server = 'WeatherSim.Weather'
+weather_server = 'AstroMC.Weather'
 default_guide_box_command_file = os.path.join(raw_data_root, 'GuideBoxCommand.txt')
 default_guide_box_log_file = os.path.join(raw_data_root, 'GuideBoxLog.txt')
 
@@ -564,8 +571,6 @@ class MaxImControl():
         # telescope.  Here we can store them as an np.array
         self.guide_rates = None # degrees/s
         
-        self.ACP_mode = None
-        #self.pinpoint_N_is_up = None
         self.guider_exptime = None
         self.guider_commanded_running = None
         # --> Eventually make this some sort of configurable
@@ -579,6 +584,10 @@ class MaxImControl():
         self.loop_sleep_time = 0.2
         self.guider_max_settle_time = 120 # seconds
         
+        # --> Kind of a hack to have this here.  Eventually want to
+        # --> integrate MaxImControl object with ACP better
+        self.weather_server = None
+
         # Create containers for all of the objects that can be
         # returned by MaxIm.  We'll only populate them when we need
         # them.  Some of these we may never use or write code for
@@ -592,7 +601,8 @@ class MaxImControl():
         # focuser directly
         self.focuser_previously_connected = None
         self.previous_guider_filter = None
-        
+        self.original_GuiderAutoPierFlip = None
+
         # There is no convenient way to get the FITS header from MaxIm
         # unless we write the file and read it in.  Instead allow for
         # getting a selection of FITS keys to pass around in a
@@ -638,28 +648,35 @@ class MaxImControl():
         return(self)
 
     def __exit__(self, exception_type, exception_value, traceback):
+        self.weather_server.Connected = False
         # --> Try to get telescope disconnected properly so APCC can
         # --> exit without having to kill it
         if self.telescope_connectable:
             self.Telescope.Connected = False
-        # --> this kills the link to the CCD camera unless another
-        # --> application is strongly holding on to it (e.g. ACP --
-        # --> FocusMax doesn't seem to be enough.  See notes in
-        # --> IoIO.notebk about C-c dance if you need to run this
-        # --> without killing camera link)
+        # This kills the link to the CCD camera unless
+        # self.CCDCamera.DisableAutoShutdown = True by someone.  ACP
+        # sets this to True but FocusMax does not.  See notes in
+        # IoIO.notebk about C-c dance if you want to have
+        # CCDCamera.DisableAutoShutdown = False and not kill camera
+        # link
         if self.CCDCamera:
             self.guider_stop()
             self.CCDCamera.GuiderFilter = self.previous_guider_filter
             #self.CCDCamera.LinkEnabled = False
         # Put the MaxIm focuser connection back to its previous state
         self.Application.FocuserConnected = self.focuser_previously_connected
+        self.CCDCamera.GuiderAutoPierFlip = self.original_GuiderAutoPierFlip
         # --> Not sure if I need to do these or if they mess it up worse
         self.Application = None
         self.CCDCamera = None
         self.Telescope = None
 
     def connect(self):
-        """Link to telescope, CCD camera(s), filter wheels, etc."""
+        """Link to weather safety monitor, telescope, CCD camera(s), filter wheels, etc."""
+
+        self.weather_server = win32com.client.Dispatch(weather_server)
+        self.weather_server.Connected = True
+        assert self.weather_server.Connected, ('Weather server not connected')
 
         # MaxIm can connect to the telescope and use things like
         # pier side to automatically adjust guiding calculations,
@@ -691,8 +708,12 @@ class MaxImControl():
         self.CCDCamera.LinkEnabled = True
         if self.CCDCamera.LinkEnabled == False:
             raise EnvironmentError('Link to camera hardware failed.  Is the power on to the CCD (including any connection hardware such as USB hubs)?')
-        # Let the guider filter be put back to previous state after we use it
+        # Let the guider filter and AutoPierFlip be put back to
+        # previous states after we use it
         self.previous_guider_filter = self.CCDCamera.GuiderFilter
+        self.original_GuiderAutoPierFlip = self.CCDCamera.GuiderAutoPierFlip
+        # Keep CCD link up after script exits (thanks to Daniel!)
+        self.CCDCamera.DisableAutoShutdown = True
 
     def getTelescope(self):
         if self.Telescope is not None:
@@ -1131,15 +1152,20 @@ class MaxImControl():
         if self.alignment_mode != win32com.client.constants.algGermanPolar:
             log.debug('Not GEM, no motor reversal')
             return
-        if (self.Application.TelescopeConnected
-            and self.CCDCamera.GuiderAutoPierFlip):
-            log.debug('Let MaxIm manage pier flip state: it is connected to the telescope and Auto Pier Flip is on.')
+        if self.pier_flip_on_side == win32com.client.constants.pierEast:
+            log.debug("ACP guider calibration mode detected.  Don't let MaxIm manage pier flip...")
+            self.CCDCamera.GuiderAutoPierFlip = False
+        elif (self.Application.TelescopeConnected
+              and self.CCDCamera.GuiderAutoPierFlip):
+            # ACP does pier flips on east side
+            log.debug('Let MaxIm manage pier flip state: guider calibrated in MaxIm mode, MaxIm is connected to the telescope and Auto Pier Flip is on.')
             # Set these to False, since otherwise they would confuse
             # us and MaxIm
             self.CCDCamera.GuiderReverseX = False
             self.CCDCamera.GuiderReverseY = False
             return
-        log.debug("MaxIm is not managing pier flip...")
+        else:
+            log.debug("MaxIm is not managing pier flip...")
         if self.Telescope.SideOfPier == self.pier_flip_on_side:
             self.CCDCamera.GuiderReverseX = guider_motor_control_reverseX
             self.CCDCamera.GuiderReverseY = guider_motor_control_reverseY
@@ -1159,7 +1185,9 @@ class MaxImControl():
             return revXY
         if self.Application.TelescopeConnected:
             log.debug("MaxIm is connected to the telescope...")
-            if self.CCDCamera.GuiderAutoPierFlip:
+            if self.pier_flip_on_side == win32com.client.constants.pierEast:
+                log.debug("... but guider calibrated in ACP mode, so inspecting GuiderReverseXY...")
+            elif self.CCDCamera.GuiderAutoPierFlip:
                 log.debug("...and managing pier flip...")
                 if (self.Telescope.SideOfPier
                       == win32com.client.constants.pierEast):
@@ -1278,6 +1306,7 @@ class MaxImControl():
         running_total = 0
         running_sq = 0
         for i in range(n):
+            assert self.weather_server.IsSafe, ('Weather is not safe!')
             # --> Need a timeout
             while self.CCDCamera.GuiderNewMeasurement is False:
                 time.sleep(self.loop_sleep_time)
@@ -1504,6 +1533,7 @@ class MaxImControl():
         # MaxIm seems to be able to press RA and DEC buttons
         # simultaneously, but we can't!
         while self.CCDCamera.GuiderMoving:
+            assert self.weather_server.IsSafe, ('Weather is not safe!')
             time.sleep(0.1)
         if dt[1] > 0:
             DEC_success = self.CCDCamera.GuiderMove(win32com.client.constants.gdPlusY, dt[1])
@@ -1515,6 +1545,7 @@ class MaxImControl():
         if not DEC_success:
             raise EnvironmentError('DEC guide slew command failed')
         while self.CCDCamera.GuiderMoving:
+            assert self.weather_server.IsSafe, ('Weather is not safe!')
             time.sleep(0.1)
 
     def scope_wcs(self,
@@ -1910,7 +1941,14 @@ class MaxImControl():
         # Take a light (1) exposure
         self.CCDCamera.Expose(exptime, 1, filt)
         # This is potentially a place for a coroutine and/or events
-        time.sleep(exptime)
+        assert self.weather_server.IsSafe, ('Weather is not safe!')
+        timeleft = exptime
+        while timeleft > 60:
+            time.sleep(60)
+            assert self.weather_server.IsSafe, ('Weather is not safe!')
+            timeleft -= 60
+        if timeleft > 1:
+            time.sleep(timeleft)
         # --> Need to set some sort of timeout
         while not self.CCDCamera.ImageReady:
             time.sleep(0.1)
@@ -2024,7 +2062,7 @@ guide_box_log_file : str
         return(self)
 
     def __exit__(self, exception_type, exception_value, traceback):
-        # Turn off the guide box moving system
+        # Turn off everything
         self.GuideBoxMoving = False
         self.MC.__exit__(exception_type, exception_value, traceback)
 
