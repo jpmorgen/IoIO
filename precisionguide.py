@@ -101,13 +101,8 @@ elif socket.gethostname() == "IoIO1U1":
     raw_data_root = r'C:\Users\PLANETARY SCIENCE\Desktop\IoIO\data'
     # --> Eventually, it would be nice to have this in a chooser
     default_telescope = 'AstroPhysicsV2.Telescope'
-#weather_server = 'ACP.BoltwoodFile'
-#weather_server = 'ACP.Weather'
-#weather_server = 'ACPWeather.Weather'
-#weather_server = 'AAG.Weather'
-# Doesn't seem to have IsSafe
-#weather_server = 'WeatherSim.Weather'
-weather_server = 'AstroMC.Weather'
+# For weather synchronization with ACP
+ACPUtil = 'ACP.Util'
 default_guide_box_command_file = os.path.join(raw_data_root, 'GuideBoxCommand.txt')
 default_guide_box_log_file = os.path.join(raw_data_root, 'GuideBoxLog.txt')
 
@@ -586,6 +581,7 @@ class MaxImControl():
         
         # --> Kind of a hack to have this here.  Eventually want to
         # --> integrate MaxImControl object with ACP better
+        self.ACPUtil = None
         self.weather_server = None
 
         # Create containers for all of the objects that can be
@@ -648,7 +644,6 @@ class MaxImControl():
         return(self)
 
     def __exit__(self, exception_type, exception_value, traceback):
-        self.weather_server.Connected = False
         # --> Try to get telescope disconnected properly so APCC can
         # --> exit without having to kill it
         if self.telescope_connectable:
@@ -661,6 +656,10 @@ class MaxImControl():
         # link
         if self.CCDCamera:
             self.guider_stop()
+            # --> consider putting this back to 0 instead of previous
+            # --> and really this should be in the coronagraph
+            # --> subclass instead of here, but that is a project for
+            # --> a later date
             self.CCDCamera.GuiderFilter = self.previous_guider_filter
             #self.CCDCamera.LinkEnabled = False
         # Put the MaxIm focuser connection back to its previous state
@@ -673,10 +672,8 @@ class MaxImControl():
 
     def connect(self):
         """Link to weather safety monitor, telescope, CCD camera(s), filter wheels, etc."""
-
-        self.weather_server = win32com.client.Dispatch(weather_server)
-        self.weather_server.Connected = True
-        assert self.weather_server.Connected, ('Weather server not connected')
+        self.ACPUtil = win32com.client.Dispatch(ACPUtil)
+        self.weather_server = self.ACPUtil.Weather
 
         # MaxIm can connect to the telescope and use things like
         # pier side to automatically adjust guiding calculations,
@@ -1306,7 +1303,7 @@ class MaxImControl():
         running_total = 0
         running_sq = 0
         for i in range(n):
-            assert self.weather_server.IsSafe, ('Weather is not safe!')
+            assert self.weather_server.Safe, ('Weather is not safe!')
             # --> Need a timeout
             while self.CCDCamera.GuiderNewMeasurement is False:
                 time.sleep(self.loop_sleep_time)
@@ -1533,7 +1530,7 @@ class MaxImControl():
         # MaxIm seems to be able to press RA and DEC buttons
         # simultaneously, but we can't!
         while self.CCDCamera.GuiderMoving:
-            assert self.weather_server.IsSafe, ('Weather is not safe!')
+            assert self.weather_server.Safe, ('Weather is not safe!')
             time.sleep(0.1)
         if dt[1] > 0:
             DEC_success = self.CCDCamera.GuiderMove(win32com.client.constants.gdPlusY, dt[1])
@@ -1545,7 +1542,7 @@ class MaxImControl():
         if not DEC_success:
             raise EnvironmentError('DEC guide slew command failed')
         while self.CCDCamera.GuiderMoving:
-            assert self.weather_server.IsSafe, ('Weather is not safe!')
+            assert self.weather_server.Safe, ('Weather is not safe!')
             time.sleep(0.1)
 
     def scope_wcs(self,
@@ -1941,11 +1938,11 @@ class MaxImControl():
         # Take a light (1) exposure
         self.CCDCamera.Expose(exptime, 1, filt)
         # This is potentially a place for a coroutine and/or events
-        assert self.weather_server.IsSafe, ('Weather is not safe!')
+        assert self.weather_server.Safe, ('Weather is not safe!')
         timeleft = exptime
         while timeleft > 60:
             time.sleep(60)
-            assert self.weather_server.IsSafe, ('Weather is not safe!')
+            assert self.weather_server.Safe, ('Weather is not safe!')
             timeleft -= 60
         if timeleft > 1:
             time.sleep(timeleft)
@@ -3191,9 +3188,9 @@ def cmd_test_center(args):
         desired_center = None
     P.center(desired_center=desired_center)
     log.debug('STARTING GUIDER') 
-    #P.MC.guider_start()
-    #log.debug('CENTERING WITH GUIDEBOX MOVES') 
-    #P.center(desired_center=desired_center)
+    P.MC.guider_start()
+    log.debug('CENTERING WITH GUIDEBOX MOVES') 
+    P.center(desired_center=desired_center)
 
 def cmd_guide(args):
     MC = MaxImControl()
