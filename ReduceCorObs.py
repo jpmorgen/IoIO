@@ -365,7 +365,7 @@ def is_jupiter(hdr):
     Parameters
     ----------
     hdr : dictionary-like
-        FITS header or ccdproc.ImageFileCollection
+        FITS header or row from ccdproc.ImageFileCollection
     """
     imagetyp = hdr['imagetyp']
     if imagetyp.lower() != 'light':
@@ -400,14 +400,15 @@ def is_jupiter(hdr):
     # Similar to above, the OBJECT keyword is not set in observations
     # recorded by ioio.py, IoIO.py, etc., so we can use its *presence*
     # to rule out non-Jupiter objects like stars and Mercury
-    # https://stackoverflow.com/questions/9573244/most-elegant-way-to-check-if-the-string-is-empty-in-python
-    if not object:
+    # https://www.netjstech.com/2019/07/check-string-empty-or-not-python.html#:~:text=Using%20len()%20function%20to,it%20is%20an%20empty%20string.
+    if len(object) > 0:
         return False
     # If we made it here, we have an unlabeled observation of
-    # something.  We can use the telescsope coordinates, which are
+    # something.  We can use the telescsope coordinates which are
     # generally good to a few arcminutes, but certainly good to 5
     # degrees, and compare it to a basic ephemeris, to determine
-    # whether or not we are pointed at Jupiter
+    # whether or not we are pointed at Jupiter.  Note, objectra code,
+    # above, guarantees we can do this test
     objctdec = hdr['objctdec']
     T = Time(hdr['date-obs'], format='fits')
     # These are MaxIm keywords
@@ -1298,9 +1299,11 @@ def get_dirs(directory,
         Stop date (inclusive).  Default = last date
     """
     assert os.path.isdir(directory)
+    fulldirs = [os.path.join(directory, d) for d in os.listdir(directory)]
     # Filter out bad directories first
-    dirs = [d for d in os.listdir(directory)
-            if (os.path.isdir(os.path.join(directory, d))
+    dirs = [os.path.basename(d) for d in fulldirs
+            if (not os.path.islink(d)
+                and os.path.isdir(d)
                 and (filt_list is None
                      or not np.any([filt in d for filt in filt_list])))]
     # Prepare to pythonically loop through date formats, trying each on 
@@ -1894,3 +1897,5 @@ if __name__ == "__main__":
 #                 default_ND_params=None)
 #reduce_dir(args)
 #print(get_astrometry_angle('2017-01-18T00:00:00'))
+
+

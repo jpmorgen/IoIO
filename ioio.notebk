@@ -1487,9 +1487,9 @@ Consider setting puppy up as the completely independent simulator
 I already have MaxIm.  It complains that my PinPoint license has
 expired.  Looks like I should get a full version of that
 
-scp "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/ACP/acp-811-setup.exe" jpmorgen@cpe-184-153-135-44.maine.res.rr.com:/data/io/IoIO/observing/ACP/
+scp "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/ACP/acp-811-setup.exe" jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/data/io/IoIO/observing/ACP/
 
-scp "/cygdrive/c/Users/PLANETARY SCIENCE/Downloads/NOVAS(2.1.1)Setup.exe" jpmorgen@cpe-184-153-135-44.maine.res.rr.com:/data/io/IoIO/observing/ACP/
+scp "/cygdrive/c/Users/PLANETARY SCIENCE/Downloads/NOVAS(2.1.1)Setup.exe" jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/data/io/IoIO/observing/ACP/
 
 Email from 04/26/2017 in Proposals/NSF folder gives download locations
 for DC3 products
@@ -1518,7 +1518,7 @@ Seems to stick if I try to download the whole thing at once.  After a
 break, it goes OK.  Although I am trying to avoid it, possibly best to
 just get from IoIO1U1.
 
-rsync -auv  "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/From Dean/usno/" jpmorgen@cpe-184-153-135-44.maine.res.rr.com:/data/USNO_A2.0/
+rsync -auv  "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/From Dean/usno/" jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/data/USNO_A2.0/
 
 Interesting.  250kb/s from PSI, 1Mbs from observatory
 
@@ -5679,8 +5679,8 @@ specific one for python.  Or just copy over the couple I need
 --> rsync
 eval `ssh-agent` 
 ssh-add
-rsync -auv jpmorgen@cpe-184-153-135-44.maine.res.rr.com:/home/jpmorgen/py/IoIO/IoIO.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
-rsync -auv jpmorgen@cpe-184-153-135-44.maine.res.rr.com:/home/jpmorgen/py/IoIO/precisionguide.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
+rsync -auv jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/home/jpmorgen/py/IoIO/IoIO.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
+rsync -auv jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/home/jpmorgen/py/IoIO/precisionguide.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
 
 Works!
 
@@ -7521,7 +7521,7 @@ with precision guide and its command line parameters
 
 Right now I have create_ObsData and the ObsDataClass property of
 precision guide, which is a pretty ugly hack.  If I have
-precisionguide deal with the simplest ObsData and a subsequent chile
+precisionguide deal with the simplest ObsData and a subsequent subclass
 of precisionguide could be something like cor_guide.  cor_guide could
 have the CorObsData overwrite ObsData in the definition such that the
 name CorObsData goes away.  I would like to have RedCorObsData be for
@@ -7535,7 +7535,8 @@ object at init time or no args.  This is reasonable, so not that hacky
 It is self.ObsDataClass that is a little more hacky.  The dynamic part
 is the hack.  Really if I have a different way to get the center, I am
 finding that I should build the whole precision guide system around
-that.
+that.  In other words, build a subclass of precisionguide instead of
+insert an important object into precisionguide
 
 As far as names go for the ObsData, it looks like I can name them
 different things, but then I am back to the hacky method of referring
@@ -7564,7 +7565,7 @@ PrecisionGuideBaseClass in the precisionguide base module.  Other
 modules could be named cor_guide, pinpoint_guide, etc. and would be
 create children of PrecisionGuideBaseClass.
 
-THe only possible disadvantage of all of this is that the WCS stuff
+The only possible disadvantage of all of this is that the WCS stuff
 would need to be different.  But that is probably not a bad thing
 because the arguments would need to be different too.
 
@@ -10162,7 +10163,7 @@ Nov 5	-1.9	33
 10**((-2.3 + 1.9)/-2.5)
 1.4454397707459274
 
-rsync -auvn  "/cygdrive/c/Users/PLANETARY SCIENCE/Documents/MaxIm DL 6/GuiderTrackingImages" "jpmorgen@cpe-184-153-135-44.maine.res.rr.com:/data/io/IoIO/observing/MaxIm DL/"
+rsync -auvn  "/cygdrive/c/Users/PLANETARY SCIENCE/Documents/MaxIm DL 6/GuiderTrackingImages" "jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/data/io/IoIO/observing/MaxIm DL/"
 
 Fri Dec 13 22:01:25 2019 EST  jpmorgen@snipe
 
@@ -10202,5 +10203,441 @@ fixed to working raw
 I think I might prefer the later.  It also gets me some practice with
 the incremental way of doing things.
 
+see if I can change mod date
+
+https://docs.python.org/3/library/os.html -> os.utime
+
+It looks like the answer to that is yes.  So I can presumably just fix
+the filters and put a note in the HISTORY
+
+Look back a year ago to
+Fri Mar 15 05:51:44 2019 EDT  jpmorgen@snipe
+for notes on wanting to split precisionguide up so I can get better
+access to objects for reduction purposes.
+
+So consider PrecisionGuide -> PrecisionGuideBaseClass
+
+And then I would inherit that into things like CorGuide,
+BrightestStarGuide, and PinpointGuide.  Each of those objects would
+need their own property to manage the specifics and they would be in
+modules (all lower case) that would have argparse stuff unique to
+their arguments.  Separately, I would have modules containing the
+ObsData: CorObsData, BrightestStarData and PinpointData whcih could
+then import into reduction modules.
+
+--> I might be able to do this in stages, where I just pull out
+    CorObsData as a module for now.
+
+Fri Mar 20 20:06:24 2020 EDT  jpmorgen@snipe
+
+Reading documentation in UserActions and finding that Bob wants all
+telescope and camera control done with Util.ScriptTelescope and
+Util.ScriptCamera for access locks to work.  Ah, but I am the only one
+using this, so that was not an issue.  But that might also help
+weather interlocks.  Either that or I do my own weather interlock
+
+Mon Mar 23 09:37:38 2020 EDT  jpmorgen@snipe
+
+Working on pier flip problems now that guider is rotated by 90
+degrees.  See IoIO.notebk for log of problem.
+
+Looking at last year's astrometry and this year's astrometry
+
+/data/io/IoIO/raw/2019-04_Astrometry/Guider_Astrometry_East_of_Pier.fit
+CTYPE1  = 'RA---TAN'           / X-axis coordinate type
+CRVAL1  =   1.28656273130E+002 / X-axis coordinate value
+CRPIX1  =   3.76000000000E+002 / X-axis reference pixel
+CDELT1  =   1.22992990806E-003 / [deg/pixel] X-axis plate scale
+CROTA1  =   2.75762353835E+000 / [deg] Roll angle wrt X-axis
+CTYPE2  = 'DEC--TAN'           / Y-axis coordinate type
+CRVAL2  =   1.83965522615E+001 / Y-axis coordinate value
+CRPIX2  =   2.90000000000E+002 / Y-axis reference pixel
+CDELT2  =   1.18778516650E-003 / [deg/pixel] Y-Axis Plate scale
+CROTA2  =   2.75762353835E+000 / [deg] Roll angle wrt Y-axis
+CD1_1   =   1.22850564169E-003 / Change in RA---TAN along X-Axis
+CD1_2   =  -5.71455686251E-005 / Change in RA---TAN along Y-Axis
+CD2_1   =   5.91731955806E-005 / Change in DEC--TAN along X-Axis
+CD2_2   =   1.18640970400E-003 / Change in DEC--TAN along Y-Axis                 
+
+/data/io/IoIO/raw/2020-03_Astrometry/Guider_Astrometry_East_of_Pier.fit
+CTYPE1  = 'RA---TAN'           / X-axis coordinate type
+CRVAL1  =   7.86597706831E+001 / X-axis coordinate value
+CRPIX1  =   3.76000000000E+002 / X-axis reference pixel
+CDELT1  =   1.22962673968E-003 / [deg/pixel] X-axis plate scale
+CROTA1  =   8.75238205289E+001 / [deg] Roll angle wrt X-axis
+CTYPE2  = 'DEC--TAN'           / Y-axis coordinate type
+CRVAL2  =   4.78872912158E+001 / Y-axis coordinate value
+CRPIX2  =   2.90000000000E+002 / Y-axis reference pixel
+CDELT2  =   1.18634500061E-003 / [deg/pixel] Y-Axis Plate scale
+CROTA2  =   8.75238205289E+001 / [deg] Roll angle wrt Y-axis
+CD1_1   =   5.31248338048E-005 / Change in RA---TAN along X-Axis
+CD1_2   =  -1.18523727452E-003 / Change in RA---TAN along Y-Axis
+CD2_1   =   1.22847860012E-003 / Change in DEC--TAN along X-Axis
+CD2_2   =   5.12548881369E-005 / Change in DEC--TAN along Y-Axis
+
+|CD1_1   =   1.22850564169E-003 / Change in RA---TAN along X-Axis (east right)
+-CD2_1   =   1.22847860012E-003 / Change in DEC--TAN along X-Axis (north)
+|CD2_2   =   1.18640970400E-003 / Change in DEC--TAN along Y-Axis (north)
+-CD1_2   =  -1.18523727452E-003 / Change in RA---TAN along Y-Axis (east down
+
+On West of Pier, the CDELTs are negative in both axes this year and
+last year.  That makes sense from pier flipping
+
+Using MaxIm 0 on top reference on East_of_Pier (MaxIm normal)
+Last year east right, N down 
+This year, east up, N right
+
+So indeed, the readout of the camera is the same and it has just been rotated ~+90 deg.
 
 
+import numpy as np
+cd2019 = np.asarray(((1.22850564169E-003, -5.71455686251E-005), (5.91731955806E-005, 1.18640970400E-003)))
+cd2020 = np.asarray(((5.31248338048E-005, -1.18523727452E-003), (1.22847860012E-003, 5.12548881369E-005)))
+
+N = np.asarray((0,1))
+np.dot(cd2019, N)
+
+np.degrees(np.arccos(cd2019[0,0]))
+-np.degrees(np.arcsin(cd2019[0,1]))
+np.degrees(np.arcsin(cd2019[1,0]))
+-np.degrees(np.arccos(cd2019[1,1]))
+
+89.92961179391786
+>>> 0.003274199901875491
+>>> 0.0033903743690491023
+>>> -89.93202371524056
+
+So the CDs aren't really the same level of accuracy as CROTA that Bob puts in
+
+Am I useing the flipped astrometry for the E calculation?
+
+Mon Mar 23 22:32:05 2020 EDT  jpmorgen@snipe
+
+Working with Venus, got thigns to work in ACP mode with MaxIm connected or not
+Procyon works at least with MaxIm connected.
+
+Ah, the problem seems to be that when I actually try guiding, the
+guider goes in the wrong direction
+
+So I would need to turn off auto pier flip
+
+Hey, got Procyon to work on both sides of the pier when MaxIm is
+connected and wanting to AutoPierFlip.  I turn that off and all is happy
+
+See if I can't do weather object real quick
+
+ACP.BoltwoodFile
+
+Just not working.  AstroMC.Weather is.  Test 
+
+Wind speed 8, 16, 999. Change to 0, 1.  That did it!
+
+Whew.  Weird connections, but it actually works.
+
+Try clouds.  AstroMC did an Analyzing thing that finally shut down after a while.
+
+-5 0 30
+
+not getting assertion error to print as I expect.  That is because I
+need a second argument ('stuff to print')
+
+Wed Mar 25 12:51:10 2020 EDT  jpmorgen@snipe
+
+Need to make a part of IoIO.py that moves Jupiter over to the side and
+takes observations for eclipse ingress/egress.  Pre-opposition is
+ingress, so this is the control time
+
+In two days there is an ingress at 18 deg elevation.  Only 10 minutes
+after rise above observatory wall!
+
+I would want to pass some arguments at some point to tell me where the
+center of the ND filter is plus some
+
+    with pg.PrecisionGuide("CorObsData", "IoIO", ) as P:
+
+--> I would need to tweak the desired_center @property, possibly
+    adding another property: offset
+
+For this first one consider just waking up early and doing it by hand
+with Jupiter out of the ND filter
+
+Sun Mar 29 18:40:07 2020 EDT  jpmorgen@snipe
+
+Working on MaxIm
+
+python \\snipe\jpmorgen\py\IoIO\precisionguide.py test_center
+
+Sun Mar 29 22:20:52 2020 EDT  jpmorgen@snipe
+
+Try changing filter looking at Venus
+
+cd "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\"
+IoIO.py center --ObsClassName CorObsData
+
+It is doing it but not just when I change filters.
+
+And it may be the target position not being fractional
+
+03:10:21*1	MaxIm DL Version 6.21 started on IOIO1U1
+
+Experiment tailed off trying to recenter afterwards
+
+Ack.  Track log is not persistent
+
+--> https://www.devdungeon.com/content/python-catch-sigint-ctrl-c
+
+Wed Apr 01 15:12:14 2020 EDT  jpmorgen@snipe
+
+Grumpy about MaxIm response
+
+"\\snipe\data\io\IoIO\observing\MaxIm DL\test_GuiderMoveStar.vbs"
+
+503, 418
+513, 423
+...
+
+cscript "\\snipe\data\io\IoIO\observing\MaxIm DL\test_GuiderMoveStarBug.vbs"
+
+XORGSUBF	= 497 /Subframe X position in binned pixels            
+YORGSUBF	= 407 /Subframe Y position in binned pixels            
+
+19:57:44*2	Debug message logging is on
+
+Note that in simulator
+
+Mon Apr 06 16:15:28 2020 EDT  jpmorgen@snipe
+
+Trying to get weather working through ACP
+
+OK, so ACP.weather is not registered.  No the error seems to be that
+Bob's ACP stuff is 32 bit and my python is 64 bit.
+
+cscript "\\snipe\data\io\IoIO\observing\ACP\test_weather.vbs"
+
+doesn't work
+
+try as C:\Windows\SYSWOW64\cmd.exe as per /cygdrive/c/Program Files (x86)/Common Files/ASCOM/MPCCOMET/Readme.txt
+
+Works better as far as finding the object, but still permission denied
+when trying to read attributes.  I get the distinct feeling that this
+can only work from within Bob's ecosystem.
+
+Ahh.  Comparing this to MPCCOMET.wsc and seeign that there is an
+object id="Util" in Bobs with a progid="ACP.Util", whereas with
+MPCCOMET, it is Shell and WScript.Shell
+
+! Got it to work!  Instantiated ACP.Util!
+
+Tue Apr 07 16:34:05 2020 EDT  jpmorgen@snipe
+
+Looking back at ccdred/CCDred, which was going to form the basis of my
+new reduction scheme.
+
+Now I am looking at the CCDproc iterators a little more and find that
+if I do it there way, I might have more readable code.
+
+So they have iterators with code.  I am thinking of having objects
+with methods that are triggered when the file is processed.  These are
+not incompatible.  Or are they?  I was thinking of absconding with the
+ImageFileCollection to tweak it to store information.  Their model is
+to keep the integrity of the original ImageFileCollection and then
+loop through it using autosaving iterators to do operations.  But I
+guess I was going to process information like ephemerides basde on
+what I built up in the headers
+
+So really ccdred is not ccdred but ImageFileCollectionHacker
+
+OK, I recall now I had the issue with how to get a comment in the FITS
+header.  This is easy with their iterator and code as you open each
+file.  I was sort of thinking that I would have an object, a ccdred,
+that would store everything needed for calculation.  But that gets a
+little too ridged.
+
+Consider starting with something simple to get back in the saddle
+again.  Have some biases and flats
+
+Wed Apr 08 12:12:25 2020 EDT  jpmorgen@snipe
+
+So the problem with handling the entire imagefilecollection as one
+group of keywords that gets modified and then written back to the
+files is that ccdproc allow only partial lists of keywords to be read
+into the summary table.  As I do the work, I hear the disk being read
+only one, which suggests that the disk and OS are doing the caching so
+that I don't need to in my code.  In other words, I can write
+inefficient code that creates and recreates the summary and I don't
+lose that much time. 
+
+OK, I have ccdproc 1.3.0-5 installed via aptitide.  They are
+developing 2.1.1, which has some documentation I am not seeing
+features for.  Some of them looks pretty useful.  Experiment with
+using latest version for my bias_dark experiments.
+
+Plus, they have a refresh method that does what I want
+
+OK, looking at their combiner object
+
+Tue Apr 14 18:34:05 2020 EDT  jpmorgen@snipe
+
+Got some stuff to run.  See IoIO.notebk for physical interpretation.
+Dealing with software here.  If I add to the csv file, I will be
+duplicating entries when I re-run.  This is different than when I
+reduced all files in their own date directories and rewrote the file
+in each directory.  I then ran a separate process to combine
+
+Wed Apr 15 15:43:52 2020 EDT  jpmorgen@snipe
+
+OK, so give up on the CSV file and deal with things using astropy an
+table culled form the data in the summary directory.
+
+Working on readnoise.  Where do I want that documented?
+
+Cool!  I am seeing that the std goes way down in the combined bias,
+relative to the individual stds.  Still wondering if I should be
+keeping track of bad values of std.
+
+So when there is a big bias ramp, std should go up relative to rdnoise.
+
+Wed Apr 15 22:19:19 2020 EDT  jpmorgen@snipe
+
+Wow!  I am consuming 46% of snipe's memory with
+
+bias_combine('/data/io/IoIO/raw/20191014')
+
+That seems to bobble around to 27% during the cycle of
+combiner.sigma_clipping
+
+Ah, that is when I had 153 files because I misunderstood the directive
+for repeats!
+
+So when I go from 10 to 5 files, the STD goes from 5.7 up to 7.6.
+With 154 files, I got down to 3.7 at -5C At -15 C that many files got
+to 2.3!
+
+So for a final work-up I could potentially do the many bias.  I have a
+balance.  For 150 files, it took 50% = 32G
+150*100E6/1E9
+15.0
+
+And the ccdproc people say it is not memory efficient, so that is
+where I am taking the 30G.  So it scales
+
+2200*2750/1E6*(8*2 + 1)
+102.85
+
+That is roughly the size of the file assuming 2 double-precision
+extensions plus a mask.  I double that because Combiner copies the ccds.
+
+OK, the max number of biases I can run is 233 if I stick to 75% of
+the memory.  The problem is I don't know how many files are in the
+individual directories until I get there.  But if I say I am going to
+max out memory I do the 233.  If I want to go faster, I have to divide
+that by the factor I want to go faster.
+
+Fri Apr 17 10:53:41 2020 EDT  jpmorgen@snipe
+
+I wonder if the bias is more correlated to the external temperature
+than the CCD temperature.  High external temperature seems to lead to
+lower bias values.
+
+So the fundamental problem is that there is no overscan on these CCDs,
+although in the small filters, I have a handy area for that.  But for
+that area, I only have dark current + bias.
+
+Fri Apr 17 20:52:19 2020 EDT  jpmorgen@snipe
+
+I have been hearing one source say that the overscan is a simple
+addition on the bias and the bias is the pattern.  So I should see if
+my biases with mean subtracted end up being similar to each other.  If
+so, or even if the pattern is temperature sensitive but the offset
+level is external temperature sensitive, I should be able to work
+backward with darks and the bias pattern to solve for the overscan
+level.  This depends critically on having a steady temperature while I
+record the darks.  I also might want to record more darks at some
+point, though they are supposed to scale OK with exposure time.  But I
+have a range of exposure times over which to test that even if the
+longer ones aren't perfect for stacking.
+
+So for the darks I want to find the biases that are closest in time
+that are the same temperature.  And probably have a minimum separation
+in time as well.  When I subtract the stacked biases, I should get at
+the true dark current right at that time.  Bias ramping should go
+away, since that dark current during the readout.
+
+So dark is going to be scaled accurately from exposure time.  The bias
+pattern comes next based on temperature (again, osmethign I can check)
+and then I add a pedistal to match the edges of the small filters and
+maybe eventually a dark exposure recorded occasionally
+
+d(ccdT) + b'(ccdT) + os(ambientT, or whatever) = background
+
+The only trick is that we have to find a background on the ccd.  Once
+we have set that, we can bridge for other filters that don't have
+that.  Eventually, we might be able find the ambient temperature
+function for os.
+
+OK, so darks need to have a bias after them so I can tell if they are
+OK.  And I should probably group the biases by time as well
+
+Sun Apr 19 20:14:10 2020 EDT  jpmorgen@snipe
+
+bias_combine('/data/io/IoIO/raw/20200419', show=True)
+
+The -20C evening biases came in at 1860 or so.  The AM ones at 1940.
+Wow!  THere were only 572 erant pixels!  Seems suspicous
+-15.24 had a consistent ramp from 1918 up to 1932
+
+std suggests some potential ccd cooling during that time.  Or it could
+be electronics cooling too. 
+
+Wed Jul 01 21:57:04 2020 EDT  jpmorgen@snipe
+
+Daniel wants to help me with the UserActions.wsc via his new GitHub
+account.  Not quite right to put that on the main IoIO stuff, at least
+not yet.  Eventually, having some sort of package that installs
+everything in the correct place.  So it would have source code and
+installer.  But for now consider having the 
+
+https://stackoverflow.com/questions/22580873/how-can-i-configure-magit-to-use-my-github-user-name
+
+git config --global github.user jpmorgen
+git config --global user.name jpmorgen
+git config --global user.email jpmorgen@psi.edu
+
+remote name UserActions
+https://github.com/jpmorgen
+
+Thu Jul 02 00:49:22 2020 EDT  jpmorgen@snipe
+
+ACP.BoltwoodFile change to WeatherSim.Weather
+
+Having trouble debugging UserActions.wsc after Daniel and I made some
+changes.
+
+Fixed that.
+
+So as Daniel poitns out, this doesn't work when the weather isn't connected.
+
+Thu Jul 02 09:41:24 2020 EDT  jpmorgen@snipe
+
+--> Consider making StowAndClose a tag!
+
+I think I am doing the GitHub thing wrong by not merging Daniel's
+changes properly on IoIO1U1
+
+Thu Jul 02 11:47:58 2020 EDT  jpmorgen@snipe
+
+Hey!  I have an idea about how to proceed with ACP cusom development!
+I can check in the whole ACP tree (rather with lots of .gitignores)
+and add to things there, like maybe in the Scripts directory, which I
+currently have in Desktop\IoIO\Scripts.  That would keep everything
+together although there would still be some things like the Scheduler
+StartupObs....  But still, I like the way that is going to be able to
+develop on greyhound with simulators and push and pull to IoIO1U1 for
+production.
+
+Update Cygwin to see if that helps the problems I was having with
+password entry on GitHub/magit
+
+Well, that doesn't seem to help.  Frustrating but not end of world.
+Can work with desktop client or command line.  Remove magit so I am
+not confused in the future.

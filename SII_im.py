@@ -14,10 +14,10 @@ from astropy.io import fits
 from ReduceCorObs import plate_scale
 
 origin = 'lower'
-vmin = 10
+vmin = 20
 vmax = 3000
-block_size = 2
-binning = 2
+block_size = 1
+binning = 1
 linewidth = 2
 
 #rdir = '/data/io/IoIO/reduced/2018-05-05/'
@@ -28,8 +28,8 @@ linewidth = 2
 #fnums = range(1,21,3)
 
 rdir = '/data/io/IoIO/reduced/2018-06-06/'
-fnums = range(2,40,5)
-fig, axes = plt.subplots(nrows=len(fnums), ncols=1, figsize=(6,10))
+fnums = range(2,30,5)
+fig, axes = plt.subplots(nrows=len(fnums), ncols=1, figsize=(5,7.6))
 
 # https://scipy-cookbook.readthedocs.io/items/Rebinning.html
 def rebin( a, newshape ):
@@ -73,7 +73,7 @@ for fname, ax in zip(fnames, axes):
     with fits.open(fname) as HDUList:
         # https://stackoverflow.com/questions/7066121/how-to-set-a-single-main-title-above-all-the-subplots-with-pyplot
         header = HDUList[0].header
-        fig.suptitle(header['DATE-OBS'].split('T')[0])
+        #fig.suptitle(header['DATE-OBS'].split('T')[0])
         im = HDUList[0].data
         center = (np.asarray(im.shape)/2).astype(int)
         im = im[center[0]-80:center[0]+80, center[1]-300:center[1]+300]
@@ -95,9 +95,10 @@ for fname, ax in zip(fnames, axes):
         ax.xaxis.set_visible(False)
 ax.xaxis.set_visible(True)
 #plt.xlabel('Rj')
-fig.subplots_adjust(right=0.85)
-cbar_ax = fig.add_axes([0.8, 0.10, 0.05, 0.8])
-cbar = fig.colorbar(plotted, cax=cbar_ax)
-cbar.ax.set_ylabel('Surface brightness (R)')
+fig.subplots_adjust(top=1,bottom=0.07,hspace=0,right=1)
+#fig.subplots_adjust(right=0.85)
+#cbar_ax = fig.add_axes([0.8, 0.10, 0.05, 0.8])
+#cbar = fig.colorbar(plotted, cax=cbar_ax)
+#cbar.ax.set_ylabel('Surface brightness (R)')
 plt.savefig('SII_seq_transparent.png', transparent=True)    
 plt.show()

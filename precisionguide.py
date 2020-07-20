@@ -836,7 +836,7 @@ class MaxImControl():
         different GEM mounts do different things to their coordinate
         systems when the mount is on the two different sides.  RA is
         generally left alone, since on either side of the pier, the
-        RA access still has to rotate toward the west.  But DEC
+        RA axis still has to rotate toward the west.  But DEC
         conventions vary.  When the mount flips and points the
         telscope at the same place on the sky (issues of
         counterweight up aside), RA flips 180 and DEC flips 180,
@@ -2199,6 +2199,15 @@ guide_box_log_file : str
         #    dec_pix_rate = -0.005/10 * plate_ratio
         #    # Note Pythonic transpose
         #    return self.GuideBoxCommander(np.asarray((dec_pix_rate, 0)))
+        # 2020 early
+        if (-40 < self.MC.Telescope.Declination
+            and self.MC.Telescope.Declination < +10
+            and self.MC.Telescope.Altitude < 30):
+            # Change from guider pixels per 10s to main camera pixels per s
+            ra_pix_rate = -0.014/10 * plate_ratio
+            dec_pix_rate = -0.020/10 * plate_ratio
+            # Note Pythonic transpose
+            return self.GuideBoxCommander(np.asarray((dec_pix_rate, ra_pix_rate)))
         return self.GuideBoxCommander(np.asarray((0, 0)))
 
     # --> I'll probably want a bunch of parameters for the exposure

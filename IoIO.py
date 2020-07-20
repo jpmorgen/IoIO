@@ -1021,6 +1021,8 @@ def ACP_IPT_Na_R(args):
                                 exptime=15,
                                 binning=1,
                                 filt=6)
+            log.debug('CENTERING WITH GUIDEBOX MOVES') 
+            P.center_loop()
             while True:
                 #fname = pg.uniq_fname(basename, d)
                 #log.debug('data_collector preparing to record ' + fname)
@@ -1070,6 +1072,8 @@ def ACP_IPT_Na_R(args):
                                     exptime=0.1,
                                     binning=1,
                                     filt=0)
+                log.debug('CENTERING WITH GUIDEBOX MOVES') 
+                P.center_loop()
                 log.info('Collecting Na')
                 exptime=60
                 if ((time.time() + exptime) > Tend):
