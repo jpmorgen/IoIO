@@ -18,9 +18,7 @@ from astropy.coordinates import EarthLocation
 from astropy.coordinates import solar_system_ephemeris, get_body
 from skimage import exposure
 
-# Using source for now
 from astroquery.jplhorizons import Horizons
-#from jplhorizons import Horizons
 #from photutils import CircularAperture, aperture_photometry
 #from photutils import RectangularAperture
 
@@ -84,9 +82,26 @@ max_ND_dist = 20
 # per core.  Just stick with one process per core
 threads_per_core = 2
 # Raised this from 100 since I am doing a better job with bias & dark
+# Try even higher for Na sake
 background_light_threshold = 250 # ADU
-movie_background_light_threshold = 250 # rayleighs
-# Astrometry.  Just keep track of angle for now
+#movie_background_light_threshold = 250 # rayleighs
+movie_background_light_threshold = 800 # rayleighs
+
+# Astrometry.  Just keep track of angle for now.  NOTE: these angles
+# are in true up-north, east-left coordinates and therefore are the
+# negative of the FITS CROTA roll angles.  PinPoint's PA keyword is
+# also off by 180, or maybe the roll angle -180.  This is a
+# consequence of N running toward negative Y on the CCD MaxIm happens
+# to plot (0,0) at the top left of the screen, thus doing the flip for
+# easy visual inspection of images, at least when the AstroPhysics
+# mount is pier east looking west (see precisionguide documentation).
+# The on-screen PinPoint output in MaxIm similarly translates the
+# position angle of the solution to N up, E left.  Up to 2020, these
+# angles were just taken from IoIO.notebk after each plate solve.
+# More precise values can be grepped from the CROTA as long as they
+# are negated!  See also
+# https://www.aanda.org/articles/aa/pdf/2002/45/aah3860.pdf equation
+# 187.
 astrometry = [('2017-03-03', 57),
               ('2017-03-04', 175-180),
               ('2017-03-05', 358),
@@ -98,7 +113,8 @@ astrometry = [('2017-03-03', 57),
               ('2017-05-18', 178-180),
               ('2018-01-15', 358),
               ('2018-01-24', 359),
-              ('2019-01-01', 3)]
+              ('2019-01-01', 3),
+              ('2020-03-01', 2)]
 
 def get_astrometry_angle(date_obs):
     Tin = Time(date_obs, format='fits')
@@ -570,7 +586,7 @@ def Rj_strip_sum(ang_width, im, center, Rj_ap_height, imtype, header, row):
     ap_height = int(Rj_ap_height * Rj)
     if ((abs(ap_height)/2 + center[0]) >= im.shape[0]
         or (center[0] - abs(ap_height)/2 < 0 )):
-        log.warning('Rj_ap_height ' + str(Rj_ap_height) + ' Rj too large, setting aperture sum to zero')
+        #log.warning('Rj_ap_height ' + str(Rj_ap_height) + ' Rj too large, setting aperture sum to zero')
         asum = 0
     else:
         tim = im + 0
@@ -621,7 +637,7 @@ def Rj_box_sum(ang_width, im, center, Rj_ap_side, imtype, header, row):
         or (center[0] - abs(ap_side)/2 < 0 )
         or (abs(ap_side)/2 + center[1]) >= im.shape[1]
         or (center[1] - abs(ap_side)/2 < 0 )):
-        log.warning('Rj_ap_side ' + str(Rj_ap_side) + ' Rj too large, setting aperture sum to zero')
+        #log.warning('Rj_ap_side ' + str(Rj_ap_side) + ' Rj too large, setting aperture sum to zero')
         asum = 0
     else:
         tim = im + 0
@@ -661,7 +677,7 @@ def Rj_box_sum(ang_width, im, center, Rj_ap_side, imtype, header, row):
     else:
         keypm = '_'
         comstr = 'entire image'
-    key = imtype + 'Rj' + keypm + sap_side
+    key = 'HIERARCH ' + imtype + 'Rj' + keypm + sap_side
     header[key] = (asum, 'average of ' + comstr)
     row[key] = asum
     return key        
@@ -683,7 +699,7 @@ def torus_box_sum(ang_width, im, center, ew, Rj_it, Rj_ot, Rj_h, imtype, header,
     else:
         raise ValueError('Expect ew east or west')
     asum /=(ot-it)*ho2*2
-    key = f'{imtype}_IPT_{ew}_{Rj_it}_{Rj_ot}_{Rj_h}'
+    key = f'HIERARCH {imtype}_IPT_{ew}_{Rj_it}_{Rj_ot}_{Rj_h}'
     header[key] = (asum, f'average {ew} IPT')
     row[key] = asum
     return key        
