@@ -23,8 +23,11 @@ import matplotlib.pyplot as plt
 import precisionguide as pg
 
 # Constants for use in code
-global_gain = 0.3 # measure this to make sure
+# Measured in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx
+# Agrees well well standard (non-PRO) Trius SX-694 advertised value
+global_gain = 0.3 
 # Measured as per ioio.notebk Tue Jul 10 12:13:33 2018 MCT  jpmorgen@byted
+# To be measured regularly as part of new bias subtraction
 global_readnoise = 15.475665 * global_gain
 SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 
@@ -42,6 +45,9 @@ SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 run_level_default_ND_params \
     = [[1.40749551e-02, 2.36320869e-02],
        [1.24240593e+03, 1.33789081e+03]]
+
+# Temporary set to 2 during really hazy weather 
+guider_nd_Filter_number = 3
 
 def hist_of_im(im, readnoise=None):
     """Returns a tuple of the histogram of image and index into centers of
@@ -825,7 +831,7 @@ def IPT_Na_R(args):
         log.debug('CENTERING WITH GUIDER SLEWS') 
         P.center_loop(max_tries=5)
         log.debug('STARTING GUIDER') 
-        P.MC.guider_start(filter=3)
+        P.MC.guider_start(filter=guider_nd_Filter_number)
     log.debug('TURNING ON GUIDEBOX MOVER SYSTEM')
     P.diff_flex()
     log.debug('CENTERING WITH GUIDEBOX MOVES') 
@@ -942,7 +948,7 @@ def ACP_IPT_Na_R(args):
                     log.info('Past expected end of ACP exposure, returning') 
                     return
                 log.debug('STARTING GUIDER') 
-                P.MC.guider_start(filter=3)
+                P.MC.guider_start(filter=guider_nd_Filter_number)
             if time.time() > Tend:
                 log.info('Past expected end of ACP exposure, returning') 
                 return
@@ -1124,7 +1130,8 @@ def cmd_center(args):
             # Upset the centering a bit
             log.info("jogging telescope a bit to force guidebox centering")
             P.MC.move_with_guider_slews(np.asarray([10,2])/3600)
-            P.MC.guider_start(filter=3)
+            #P.MC.move_with_guider_slews(np.asarray([20,5])/3600)
+            P.MC.guider_start(filter=guider_nd_Filter_number)
             P.center_loop()
             for ifilt in np.arange(8):
                 log.info("recording 2 images in filter # " + str(ifilt))

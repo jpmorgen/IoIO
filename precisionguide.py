@@ -107,7 +107,8 @@ default_guide_box_command_file = os.path.join(raw_data_root, 'GuideBoxCommand.tx
 default_guide_box_log_file = os.path.join(raw_data_root, 'GuideBoxLog.txt')
 
 run_level_main_astrometry = os.path.join(
-    raw_data_root, '2020-03_Astrometry/Main_Astrometry_East_of_Pier.fit')
+    raw_data_root, '2020-09_Astrometry/Main_Astrometry_East_of_Pier.fit')
+    #raw_data_root, '2020-03_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2019-04_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2019-04_Astrometry/Main_Astrometry_West_of_Pier.fit')
     #raw_data_root, '2019-02_Astrometry/PinPointSolutionEastofPier.fit')
@@ -120,7 +121,8 @@ run_level_main_astrometry = os.path.join(
 # --> pier flip doesn't affect N/S because tube rolls over too, E/W is
 # --> affected
 run_level_guider_astrometry = os.path.join(
-    raw_data_root, '2020-03_Astrometry/Guider_Astrometry_East_of_Pier.fit')
+    raw_data_root, '2020-09_Astrometry/Guider_Astrometry_East_of_Pier.fit')
+    #raw_data_root, '2020-03_Astrometry/Guider_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2019-04_Astrometry/Guider_Astrometry_West_of_Pier.fit')
     #raw_data_root, '2019-02_Astrometry/GuiderPinPointSolutionWestofPier.fit')
     #raw_data_root, '2019-02_Astrometry/GuiderPinPointSolutionEastofPier.fit')    
@@ -506,6 +508,9 @@ if True:
             self._mlist.append(item)
 #Daniel
 
+class FakeWeather():
+    def __init__(self):
+        self.Safe = True
 
 class MaxImControl():
     """Controls MaxIm DL via ActiveX/COM events.
@@ -672,8 +677,14 @@ class MaxImControl():
 
     def connect(self):
         """Link to weather safety monitor, telescope, CCD camera(s), filter wheels, etc."""
-        self.ACPUtil = win32com.client.Dispatch(ACPUtil)
-        self.weather_server = self.ACPUtil.Weather
+        try:
+            self.ACPUtil = win32com.client.Dispatch(ACPUtil)
+            self.weather_server = self.ACPUtil.Weather
+            test = self.ACPUtil.Weather.Safe
+        except Exception as e:
+            log.error('Received the following error: ' + str(e))
+            log.warning('Seems to be an ACP weather server problem, forging ahead with no weather protection!')
+            self.weather_server = FakeWeather()
 
         # MaxIm can connect to the telescope and use things like
         # pier side to automatically adjust guiding calculations,
@@ -2339,7 +2350,8 @@ guide_box_log_file : str
                 log.debug('TURNING GUIDER OFF AND CENTERING WITH GUIDER SLEWS')
                 self.MC.guider_stop()
                 # --> Consider using center here instead of move_with_guider_slews
-                self.MC.move_with_guider_slews(dw_coords)
+                self.center_loop()
+                #self.MC.move_with_guider_slews(dw_coords)
                 # --> Need to add logic to capture guider stuff,
                 # though filter should be the same.  It is just
                 # the exposure time that I might want to have
@@ -2352,6 +2364,10 @@ guide_box_log_file : str
         else:
             log.debug('CENTERING TARGET WITH GUIDER SLEWS')
             self.MC.move_with_guider_slews(dw_coords)
+            if self.MC.guider_commanded_running:
+                log.debug('Guider was turned off unexpectedly.  Turning it back on and recentering with guidebox moves')
+                self.MC.guider_start()
+                self.center(recursive_count=recursive_count)
         return True
 
     def center_loop(self,
