@@ -677,8 +677,8 @@ def Rj_box_sum(ang_width, im, center, Rj_ap_side, imtype, header, row):
     else:
         keypm = '_'
         comstr = 'entire image'
-    key = 'HIERARCH ' + imtype + 'Rj' + keypm + sap_side
-    header[key] = (asum, 'average of ' + comstr)
+    key = imtype + 'Rj' + keypm + sap_side
+    header['HIERARCH ' + key] = (asum, 'average of ' + comstr)
     row[key] = asum
     return key        
 
@@ -699,8 +699,8 @@ def torus_box_sum(ang_width, im, center, ew, Rj_it, Rj_ot, Rj_h, imtype, header,
     else:
         raise ValueError('Expect ew east or west')
     asum /=(ot-it)*ho2*2
-    key = f'HIERARCH {imtype}_IPT_{ew}_{Rj_it}_{Rj_ot}_{Rj_h}'
-    header[key] = (asum, f'average {ew} IPT')
+    key = f'{imtype}_IPT_{ew}_{Rj_it}_{Rj_ot}_{Rj_h}'
+    header['HIERARCH ' + key] = (asum, f'average {ew} IPT')
     row[key] = asum
     return key        
 
@@ -1471,7 +1471,7 @@ class MovieCorObs():
         self.dt_cur = None
         self.HDUCur = None
         self.HDUNext = None
-        self.HDUfailsafe = None
+        self.failsafeim = np.zeros(self.crop)
         self.persist_im = None
         self.last_persist_im = None
         self.next_f()
@@ -1499,10 +1499,6 @@ class MovieCorObs():
             # Initialize here, since we have shared code
             self.fnum = 0
             self.HDULcur = fits.open(self.flist[self.fnum])
-            # Save off a zeroed out version of the first image in case
-            # we have no images
-            self.HDUfailsafe = self.HDULcur.copy()
-            self.HDUfailsafe[0].data[:] = 0
             # Beware new filter name SII_on and SII_off
             if 'SII' in self.HDULcur[0].header['FILTER']:
                 # But string name can be proper notation
@@ -1540,10 +1536,9 @@ class MovieCorObs():
         # read the next one and pretend it is the first until we find
         # a good one
         if self.HDUNext is None:
-            log.warning('No good images, returning 0ed version of first image')
+            log.warning('No good images, returning 0ed frame')
             # Do operations from make_frame that 
-            im = self.HDUfailsafe[0].data
-            im = self.do_crop(im)
+            im = self.failsafeim
             self.persist_im = np.stack((im,)*3, axis=-1)
             return self.persist_im
         # If we made it here there are still some more images to try
@@ -1551,13 +1546,13 @@ class MovieCorObs():
         self.dt_cur = 0
         return(self.make_frame(t))
                    
-    def do_crop(self, im):
-        if self.crop is not None:
-            c = (np.asarray(im.shape)/2).astype(int)
-            ll = (c - self.crop/2).astype(int)
-            ur = (c + self.crop/2).astype(int)
-            im = im[ll[0]:ur[0], ll[1]:ur[1]]
-        return(im)
+    #def do_crop(self, im):
+    #    if self.crop is not None:
+    #        c = (np.asarray(im.shape)/2).astype(int)
+    #        ll = (c - self.crop/2).astype(int)
+    #        ur = (c + self.crop/2).astype(int)
+    #        im = im[ll[0]:ur[0], ll[1]:ur[1]]
+    #    return(im)
 
     def make_frame(self, t):
         """Make a frame for mpy.VideoClip.  
@@ -1726,19 +1721,20 @@ def movie_concatenate(directory):
     # --> eventually I want to have the data themselves indicate this
     filt_list = ['cloudy', 'marginal', 'dew', 'bad', 'stuck']
     for d in get_dirs(directory, filt_list=filt_list):
-        if len(clips) == 120 or len(Na_clips) == 120:
-            break
+        #if len(clips) == 3 or len(Na_clips) == 3:
+        #    break
         try:
             c = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
-            clips.append(c)
         except Exception as e:
             log.error(str(e) + ' Bad Na_SII movie in ' + d)
+        else:
+            clips.append(c)
         try:
             c = mpy.VideoFileClip(os.path.join(d, 'Na_movie.mp4'))
-            Na_clips.append(c)
         except Exception as e:
             log.error(str(e) + ' Bad Na movie in ' + d)
-        # --> temporary test
+        else:
+            Na_clips.append(c)
     log.debug(str(len(clips)) + ' good [Na_SII] movies found')
     animation = mpy.concatenate_videoclips(clips)
     animation.write_videofile(os.path.join(directory, 'Na_SII.mp4'),
@@ -1915,3 +1911,19 @@ if __name__ == "__main__":
 #print(get_astrometry_angle('2017-01-18T00:00:00'))
 
 
+#d = '/data/io/IoIO/reduced/20190309'
+
+d = '/data/io/IoIO/reduced/20190611'
+c0 = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
+d = '/data/io/IoIO/reduced/20190820'
+c1 = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
+c = mpy.concatenate_videoclips([c0, c1])
+c.write_videofile('/tmp/test.mp4')
+
+
+d = '/data/io/IoIO/reduced/20200505'
+c0 = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
+d = '/data/io/IoIO/reduced/20200506'
+c1 = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
+c = mpy.concatenate_videoclips([c0, c1])
+c.write_videofile('/tmp/test.mp4')
