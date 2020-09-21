@@ -11,7 +11,7 @@ from multiprocessing import Pool
 
 import numpy as np
 import numpy.ma as ma
-from scipy import signal, stats
+from scipy import signal, stats, interpolate
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
@@ -27,63 +27,98 @@ from astropy.stats import mad_std, biweight_location
 from astropy.visualization import SqrtStretch
 from astropy.visualization.mpl_normalize import ImageNormalize
 
+from photutils import Background2D, MedianBackground
+
 import ccdproc as ccdp
 
 from west_aux.west_aux import add_history
 from ReduceCorObs import get_dirs
+from IoIO import CorObsData
 
-# Measured in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx.  Value
-# agrees well with Trius SX-694 advertised value (note, newer "PRO"
-# model has a different gain value)
+# Record in global variables Starlight Xpress Trius SX694 CCD
+# characteristics.  Note that CCD was purchased in 2017 and is NOT the
+# "Pro" version, which has a different gain but otherwise similar
+# characteristics
+
+sx694_camera_description = 'Starlight Xpress Trius SX694 mono, 2017 model version'
+
+# 16-bit A/D converter, stored in SATLEVEL keyword
+sx694_satlevel = 2**16-1
+sx694_satlevel_comment = 'Saturation level (ADU)'
+
+# Gain measured in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx.
+# Value agrees well with Trius SX-694 advertised value (note, newer
+# "PRO" model has a different gain value).  Stored in GAIN keyword
 sx694_gain = 0.3
-# Measured as per ioio.notebk Tue Jul 10 12:13:33 2018 MCT  jpmorgen@byted
-# To be measured regularly as part of master bias creation
-example_readnoise = 15.475665 * sx694_gain
-# For ease of use, create some default ccdp.Keyword objects for gain
-# and readnoise.  The value property in readnoise_keyword ends up
-# being used like a local variable with the help of value_from=<FITS
-# header> method.  The idea is the measured readnoise for a particular
-# timeperiod/temperature is stored in the RDNOISE keyword of each
-# master_bias and then, via the Keyword object, used in overscan
-# subtraction, etc.
-gain_keyword = ccdp.Keyword('GAIN', u.electron/u.adu, value=sx694_gain)
-readnoise_keyword = ccdp.Keyword('RDNOISE', u.electron, example_readnoise)
+sx694_gain_comment = 'Measured gain (electron/ADU)'
 
-#XXXdef calc_max_num_biases(max_mem_fraction=0.75,
-#XXX                        num_processes=None,
-#XXX                        logical=False):
-#XXX    # Calculate how many bias images we can combine based on how many
-#XXX    # CPUs and how much memory we want to use.  Default to using the
-#XXX    # same fraction of the CPUs as the memory.  Default to using
-#XXX    # "real" CPUs, not hyperthreads, since at least for reduction done
-#XXX    # for Morgenthaler et al. 2019, I found going beyond the real CPU
-#XXX    # limit didn't increase efficiency much.  Not psutil has better
-#XXX    # facility with cpu_count than os.
-#XXX    if num_processes is None:
-#XXX        num_processes = max_mem_fraction * psutil.cpu_count(logical=logical)
-#XXX    assert num_processes > 0
-#XXX    # Let user do fraction to get at num_processes
-#XXX    if num_processes == 0:
-#XXX        psutil.cpu_count(logical=logical)
-#XXX    if num_processes < 1:
-#XXX        num_processes *= psutil.cpu_count(logical=logical)
-#XXX    # The combiner doubles the size of a normal CCDData, which
-#XXX    # consists of two double-precision images (primary plus error)
-#XXX    # plus a single-byte mask image
-#XXX    combiner_mem_per_image = 2 * NAXIS1 * NAXIS2 * (8*2 + 1)
-#XXX    mem = psutil.virtual_memory()
-#XXX    max_num_biases = (mem.available * max_mem_fraction /
-#XXX                      combiner_mem_per_image / num_processes)
-#XXX    return np.int(max_num_biases), num_processes
+# Readnoise measured as per ioio.notebk Tue Jul 10 12:13:33 2018 MCT
+# jpmorgen@byted To be measured regularly as part of master bias
+# creation.  Stored in RDNOISE keyword
+# --> consider checking against this for sanity when
+# constructing readnoises
+sx694_example_readnoise = 15.475665 * sx694_gain
+sx694_example_readnoise_comment = '2018-07-10 readnoise (electron)'
 
-def ccddata_read(fname_or_ccd, *args, **kwargs):
-    """Convenience function to read a FITS file into a CCDData object
+# Measurement in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx of
+# when camera becomes non-linear.  Stored in NONLIN keyword.  Raw
+# value of 42k was recorded with a typical overscan value.  Helps to
+# remember ~40k is absolute max raw ADU to shoot for.  This is
+# suspiciously close to the full-well depth in electrons of 17,000
+# (web) - 18,000 (user's manual) provided by the manufacturer
+# --> could do a better job of measuring the precise high end of this,
+# since it could be as high as 50k
+sx694_nonlin = 42000 - 1811
+sx694_nonlin_comment = 'Measured nonlinearity point (ADU)'
+
+# Exposure times at or below this value are counted on the camera and
+# not in MaxIm.  There is a bug in the SX694 MaxIm driver seems to
+# consistently add about sx694_exposure_correct seconds to the
+# exposure time before asking the camera to read the CCD out.
+# Measured in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx
+# --> NEEDS TO BE VERIFIED WITH PHOTOMETRY FROM 2019 and 2020
+# Corrected as part of local version of ccd_process
+sx694_max_accurate_exposure = 0.7 # s
+sx694_exposure_correct = 1.7 # s
+
+def ccd_metadata(ccd,
+                 camera_description=sx694_camera_description,
+                 gain=sx694_gain,
+                 gain_comment=sx694_gain_comment,
+                 satlevel=sx694_satlevel,
+                 satlevel_comment=sx694_satlevel_comment,
+                 nonlin=sx694_nonlin,
+                 nonlin_comment=sx694_nonlin_comment,
+                 readnoise=sx694_example_readnoise,
+                 readnoise_comment=sx694_example_readnoise_comment,
+                 *args, **kwargs):
+    """Record [SX694] CCD metadata for all the reductions"""
+    if ccd.meta.get('camera') is not None:
+        # We have been here before, so exit quietly
+        return
+    # Clean up double exposure time reference to avoid confusion
+    if ccd.meta.get('exposure') is not None:
+        del ccd.meta['EXPOSURE']
+    ccd.meta.insert('INSTRUME',
+                    ('CAMERA', camera_description),
+                    after=True)
+    ccd.meta['GAIN'] = (gain, gain_comment)
+    # This gets used in ccdp.cosmicray_lacosmic
+    ccd.meta['SATLEVEL'] = (satlevel, satlevel_comment)
+    # This is where the CCD starts to become non-linear and is
+    # used for things like rejecting flats recorded when
+    # conditions were too bright
+    ccd.meta['NONLIN'] = (nonlin, nonlin_comment)
+    ccd.meta['RDNOISE'] = (readnoise, readnoise_comment)
+
+def ccddata_read(fname_or_ccd, add_metadata=False, *args, **kwargs):
+    """Convenience function to read a FITS file into a CCDData object.  
 
     Catches the case where the raw FITS file does not have a BUNIT
-    keyword, which otherwise causes CCDData.read to crash.  In this,
-    ccddata_read assumes raw data units are in units of ADU.
-
-    Also accepts ccd as a 
+    keyword, which otherwise causes CCDData.read to crash.  In this
+    case, ccddata_read assumes raw data are in units of ADU.  Optionally 
+    supplements metadata with externally measured quantities such as
+    gain, nonlinearity level, and readnoise
 
     Adds following FITS card if no BUNIT keyword present in metadata
         BUNIT = 'ADU' / physical units of the array values
@@ -95,6 +130,9 @@ def ccddata_read(fname_or_ccd, *args, **kwargs):
         If str, assumed to be a filename, which is read into a
         CCDData.  If ccddata, simply return the CCDData with BUNIT
         keyword possibly added
+
+    add_metadata : bool
+        If True, add [SX694] metadata.  Default: False
         
     Returns
     -------
@@ -120,7 +158,84 @@ def ccddata_read(fname_or_ccd, *args, **kwargs):
         # family is BZERO and BSCALE
         # https://heasarc.gsfc.nasa.gov/docs/fcg/standard_dict.html
         ccd.meta['BUNIT'] = ('ADU', 'physical units of the array values')
+    if add_metadata:
+        ccd_metadata(ccd, **kwargs)
     return ccd
+
+def full_frame(im,
+               naxis1 = 2750,
+               naxis2 = 2200):
+    """Returns true if image is a full frame, as defined by naxis1 and naxis2.
+
+    Helps spot binned and guider images"""
+    
+    s = im.shape
+    # Note Pythonic C index ordering
+    if s != (naxis2, naxis1):
+        return False
+    return True    
+
+def light_image(im, tolerance=2):
+    
+    """Returns True if light detected in image"""
+    s = im.shape
+    m = np.asarray(s)/2 # Middle of CCD
+    q = np.asarray(s)/4 # 1/4 point
+    m = m.astype(int)
+    q = q.astype(int)
+    # --> check lowest y too, since large filters go all the
+    # --> way to the edge See 20200428 dawn biases
+    dark_patch = im[m[0]-50:m[0]+50, 0:100]
+    light_patch = im[m[0]-50:m[0]+50, q[1]:q[1]+100]
+    mdp = np.median(dark_patch)
+    mlp = np.median(light_patch)
+    if (np.median(light_patch) - np.median(dark_patch) > 2):
+        log.debug('light, dark patch medians ({:.4f}, {:.4f})'.format(mdp, mlp))
+        return True
+    return False
+
+def mask_above(ccd, key, margin=0.1):
+    masklevel = ccd.meta[key]
+    # Saturation level is subject to overscan subtraction and
+    # multiplication by gain, so don't do strict = testing, but give
+    # ourselves a little margin.
+    mask = ccd.data >= masklevel - margin
+    n_masked = np.count_nonzero(mask)
+    if n_masked > 0:
+        log.info('Masking {} pixels above {}'.format(n_masked, key))
+    if len(key) > 6:
+        h = 'HIERARCH '
+    else:
+        h = ''
+    ccd.meta[h + 'N_' + key] \
+        = (n_masked, 'number of pixels > {}'.format(key))
+    if n_masked > 0:
+        # Avoid creating a mask of all Falses
+        ccd.mask = ccd.mask or mask
+    return n_masked
+    
+#def mask_saturated(ccd):
+#    """Record the number of saturated pixels in image metadata and log a warning if > 0"""
+#    satlevel = ccd.meta['SATLEVEL']
+#    # Saturation level is subject to overscan subtraction and multiplication by gain, so don't do strict = testing, but give ourselves a little margin.
+#    mask = ccd.data >= satlevel - 0.1
+#    n_saturated = np.count_nonzero(mask)
+#    if n_saturated > 0:
+#        log.warning('There are {} saturated pixels'.format(n_saturated))
+#    ccd.meta['N_SAT'] \
+#        = (n_saturated, 'number of saturated pixels')
+#    return (n_saturated, mask)
+#
+#def mask_nonlin(ccd):
+#    """Record the number of pixels > nonlinearity point in image metadata and log a warning if > 0"""
+#    nonlin = ccd.meta['NONLIN']
+#    mask = ccd.data > nonlin
+#    n_nonlin = np.count_nonzero(mask)
+#    if n_nonlin > 0:
+#        log.warning('There are {} pixels > nonlinearity point'.format(n_nonlin))
+#    ccd.meta['N_NONLIN'] \
+#        = (n_nonlin, 'number of pixels > nonlinearity point')
+#    return (n_nonlin, mask)
 
 def fname_by_imagetyp_t_exp(directory=None,
                             collection=None,
@@ -197,6 +312,7 @@ def fname_by_imagetyp_t_exp(directory=None,
         # Create a new summary Table that inlcudes just these Ts
         narrow_to_t = narrow_to_imagetyp[tslices[it]:tslices[it+1]]
         exps = narrow_to_t['exptime']
+        # These are sorted by increasing exposure time
         ues = np.unique(exps)
         for ue in ues:
             exp_idx = np.flatnonzero(exps == ue)
@@ -207,38 +323,6 @@ def fname_by_imagetyp_t_exp(directory=None,
                                'fnames': full_files})
     return fdict_list
 
-def full_frame(im,
-               naxis1 = 2750,
-               naxis2 = 2200):
-    """Returns true if image is a full frame, as defined by naxis1 and naxis2.
-
-    Helps spot binned and guider images"""
-    
-    s = im.shape
-    # Note Pythonic C index ordering
-    if s != (naxis2, naxis1):
-        return False
-    return True    
-
-def light_image(im, tolerance=2):
-    
-    """Returns True if light detected in image"""
-    s = im.shape
-    m = np.asarray(s)/2 # Middle of CCD
-    q = np.asarray(s)/4 # 1/4 point
-    m = m.astype(int)
-    q = q.astype(int)
-    # --> check lowest y too, since large filters go all the
-    # --> way to the edge See 20200428 dawn biases
-    dark_patch = im[m[0]-50:m[0]+50, 0:100]
-    light_patch = im[m[0]-50:m[0]+50, q[1]:q[1]+100]
-    mdp = np.median(dark_patch)
-    mlp = np.median(light_patch)
-    if (np.median(light_patch) - np.median(dark_patch) > 2):
-        log.debug('light, dark patch medians ({:.4f}, {:.4f})'.format(mdp, mlp))
-        return True
-    return False
-    
 def bias_combine(directory=None,
                  collection=None,
                  subdirs=['Calibration'],
@@ -246,9 +330,11 @@ def bias_combine(directory=None,
                  temperature_tolerance=0.5,
                  outdir='/data/io/IoIO/reduced/bias_dark',
                  show=False,
-                 gain_keyword=gain_keyword,
-                 readnoise_keyword=readnoise_keyword,
-                 additional_gain_comment='Measured value',
+                 camera_description=sx694_camera_description,
+                 gain=sx694_gain,
+                 satlevel=sx694_satlevel,
+                 readnoise=sx694_example_readnoise,
+                 readnoise_tolerance=0.5, # units of readnoise
                  gain_correct=False):
     """Play with biases in a directory
 
@@ -258,7 +344,6 @@ def bias_combine(directory=None,
         Effects unit of stored images.  True: units of electron.
         False: unit of ADU.  Default: False
     """
-    gain = gain_keyword.value.value
     fdict_list = \
         fname_by_imagetyp_t_exp(directory=directory,
                                 collection=collection,
@@ -270,9 +355,8 @@ def bias_combine(directory=None,
         # Make sure 'directory' is a valid variable
         directory = collection.location
     if len(fdict_list) == 0:
-            log.debug('No biases found in: ' + directory)
-            return False
-    log.debug('Biases found in ' + directory)
+        log.debug('No biases found in: ' + directory)
+        return False
     # Loop through each member of our fdict_list, preparing summary
     # plot and combining biases
     for fdict in fdict_list:
@@ -280,7 +364,7 @@ def bias_combine(directory=None,
         stats = []
         jds = []
         for fname in fdict['fnames']:
-            ccd = ccddata_read(fname)
+            ccd = ccddata_read(fname, add_metadata=True)
             if not full_frame(ccd):
                 log.debug('bias wrong shape: ' + fname)
                 continue
@@ -309,7 +393,7 @@ def bias_combine(directory=None,
                           'rdnoise': rdnoise*gain,
                           'min': np.min(im),  
                           'max': np.max(im)})
-        mean_t = fdict['T']
+            mean_t = fdict['T']
         if len(stats) < 3:
             log.debug('Not enough good biases found at CCDT = {} C in {}'.format(mean_t, collection.location))
             continue
@@ -365,37 +449,29 @@ def bias_combine(directory=None,
 
         plt.gcf().autofmt_xdate()
 
-        # Make sure outdir exists
-        if not os.path.exists(outdir):
-            os.mkdir(outdir)
-        fbase = os.path.join(outdir, this_dateb + '_ccdT_' + this_ccdt)
-        plt.savefig((fbase + '_vs_time.png'), transparent=True)
-        if show:
-            plt.show()
-        plt.close()
-
         # At the 0.5 deg level, there seems to be no correlation between T and bias level
         #plt.plot(df['ccdt'], df['mean'], 'k.')
         #plt.xlabel('ccdt')
         #plt.ylabel('mean')
         #plt.show()
-        
-        ### Some nights were recorded with a bad ACP plan that
-        ### recursively multiplied the number of biases
-        ### -->
-        ### https://mwcraig.github.io/ccd-as-book/02-04-Combine-bias-images-to-make-master.html
-        ### suggests that there is a separate ccdp.combine function
-        ### that takes care of this with mem_limit
-        ##if len(stats) > max_num_biases:
-        ##    log.debug('Limiting to {} the {} biases found at CCDT = {} C in {}'.format(max_num_biases, len(stats), mean_t, collection.location))
-        ##    # Thanks to https://note.nkmk.me/en/python-pandas-list/ to
-        ##    # get this into a list.  The Series object works OK
-        ##    # internally to Pandas but not ouside
-        ##    best_idx = df['mean'].argsort().values.tolist()
-        ##    df = df.iloc[best_idx[:max_num_biases]]
-        ##    lccds = [lccds[i] for i in best_idx[:max_num_biases]]
-        ##    flist = [flist[i] for i in best_idx[:max_num_biases]]
             
+        # Make sure outdir exists
+        if not os.path.exists(outdir):
+            os.mkdir(outdir)
+        fbase = os.path.join(outdir, this_dateb + '_ccdT_' + this_ccdt)
+        fname = fbase + '_combined_bias.fits'
+        plt.savefig((fbase + '_vs_time.png'), transparent=True)
+        if show:
+            plt.show()
+        plt.close()
+
+        # Do a sanity check of readnoise
+        av_rdnoise = np.mean(df['rdnoise'])            
+        if (np.abs(av_rdnoise/sx694_example_readnoise - 1)
+            > readnoise_tolerance):
+            log.warning('High readnoise {}, skipping {}'.format(av_rdnoise, fname))
+            continue
+
         # Go through each image and subtract the median, since that
         # value wanders as a function of ambient (not CCD)
         # temperature.  To use ccd.subtract, type must match type of
@@ -408,10 +484,9 @@ def bias_combine(directory=None,
         # anyway
         os_lccds = []
         for ccd, m in zip(lccds, medians):
-            #ccd.data = ccd.data - m
             ccd = ccd.subtract(m*u.adu, handle_meta='first_found')
             os_lccds.append(ccd)
-        lccds = os_lccds
+            lccds = os_lccds
 
         ### Use ccdproc Combiner object iteratively as per example to
         ### mask out bad pixels
@@ -439,42 +514,40 @@ def bias_combine(directory=None,
         mem = psutil.virtual_memory()
         im = \
             ccdp.combine(lccds,
-                            method='average',
-                            sigma_clip=True,
-                            sigma_clip_low_thresh=5,
-                            sigma_clip_high_thresh=5,
-                            sigma_clip_func=np.ma.median,
-                            sigma_clip_dev_func=mad_std,
-                            mem_limit=mem.available*0.6)
-        # This is ultimately where we set the gain for all the reductions
-        im.meta[gain_keyword.name] = (gain,
-                                      repr(gain_keyword.unit) + ' '
-                                      + additional_gain_comment)
+                         method='average',
+                         sigma_clip=True,
+                         sigma_clip_low_thresh=5,
+                         sigma_clip_high_thresh=5,
+                         sigma_clip_func=np.ma.median,
+                         sigma_clip_dev_func=mad_std,
+                         mem_limit=mem.available*0.6)
+        ccd_metadata(im)
         if gain_correct:
-            im = ccdp.gain_correct(im, gain_keyword)
+            im = ccdp.gain_correct(im, gain*u.electron/u.adu)
             gain = 1
-        # Prepare to write
-        fname = fbase + '_combined_bias.fits'
-        # Collect metadata, preparing to write to FITS header and CSV
-        # file.  FITS wants a tuple, CSV wants a dict
-        # Note that std and mean behave differently on masked arrays,
-        # returning a masked object themselves.  The output of
-        # Combiner is a masked array.  The combine function does not
-        # do that.  The later is appropriate for biases only
-        #std =  np.asscalar(np.std(im).data   )
-        std =  np.std(im)*gain
-        med =  np.median(im)*gain
-        #mean = np.asscalar(np.mean(im).data  )
-        mean = np.mean(im)*gain
-        tmin = np.min(im)*gain
-        tmax = np.max(im)*gain
-        av_rdnoise = np.mean(df['rdnoise'])
+        mask_above(im, 'SATLEVEL')
+        mask_above(im, 'NONLIN')
+            
+        # Collect image metadata.  For some reason, masked pixels
+        # aren't ignored by std, etc. even though they output masked
+        # arrays (which is annoying in its own right -- see example
+        # commented mean).  So just create a new array, if needed, and
+        # only put into it the good pixels
+        if im.mask is None:
+            tim = im
+        else:
+            tim = im.data[im.mask == 0]
+        std =  np.std(tim)*gain
+        med =  np.median(tim)*gain
+        #mean = np.asscalar(np.mean(tim).data  )
+        mean = np.mean(tim)*gain
+        tmin = np.min(tim)*gain
+        tmax = np.max(tim)*gain
         print('std, mean, med, tmin, tmax (electron)')
         print(std, mean, med, tmin, tmax)
         im.meta['DATE-OBS'] = (this_date, 'Average of DATE-OBS from set of biases')
-        im.meta['CCD-TEMP'] = (mean_t, 'average CCD temperature for combined biases')
-        im.meta[readnoise_keyword.name] \
-            = (av_rdnoise, 'readnoise measured during master_bias creation (electron)')
+        im.meta['CCD-TEMP'] = (mean_t, 'Average CCD temperature for combined biases')
+        im.meta['RDNOISE'] = (av_rdnoise, 'Measured readnoise (electron)')
         im.meta['STD'] = (std, 'Standard deviation of image (electron)')
         im.meta['MEDIAN'] = (med, 'Median of image (electron)')
         im.meta['MEAN'] = (mean, 'Mean of image (electron)')
@@ -483,13 +556,13 @@ def bias_combine(directory=None,
         im.meta['HIERARCH OVERSCAN_VALUE'] = (overscan, 'Average of raw bias medians (ADU)')
         im.meta['HIERARCH SUBTRACT_OVERSCAN'] = (True, 'Overscan has been subtracted')
         im.meta['NCOMBINE'] = (len(lccds), 'Number of biases combined')
-        # Record each bias filename
+        # Record each filename
         for i, f in enumerate(fdict['fnames']):
             im.meta['FILE{0:02}'.format(i)] = f
-        # Prepare to write
-        fname = fbase + '_combined_bias.fits'
         add_history(im.meta,
                     'Combining NCOMBINE biases indicated in FILENN')
+        add_history(im.meta,
+                    'SATLEVEL and NONLIN apply to pre-overscan subtraction')
         # Leave these large for fast calculations downstream and make
         # final results that primarily sit on disk in bulk small
         #im.data = im.data.astype('float32')
@@ -505,335 +578,7 @@ def bias_combine(directory=None,
             plt.show()
         plt.close()
 
-#XXXdef old_bias_combine(directory=None,
-#XXX                 collection=None,
-#XXX                 outdir='/data/io/IoIO/reduced/bias_dark',
-#XXX                 show=False,
-#XXX                 temperature_tolerance=0.5,
-#XXX                 gain_keyword=gain_keyword,
-#XXX                 readnoise_keyword=readnoise_keyword,
-#XXX                 additional_gain_comment='Measured value',
-#XXX                 gain_correct=False):
-#XXX    """Play with biases in a directory
-#XXX
-#XXX    Parameters
-#XXX    ----------
-#XXX    gain_correct : Boolean
-#XXX        Effects unit of stored images.  True: units of electron.
-#XXX        False: unit of ADU.  Default: False
-#XXX    """
-#XXX    gain = gain_keyword.value.value
-#XXX    if collection is None:
-#XXX        if not os.path.isdir(directory):
-#XXX            log.debug('Not a directory, skipping: ' + directory)
-#XXX            return False
-#XXX        # Speed things up considerably by globbing the bias fnames, of
-#XXX        # which I only have two types: those recorded by ACP (Bias*)
-#XXX        # and those recorded by MaxIm (Bias* and *_bias.fit)
-#XXX        collection = ccdp.ImageFileCollection(directory,
-#XXX                                                 glob_include='Bias*')
-#XXX        if collection.summary is None:
-#XXX            collection = ccdp.ImageFileCollection(directory,
-#XXX                                                     glob_include='*_bias.fit')
-#XXX        if collection.summary is None:
-#XXX            subdir = os.path.join(directory, 'Calibration')
-#XXX            if not os.path.isdir(subdir):
-#XXX                return False
-#XXX            return bias_combine(subdir)            
-#XXX    if collection.summary is None:
-#XXX        return False
-#XXX    log.debug('found biases in ' + directory)
-#XXX    #if max_num_biases is None:
-#XXX    #    # Make sure we don't overwhelm our memory
-#XXX    #    max_num_biases, num_processes = calc_max_num_biases(num_processes=1)
-#XXX    # Prepare to write output
-#XXX    if not os.path.exists(outdir):
-#XXX        os.mkdir(outdir)
-#XXX    #bias_summary_fname = os.path.join(outdir, 'bias_summary.csv')
-#XXX    
-#XXX    # Find the distinct sets of temperatures within temperature_tolerance
-#XXX    
-#XXX    isbias = collection.summary['imagetyp'] == 'BIAS'
-#XXX    ts = collection.summary['ccd-temp'][isbias]
-#XXX    bias_fnames = collection.summary['file'][isbias]
-#XXX    # ccd-temp is recorded as a string.  Convert it to a number so
-#XXX    # we can sort +/- values properly
-#XXX    ts = np.asarray(ts)
-#XXX    # Get the sort indices so we can extract fnames in proper order
-#XXX    tsort_idx = np.argsort(ts)
-#XXX    ts = ts[tsort_idx]
-#XXX    bias_fnames = bias_fnames[tsort_idx]
-#XXX    # Spot jumps in t and translate them into slices into ts
-#XXX    dts = ts[1:] - ts[0:-1]
-#XXX    jump = np.flatnonzero(dts > temperature_tolerance)
-#XXX    slices = np.append(0, jump+1)
-#XXX    slices = np.append(slices, -1)
-#XXX    for it in range(len(slices)-1):
-#XXX        # Loop through each temperature set
-#XXX        flist = [os.path.join(collection.location, f)
-#XXX                 for f in bias_fnames[slices[it]:slices[it+1]]]
-#XXX        lccds = [ccddata_read(f) for f in flist]
-#XXX        dark_ccds = []
-#XXX        stats = []
-#XXX        jds = []
-#XXX        this_ts = ts[slices[it]:slices[it+1]]
-#XXX        for iccd, ccd in enumerate(lccds):
-#XXX            im = ccd.data
-#XXX            s = im.shape
-#XXX            # Create uncertainty image
-#XXX            diffs2 = (im[1:] - im[0:-1])**2
-#XXX            rdnoise = np.sqrt(biweight_location(diffs2))
-#XXX            uncertainty = np.multiply(rdnoise, np.ones(s))
-#XXX            ccd.uncertainty = StdDevUncertainty(uncertainty)
-#XXX            # Spot guider biases and binned main camera biases.  Note
-#XXX            # Pythonic C index ordering
-#XXX            if s != (NAXIS2, NAXIS1):
-#XXX                log.debug('bias wrong shape: ' + str(s))
-#XXX                continue
-#XXX            # Spot biases recorded when too bright.
-#XXX            m = np.asarray(s)/2 # Middle of CCD
-#XXX            q = np.asarray(s)/4 # 1/4 point
-#XXX            m = m.astype(int)
-#XXX            q = q.astype(int)
-#XXX            # --> check lowest y too, since large filters go all the
-#XXX            # --> way to the edge See 20200428 dawn biases
-#XXX            dark_patch = im[m[0]-50:m[0]+50, 0:100]
-#XXX            light_patch = im[m[0]-50:m[0]+50, q[1]:q[1]+100]
-#XXX            mdp = np.median(dark_patch)
-#XXX            mlp = np.median(light_patch)
-#XXX            if (np.median(light_patch) - np.median(dark_patch) > 1):
-#XXX                log.debug('bias recorded during light conditions: ' +
-#XXX                          flist[iccd])
-#XXX                log.debug('light, dark patch medians ({:.4f}, {:.4f})'.format(mdp, mlp))
-#XXX                continue
-#XXX            dark_ccds.append(ccd)
-#XXX            # Prepare to create a pandas data frame to track relevant
-#XXX            # quantities
-#XXX            tm = Time(ccd.meta['DATE-OBS'], format='fits')
-#XXX            tt = tm.tt.datetime
-#XXX            jds.append(tm.jd)
-#XXX            stats.append({'time': tt,
-#XXX                          'ccdt': this_ts[iccd],
-#XXX                          'median': np.median(im),
-#XXX                          'mean': np.mean(im),
-#XXX                          'std': np.std(im)*gain,
-#XXX                          'rdnoise': rdnoise*gain,
-#XXX                          'min': np.min(im),  
-#XXX                          'max': np.max(im)})
-#XXX        lccds = dark_ccds
-#XXX        mean_t = np.mean(this_ts)
-#XXX        if len(stats) < 3:
-#XXX            log.debug('Not enough good biases found at CCDT = {} C in {}'.format(mean_t, collection.location))
-#XXX            continue
-#XXX        df = pd.DataFrame(stats)
-#XXX        tm = Time(np.mean(jds), format='jd')
-#XXX        this_date = tm.fits
-#XXX        this_dateb = this_date.split('T')[0]
-#XXX        this_ccdt = '{:.2f}'.format(mean_t)
-#XXX        f = plt.figure(figsize=[8.5, 11])
-#XXX
-#XXX        # In the absence of a formal overscan region, this is the best
-#XXX        # I can do
-#XXX        medians = df['median']
-#XXX        overscan = np.mean(medians)
-#XXX
-#XXX        ax = plt.subplot(5, 1, 1)
-#XXX        plt.title('CCDT = {} C on {}'.format(this_ccdt, this_dateb))
-#XXX        ax.yaxis.set_minor_locator(AutoMinorLocator())
-#XXX        ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-#XXX        plt.plot(df['time'], df['max'], 'k.')
-#XXX        plt.ylabel('max (ADU)')
-#XXX
-#XXX        ax = plt.subplot(5, 1, 2)
-#XXX        ax.yaxis.set_minor_locator(AutoMinorLocator())
-#XXX        ax.tick_params(which='both', bottom=True, top=True, left=True, right=False)
-#XXX        plt.plot(df['time'], df['median'], 'k.')
-#XXX        plt.plot(df['time'], df['mean'], 'r.')
-#XXX        plt.ylabel('median & mean (ADU)')
-#XXX        plt.legend(['median', 'mean'])
-#XXX        secax = ax.secondary_yaxis \
-#XXX            ('right',
-#XXX             functions=(lambda adu: (adu - overscan)*gain,
-#XXX                        lambda e: e/gain + overscan))
-#XXX        secax.set_ylabel('Electrons')
-#XXX
-#XXX        ax=plt.subplot(5, 1, 3)
-#XXX        ax.yaxis.set_minor_locator(AutoMinorLocator())
-#XXX        ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-#XXX        plt.plot(df['time'], df['min'], 'k.')
-#XXX        plt.ylabel('min (ADU)')
-#XXX
-#XXX        ax=plt.subplot(5, 1, 4)
-#XXX        ax.yaxis.set_minor_locator(AutoMinorLocator())
-#XXX        ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-#XXX        plt.plot(df['time'], df['std'], 'k.')
-#XXX        plt.ylabel('std (electron)')
-#XXX
-#XXX        ax=plt.subplot(5, 1, 5)
-#XXX        ax.yaxis.set_minor_locator(AutoMinorLocator())
-#XXX        ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-#XXX        plt.plot(df['time'], df['rdnoise'], 'k.')
-#XXX        plt.ylabel('rdnoise (electron)')
-#XXX
-#XXX        plt.gcf().autofmt_xdate()
-#XXX
-#XXX
-#XXX        fbase = os.path.join(outdir, this_dateb + '_ccdT_' + this_ccdt)
-#XXX        plt.savefig((fbase + '_vs_time.png'), transparent=True)
-#XXX        if show:
-#XXX            plt.show()
-#XXX        plt.close()
-#XXX
-#XXX        # At the 0.5 deg level, there seems to be no correlation between T and bias level
-#XXX        #plt.plot(df['ccdt'], df['mean'], 'k.')
-#XXX        #plt.xlabel('ccdt')
-#XXX        #plt.ylabel('mean')
-#XXX        #plt.show()
-#XXX        
-#XXX        ### Some nights were recorded with a bad ACP plan that
-#XXX        ### recursively multiplied the number of biases
-#XXX        ### -->
-#XXX        ### https://mwcraig.github.io/ccd-as-book/02-04-Combine-bias-images-to-make-master.html
-#XXX        ### suggests that there is a separate ccdp.combine function
-#XXX        ### that takes care of this with mem_limit
-#XXX        ##if len(stats) > max_num_biases:
-#XXX        ##    log.debug('Limiting to {} the {} biases found at CCDT = {} C in {}'.format(max_num_biases, len(stats), mean_t, collection.location))
-#XXX        ##    # Thanks to https://note.nkmk.me/en/python-pandas-list/ to
-#XXX        ##    # get this into a list.  The Series object works OK
-#XXX        ##    # internally to Pandas but not ouside
-#XXX        ##    best_idx = df['mean'].argsort().values.tolist()
-#XXX        ##    df = df.iloc[best_idx[:max_num_biases]]
-#XXX        ##    lccds = [lccds[i] for i in best_idx[:max_num_biases]]
-#XXX        ##    flist = [flist[i] for i in best_idx[:max_num_biases]]
-#XXX            
-#XXX        # Go through each image and subtract the median, since that
-#XXX        # value wanders as a function of ambient (not CCD)
-#XXX        # temperature.  To use ccd.subtract, type must match type of
-#XXX        # array.  And they are integers anyway
-#XXX
-#XXX        # We need another list to keep track of the
-#XXX        # overscan-subtracted ccds, since ccd.subtract returns a copy
-#XXX        # which doesn't get put back into the original lccd.  And when
-#XXX        # I tried to put it in the original lccd wierd things happened
-#XXX        # anyway
-#XXX        os_lccds = []
-#XXX        for ccd, m in zip(lccds, medians):
-#XXX            #ccd.data = ccd.data - m
-#XXX            ccd = ccd.subtract(m*u.adu, handle_meta='first_found')
-#XXX            os_lccds.append(ccd)
-#XXX        lccds = os_lccds
-#XXX
-#XXX        ### Use ccdproc Combiner object iteratively as per example to
-#XXX        ### mask out bad pixels
-#XXX        ##combiner = ccdp.Combiner(lccds)
-#XXX        ##old_n_masked = -1  # dummy value to make loop execute at least once
-#XXX        ##new_n_masked = 0
-#XXX        ##while (new_n_masked > old_n_masked):
-#XXX        ##    #combiner.sigma_clipping(low_thresh=2, high_thresh=5,
-#XXX        ##    #                        func=np.ma.median)
-#XXX        ##    # Default to 1 std and np.ma.mean for func
-#XXX        ##    combiner.sigma_clipping()
-#XXX        ##    old_n_masked = new_n_masked
-#XXX        ##    new_n_masked = combiner.data_arr.mask.sum()
-#XXX        ##    print(old_n_masked, new_n_masked)
-#XXX        ###Just one iteration for testing
-#XXX        ###combiner.sigma_clipping(low_thresh=2, high_thresh=5, func=np.ma.median)
-#XXX        ##combiner.sigma_clipping(low_thresh=1, high_thresh=1, func=np.ma.mean)
-#XXX        ## I prefer average to get sub-ADU accuracy.  Median outputs in
-#XXX        ## double-precision anyway, so it doesn't save space
-#XXX        #combined_average = combiner.average_combine()
-#XXX
-#XXX        # Use ccdp.combine since it enables memory management by
-#XXX        # breaking up images to smaller chunks (better than throwing
-#XXX        # images away)
-#XXX        mem = psutil.virtual_memory()
-#XXX        im = \
-#XXX            ccdp.combine(lccds,
-#XXX                            method='average',
-#XXX                            sigma_clip=True,
-#XXX                            sigma_clip_low_thresh=5,
-#XXX                            sigma_clip_high_thresh=5,
-#XXX                            sigma_clip_func=np.ma.median,
-#XXX                            sigma_clip_dev_func=mad_std,
-#XXX                            mem_limit=mem.available*0.6)
-#XXX        # This is ultimately where we set the gain for all the reductions
-#XXX        im.meta[gain_keyword.name] = (gain,
-#XXX                                      repr(gain_keyword.unit) + ' '
-#XXX                                      + additional_gain_comment)
-#XXX        if gain_correct:
-#XXX            im = ccdp.gain_correct(im, gain_keyword)
-#XXX            gain = 1
-#XXX        # Prepare to write
-#XXX        fname = fbase + '_combined_bias.fits'
-#XXX        # Collect metadata, preparing to write to FITS header and CSV
-#XXX        # file.  FITS wants a tuple, CSV wants a dict
-#XXX        # Note that std and mean behave differently on masked arrays,
-#XXX        # returning a masked object themselves.  The output of
-#XXX        # Combiner is a masked array.  The combine function does not
-#XXX        # do that.  The later is appropriate for biases only
-#XXX        #std =  np.asscalar(np.std(im).data   )
-#XXX        std =  np.std(im)*gain
-#XXX        med =  np.median(im)*gain
-#XXX        #mean = np.asscalar(np.mean(im).data  )
-#XXX        mean = np.mean(im)*gain
-#XXX        tmin = np.min(im)*gain
-#XXX        tmax = np.max(im)*gain
-#XXX        av_rdnoise = np.mean(df['rdnoise'])
-#XXX        print('std, mean, med, tmin, tmax (electron)')
-#XXX        print(std, mean, med, tmin, tmax)
-#XXX        im.meta['DATE-OBS'] = (this_date, 'Average of DATE-OBS from set of biases')
-#XXX        im.meta['CCD-TEMP'] = (mean_t, 'average CCD temperature for combined biases')
-#XXX        im.meta[readnoise_keyword.name] \
-#XXX            = (av_rdnoise, 'readnoise measured during master_bias creation (electron)')
-#XXX        im.meta['STD'] = (std, 'Standard deviation of image (electron)')
-#XXX        im.meta['MEDIAN'] = (med, 'Median of image (electron)')
-#XXX        im.meta['MEAN'] = (mean, 'Mean of image (electron)')
-#XXX        im.meta['MIN'] = (tmin, 'Min of image (electron)')
-#XXX        im.meta['MAX'] = (tmax, 'Max of image (electron)')
-#XXX        im.meta['HIERARCH OVERSCAN_VALUE'] = (overscan, 'Average of raw bias medians (ADU)')
-#XXX        im.meta['HIERARCH SUBTRACT_OVERSCAN'] = (True, 'Overscan has been subtracted')
-#XXX        #im.meta['NCOMBINE'] = (len(lccds), 'Number of biases combined')
-#XXX        # Record each bias filename
-#XXX        for i, f in enumerate(flist):
-#XXX            im.meta['FILE{0:02}'.format(i)] = f
-#XXX        # Prepare to write
-#XXX        fname = fbase + '_combined_bias.fits'
-#XXX        add_history(im.meta,
-#XXX                    'Combining NCOMBINE biases indicated in FILENN')
-#XXX        # Leave these large for fast calculations downstream and make
-#XXX        # final results that primarily sit on disk in bulk small
-#XXX        #im.data = im.data.astype('float32')
-#XXX        #im.uncertainty.array = im.uncertainty.array.astype('float32')
-#XXX        im.write(fname, overwrite=True)
-#XXX        # Always display image in electrons
-#XXX        impl = plt.imshow(im.multiply(gain), origin='lower', cmap=plt.cm.gray,
-#XXX                          filternorm=0, interpolation='none',
-#XXX                          vmin=med-std, vmax=med+std)
-#XXX        plt.title('CCDT = {} C on {} (electrons)'.format(this_ccdt, this_dateb))
-#XXX        plt.savefig((fbase + '_combined_bias.png'), transparent=True)
-#XXX        if show:
-#XXX            plt.show()
-#XXX        plt.close()
-#XXX        #return im
-#XXX        
-#XXX        #fieldnames = list(row.keys())
-#XXX        #if not os.path.exists(bias_summary_fname):
-#XXX        #    with open(bias_summary_fname, 'w', newline='') as csvfile:
-#XXX        #        csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
-#XXX        #                               quoting=csv.QUOTE_NONNUMERIC)
-#XXX        #        csvdw.writeheader()
-#XXX        #with open(bias_summary_fname, 'a', newline='') as csvfile:
-#XXX        #    csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
-#XXX        #                           quoting=csv.QUOTE_NONNUMERIC)
-#XXX        #    csvdw.writerow(row)
-#XXX
-#XXXdef metadata(im, hdr):
-#XXX    return hdr, row
-#XXX
-#XXXdef bias_closest_T():
-#XXX    pass
-
-def hist_of_im(im, binsize=1):
+def hist_of_im(im, binsize=1, show=False):
     """Returns a tuple of the histogram of image and index into *centers* of
 bins."""
     # Code from west_aux.py, maskgen.
@@ -844,21 +589,23 @@ bins."""
                                range=hrange, density=False)
     # Convert edges of histogram bins to centers
     centers = (edges[0:-1] + edges[1:])/2
-    #plt.plot(centers, hist)
-    #plt.show()
+    if show:
+        plt.plot(centers, hist)
+        plt.show()
+        plt.close()
     return (hist, centers)
 
-def overscan_estimate(ccd_in, master_bias=None,
-                      readnoise_key=readnoise_keyword,
-                      gain_key=gain_keyword, binsize=None,
+def overscan_estimate(ccd_in, meta=None, master_bias=None,
+                      readnoise=sx694_example_readnoise,
+                      gain=sx694_gain, binsize=None,
                       min_width=1, max_width=8, box_size=100,
+                      min_hist_val=10,
                       show=False, *args, **kwargs):
     """Estimate overscan in ADU in the absense of a formal overscan region
 
     Uses the minimum of: (1) the first peak in the histogram of the
     image or (2) the minimum of the median of four boxes at the
-    corners of the image.  Updates ccd metadata with OVERSCAN and
-    OVERSCAN_METHOD keywords and, if needed, adds BUNIT keyword
+    corners of the image.
 
     Works best if bias shape (particularly bias ramp) is subtracted
     first.  Will subtract bias if bias is supplied and has not been
@@ -869,6 +616,9 @@ def overscan_estimate(ccd_in, master_bias=None,
     ccd_in : `~astropy.nddata.CCDData` or filename
         Image from which to extract overscan estimate
 
+    meta : `astropy.io.fits.header` or None
+        referece to metadata of ccd into which to write OVERSCAN_* cards
+
     master_bias : `~astropy.nddata.CCDData`, filename, or None
         Bias to subtract from ccd before estimate is calculated.
         Improves accruacy by removing bias ramp.  Bias can be in units
@@ -877,19 +627,13 @@ def overscan_estimate(ccd_in, master_bias=None,
         but the bias header will be used to extract readnoise and gain
         using the *_key keywords.  Default is ``None``.
 
-    readnoise_key : ccdproc.Keyword
-        If bias supplied, used to extract readnoise from bias header.
-        Otherwise value property used.
-        Default = ``readnoise_keyword``.
+    readnoise : float
+        If bias supplied, its value of the RDNOISE keyword is used
+        Default = ``sx694_example_readnoise``.
 
-    --> Note these next two are not as flexible as they can be because
-    the value in the bias header will always override the value passed
-    in the parameter.  Unlikely to need to do it that way, so I haven't
-    bothered to write the code to make that convenient
-    gain_key :  ccdproc.Keyword
-        If bias supplied, used to extract gain from bias header.  
-        Otherwise value property used.
-        Default = ``gain_keyword``.
+    gain :  float
+        If bias supplied, its value of the GAIN keyword is used
+        Default = ``sx_gain``.
 
     binsize: float or None, optional
         The binsize to use for the histogram.  If None, binsize is 
@@ -899,7 +643,7 @@ def overscan_estimate(ccd_in, master_bias=None,
         Minimum width peak to search for in histogram.  Keep in mind
         histogram bins are binsize ADU wide.  Default = 1
 
-    max_width : int, optionsl
+    max_width : int, optional
         See min_width.  Default = 8
 
     box_size : int
@@ -913,30 +657,33 @@ def overscan_estimate(ccd_in, master_bias=None,
 
     """
     # Originally in IoIO.py as back_level
-    ccd = ccddata_read(ccd_in)
+    ccd = ccddata_read(ccd_in, add_metadata=True)
+    if meta is None:
+        meta = ccd.meta
     # For now don't get fancy with unit conversion
     assert ccd.unit is u.adu
     if master_bias is None:
-        pass
+        bias = None
     elif isinstance(master_bias, CCDData):
         # Make a copy because we are going to mess with it
         bias = master_bias.copy()
     else:
         bias = ccddata_read(master_bias)
     if isinstance(bias, CCDData):
-        readnoise = readnoise_key.value_from(bias.meta)
-        gain = gain_key.value_from(bias.meta)
-    else:
-        readnoise = readnoise_key.value
-        gain = gain_key.value
+        readnoise = bias.meta['RDNOISE']
+        gain = bias.meta['GAIN']
     if isinstance(bias, CCDData):
         # Make sure bias hasn't been subtracted before
-        if ccd.header.get('subtract_bias') is None:
+        if ccd.meta.get('subtract_bias') is None:
             if bias.unit is u.electron:
                 # Convert bias back to ADU for subtraction, if needed
-                bias = bias.divide(gain)
+                bias = bias.divide(gain*u.electron/u.adu)
             ccd = ccdp.subtract_bias(ccd, bias)
-            log.info('overscan_estimate: subtracted bias to improve overscan estimate')
+    elif ccd.meta.get('subtract_bias') is None:
+        log.warning('overscan_estimate: bias has not been subtracted, which can lead to inaccuracy of overscan estimate')
+    # The coronagraph creates a margin of un-illuminated pixels on the
+    # CCD.  These are great for estimating the bias and scattered
+    # light for spontanous subtraction.
     # Corners method
     s = ccd.shape
     bs = box_size
@@ -945,20 +692,20 @@ def overscan_estimate(ccd_in, master_bias=None,
     c01 = biweight_location(ccd[0:bs,s[1]-bs:s[1]])
     c11 = biweight_location(ccd[s[0]-bs:s[0],s[1]-bs:s[1]])
     corners_method = min(c00, c10, c01, c11)
-    # Histogram method.  The coronagraph creates a margin of
-    # un-illuminated pixels on the CCD.  These are great for
-    # estimating the bias and scattered light for spontanous
-    # subtraction.  The ND filter provides a similar peak after bias
-    # subutraction (or, rather, it is the second such peak).  Note
-    # that the 1.25" filters do a better job at this than the 2"
-    # filters but with carefully chosen parameters, the first small
-    # peak can be spotted.  
+    # Histogram method.  The first peak is the bias, the second is the
+    # ND filter.  Note that the 1.25" filters do a better job at this
+    # than the 2" filters but with carefully chosen parameters, the
+    # first small peak can be spotted.
     if binsize is None:
         # Calculate binsize based on readnoise in ADU, but oversample
         # by 4.  Note need to convert from Quantity to float
         binsize = readnoise/gain/4.
-        binsize = binsize.value
     im_hist, im_hist_centers = hist_of_im(ccd, binsize)
+    # Note that after bias subtraction, there is sometimes some noise
+    # at low counts.  We expect a lot of pixels in the histogram, so filter
+    good_idx = np.flatnonzero(im_hist > min_hist_val)
+    im_hist = im_hist[good_idx]
+    im_hist_centers = im_hist_centers[good_idx]
     # The arguments to linspace are the critical parameters I played
     # with together with binsize to get the first small peak to be recognized
     im_peak_idx = signal.find_peaks_cwt(im_hist,
@@ -966,14 +713,16 @@ def overscan_estimate(ccd_in, master_bias=None,
     hist_method = im_hist_centers[im_peak_idx[0]]
     overscan_methods = ['corners', 'histogram']
     overscan_values = np.asarray((corners_method, hist_method))
+    meta['HIERARCH OVERSCAN_CORNERS'] = (corners_method, 'ADU')
+    meta['HIERARCH OVERSCAN_HISTOGRAM'] = (hist_method, 'ADU')
     o_idx = np.argmin(overscan_values)
     overscan = overscan_values[o_idx]
-    meta = ('HIERARCH OVERSCAN_METHOD', overscan_methods[o_idx])
+    meta['HIERARCH OVERSCAN_METHOD'] = (overscan_methods[o_idx],
+                                       'Method used for overscan estimation')
     if show:
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8.5, 9))
         ccds = ccd.subtract(1000*u.adu)
         range = 5*readnoise/gain
-        range = range.value
         vmin = overscan - range - 1000
         vmax = overscan + range - 1000
         ax1.imshow(ccds, origin='lower', cmap=plt.cm.gray, filternorm=0,
@@ -994,10 +743,11 @@ def overscan_estimate(ccd_in, master_bias=None,
                  rotation=90, transform=trans,
                  verticalalignment='bottom')
         plt.show()
-    return overscan, meta
+    return overscan
 
 def subtract_overscan(ccd_in, *args, **kwargs):
-    """Subtract overscan in absense of formal overscan region.  
+    """Subtract overscan for IoIO coronagraph and add CCD metadata.
+    Overscan value is subtracted from the SATLEVEL keyword
 
     This is a wrapper around overscan_estimate in case I want to make
     overscan estimation more complicated by linking files within a
@@ -1005,75 +755,24 @@ def subtract_overscan(ccd_in, *args, **kwargs):
     used because it assumes the overscan region is specified by a
     simple rectangle.
 
+    All processing except bias_combine needs to run through this
+    point, so this is a good place to add our common metadata
+
     """
-    ccd = ccddata_read(ccd_in)
-    overscan, meta = overscan_estimate(ccd, *args, **kwargs)
+    ccd = ccddata_read(ccd_in, add_metadata=True)
+    ccd_metadata(ccd)
+    overscan = overscan_estimate(ccd, meta=ccd.meta, *args, **kwargs)
     ccd = ccd.subtract(overscan*u.adu, handle_meta='first_found')
-    ccd.meta[meta[0]] = meta[1]
-    ccd.meta['HIERARCH OVERSCAN_VALUE'] = overscan
+    ccd.meta['HIERARCH OVERSCAN_VALUE'] = (overscan, 'overscan value subtracted (ADU)')
     ccd.meta['HIERARCH SUBTRACT_OVERSCAN'] \
         = (True, 'Overscan has been subtracted')
+    # Keep track of our precise saturation level
+    satlevel = ccd.meta['SATLEVEL']
+    satlevel -= overscan
+    ccd.meta['SATLEVEL'] = satlevel # still in ADU
+    ccd.meta
     return ccd
 
-#Xdef bias_subtract(fname, bias_fname, out_fname, show=False,
-#X                  overscan=None, gain=None):
-#X    # Think about making overscan possibly a directory or collection
-#X    # to trigger calculation
-#X    try:
-#X        im = CCDData.read(fname)
-#X    except Exception as e: 
-#X        im = CCDData.read(fname, unit="adu")
-#X        im.meta['BUNIT'] = ('ADU', 'Unit of pixel value')
-#X    if show:
-#X        im_orig = im.copy()
-#X    bias = CCDData.read(bias_fname)
-#X    if overscan is None:
-#X        overscan = overscan_estimate(im, bias)
-#X    im = im.subtract(overscan*u.adu, handle_meta='first_found')
-#X    im = ccdp.subtract_bias(im, bias)
-#X    if gain is None:
-#X        gain = global_gain
-#X    im.meta['GAIN'] = (gain, 'Measured electrons per ADU')
-#X    g = ccdp.Keyword('GAIN', u.electron/u.adu)
-#X    im = ccdp.gain_correct(im, g)
-#X    im.meta['BUNIT'] = 'electron'
-#X    im.meta['BIASNAME'] = bias_fname
-#X    add_history(im.meta,
-#X                'Subtracted OVERSCAN, BIASNAME, and gain corrected')
-#X    #std =  np.asscalar(np.std(im).data   )
-#X    std =  np.std(im)
-#X    med =  np.median(im)
-#X    #mean = np.asscalar(np.mean(im).data  )
-#X    mean = np.mean(im)
-#X    tmin = np.min(im)
-#X    tmax = np.max(im)
-#X    rdnoise = np.sqrt(np.median((im.data[1:] - im.data[0:-1])**2))
-#X    im.write(out_fname, overwrite=True)
-#X    #print(im.header)
-#X    print('std, rdnoise, mean, med, min, max')
-#X    print(std, rdnoise, mean, med, tmin, tmax)
-#X    if show:
-#X        im_orig = im_orig - overscan
-#X        med = np.median(im_orig[0:100, 0:100])
-#X        std = np.std(im_orig[0:100, 0:100])
-#X        #impl = plt.imshow(im, cmap=plt.cm.gray, filternorm=0,
-#X        #                  interpolation='none', vmin=med-std, vmax=med+std)
-#X        norm = ImageNormalize(stretch=SqrtStretch())
-#X        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8.5, 9))
-#X        #ax1.imshow(im_orig, origin='lower', cmap='Greys_r', norm=norm)
-#X        ax1.imshow(im_orig, origin='lower', cmap=plt.cm.gray, filternorm=0,
-#X                   interpolation='none', vmin=med-std, vmax=med+std)
-#X        ax1.set_title('Raw Data Minus Overscan')
-#X        #ax2.imshow(im, origin='lower', cmap='Greys_r', norm=norm)
-#X        med = np.median(im[0:100, 0:100])
-#X        std = np.std(im[0:100, 0:100])
-#X        ax2.imshow(im, origin='lower', cmap=plt.cm.gray, filternorm=0,
-#X                   interpolation='none', vmin=med-std, vmax=med+std)
-#X        ax2.set_title('Bias Subtracted')
-#X        plt.show()
-#X        plt.close()
-#X    return im
-    
 # Copy and tweak ccdp.ccd_process
 #def ccd_process(ccd, oscan=None, trim=None, error=False, master_bias=None,
 #                dark_frame=None, master_flat=None, bad_pixel_mask=None,
@@ -1082,7 +781,8 @@ def subtract_overscan(ccd_in, *args, **kwargs):
 #                exposure_key=None, exposure_unit=None,
 #                dark_scale=False, gain_corrected=True):
 def ccd_process(ccd, oscan=None, error=False, master_bias=None,
-                gain=None, readnoise=None, *args, **kwargs):
+                gain=None, readnoise=None, dark_frame=None, master_flat=None,
+                *args, **kwargs):
     """Perform basic processing on IoIO ccd data.  Uses ccd_process
     for all steps except overscan subtraction
 
@@ -1216,9 +916,27 @@ def ccd_process(ccd, oscan=None, error=False, master_bias=None,
     # make a copy of the object
     nccd = ccd.copy()
 
-    # Bias subtract first to improve overscan
+    # Put in our common metadata
+    ccd_metadata(nccd)
 
-    # apply overscan correction unique to the IoIO SX694 CCD
+    # Correct exposure time
+    # --> REFINE THIS ESTIMATE BASED ON MORE MEASUREMENTS
+    exptime = nccd.meta['EXPTIME']
+    if exptime > sx694_max_accurate_exposure:
+        nccd.meta.insert('EXPTIME', 
+                         ('OEXPTIME', exptime, 'original exposure time (seconds)'),
+                         after=True)
+        exptime += sx694_exposure_correct
+        nccd.meta['EXPTIME'] = (exptime, 'corrected exposure time (seconds)')
+        nccd.meta.insert('OEXPTIME', 
+                         ('HIERARCH EXPTIME_CORRECTION',
+                          sx694_exposure_correct, '(seconds)'),
+                         after=True)
+        add_history(nccd.meta,
+                    'Corrected exposure time for SX694 MaxIm driver bug')
+
+    # Apply overscan correction unique to the IoIO SX694 CCD.  This
+    # also adds our CCD metadata
     if oscan is True:
         nccd = subtract_overscan(nccd, master_bias=master_bias,
                                  *args, **kwargs)
@@ -1227,40 +945,67 @@ def ccd_process(ccd, oscan=None, error=False, master_bias=None,
     else:
         raise TypeError('oscan is not None, True or False')
 
-    # Here is where we "infect" our processed data with gain and
-    # readnoise metadata and, while we are at it, extract these values
-    # for use in ccdp.ccd_process
     if master_bias is not None:
+        nccd.meta['RDNOISE'] = master_bias.meta['RDNOISE']
+        nccd.meta.comments['RDNOISE'] = master_bias.meta.comments['RDNOISE']
+        # Extract values used for further ccd_process
         # --> document these True options in help
         if gain is True:
-            gn = gain_keyword.name
-            gain = gain_keyword.value_from(master_bias.meta)
-            gc = master_bias.meta.comments[gn]
-            nccd.meta[gn] = (gain.value, gc)
+            gain = master_bias.meta['GAIN']
             if master_bias.unit == u.electron/u.adu:
                 gain_corrected = True
         if error is True:
-            rn = readnoise_keyword.name
-            readnoise = readnoise_keyword.value_from(master_bias.meta)
-            rc = master_bias.meta.comments[rn]
-            nccd.meta[rn] = (readnoise.value, rc)
-        
-    # create the error frame.  I can't trim my overscan, so there are
+            readnoise = master_bias.meta['RDNOISE']
+
+    # Correct our SATLEVEL and NONLIN units if we are going to gain
+    # correct
+    if gain is not None:
+        nccd.meta['SATLEVEL'] = nccd.meta['SATLEVEL'] * gain
+        nccd.meta.comments['SATLEVEL'] = 'saturation level (electron)'
+        nccd.meta['NONLIN'] = nccd.meta['NONLIN'] * gain
+        nccd.meta.comments['NONLIN'] = 'Measured nonlinearity point (electron)'
+            
+    # Create the error frame.  I can't trim my overscan, so there are
     # lots of pixels at the overscan level.  After overscan and bias
     # subtraction, many of them that are probably normal statitical
     # outliers are negative enough to overwhelm the readnoise in the
     # deviation calculation.  But I don't want the error estimate on
     # them to be NaN, since the error is really the readnoise.
     if error and gain is not None and readnoise is not None:
-        nccd = ccdp.create_deviation(nccd, gain=gain, readnoise=readnoise,
-                                disregard_nan=True)
+        nccd = ccdp.create_deviation(nccd, gain=gain*u.electron/u.adu,
+                                     readnoise=readnoise*u.electron,
+                                     disregard_nan=True)
     elif error and (gain is None or readnoise is None):
         raise ValueError(
             'gain and readnoise must be specified to create error frame.')
     
+    # Make it convenient to just specify dark_frame to do dark
+    # subtraction the way I want
+    if isinstance(dark_frame, CCDData):
+        exposure_key = ccdp.Keyword('EXPTIME', u.s)
+        dark_scale = True
+    else:
+        exposure_key=None
+        dark_scale=False
 
-    return ccdp.ccd_process(nccd, master_bias=master_bias,
-                            gain=gain, *args, **kwargs)
+    nccd = ccdp.ccd_process(nccd, master_bias=master_bias,
+                            gain=gain*u.electron/u.adu,
+                            dark_frame=dark_frame,
+                            exposure_key=exposure_key,
+                            dark_scale=dark_scale,
+                            *args, **kwargs)
+    if master_flat is None:
+        return nccd
+    min_value = master_flat.meta['FLAT_CUT']
+    nccd = ccdp.flat_correct(nccd, master_flat,
+                             min_value=min_value, norm_value=1)
+    # My flats look different that most, so just divide and call that
+    # good enough
+    #master_flat.mask=None
+    #nccd = nccd.divide(master_flat, handle_meta='first_found')
+    #nccd.meta['HIERARCH FLAT_CORRECT'] = True
+    return nccd
+    
 
     #### make a copy of the object
     ###nccd = ccd.copy()
@@ -1351,7 +1096,7 @@ def dark_combine(directory=None,
                  subdirs=['Calibration'],
                  glob_include=['Dark*', '*_dark.fit'],
                  master_bias=None, # This is going to have to be True or something like that to trigger search for optimum
-                 outdir='/data/io/IoIO/reduced/bias_dark',
+                 outdir='/data/io/IoIO/reduced/bias_dark', 
                  show=False,
                  temperature_tolerance=0.5,
                  mask_threshold=3): #Units of readnoise
@@ -1378,7 +1123,7 @@ def dark_combine(directory=None,
         lccds = []
         jds = []
         for fname in fdict['fnames']:
-            ccd = ccddata_read(fname)
+            ccd = ccddata_read(fname, add_metadata=True)
             if not full_frame(ccd):
                 log.debug('dark wrong shape: ' + fname)
                 continue
@@ -1406,7 +1151,7 @@ def dark_combine(directory=None,
             this_dateb, this_ccdt, exptime)
 
         mem = psutil.virtual_memory()
-        combined_average = \
+        im = \
             ccdp.combine(lccds,
                          method='average',
                          sigma_clip=True,
@@ -1415,43 +1160,57 @@ def dark_combine(directory=None,
                          sigma_clip_func=np.ma.median,
                          sigma_clip_dev_func=mad_std,
                          mem_limit=mem.available*0.6)
-        im = combined_average
-        # Create a mask that blanks out all our pixels that are just readnoise
+        mask_above(im, 'SATLEVEL')
+        mask_above(im, 'NONLIN')
+
+        # Create a mask that blanks out all our pixels that are just
+        # readnoise.  Multiply this in as zeros, not a formal mask,
+        # otherwise subsequent operations with the dark will mask out
+        # all but the dark current-affected pixels!
         measured_readnoise = im.meta['RDNOISE']
-        mask = im < measured_readnoise * mask_threshold
-        im.mask = mask
-        n_hot_pix = np.count_nonzero(mask == 0)
-        #std =  np.std(im)
-        std = np.asscalar(np.std(im).data)
-        med =  np.asscalar(np.median(im).data)
-        #mean = np.ma.mean(im)
-        mean = np.asscalar(np.mean(im).data  )
-        tmin = np.min(im)
-        tmax = np.max(im)
-        rdnoise = np.sqrt(np.median((im.data[1:] - im.data[0:-1])**2))
+        is_dark_mask = im.data > measured_readnoise * mask_threshold
+        n_dark_pix = np.count_nonzero(is_dark_mask)
+        im.meta['NDARKPIX'] \
+            = (n_dark_pix, 'number of pixels with dark current')
+        im = im.multiply(is_dark_mask, handle_meta='first_found')
+
+        # Collect image metadata.  For some reason, masked pixels
+        # aren't ignored by std, etc. even though they output masked
+        # arrays (which is annoying in its own right -- see example
+        # commented mean).  So just create a new array, if needed, and
+        # only put into it the good pixels
+        bad_mask = is_dark_mask == 0
+        if im.mask is not None:
+            bad_mask = bad_mask | im.mask
+        # Flip bad mask around so we get only the dark pixels in the
+        # linear range
+        tim = im.data[bad_mask == 0]
+
+        std =  np.std(tim)
+        #std =  np.asscalar(std.data  )
+        med =  np.median(tim)
+        #med =  np.asscalar(med.data  )
+        mean = np.mean(tim)
+        #mean = np.asscalar(mean.data  )
+        tmin = np.min(tim)
+        tmax = np.max(tim)
+        rdnoise = np.sqrt(np.median((tim[1:] - tim[0:-1])**2))
         print('combined dark statistics for ' + fbase)
-        print('std, rdnoise, mean, med, min, max, n_hot_pix')
-        print(std, rdnoise, mean, med, tmin, tmax, n_hot_pix)
+        print('std, rdnoise, mean, med, min, max, n_dark_pix')
+        print(std, rdnoise, mean, med, tmin, tmax, n_dark_pix)
         im.meta['STD'] = (std, 'Standard deviation of image (electron)')
         im.meta['MEDIAN'] = (med, 'Median of image (electron)')
         im.meta['MEAN'] = (mean, 'Mean of image (electron)')
         im.meta['MIN'] = (tmin, 'Min of image (electron)')
         im.meta['MAX'] = (tmax, 'Max of image (electron)')
-        im.meta['NCOMBINE'] = (len(lccds), 'Number of biases combined')
+        im.meta['NCOMBINE'] = (len(lccds), 'Number of darks combined')
         add_history(im.meta,
                     'Combining NCOMBINE biases indicated in FILENN')
-        ### Create a mask that blanks out all our pixels that are just readnoise
-        ##measured_readnoise = im.meta['RDNOISE']
-        ##mask = im < measured_readnoise * mask_threshold
-        ##im.mask = mask
-        ##n_hot_pix = np.count_nonzero(mask)
         im.meta['HIERARCH MASK_THRESHOLD'] \
             = (mask_threshold, 'Units of readnoise')
-        im.meta['N_HOTPIX'] \
-            = (n_hot_pix, 'number of pixels with dark current')
         add_history(im.meta,
-                    'Masking pixels below MASK_THRESHOLD')        
-        # Record each bias filename
+                    'Setting pixes below MASK_THRESHOLD to zero; prevents subtraction noise')
+        # Record each filename
         for i, f in enumerate(fdict['fnames']):
             im.meta['FILE{0:02}'.format(i)] = f
         # Prepare to write
@@ -1471,170 +1230,134 @@ def dark_combine(directory=None,
             plt.show()
             plt.close()
 
+def flat_combine(directory=None,
+                 collection=None,
+                 subdir='AutoFlat', # not a list
+                 glob_include='*Flat*', # not a list
+                 master_bias=None, # This is going to have to be True or something like that to trigger search for optimum
+                 dark_frame=None, # similarly here
+                 outdir='/data/io/IoIO/reduced/bias_dark', # --> change this
+                 show=False,
+                 flat_cut=0.75,
+                 init_threshold=100, # units of readnoise
+                 edge_mask=-40, # CorObsData parameter for ND filter coordinates
+                 temperature_tolerance=0.5):
+    if collection is None:
+        if not os.path.isdir(directory):
+            log.debug('No directory ' + directory)
+            return False
+        collection = ccdp.ImageFileCollection(directory,
+                                              glob_include=glob_include)
+    directory = collection.location
+    if collection.summary is None:
+        if subdir is not None:
+            newdir = os.path.join(directory, subdir)
+            return flat_combine(newdir,
+                                subdir=None,
+                                glob_include=glob_include,
+                                master_bias=master_bias,
+                                dark_frame=dark_frame, # similarly here
+                                outdir=outdir,
+                                show=show,
+                                temperature_tolerance=temperature_tolerance)
+        log.debug('No [matching] FITS files found in  ' + directory)
+        return False
+    # If we made it here, we have a collection with files in it
+    filters = np.unique(collection.summary['filter'])
+    for this_filter in filters:
+        flat_fnames = collection.files_filtered(imagetyp='FLAT',
+                                                filter=this_filter,
+                                                include_path=True)
+        lccds = []
+        jds = []
+        for fname in flat_fnames:
+            ccd = ccddata_read(fname, add_metadata=True)
+            ccd = ccd_process(ccd,
+                              oscan=True,
+                              master_bias=master_bias,
+                              gain=True,
+                              error=True,
+                              dark_frame=dark_frame)
+            # Use photutils.Background2D to smooth each flat and get a
+            # good maximum value.  Mask edges and ND filter so as to
+            # increase quality of background map
+            mask = np.zeros(ccd.shape, bool)
+            # Use the CorObsData ND filter stuff with a negative
+            # edge_mask to blank out all of the fuzz from the ND filter cut
+            obs_data = CorObsData(ccd.to_hdu(), edge_mask=edge_mask)
+            mask[obs_data.ND_coords] = True
+            rdnoise = ccd.meta['RDNOISE']
+            mask[ccd.data < rdnoise * init_threshold] = True
+            ccd.mask = mask
+            bkg_estimator = MedianBackground()
+            b = Background2D(ccd, 20, mask=mask, filter_size=5,
+                             bkg_estimator=bkg_estimator)
+            max_flat = np.max(b.background)
+            if max_flat > ccd.meta['NONLIN']:
+                log.warning('flat max value of {} too bright: {}'.format(
+                    max_flat, fname))
+                continue
+            ccd.mask = None
+            ccd = ccd.divide(max_flat, handle_meta='first_found')
+            lccds.append(ccd)
+            # Get ready to capture the mean DATE-OBS
+            tm = Time(ccd.meta['DATE-OBS'], format='fits')
+            tt = tm.tt.datetime
+            jds.append(tm.jd)
+        
+        if len(jds) < 3:
+            log.debug('Not enough good flats found for filter = {} in {}'.format(this_filter, collection.location))
+            continue
+        # Combine our flats
+        mem = psutil.virtual_memory()
+        im = \
+            ccdp.combine(lccds,
+                         method='average',
+                         sigma_clip=True,
+                         sigma_clip_low_thresh=5,
+                         sigma_clip_high_thresh=5,
+                         sigma_clip_func=np.ma.median,
+                         sigma_clip_dev_func=mad_std,
+                         mem_limit=mem.available*0.6)
+        # Interpolate over our ND filter
+        hdul = ccd.to_hdu()
+        obs_data = CorObsData(hdul, edge_mask=edge_mask)
+        # Capture our ND filter metadata
+        im.meta = hdul[0].header
+        good_pix = np.ones(ccd.shape, bool)
+        good_pix[obs_data.ND_coords] = False
+        points = np.where(good_pix)
+        values = im[points]
+        xi = obs_data.ND_coords
+        # Linear behaved much better
+        nd_replacement = interpolate.griddata(points,
+                                              values,
+                                              xi,
+                                              method='linear')
+                                              #method='cubic')
+        im.data[xi] = nd_replacement
+        # Do one last smoothing and renormalization
+        bkg_estimator = MedianBackground()
+        b = Background2D(im, 20, mask=(im.data<flat_cut), filter_size=5,
+                         bkg_estimator=bkg_estimator)
+        max_flat = np.max(b.background)
+        im = im.divide(max_flat, handle_meta='first_found')
+        im.mask = im.data < flat_cut
+        im.meta['FLAT_CUT'] = (flat_cut, 'Value below which flat is masked')
 
-#XX
-#XXdef old_dark_combine(directory=None,
-#XX                 collection=None,
-#XX                 master_bias=None, # This is going to have to be True or something like that to trigger search for optimum
-#XX                 outdir='/data/io/IoIO/reduced/bias_dark',
-#XX                 show=False,
-#XX                 temperature_tolerance=0.5):
-#XX    if collection is None:
-#XX        if not os.path.isdir(directory):
-#XX            log.debug('Not a directory, skipping: ' + directory)
-#XX            return False
-#XX        # Speed things up considerably by globbing the dark fnames, of
-#XX        # which I only have two types: those recorded by ACP (Dark*)
-#XX        # and those recorded by MaxIm (Dark* and *_dark.fit)
-#XX        collection = ccdp.ImageFileCollection(directory,
-#XX                                                 glob_include='Dark*')
-#XX        if collection.summary is None:
-#XX            collection = ccdp.ImageFileCollection(directory,
-#XX                                                     glob_include='*_dark.fit')
-#XX        if collection.summary is None:
-#XX            subdir = os.path.join(directory, 'Calibration')
-#XX            if not os.path.isdir(subdir):
-#XX                return False
-#XX            return dark_combine(subdir)            
-#XX    if collection.summary is None:
-#XX        return False
-#XX    log.debug('found darks in ' + directory)
-#XX    if not os.path.exists(outdir):
-#XX        os.mkdir(outdir)
-#XX
-#XX    
-#XX    # Redo list logic to be more Pythonic and include exposure times
-#XX    imagetyp = 'DARK'
-#XX    our_imagetyp = collection.summary['imagetyp'] == imagetyp
-#XX    narrow_to_imagetyp = collection.summary[our_imagetyp]
-#XX    ts = narrow_to_imagetyp['ccd-temp']
-#XX    # ccd-temp is recorded as a string.  Convert it to a number so
-#XX    # we can sort +/- values properly
-#XX    ts = np.asarray(ts)
-#XX    # Get the sort indices so we can extract fnames in proper order
-#XX    tsort_idx = np.argsort(ts)
-#XX    ts = ts[tsort_idx]
-#XX    # Spot jumps in t and translate them into slices into ts
-#XX    dts = ts[1:] - ts[0:-1]
-#XX    jump = np.flatnonzero(dts > temperature_tolerance)
-#XX    tslices = np.append(0, jump+1)
-#XX    tslices = np.append(tslices, -1)
-#XX    fdict_list = []
-#XX    for it in range(len(tslices)-1):
-#XX        this_ts = ts[tslices[it]:tslices[it+1]]
-#XX        mean_t = np.mean(this_ts)
-#XX        print(mean_t)
-#XX        narrow_to_t = narrow_to_imagetyp[tslices[it]:tslices[it+1]]
-#XX        exps = narrow_to_t['exptime']
-#XX        ues = np.unique(exps)
-#XX        for ue in ues:
-#XX            exp_idx = np.flatnonzero(exps == ue)
-#XX            files = narrow_to_t['file'][exp_idx]
-#XX            fdict_list.append({'T': mean_t,
-#XX                               'EXPTIME': ue,
-#XX                               'fnames': files})
-#XX    print(fdict_list)
-#XX    return
-#XX    
-#XX
-#XX    # Find the distinct sets of temperatures within temperature_tolerance
-#XX    # --> doing this for the second time.  Might want to make it some
-#XX    # sort of function.  For darks I also need to collect times
-#XX    
-#XX    isdark = collection.summary['imagetyp'] == 'DARK'
-#XX    ts = collection.summary['ccd-temp'][isdark]
-#XX    dark_fnames = collection.summary['file'][isdark]
-#XX    # ccd-temp is recorded as a string.  Convert it to a number so
-#XX    # we can sort +/- values properly
-#XX    ts = np.asarray(ts)
-#XX    # Get the sort indices so we can extract fnames in proper order
-#XX    tsort_idx = np.argsort(ts)
-#XX    ts = ts[tsort_idx]
-#XX    dark_fnames = dark_fnames[tsort_idx]
-#XX    # Spot jumps in t and translate them into slices into ts
-#XX    dts = ts[1:] - ts[0:-1]
-#XX    jump = np.flatnonzero(dts > temperature_tolerance)
-#XX    slice = np.append(0, jump+1)
-#XX    slice = np.append(slice, -1)
-#XX    for it in range(len(slice)-1):
-#XX        # Loop through each temperature set
-#XX        flist = [os.path.join(collection.location, f)
-#XX                 for f in dark_fnames[slice[it]:slice[it+1]]]
-#XX        lccds = [ccddata_read(f) for f in flist]
-#XX        dark_ccds = []
-#XX        stats = []
-#XX        jds = []
-#XX        this_ts = ts[slice[it]:slice[it+1]]
-#XX        for iccd, ccd in enumerate(lccds):
-#XX            s = ccd.shape
-#XX            # Spot guider darks and binned main camera darks.  Note
-#XX            # Pythonic C index ordering
-#XX            if s != (NAXIS2, NAXIS1):
-#XX                log.debug('dark wrong shape: ' + str(s))
-#XX                continue
-#XX            ccd = ccd_process(ccd, oscan=True, master_bias=master_bias,
-#XX                              gain=True, error=True)
-#XX            hdr = ccd.header
-#XX            im = ccd.data
-#XX            # Spot darks recorded when too bright.
-#XX            m = np.asarray(s)/2 # Middle of CCD
-#XX            q = np.asarray(s)/4 # 1/4 point
-#XX            m = m.astype(int)
-#XX            q = q.astype(int)
-#XX            # --> check lowest y too, since large filters go all the
-#XX            # --> way to the edge See 20200428 dawn biases
-#XX            dark_patch = im[m[0]-50:m[0]+50, 0:100]
-#XX            light_patch = im[m[0]-50:m[0]+50, q[1]:q[1]+100]
-#XX            mdp = np.median(dark_patch)
-#XX            mlp = np.median(light_patch)
-#XX            # --> might need to adjust this tolerance
-#XX            if (np.median(light_patch) - np.median(dark_patch) > 1):
-#XX                log.debug('dark recorded during light conditions: ' +
-#XX                          flist[iccd])
-#XX                log.debug('light, dark patch medians ({:.4f}, {:.4f})'.format(mdp, mlp))
-#XX                continue
-#XX            dark_ccds.append(ccd)
-#XX        lccds = dark_ccds
-#XX        mem = psutil.virtual_memory()
-#XX        combined_average = \
-#XX            ccdp.combine(lccds,
-#XX                         method='average',
-#XX                         sigma_clip=True,
-#XX                         sigma_clip_low_thresh=5,
-#XX                         sigma_clip_high_thresh=5,
-#XX                         sigma_clip_func=np.ma.median,
-#XX                         sigma_clip_dev_func=mad_std,
-#XX                         mem_limit=mem.available*0.6)
-#XX        im = combined_average
-#XX        std =  np.std(im)
-#XX        med =  np.median(im)
-#XX        mean = np.mean(im)
-#XX        tmin = np.min(im)
-#XX        tmax = np.max(im)
-#XX        rdnoise = np.sqrt(np.median((im.data[1:] - im.data[0:-1])**2))
-#XX        print('combined dark statistics')
-#XX        print('std, rdnoise, mean, med, min, max')
-#XX        print(std, rdnoise, mean, med, tmin, tmax)
-#XX        # Record each bias filename
-#XX        for i, f in enumerate(flist):
-#XX            im.meta['FILE{0:02}'.format(i)] = f
-#XX        # Prepare to write
-#XX        fname = fbase + '_combined_bias.fits'
-#XX        add_history(im.meta,
-#XX                    'Combining NCOMBINE biases indicated in FILENN')
-#XX        # Leave these large for fast calculations downstream and make
-#XX        # final results that primarily sit on disk in bulk small
-#XX        #im.data = im.data.astype('float32')
-#XX        #im.uncertainty.array = im.uncertainty.array.astype('float32')
-#XX        im.write(fname, overwrite=True)
-#XX        if show:
-#XX            impl = plt.imshow(im, origin='lower', cmap=plt.cm.gray,
-#XX                              filternorm=0, interpolation='none',
-#XX                              vmin=med-std, vmax=med+std)
-#XX            plt.show()
-#XX            plt.close()
-
-
+        # Prepare to write
+        tm = Time(np.mean(jds), format='jd')
+        this_date = tm.fits
+        this_dateb = this_date.split('T')[0]
+        fbase = '{}_{}'.format(this_dateb, this_filter)
+        if not os.path.exists(outdir):
+            os.mkdir(outdir)
+        fbase = os.path.join(outdir, fbase)
+        fname = fbase + '_flat.fits'
+        im.write(fname, overwrite=True)
+        if show:
+            impl = plt.imshow(im, origin='upper', cmap=plt.cm.gray)
+            plt.show()
 
 
 def bulk_bias_combine(directory='/data/io/IoIO/raw',
@@ -1746,46 +1469,6 @@ def plot_dark_with_distributions(image, rn, dark_rate,
     plt.grid()
     plt.legend()
 
-# def dark_combine(dark_fnames, overscan_fname=None, show=False):
-#     if overscan_fname is not None:
-#         o = CCDData.read(overscan_fname, unit=u.adu)
-#         overscan = np.median(o)
-#     else:
-#         overscan = 0
-#     # --> note scope violation of directory
-#     dark_fnames = [os.path.join(directory, f) for f in dark_fnames]
-#     satlevel = (np.uint16(-1) - overscan) * global_gain
-#     print('bias_level from bias immediately after dark sequence = ', overscan)
-#     print('saturation level (electrons) ', satlevel)
-#     lccds = [bias_subtract(d, bias_fname, '/tmp/test.fits', overscan=overscan)
-#          for d in dark_fnames]
-#     mem = psutil.virtual_memory()
-#     combined_average = \
-#         ccdp.combine(lccds,
-#                         method='average',
-#                         sigma_clip=True,
-#                         sigma_clip_low_thresh=5,
-#                         sigma_clip_high_thresh=5,
-#                         sigma_clip_func=np.ma.median,
-#                         sigma_clip_dev_func=mad_std,
-#                         mem_limit=mem.available*0.6)
-#     im = combined_average
-#     std =  np.std(im)
-#     med =  np.median(im)
-#     mean = np.mean(im)
-#     tmin = np.min(im)
-#     tmax = np.max(im)
-#     rdnoise = np.sqrt(np.median((im.data[1:] - im.data[0:-1])**2))
-#     print('combined dark statistics')
-#     print('std, rdnoise, mean, med, min, max')
-#     print(std, rdnoise, mean, med, tmin, tmax)
-#     if show:
-#         impl = plt.imshow(im, origin='lower', cmap=plt.cm.gray, filternorm=0,
-#                           interpolation='none', vmin=med-std, vmax=med+std)
-#         plt.show()
-#         plt.close()
-#     return im
-
 def quick_show(im):
     std =  np.std(im)
     med =  np.median(im)
@@ -1796,7 +1479,9 @@ def quick_show(im):
     print('image statistics')
     print('std, rdnoise, mean, med, min, max')
     print(std, rdnoise, mean, med, tmin, tmax)
-    impl = plt.imshow(im, origin='lower', cmap=plt.cm.gray, filternorm=0,
+    #impl = plt.imshow(im, origin='lower', cmap=plt.cm.gray, filternorm=0,
+    #                  interpolation='none', vmin=med-std, vmax=med+std)
+    impl = plt.imshow(im, origin='upper', cmap=plt.cm.gray, filternorm=0,
                       interpolation='none', vmin=med-std, vmax=med+std)
     if isinstance(im, CCDData):
         plt.title(im.unit)
@@ -1808,10 +1493,82 @@ def quick_show(im):
 
 log.setLevel('DEBUG')
 
+# bias_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits'
+# master_bias = ccddata_read(bias_fname)
+# #dark_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.25_exptime_300.0s_combined_dark.fits'
+# dark_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.25_exptime_10.0s_combined_dark.fits'
+# dark_frame = ccddata_read(dark_fname)
+# #flat_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-07_Na_on_flat.fits'
+# #master_flat = ccddata_read(flat_fname)
+# # --> remove this
+# #master_flat.meta['FLAT_CUT'] = 0.75
+# fname = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0007_Na-on.fit'
+# raw = ccddata_read(fname)
+# ccd = ccd_process(raw, oscan=True, master_bias=master_bias,
+#                   gain=True, error=True, dark_frame=dark_frame)
+# 
+# readnoise = ccd.meta['RDNOISE']
+# binsize = readnoise/4.
+# im_hist, im_hist_centers = hist_of_im(ccd, binsize)
+# min_hist_val=10
+# min_width=10
+# max_width=20
+# good_idx = np.flatnonzero(im_hist > min_hist_val)
+# im_hist = im_hist[good_idx]
+# im_hist_centers = im_hist_centers[good_idx]
+# # The arguments to linspace are the critical parameters I played
+# # with together with binsize to get the first small peak to be recognized
+# im_peak_idx = signal.find_peaks_cwt(im_hist,
+#                                     np.linspace(min_width, max_width))
+# print(im_hist_centers)
+# sky = im_hist_centers[im_peak_idx[1]]
+# print(sky) # expecting ~90
+# mask = ccd.data < 0.25 * sky
+# ccd.mask = mask
+#ccd.write('/tmp/test.fits', overwrite=True)
+#impl = plt.imshow(ccd, origin='upper', cmap=plt.cm.gray, filternorm=0,
+#                      interpolation='none', vmin=0, vmax=500)
+#plt.show()
+#quick_show(ccd)
+
 bias_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits'
-bias = ccddata_read(bias_fname)
-dark_dir = '/data/io/IoIO/raw/20200711'
-dark_combine(dark_dir, master_bias=bias, show=True)
+master_bias = ccddata_read(bias_fname)
+dark_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.25_exptime_300.0s_combined_dark.fits'
+#dark_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.25_exptime_10.0s_combined_dark.fits'
+dark_frame = ccddata_read(dark_fname)
+flat_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-07_Na_on_flat.fits'
+master_flat = ccddata_read(flat_fname)
+# --> remove this
+#master_flat.meta['FLAT_CUT'] = 0.75
+fname = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0007_Na-on.fit'
+raw = ccddata_read(fname)
+ccd = ccd_process(raw, oscan=True, master_bias=master_bias,
+                  gain=True, error=True, dark_frame=dark_frame,
+                  master_flat=master_flat)
+ccd.write('/tmp/test.fits', overwrite=True)
+impl = plt.imshow(ccd, origin='upper', cmap=plt.cm.gray, filternorm=0,
+                      interpolation='none', vmin=0, vmax=500)
+plt.show()
+#quick_show(ccd)
+
+
+# bias_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits'
+# master_bias = ccddata_read(bias_fname)
+# dark_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.25_exptime_300.0s_combined_dark.fits'
+# dark_frame = ccddata_read(dark_fname)
+# flat_combine('/data/io/IoIO/raw/2020-07-07/',
+#              master_bias=master_bias,
+#              dark_frame=dark_frame,
+#              show=False)
+
+
+#fname = '/data/io/IoIO/raw/20200708/SII_on-band_004.fits'
+#master_bias = ccddata_read(bias_fname)
+#ccd = ccddata_read(fname)
+#b = ccd_process(ccd, oscan=True, master_bias=master_bias,
+#                gain=True, error=True)
+#quick_show(b)
+
 
 #dark_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.25_exptime_300.0s_combined_dark.fits'
 ##dark_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.25_exptime_300.0s_combined_dark.fits'
@@ -1829,132 +1586,18 @@ dark_combine(dark_dir, master_bias=bias, show=True)
 ##plt.xlim(-20, 30)
 #plt.show()
 
-#print(fname_by_imagetyp_t_exp('/data/io/IoIO/raw/20200711',
-#                              subdirs=['Calibration'],
-#                              glob_include=['Bias*', '*_bias.fit'],
-#                              imagetyp='BIAS'))
-#print('Now on to DARKS')
-#print(fname_by_imagetyp_t_exp('/data/io/IoIO/raw/20200711', imagetyp='DARK'))
-
 #bias_combine('/data/io/IoIO/raw/20200711', show=True, gain_correct=True)
+#bias_combine('/data/io/IoIO/raw/20200711', show=False, gain_correct=True)
 #bias_combine('/data/io/IoIO/raw/20200711', show=True, gain_correct=False)
+#bias_combine('/data/io/IoIO/raw/20200711', show=False, gain_correct=False)
 
 #bias_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits'
-#fname = '/data/io/IoIO/raw/20200708/SII_on-band_004.fits'
-#master_bias = ccddata_read(bias_fname)
-#ccd = ccddata_read(fname)
-#b = ccd_process(ccd, oscan=True, master_bias=master_bias,
-#                gain=True, error=True)
-#quick_show(b)
-
-#bias_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits'
-#
-#fname = '/data/io/IoIO/raw/20200708/SII_on-band_004.fits'
-#b = subtract_overscan(fname, bias_fname)
-#quick_show(b)
-
-## bias_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits'
-## fname = '/data/io/IoIO/raw/20200708/SII_on-band_004.fits'
-## print(overscan_estimate(fname, bias_fname, show=True))
-## #(1935.667312196714, ('OVERSCAN_METHOD', 'corners'))
-## 
-## fname = '/data/io/IoIO/raw/2020-07-07/Sky_Flat-0010_Na_on-band.fit'
-## print(overscan_estimate(fname, bias_fname, show=True))
-## #(1949.6699784443222, ('OVERSCAN_METHOD', 'corners'))
-## 
-## fname = '/data/io/IoIO/raw/2020-07-11/NEOWISE-0005_Na-on.fit'
-## print(overscan_estimate(fname, bias_fname, show=True))
-## #(1934.3136989482311, ('OVERSCAN_METHOD', 'histogram'))
-
-### fname = '/data/io/IoIO/raw/20200708/SII_on-band_004.fits'
-### print(overscan_estimate(fname, readnoise='RDNOISE', bias=bias, show=True))
-### # 1932.5354651515347
-### 
-### fname = '/data/io/IoIO/raw/2020-07-07/Sky_Flat-0010_Na_on-band.fit'
-### print(overscan_estimate(fname, readnoise='RDNOISE', bias=bias, show=True))
-### # 1966.1345777424763
-### # a broad peak, so higher than it needs to be
+#bias = ccddata_read(bias_fname)
+#dark_dir = '/data/io/IoIO/raw/20200711'
+##dark_combine(dark_dir, master_bias=bias, show=True)
+#dark_combine(dark_dir, master_bias=bias, show=False)
 
 
-
-
-#bias_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits'
-#b = ccddata_read(bias_fname)
-##print(b.meta)
-#fname = '/data/io/IoIO/raw/2020-07-11/NEOWISE-0005_Na-on.fit'
-#f = ccddata_read(fname)
-##print(f.meta)
-#g = ccddata_read(f)
-#print(g.meta)
-
-#bias_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits'
-#bias = CCDData.read(bias_fname)
-#fname = '/data/io/IoIO/raw/2020-07-11/NEOWISE-0005_Na-on.fit'
-#f = CCDData.read(fname, unit=u.adu)
-#f.meta['BUNIT'] = ('ADU', 'Unit of pixel value')
-#print(overscan_estimate(f, show=True))
-##print(overscan_estimate(f, readnoise='RDNOISE', gain='GAIN', bias=bias, show=True))
-##print(overscan_estimate(fname, readnoise='RDNOISE', bias=bias, show=True))
-##print(overscan_estimate(fname, readnoise='RDNOISE', bias=bias_fname, show=True))
-#print(f.meta)
-#print(overscan_estimate(fname, binsize=100, bias=bias, show=True))
-## 1930.2304235108968
-
-# bias_adu = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias_ADU.fits'
-# bias_electron = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias_electrons.fits'
-# fname = '/data/io/IoIO/raw/20200708/Na_on-band_004.fits'
-# 
-# gain_obj = ccdp.Keyword('GAIN', u.electron/u.adu)
-# readnoise_obj = ccdp.Keyword('RDNOISE', u.electron)
-# 
-# #im = ccdp.gain_correct(im, g)
-# raw_ccd = ccddata_read(fname)
-# bias_adu = ccddata_read(bias_adu)
-# 
-# bias_electron = ccddata_read(bias_electron)
-# 
-# ccd_bs = ccdp.subtract_bias(raw_ccd, bias_adu)
-# ccd_bsos = subtract_overscan(ccd_bs, bias=bias_adu, readnoise='RDNOISE', gain='GAIN')
-# #ccd_bsos = create_deviation(ccd_bsos, gain=global_gain*u.electron/u.adu,
-# #                            readnoise=global_readnoise)
-# 
-# 
-# ccd_os = subtract_overscan(raw_ccd, bias=bias_electron, readnoise='RDNOISE', gain='GAIN')
-# ccd_osbs = ccdp.subtract_bias(ccd_os, bias_adu)
-# 
-# im = ccd_osbs.subtract(ccd_bsos)
-# std =  np.std(im)
-# med =  np.median(im)
-# #mean = np.asscalar(np.mean(im).data  )
-# mean = np.mean(im)
-# tmin = np.min(im)
-# tmax = np.max(im)
-# impl = plt.imshow(im, origin='lower', cmap=plt.cm.gray, filternorm=0,
-#                   interpolation='none', vmin=med-std, vmax=med+std)
-# print('std, mean, med, min, max (ADU)')
-# print(std, mean, med, tmin, tmax)
-# 
-# plt.show()
-# plt.close()
-
-
-#print(overscan_estimate(fname, readnoise='RDNOISE', gain='GAIN', bias=bias, show=True))
-#bias = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias_electrons.fits'
-#print(overscan_estimate(fname, readnoise='RDNOISE', gain='GAIN', bias=bias, show=True))
-## 1923.0292722359077
-### 
-### fname = '/data/io/IoIO/raw/20200708/SII_on-band_004.fits'
-### print(overscan_estimate(fname, readnoise='RDNOISE', bias=bias, show=True))
-### # 1932.5354651515347
-### 
-### fname = '/data/io/IoIO/raw/2020-07-07/Sky_Flat-0010_Na_on-band.fit'
-### print(overscan_estimate(fname, readnoise='RDNOISE', bias=bias, show=True))
-### # 1966.1345777424763
-### # a broad peak, so higher than it needs to be
-
-#bias_combine('/data/io/IoIO/raw/20200711', show=True)
-#im = ccddata_read('/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits')
-#
 ## 
 ## im = CCDData.read('/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits')
 ## data = im.data.copy()
@@ -1972,172 +1615,4 @@ dark_combine(dark_dir, master_bias=bias, show=True)
 #im.dtype
 #plt.show()
 #plt.close()
-
-## directory = '/data/io/IoIO/raw/20200711'
-## bias_fname = '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits'
-## 
-## overscan_fname = os.path.join(directory, 'Bias-S005-R007-C001-B1.fts')
-## dark_fnames = ['Dark-S005-R006-C001-B1.fts',
-##                'Dark-S005-R006-C002-B1.fts',
-##                'Dark-S005-R006-C003-B1.fts',
-##                'Dark-S005-R006-C004-B1.fts',
-##                'Dark-S005-R006-C005-B1.fts']               
-## print("T100")
-## T100 = dark_combine(dark_fnames, overscan_fname, show=True)
-## overscan_fname = os.path.join(directory, 'Bias-S005-R008-C001-B1.fts')
-## dark_fnames = ['Dark-S005-R007-C001-B1.fts',
-##                'Dark-S005-R007-C002-B1.fts',
-##                'Dark-S005-R007-C003-B1.fts']
-## print("T300")
-## T300 = dark_combine(dark_fnames, overscan_fname, show=True)
-## overscan_fname = os.path.join(directory, 'Bias-S005-R009-C001-B1.fts')
-## dark_fnames = ['Dark-S005-R008-C001-B1.fts']               
-## print("T1000")
-## T1000 = dark_combine(dark_fnames, overscan_fname, show=True)
-## dscale = T100.multiply(3, handle_meta='first_found')
-## im = T300.subtract(dscale)
-## std =  np.std(im)
-## med =  np.median(im)
-## mean = np.mean(im)
-## tmin = np.min(im)
-## tmax = np.max(im)
-## rdnoise = np.sqrt(np.median((im.data[1:] - im.data[0:-1])**2))
-## print('T300 - 3* T100')
-## print('std, rdnoise, mean, med, min, max')
-## print(std, rdnoise, mean, med, tmin, tmax)
-## impl = plt.imshow(im, origin='lower', cmap=plt.cm.gray, filternorm=0,
-##                   interpolation='none', vmin=med-std, vmax=med+std)
-## plt.show()
-## plt.close()
-## dscale = T100.multiply(10, handle_meta='first_found')
-## im = T1000.subtract(dscale)
-## std =  np.std(im)
-## med =  np.median(im)
-## mean = np.mean(im)
-## tmin = np.min(im)
-## tmax = np.max(im)
-## rdnoise = np.sqrt(np.median((im.data[1:] - im.data[0:-1])**2))
-## print('T1000 - 10* T100')
-## print('std, rdnoise, mean, med, min, max')
-## print(std, rdnoise, mean, med, tmin, tmax)
-## impl = plt.imshow(im, origin='lower', cmap=plt.cm.gray, filternorm=0,
-##                   interpolation='none', vmin=med-std, vmax=med+std)
-## plt.show()
-## plt.close()
-## dscale = T300.multiply(10/3., handle_meta='first_found')
-## im = T1000.subtract(dscale)
-## std =  np.std(im)
-## med =  np.median(im)
-## mean = np.mean(im)
-## tmin = np.min(im)
-## tmax = np.max(im)
-## rdnoise = np.sqrt(np.median((im.data[1:] - im.data[0:-1])**2))
-## print('T1000 - 3.33* T300')
-## print('std, rdnoise, mean, med, min, max')
-## print(std, rdnoise, mean, med, tmin, tmax)
-## impl = plt.imshow(im, origin='lower', cmap=plt.cm.gray, filternorm=0,
-##                   interpolation='none', vmin=med-std, vmax=med+std)
-## plt.show()
-## plt.close()
-## 
-## rdnoise = T1000.meta['RDNOISE']
-## exptime = T1000.meta['EXPTIME']
-## plot_dark_with_distributions(T1000.data, rdnoise, 0.002, exposure=exptime)
-
-
-
-
-## 1000s at -5C shows only ~5 e- dark current but large std likely from
-## cosmic rays
-#dark_fname = os.path.join(directory, 'Dark-S005-R008-C001-B1.fts')
-#print('self overscan-subtracted')
-#dark = bias_subtract(dark_fname, bias_fname,
-#                     '/tmp/test.fits')
-#overscan_fname = os.path.join(directory, 'Bias-S005-R009-C001-B1.fts')
-#o = CCDData.read(overscan_fname, unit=u.adu)
-#overscan = np.median(o)
-#print('bias_level from bias after read = ', overscan)
-#dark = bias_subtract(dark_fname, bias_fname,
-#                     '/tmp/test.fits', overscan=overscan)
-#im = dark
-#impl = plt.imshow(im, origin='lower', cmap=plt.cm.gray, filternorm=0,
-#                  interpolation='none', vmin=med-std, vmax=med+std)
-#plt.show()
-#plt.close()
-
-
-#collection = ccdp.ImageFileCollection(directory,
-#                                         glob_include='Dark*')
-#isdark = collection.summary['imagetyp'] == 'DARK'
-#exps = collection.summary['EXPTIME'][isdark]
-#dark_fnames = collection.summary['file'][isdark]
-
-
-
-#c = CCDData.read('/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits')
-#d = CCDData.read('/data/io/IoIO/raw/20200711/Dark-S005-R008-C001-B1.fts', unit=u.adu)
-#
-#ch = c.header
-##print(ch)
-#dh = d.header
-#dh.update(ch)
-#print(dh)
-#print(c.header.update(d.header))
-
-#print(d.meta.append(c.meta))
-
-#result = c.subtract(10000.*u.adu)
-#print(np.median(result))
-##std =  np.asscalar(np.std(im).data   )
-#std =  np.std(c).data
-
-#bias_analyze()
-#bulk_bias_combine()
-
-#bias_combine('/data/io/IoIO/raw/20200711', show=True)
-#bias_subtract('/data/io/IoIO/raw/20200711/Dark-S005-R008-C001-B1.fts',
-#              '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits',
-#              '/tmp/test.fits',
-#              show=True)
-
-#bias_subtract('/data/io/IoIO/raw/20200711/Bias-S005-R001-C005-B1.fts',
-#              '/data/io/IoIO/reduced/bias_dark/2020-07-11_ccdT_-5.27_combined_bias.fits',
-#              '/tmp/test.fits',
-#              show=True)
-
-
-#bias_combine('/data/io/IoIO/raw/20200422', show=True)
-#bias_subtract('/data/io/IoIO/raw/20200422/Bias-S002-R001-C001-B1.fts',
-#bias_subtract('/data/io/IoIO/raw/20200422/Bias-S002-R002-C001-B1.fts',
-#              '/data/io/IoIO/reduced/bias_dark/2020-04-22_ccdT_-20.25_combined_bias.fits',
-#              '/tmp/test.fits',
-#              show=True)
-
-#bias_combine('/data/io/IoIO/raw/20200421', show=True)
-#bias_combine('/data/io/IoIO/raw/20200419', show=True)
-#bias_combine('/data/io/IoIO/raw/20200417')#, show=True)
-#bias_combine('/data/io/IoIO/raw/20200416')#, show=True)
-#bias_combine('/data/io/IoIO/raw/20200408')#, show=True)
-#bias_combine('/data/io/IoIO/raw/20200326/Calibration')
-#bias_combine('/data/io/IoIO/raw/20191014')
-
-#bias_subtract('/data/io/IoIO/raw/20200326/Calibration/Bias-S001-R001-C001-B1_dupe-1.fts',
-#              '/data/io/IoIO/reduced/bias_dark/2020-03-26_ccdT_-15.00_combined_bias.fits',
-#              '/tmp/test.fits',
-#              show=True)
-#bias_subtract('/data/io/IoIO/raw/20200326/Calibration/Bias-S001-R001-C001-B1.fts',
-#              '/data/io/IoIO/reduced/bias_dark/2020-03-25_ccdT_9.46_combined_bias.fits',
-#              '/tmp/test.fits',
-#              show=True)
-#
-#bias_subtract('/data/io/IoIO/raw/20200326/Calibration/Dark-S001-R006-C001-B1.fts',
-#              '/data/io/IoIO/reduced/bias_dark/2020-03-25_ccdT_9.46_combined_bias.fits',
-#              '/tmp/test.fits',
-#              show=True)
-#
-#bias_subtract('/data/io/IoIO/raw/20200408/Dark-S002-R006-C001-B1.fts',
-#              '/data/io/IoIO/reduced/bias_dark/2020-04-08_ccdT_-15.89_combined_bias.fits',
-#              '/tmp/test.fits',
-#              show=True)
-
 
