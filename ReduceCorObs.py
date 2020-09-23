@@ -69,6 +69,7 @@ global_bias = 1633 # ADU
 global_dark = 0.021 # ADU/s
 reduce_edge_mask = -10 # Block out beyond ND filter
 ap_sum_fname = 'ap_sum.csv'
+off_jup_ap_sum_fname = 'off_jup_ap_sum.csv'
 
 # 80 would be perfect match.  Lets go a little short of that
 #global_frame_rate = 80
@@ -764,8 +765,8 @@ def reduce_pair(OnBand_fname=None,
                 # We should be in our normal directory structure
                 basename = os.path.basename(rawfname)
                 # Insert "r" so no collisions are possible
-                (fbase, ext) = os.path.splitext(basename)
-                redbasename = fbase + 'r' + ext
+                fbase, _ = os.path.splitext(basename)
+                redbasename = fbase + 'r' + '.fits'
                 # --! This is an assumtion
                 rawdatepath = os.path.dirname(rawfname)
                 datedir = os.path.split(rawdatepath)[1]
@@ -785,17 +786,9 @@ def reduce_pair(OnBand_fname=None,
         OnBandObsData = IoIO.CorObsData(OnBand_HDUList,
                                         default_ND_params=default_ND_params,
                                         edge_mask=reduce_edge_mask)
-        if OnBandObsData.quality < 5:
-            log.warning('Skipping: poor quality center determination for '
-                        + OnBand_HDUList.filename())
-            return
         OffBandObsData = IoIO.CorObsData(OffBand_HDUList,
                                          default_ND_params=default_ND_params,
                                          edge_mask=reduce_edge_mask)
-        if OffBandObsData.quality < 5:
-            log.warning('Skipping: poor quality center determination for '
-                        + OffBand_HDUList.filename())
-            return
         if back_obj is None:
             rawfname = OnBand_HDUList.filename()
             if rawfname is None:
@@ -832,6 +825,154 @@ def reduce_pair(OnBand_fname=None,
                              'off-band back (bias, dark) value subtracted')
         header['DOFFBSUB'] = (bias_dark - OffBandObsData.back_level,
                              'off-band back - ind. est. back via histogram')
+
+        # --> consider just storing this in the header and letting
+        # --> subsequent reduction & analysis do things in native
+        # --> coordinates
+        
+        # Calculate NPole_ang if we weren't passed it, but store it in
+        # property so it can be used for the next file in this day.
+        # Also truncate to the integer so that astroquery caching can
+        # work --> might want to loosen this for nth degree
+        # calculations when I am ready for those
+        if NPole_ang is None:
+            # V09 is the Moka observatory at Benson, which looks like
+            # the San Pedro Valley observatory
+            T = Time(header['DATE-OBS'], format='fits')
+            # --> eventually I might want to be general with the object
+            jup = Horizons(id=599,
+                           location='V09',
+                           epochs=np.round(T.jd),
+                           id_type='majorbody')
+            NPole_ang = jup.ephemerides()['NPole_ang'].quantity.value[0]
+            ang_width = jup.ephemerides()['ang_width'].quantity.value[0]
+
+        # --> This is where we do the off-Jupiter reduction
+        if ('Na' in header['FILTER'] and
+            (header.get('RAOFF') is not None
+             or header.get('DECOFF') is not None)):
+            if header['OBJECT'] != 'Jupiter':
+                return
+            print('BOO')
+            line = 'Na'
+            # Try simple scaled subtraction.
+            on_exp = header['EXPTIME']
+            off_exp = OffBandObsData.header['EXPTIME']
+            # Value of 50 is from simple quoted off-band FWHM
+            # Na_eq_width is a measurement of the filter eq_width and
+            # the ADU2R_adjust was calculated by Carl for Fraunhofer
+            # line light loss
+            # --> need to improve on this with measurements
+            #ADU2R_adjust = 1.15
+            # This is in read_ap for now, so don't put it here 
+            ADU2R_adjust = 1
+            offscale = Na_eq_width/50 * on_exp/off_exp
+            # Based on on-Jupiter images and known Jupiter brightness
+            # in MR/R, this seems to be the calibration, though we
+            # wonder if the ND filter is doing something funny
+            ADU2R = 0.1*ADU2R_adjust
+            na_im = on_im - off_im * offscale
+            #na_im = off_im * offscale
+            na_im = na_im / ADU2R
+            header['OFFFNAME'] = (OffBand_HDUList.filename(),
+                                  'off-band file')
+            header['OFFSCALE'] = (offscale, 'scale factor applied to off-band im')
+            header['BUNIT'] = ('rayleighs', 'pixel unit')
+            header['ADU2R'] = (ADU2R, 'ADU/R')
+            
+            # Do some quick-and-dirty aperture sums
+            # --> improve on this
+            #fieldnames = ['TMID', 'ANGDIAM', 'EXPTIME', 'FNAME', 'LINE', 'ONBSUB', 'OFFBSUB', 'DONBSUB', 'DOFFBSUB']
+            this_ap_sum_fname = os.path.join(reddir, off_jup_ap_sum_fname)
+            tmid = (get_tmid(header)).fits
+            header['TMID'] = (tmid, 'Midpoint of observation')
+            header['ANGDIAM'] = (ang_width, 'Angular diameter of Jupiter (arcsec)')
+            row = {'FNAME': outfname,
+                   'LINE': line,
+                   'TMID': tmid,
+                   'EXPTIME': header['EXPTIME'],
+                   'ONBSUB': header['ONBSUB'],
+                   'DONBSUB': header['DONBSUB'],
+                   'OFFBSUB': header['OFFBSUB'],
+                   'DOFFBSUB': header['DOFFBSUB'],
+                   'OFFSCALE': header['OFFSCALE'],
+                   'ADU2R': ADU2R,
+                   'ANGDIAM': ang_width}
+            fieldnames = list(row.keys())
+            for imtype in ['AP', 'On', 'Off']:
+                if imtype == 'AP':
+                    im = na_im
+                elif imtype == 'On':
+                    im = on_im / ADU2R
+                elif imtype == 'Off':
+                    im = off_im / ADU2R
+                else:
+                    raise ValueError('Unknown imtype ' + imtype)
+                center = np.asarray(im.shape)/2
+                #for ap_height in [0, 1200, 600, 300, -300, -600, -1200]:
+                #    key = strip_sum(im, center, ap_height, imtype, header, row)
+                #    fieldnames.append(key)
+                for ap_box in [0, 150, 140, 130, 120, 110, 100, 90, 80, 70, 60, 50, 40, 30, 15, 10, 5]:
+                    key = Rj_box_sum(ang_width, im, center, ap_box, imtype, header, row)
+                    fieldnames.append(key)
+                # --> Add torus columns
+                for ew in ['east', 'west']:
+                    for ot in [8, 7, 6]:
+                        for it in [1, 2, 3, 4, 5]:
+                            for h in [1, 2, 3, 4, 5]:
+                                key = torus_box_sum(ang_width, im,
+                                                    center, ew,
+                                                    it, ot, h,
+                                                    imtype, header, row)
+                                fieldnames.append(key)
+    
+                #for y in [600, 150, 0, -150, -600]:
+                #    for x in [-600, -500, -400, -300, -200, 200, 300, 400, 500, 600]:
+                #        key = aperture_sum(im, center, y, x, 60, imtype, header, row)
+                #        fieldnames.append(key)
+                #for y in [30, 20, 10, 5, 0, -5, -10, -20, -30]:
+                #    for x in [30, 20, 10, 5, 0, -5, -10, -20, -30]:
+                #        key = Rj_aperture_sum(ang_width, im, center, y, x, 60, imtype, header, row)
+                #        fieldnames.append(key)
+            rdate = (Time.now()).fits
+            header['RDATE'] = (rdate, 'UT time of reduction')
+            header['RVERSION'] = (rversion, 'Reduction version')
+            row['RDATE'] = rdate
+            row['RVERSION'] = rversion
+            fieldnames.extend(['RDATE', 'RVERSION'])
+            # Get ready to write some output to the reduced directory
+            if not os.path.exists(red_data_root):
+                os.mkdir(red_data_root)
+            if not os.path.exists(reddir):
+                os.mkdir(reddir)
+    
+            if not os.path.exists(this_ap_sum_fname):
+                with open(this_ap_sum_fname, 'w', newline='') as csvfile:
+                    csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
+                                           quoting=csv.QUOTE_NONNUMERIC)
+                    csvdw.writeheader()
+            with open(this_ap_sum_fname, 'a', newline='') as csvfile:
+                csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
+                                       quoting=csv.QUOTE_NONNUMERIC)
+                csvdw.writerow(row)
+        
+            # Get ready to write
+            OnBand_HDUList[0].data = na_im
+            OnBand_HDUList.writeto(outfname, overwrite=recalculate)
+            return
+
+
+        # Here is where we do reduction for observations Na nebula and IPT
+        if OnBandObsData.quality < 5:
+            log.warning('Skipping: poor quality center determination for '
+                        + OnBand_HDUList.filename())
+            return
+        if OffBandObsData.quality < 5:
+            log.warning('Skipping: poor quality center determination for '
+                        + OffBand_HDUList.filename())
+            return
+
+
         # --> Worry about flat-fielding later
         # --> Make all these things FITS keywords
         # Get ready to shift off-band image to match on-band image
@@ -966,26 +1107,6 @@ def reduce_pair(OnBand_fname=None,
         else:
             gem_flip = 0
             
-        # --> consider just storing this in the header and letting
-        # --> subsequent reduction & analysis do things in native
-        # --> coordinates
-        
-        # Calculate NPole_ang if we weren't passed it, but store it in
-        # property so it can be used for the next file in this day.
-        # Also truncate to the integer so that astroquery caching can
-        # work --> might want to loosen this for nth degree
-        # calculations when I am ready for those
-        if NPole_ang is None:
-            # V09 is the Moka observatory at Benson, which looks like
-            # the San Pedro Valley observatory
-            T = Time(header['DATE-OBS'], format='fits')
-            # --> eventually I might want to be general with the object
-            jup = Horizons(id=599,
-                           location='V09',
-                           epochs=np.round(T.jd),
-                           id_type='majorbody')
-            NPole_ang = jup.ephemerides()['NPole_ang'].quantity.value[0]
-            ang_width = jup.ephemerides()['ang_width'].quantity.value[0]
         # Save off original center of image for NDparams update, below
         o_center = np.asarray(scat_sub_im.shape)/2
         on_shift = o_center - OnBandObsData.obj_center
@@ -1031,12 +1152,6 @@ def reduce_pair(OnBand_fname=None,
     
         # Coronagraph flips images N/S.  Transpose alert
         scat_sub_im =np.flipud(scat_sub_im)
-    
-        # Get ready to write some output to the reduced directory
-        if not os.path.exists(red_data_root):
-            os.mkdir(red_data_root)
-        if not os.path.exists(reddir):
-            os.mkdir(reddir)
     
         # Do some quick-and-dirty aperture sums
         # --> improve on this
@@ -1471,7 +1586,11 @@ class MovieCorObs():
         self.dt_cur = None
         self.HDUCur = None
         self.HDUNext = None
-        self.failsafeim = np.zeros(self.crop)
+        scale = (np.round(self.crop / self.mp4shape)).astype(int)
+        if np.any(scale > 1):
+            scale = np.max(scale)
+        self.failsafeim = np.zeros((self.crop/scale).astype(int))
+        
         self.persist_im = None
         self.last_persist_im = None
         self.next_f()
@@ -1644,6 +1763,31 @@ class MovieCorObs():
         self.persist_im = np.stack((im,)*3, axis=-1)
         return self.persist_im
 
+def offset_no_offset(collection_or_directory, include_path=False):
+    if isinstance(collection_or_directory, ccdproc.ImageFileCollection):
+        collection = collection_or_directory
+    else:
+        collection = ccdproc.ImageFileCollection(collection_or_directory)
+    offset = []
+    no_offset = []
+    if (not 'decoff' in collection.keywords
+            and not 'raoff' in collection.keywords):
+        no_offset = collection.files_filtered(include_path=include_path)
+        return (offset, no_offset)
+    summary_table = collection.summary
+    for l in summary_table:
+        raoff = l['raoff']
+        decoff = l['decoff']
+        if hasattr(raoff, 'mask') and hasattr(decoff, 'mask'):
+            no_offset.append(l['file'])
+        else:
+            offset.append(l['file'])
+    if include_path:
+        d = collection.location
+        offset = [os.path.join(d, o) for o in no_offset]
+        no_offset = [os.path.join(d, n) for n in no_offset]
+    return (offset, no_offset)
+
 def make_movie(directory,
                recalculate=False,
                SII_crop=None,
@@ -1668,12 +1812,28 @@ def make_movie(directory,
     Na_filt = get_filt_name(collection, 'Na', 'on')
     SII_on_list = collection.files_filtered(filter=SII_filt,
                              include_path=True)
-    Na_on_list = collection.files_filtered(filter=Na_filt,
-                            include_path=True)
+    # Na off-Jupiter observations cause some problems, so filter them out
+    if ('decoff' in collection.keywords
+            and 'raoff' in collection.keywords):
+        summary_table = collection.summary
+        d = collection.location
+        Na_on_list = []
+        for l in summary_table:
+            if l['filter'] != Na_filt:
+                continue
+            raoff = l['raoff']
+            decoff = l['decoff']
+            if hasattr(raoff, 'mask') and hasattr(decoff, 'mask'):
+                Na_on_list.append(os.path.join(d, l['file']))
+    else:
+        Na_on_list = collection.files_filtered(filter=Na_filt,
+                                               include_path=True)
 
     if len(SII_on_list) == 0 or len(Na_on_list) == 0:
         # Just return if we don't have BOTH [SII] and Na to display
         return
+
+    # --> AH HA! empty movie may be reason contamination fails
 
     # Set our default crop here so we can handle being called with
     # only the directory from reduce
@@ -1913,17 +2073,51 @@ if __name__ == "__main__":
 
 #d = '/data/io/IoIO/reduced/20190309'
 
-d = '/data/io/IoIO/reduced/20190611'
-c0 = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
-d = '/data/io/IoIO/reduced/20190820'
-c1 = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
-c = mpy.concatenate_videoclips([c0, c1])
-c.write_videofile('/tmp/test.mp4')
+# --> still working on figuring out why video is not working right
+# d = '/data/io/IoIO/reduced/20190611'
+# c0 = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
+# d = '/data/io/IoIO/reduced/20190820'
+# c1 = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
+# c = mpy.concatenate_videoclips([c0, c1])
+# c.write_videofile('/tmp/test.mp4')
+# 
+# 
+# d = '/data/io/IoIO/reduced/20200505'
+# c0 = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
+# d = '/data/io/IoIO/reduced/20200506'
+# c1 = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
+# c = mpy.concatenate_videoclips([c0, c1])
+# c.write_videofile('/tmp/test.mp4')
 
 
-d = '/data/io/IoIO/reduced/20200505'
-c0 = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
-d = '/data/io/IoIO/reduced/20200506'
-c1 = mpy.VideoFileClip(os.path.join(d, 'Na_SII.mp4'))
-c = mpy.concatenate_videoclips([c0, c1])
-c.write_videofile('/tmp/test.mp4')
+#on_band = os.path.join(data_root, 'raw', '20200921', 'SII_on-band_004.fits')
+#off_band = os.path.join(data_root, 'raw', '20200921', 'SII_off-band_004.fits')
+#
+#on_band = os.path.join(data_root, 'raw', '20200921', 'Jupiter-S001-R001-C001-Na_on.fts')
+#off_band = os.path.join(data_root, 'raw', '20200921', 'Jupiter-S001-R001-C001-Na_off.fts')
+#
+#
+#reduce_pair(on_band, off_band, recalculate=True)
+
+#directory = os.path.join(data_root, 'raw', '20200921')
+## Sort on whether or not images are recorded with Jupiter centered or
+## offset from Jupiter
+#collection = ccdproc.ImageFileCollection(directory)
+#if 'decoff' in collection.keywords or 'raoff' in collection.keywords:
+#    summary_table = collection.summary
+#    on_jupiter = []
+#    off_jupiter = []
+#    for l in summary_table:
+#        raoff = l['raoff']
+#        decoff = l['decoff']
+#        if hasattr(raoff, 'mask') and hasattr(decoff, 'mask'):
+#            on_jupiter.append(l['file'])
+#        else:
+#            off_jupiter.append(l['file'])
+
+#directory = os.path.join(data_root, 'raw', '20200921')
+#off_jupiter, on_jupiter = offset_no_offset(directory, include_path=True)
+#print(on_jupiter)
+#print('hey')
+#print(off_jupiter)
+
