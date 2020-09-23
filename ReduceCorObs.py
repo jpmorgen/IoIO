@@ -54,11 +54,30 @@ line_associations = [{'line': 'SII',   'cwl': '6731'},
 # These are the equavalent widths of the filters in angstroms
 SII_eq_width = 9.95
 Na_eq_width = 11.22
-# There is a noticeable scattered light loss in the Na on-band filter.
-# Aperture photometry didn't fix it, so this is my guess at the
-# magnitude of the problem
+# XXX There is a noticeable scattered light loss in the Na on-band filter.
+# XXX Aperture photometry didn't fix it, so this [Na_on_loss] is my guess at the
+# XXX magnitude of the problem
+#
+# *_on_loss: See discussion in IoIO_reduction.notebk on
+# Wed Sep 23 12:32:39 2020 EDT  jpmorgen@snipe
+#
+# Leave ADU2R un-calibrated in the absolute sense so we can keep track
+# of it it in read_ap.  It effectively tells us how much light is
+# actually detected through the ND filter + narrow-band filter system,
+# which changed unexpectedly when we changed the filter wheel.
+# Because scattered light subtraction is critical, do account for the
+# observed change in the relative sensitivity of Jupiter through the
+# Na_off filter before and after the filter wheel change.  Both Na_on
+# and Na_off changed by a factor of ~0.4, but Na_off needed an extra
+# tweak.  In light of the filter wheel change discovery, the *_on_loss
+# were probably always about adjusting for the relative effects of the
+# ND filter on the narrow-band transmissivity, the physics of which we
+# have yet to fully understand.
+Twheel = Time('2019-03-27T00:00:00', format='fits')
+#
 #SII_on_loss = 0.95
-# 2019
+# 2019 [this seems to be good enough for everyone when looking at
+# read_ap results]
 SII_on_loss = 1.1
 #Na_on_loss = 0.8
 # 2019
@@ -69,7 +88,6 @@ global_bias = 1633 # ADU
 global_dark = 0.021 # ADU/s
 reduce_edge_mask = -10 # Block out beyond ND filter
 ap_sum_fname = 'ap_sum.csv'
-off_jup_ap_sum_fname = 'off_jup_ap_sum.csv'
 
 # 80 would be perfect match.  Lets go a little short of that
 #global_frame_rate = 80
@@ -748,6 +766,7 @@ def reduce_pair(OnBand_fname=None,
         # in general so we can be called at any directory level
         # (though see messages for issues)
         header = OnBand_HDUList[0].header
+        T = Time(header['DATE-OBS'], format='fits')
         if outfname is None:
             rawfname = OnBand_HDUList.filename()
             if rawfname is None:
@@ -838,7 +857,6 @@ def reduce_pair(OnBand_fname=None,
         if NPole_ang is None:
             # V09 is the Moka observatory at Benson, which looks like
             # the San Pedro Valley observatory
-            T = Time(header['DATE-OBS'], format='fits')
             # --> eventually I might want to be general with the object
             jup = Horizons(id=599,
                            location='V09',
@@ -883,7 +901,7 @@ def reduce_pair(OnBand_fname=None,
             # Do some quick-and-dirty aperture sums
             # --> improve on this
             #fieldnames = ['TMID', 'ANGDIAM', 'EXPTIME', 'FNAME', 'LINE', 'ONBSUB', 'OFFBSUB', 'DONBSUB', 'DOFFBSUB']
-            this_ap_sum_fname = os.path.join(reddir, off_jup_ap_sum_fname)
+            this_ap_sum_fname = os.path.join(reddir, ap_sum_fname)
             tmid = (get_tmid(header)).fits
             header['TMID'] = (tmid, 'Midpoint of observation')
             header['ANGDIAM'] = (ang_width, 'Angular diameter of Jupiter (arcsec)')
@@ -1038,7 +1056,10 @@ def reduce_pair(OnBand_fname=None,
         elif 'Na' in OnBandObsData.header['FILTER']:
             line = 'Na'
             eq_width = Na_eq_width
-            on_loss = Na_on_loss
+            if T < Twheel:
+                on_loss = 0.8
+            else:
+                on_loss = 0.6
         else:
             raise ValueError('Improper filter ' +
                              OnBandObsData.header['FILTER'])
@@ -1224,6 +1245,11 @@ def reduce_pair(OnBand_fname=None,
         row['RDATE'] = rdate
         row['RVERSION'] = rversion
         fieldnames.extend(['RDATE', 'RVERSION'])
+        # Get ready to write some output to the reduced directory
+        if not os.path.exists(red_data_root):
+            os.mkdir(red_data_root)
+        if not os.path.exists(reddir):
+            os.mkdir(reddir)
         if not os.path.exists(this_ap_sum_fname):
             with open(this_ap_sum_fname, 'w', newline='') as csvfile:
                 csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
@@ -2090,14 +2116,16 @@ if __name__ == "__main__":
 # c.write_videofile('/tmp/test.mp4')
 
 
-#on_band = os.path.join(data_root, 'raw', '20200921', 'SII_on-band_004.fits')
-#off_band = os.path.join(data_root, 'raw', '20200921', 'SII_off-band_004.fits')
+on_band = os.path.join(data_root, 'raw', '20200921', 'SII_on-band_004.fits')
+off_band = os.path.join(data_root, 'raw', '20200921', 'SII_off-band_004.fits')
+on_band = os.path.join(data_root, 'raw', '20200921', 'Na_on-band_002.fits')
+off_band = os.path.join(data_root, 'raw', '20200921', 'Na_off-band_002.fits')
 #
-#on_band = os.path.join(data_root, 'raw', '20200921', 'Jupiter-S001-R001-C001-Na_on.fts')
-#off_band = os.path.join(data_root, 'raw', '20200921', 'Jupiter-S001-R001-C001-Na_off.fts')
+on_band = os.path.join(data_root, 'raw', '20200921', 'Jupiter-S001-R001-C001-Na_on.fts')
+off_band = os.path.join(data_root, 'raw', '20200921', 'Jupiter-S001-R001-C001-Na_off.fts')
 #
 #
-#reduce_pair(on_band, off_band, recalculate=True)
+reduce_pair(on_band, off_band, recalculate=True)
 
 #directory = os.path.join(data_root, 'raw', '20200921')
 ## Sort on whether or not images are recorded with Jupiter centered or

@@ -10641,3 +10641,77 @@ password entry on GitHub/magit
 Well, that doesn't seem to help.  Frustrating but not end of world.
 Can work with desktop client or command line.  Remove magit so I am
 not confused in the future.
+
+Wed Aug 19 23:10:11 2020 EDT  jpmorgen@snipe
+
+Hmm.  In a situation where weather is broken, but weather is good, so
+want to run without weather.  Figured out how to trick it in
+UserActions.  Need to trick it in precisionguide
+
+Copied over precisionguide with modification of FakeWeather
+
+Not working for some reason.
+
+cd "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\"
+IoIO.py center --ObsClassName CorObsData
+
+Wed Sep 02 11:32:29 2020 EDT  jpmorgen@snipe
+
+OK, got that all worked out and also new astrometry _and guider
+calibration_ as per notes of earlier this morning in ~/IoIO.notebk
+
+Fri Sep 04 10:28:13 2020 EDT  jpmorgen@snipe
+
+I should probably add a correction for 1/cos(DEC) in my offsets
+
+/cygdrive/c/Program Files (x86)/ACP Obs Control/UserActions.wsc
+
+As used, the offsets are in arcminutes, so I really do expect
+arcminute in angle, not RA.  So where do I want to do the correction?
+I could do it when I first put thing into Util.Script.RAoffsets[iTgt],
+which happens in a couple of places.
+
+I need to be mindful of Util.Script.RAoffset and what that reads in.
+It may be the best thing to do is make the conversion just before I
+reset the Target.RA
+
+function RAOff_arcmin_to_hrs(Target)
+{
+    // Calculate correction factor to apply to RA offset in arcminutes
+    // so that it can be added to the target RA in hours
+    var radec = Math.abs(Target.DEC)
+    // Make sure not to cause problems at extremely high DEC
+    radec = Math.min(radec, 80);
+    radec = radec * Math.PI / 180.;
+    var raf = 1.0/60.0 * 24.0/360.0 / Math.cos(radec);
+    return raf;
+}
+
+
+Maybe this should be a function: RAOff_factor(Target)
+
+OK, getting this.  But I am finding inconsistent results when I try to
+subtract to go back, since I am using the current target DEC.  What I
+really want is to store the old values somehow.
+
+Whew.  That was a bit of a pain to work with GitHub desktop.
+Basically, I needed to clone into an empty directory and then move the
+.git into the ACP Obs Control directory.  Then I had a bunch of files
+that were changed.  Rather than .gitignore all of them, I just
+deselected all of them and then selected UserActions.wsc and committed
+that.  There is a little square in the bottom left to write the commit
+message
+
+--> remember to pull on ioio1u1.
+
+Sun Sep 06 09:49:15 2020 EDT  jpmorgen@snipe
+
+Ack!  I have other work on ioio1u1 that I haven't pushed to master
+properly.
+
+Sun Sep 06 15:50:07 2020 EDT  jpmorgen@snipe
+
+Awesome!  That worked!  I committed to master on ioio1u1.  Then
+pushed to remote.  It automatically resolve the conflicts, which were
+not real conflicts, since they were independent.
+

@@ -28,14 +28,16 @@ ADU2R_adjust = 1.15
 telluric_Na = 55
 N_med = 11
 
-line = 'Na'
-#line = '[SII]'
-onoff = 'AP'	# on-band minus off-band, fully reduced images
-#onoff = 'On'	# on-band images after bias and dark subtraction and rayleigh calibration
+#line = 'Na'
+line = '[SII]'
+#onoff = 'AP'	# on-band minus off-band, fully reduced images
+onoff = 'On'	# on-band images after bias and dark subtraction and rayleigh calibration
 #onoff = 'Off'	# off-band images after bias and dark subtraction and rayleigh calibration
 
 ap_sum_fname = '/data/io/IoIO/reduced/ap_sum.csv'
 #ap_sum_fname = '/data/io/IoIO/reduced/ap_sum_20190411+.csv'
+ap_sum_fname = '/data/io/IoIO/NO_BACKUP/reduced.previous_versions/202009_before_off_jup/ap_sum.csv'
+
 
 # list of days in matplotlib plot_date format, which happen to start
 # at midnight UT, which is the way I like it
@@ -45,11 +47,15 @@ pdlist = []
 rlist = []
 # Try to hack together a consistent calibration and
 if line == 'Na':
-    ADU2R_recalib = 1
+    #ADU2R_recalib = 1
     #ADU2R_recalib = 1/2
     #ADU2R_recalib = 1/4
+     ADU2R_recalib = 0.4
+     # --> long-term I need to change this in RedCorObs
+     on_loss_adjust = 0.5/0.8
 if line == '[SII]':
-    ADU2R_recalib = 1/6
+    ADU2R_recalib = 1/4.8
+    on_loss_adjust = 1
 
 # Notable times
 T2019 = Time('2019-01-01T00:00:00', format='fits')
@@ -87,10 +93,14 @@ with open(ap_sum_fname, newline='') as csvfile:
         # If we made it here, we should be a good datapoint
         pdlist.append(T.plot_date)
         rlist.append(row)
+        if T > Twheel:
+            row['ADU2R'] /= ADU2R_recalib
         for ap in ap_keys:
             # Apply 2019 recalibration for filter wheel change
             if T > Twheel:
                 row[ap] *= ADU2R_recalib
+                if onoff == 'Off':
+                    row[ap] *= on_loss_adjust
             # Apply ADU2R adjustment for sodium
             if row['LINE'] == 'Na':
                 row[ap] *= ADU2R_adjust
@@ -189,27 +199,28 @@ mpds = np.asarray(mpds)
 
 ######## Time series of primary apertures.
 # CHANGE onoff ABOVE TO PLOT FOR ON-BAND and OFF-BAND images 
-plt.plot_date(mpds -  pdconvert, 
+plt.plot_date(mpds - pdconvert, 
               [row[onoff + 'Rjp15'] for row in median_ap_list], '^')
-plt.plot_date(mpds -  pdconvert, 
+plt.plot_date(mpds - pdconvert, 
               [row[onoff + 'Rjp30'] for row in median_ap_list], 's')
-plt.plot_date(pds -  pdconvert, 
+plt.plot_date(pds - pdconvert, 
               [row[onoff + 'Rjp30'] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
 back = [row[onoff + 'back'] for row in median_ap_list]
-plt.plot_date(mpds -  pdconvert, back, 'x')
+plt.plot_date(mpds - pdconvert, back, 'x')
 #back_mav = np.convolve(back, np.ones((N_med,))/N_med, mode='same')
 #back_med = medfilt(back, N_med)
 #plt.plot_date(mpds, back_med, ',', linestyle='-')
 axes = plt.gca()
 if onoff == 'AP':
 #    axes.set_ylim([0, 1700])
-    axes.set_ylim([0, 2300])
+#    axes.set_ylim([0, 2300])
+    axes.set_ylim([0, 5000])
     ylabel = ''
 else:
     if onoff == 'On':
-        axes.set_ylim([0, 3000])
+        axes.set_ylim([0, 15000])
     else:
-        axes.set_ylim([0, 1500])
+        axes.set_ylim([0, 8000])
     ylabel = onoff + '-band'
 plt.legend(['Rj < 7.5 nightly median', 'Rj < 15 nightly median', 'Rj < 15 surface brightness', '20 < Rj < 25 nightly median'], ncol=2)
 plt.xlabel('UT Date')
@@ -219,9 +230,9 @@ plt.show()
 
 ##-## ######## Time series of your key of choice
 ##-## #key = 'ONBSUB'
-##-## key = 'OFFSCALE'
-##-## #key = 'ADU2R'
-##-## plt.plot_date(pds, 
+##-## #key = 'OFFSCALE'
+##-## key = 'ADU2R'
+##-## plt.plot_date(pds - pdconvert, 
 ##-##               [row[key] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
 ##-## plt.xlabel('UT Date')
 ##-## plt.ylabel(f'{line} {key}')
@@ -414,14 +425,15 @@ plt.show()
 
 ##-## ######### Check offsets and scaling for final reduced images
 ##-## if onoff == 'AP':
-##-##     plt.plot_date(mpds, 
+##-##     plt.plot_date(mpds - pdconvert, 
 ##-##                   [row[onoff + 'Rjp15'] - 900*ADU2R_adjust for row in median_ap_list], '^')
-##-##     plt.plot_date(mpds, 
+##-##     plt.plot_date(mpds - pdconvert, 
 ##-##                   [(row[onoff + 'Rjp30'] - 320*ADU2R_adjust) * 1.5 for row in median_ap_list], 's')
-##-##     plt.plot_date(mpds, 
+##-##     plt.plot_date(mpds - pdconvert, 
 ##-##                   [(row[onoff + 'back'] - 70*ADU2R_adjust) * 2.2 for row in median_ap_list], 'x')
 ##-##     axes = plt.gca()
-##-##     axes.set_ylim([-50, 700])
+##-##     #axes.set_ylim([-50, 700])
+##-##     axes.set_ylim([-500, 7000])
 ##-##     plt.xlabel('UT Date')
 ##-##     plt.ylabel(line + ' Surface Brightness (R)')
 ##-##     plt.legend(['Rj < 7.5 nightly median - 900', '(Rj < 15 nightly median - 320) * 1.5', '(20 < Rj < 25 nightly median - 70) * 2.2'])
