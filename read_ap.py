@@ -10,6 +10,12 @@ from scipy.stats import linregress
 from scipy.signal import medfilt
 from astropy.time import Time
 
+
+# plt changed its plotting epoch, but astropy has not caught up 
+pdconvert = 2440587.50000 - 1721424.5
+
+
+
 # More careful calculation detailed in Morgenthaler et al. 2019 ApJL
 # suggests that ND filter is ~30% low and in MR, 15% light lost to
 # Fraunhofer lines.  Net is 15% too low.  Correct here.
@@ -39,8 +45,9 @@ pdlist = []
 rlist = []
 # Try to hack together a consistent calibration and
 if line == 'Na':
+    ADU2R_recalib = 1
     #ADU2R_recalib = 1/2
-    ADU2R_recalib = 1/4
+    #ADU2R_recalib = 1/4
 if line == '[SII]':
     ADU2R_recalib = 1/6
 
@@ -57,6 +64,12 @@ with open(ap_sum_fname, newline='') as csvfile:
                    or 'On' in k
                    or 'Off' in k)]
     for row in csvr:
+        # Skip cal
+        if row['EXPTIME'] < 60:
+            continue
+        # Skip RAOFF and DECOFF observations
+        if 'Jupiter' in row['FNAME']:
+            continue
         if row['LINE'] != line:
             continue
         T = Time(row['TMID'], format='fits')
@@ -170,25 +183,27 @@ for id in list(set(idays)):
     median_ap_list.append(this_day_medians)
 
 mpds = [row['TMID'] for row in median_ap_list]
+mpds = np.asarray(mpds)
 
 ######## UNCOMMENT APPROPRIATE BLOCK TO CREATE DESIRED FIGURE
 
 ######## Time series of primary apertures.
 # CHANGE onoff ABOVE TO PLOT FOR ON-BAND and OFF-BAND images 
-plt.plot_date(mpds, 
+plt.plot_date(mpds -  pdconvert, 
               [row[onoff + 'Rjp15'] for row in median_ap_list], '^')
-plt.plot_date(mpds, 
+plt.plot_date(mpds -  pdconvert, 
               [row[onoff + 'Rjp30'] for row in median_ap_list], 's')
-plt.plot_date(pds, 
+plt.plot_date(pds -  pdconvert, 
               [row[onoff + 'Rjp30'] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
 back = [row[onoff + 'back'] for row in median_ap_list]
-plt.plot_date(mpds, back, 'x')
+plt.plot_date(mpds -  pdconvert, back, 'x')
 #back_mav = np.convolve(back, np.ones((N_med,))/N_med, mode='same')
 #back_med = medfilt(back, N_med)
 #plt.plot_date(mpds, back_med, ',', linestyle='-')
 axes = plt.gca()
 if onoff == 'AP':
-    axes.set_ylim([0, 1700])
+#    axes.set_ylim([0, 1700])
+    axes.set_ylim([0, 2300])
     ylabel = ''
 else:
     if onoff == 'On':
@@ -204,14 +219,15 @@ plt.show()
 
 ##-## ######## Time series of your key of choice
 ##-## #key = 'ONBSUB'
-##-## #key = 'OFFSCALE'
-##-## key = 'ADU2R'
+##-## key = 'OFFSCALE'
+##-## #key = 'ADU2R'
 ##-## plt.plot_date(pds, 
 ##-##               [row[key] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
 ##-## plt.xlabel('UT Date')
 ##-## plt.ylabel(f'{line} {key}')
 ##-## plt.gcf().autofmt_xdate()  # orient date labels at a slant
 ##-## plt.show()
+
 
 ##-## ######## Time series of 25 Rj aperture.
 ##-## # Subtract the estimated telluric sodium background
