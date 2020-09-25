@@ -1059,7 +1059,7 @@ def reduce_pair(OnBand_fname=None,
             if T < Twheel:
                 on_loss = 0.8
             else:
-                on_loss = 0.6
+                on_loss = 0.5
         else:
             raise ValueError('Improper filter ' +
                              OnBandObsData.header['FILTER'])
