@@ -76,12 +76,12 @@ Na_eq_width = 11.22
 Twheel = Time('2019-03-27T00:00:00', format='fits')
 #
 #SII_on_loss = 0.95
-# 2019 [this seems to be good enough for everyone when looking at
+# 2019 [this seems to be good enough for all dates when looking at
 # read_ap results]
 SII_on_loss = 1.1
 #Na_on_loss = 0.8
 # 2019
-Na_on_loss = 0.6
+#Na_on_loss = 0.6 ---> 0.5 [see on_loss code below]
 # Tue Jul 24 17:37:12 2018 EDT  jpmorgen@snipe
 # See notes in ioio.notebk of this day
 global_bias = 1633 # ADU
@@ -1059,7 +1059,7 @@ def reduce_pair(OnBand_fname=None,
             if T < Twheel:
                 on_loss = 0.8
             else:
-                on_loss = 0.5
+                on_loss = 0.45
         else:
             raise ValueError('Improper filter ' +
                              OnBandObsData.header['FILTER'])
