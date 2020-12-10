@@ -90,12 +90,27 @@ sx694_nonlin_comment = 'Measured nonlinearity point (ADU)'
 sx694_max_accurate_exposure = 0.7 # s
 sx694_exposure_correct = 1.7 # s
 
-# Processing global variables
+# Processing global variables.  Since I avoid use of the global
+# statement and don't reassign these at global scope, they stick to
+# these values and provide handy defaults for routines and object
+# inits.
+
+
+# Tests with first iteration of pipeline showed that the real gain in
+# speed is from the physical processors, not the logical processes
+# (threads).  Threads automatically make the physical processes
+# faster.  Going to num_processes greater than the number of physical
+# processes does go faster, but only asymptotically, probably because
+# wait times are minimized.  Rather than try to milk the asymptote for
+# speed, just max out on physical processors to get the steepest gains
+# and leave the asymptote for other jobs
+num_processes = psutil.cpu_count(logical=False)
 
 data_root = '/data/io/IoIO'
 raw_data_root = os.path.join(data_root, 'raw')
 reduced_root = os.path.join(data_root, 'reduced')
-calibration_root = os.path.join(reduced_root, 'calibration')
+calibration_root = os.path.join(reduced_root, 'Calibration')
+calibration_scratch = os.path.join(calibration_root, 'scratch')
 
 # Raw (and reduced) data are stored in directories by UT date, but
 # some have subdirectories that contain calibration files.
@@ -117,6 +132,10 @@ dccdt_tolerance = 0.5
 # During reduction of files, biases and darks need to be matched to
 # each file by temperature.  This is the tolerance for that matching
 ccdt_tolerance = 2
+# When I was experimenting with bias collection on a per-night basis,
+# I got lots of nights with a smattering of biases.  Discard these
+min_num_biases = 7
+min_num_flats = 3
 
 def get_dirs(directory,
              filt_list=None,
@@ -164,7 +183,8 @@ def get_dirs(directory,
             except:
                 pass
         if dirfail:
-            log.debug('Skipping non-date formatted directory: ' + thisdir)
+            pass
+            #log.debug('Skipping non-date formatted directory: ' + thisdir)
     # Thanks to https://stackoverflow.com/questions/9376384/sort-a-list-of-tuples-depending-on-two-elements
     if len(ddlist) == 0:
         return []
@@ -439,18 +459,53 @@ def fname_by_imagetyp_ccdt_exp(directory=None,
                                'fnames': full_files})
     return fdict_list
 
+def bias_dataframe(fname, gain):
+    ccd = ccddata_read(fname, add_metadata=True)
+    if not full_frame(ccd):
+        log.debug('bias wrong shape: ' + fname)
+        return {'good': False}
+    if light_image(ccd):
+        log.debug('bias recorded during light conditions: ' +
+                  fname)
+        return {'good': False}
+    im = ccd.data
+    # Create uncertainty image
+    diffs2 = (im[1:] - im[0:-1])**2
+    rdnoise = np.sqrt(biweight_location(diffs2))
+    uncertainty = np.multiply(rdnoise, np.ones(im.shape))
+    ccd.uncertainty = StdDevUncertainty(uncertainty)
+    # Prepare to create a pandas data frame to track relevant
+    # quantities
+    tm = Time(ccd.meta['DATE-OBS'], format='fits')
+    ccdt = ccd.meta['CCD-TEMP']
+    tt = tm.tt.datetime
+    dataframe = {'time': tt,
+                 'ccdt': ccdt,
+                 'median': np.median(im),
+                 'mean': np.mean(im),
+                 'std': np.std(im)*gain,
+                 'rdnoise': rdnoise*gain,
+                 'min': np.min(im),  
+                 'max': np.max(im)}
+    return {'good': True,
+            'fname': fname,
+            'dataframe': dataframe,
+            'jd': tm.jd}
+
 def bias_combine(directory=None,
                  collection=None,
                  subdirs=calibration_subdirs,
                  glob_include=bias_glob,
-                 outdir='/data/io/IoIO/reduced/bias_dark',
+                 outdir=calibration_root,
                  show=False,
+                 min_num_biases=min_num_biases,
                  dccdt_tolerance=dccdt_tolerance,
+                 num_processes=num_processes,
                  camera_description=sx694_camera_description,
                  gain=sx694_gain,
                  satlevel=sx694_satlevel,
                  readnoise=sx694_example_readnoise,
-                 readnoise_tolerance=0.5, # units of readnoise
+                 readnoise_tolerance=0.5, # units of readnoise (e.g., electrons)
                  gain_correct=False):
     """Combine biases in a directory
 
@@ -473,57 +528,65 @@ def bias_combine(directory=None,
     if len(fdict_list) == 0:
         log.debug('No biases found in: ' + directory)
         return False
-    # Loop through each member of our fdict_list, preparing summary
-    # plot and combining biases
+
+    # Loop through each member of our fdict_list, preparing a pandas
+    # dataframe for subsequent processing.  Note, to avoid
+    # overwhelming memory, don't store files as a list of ccddata
+    # objects (lccd)
 
     # --> Consider paralleling this loop somehow.  Pretty much just
     # --> need to make it a subroutine like I did
-    # --> ReduceCorObs.ReduceDir.worker_reduce_pair.  I just need to
-    # --> be careful about passing a sensible mem_limit to the workers
-    # --> based on the number of processes and memory I want to hog.
+    # --> ReduceCorObs.ReduceDir.worker_reduce_pair.  However, don't
+    # --> do this until after Daniel & I parallelize ccdproc.combine,
+    # --> since it makes more sense to keep this thin and parallelize
+    # --> in the calling routine
     for fdict in fdict_list:
-        lccds = []
-        stats = []
-        jds = []
-        for fname in fdict['fnames']:
-            ccd = ccddata_read(fname, add_metadata=True)
-            if not full_frame(ccd):
-                log.debug('bias wrong shape: ' + fname)
-                continue
-            if light_image(ccd):
-                log.debug('bias recorded during light conditions: ' +
-                          fname)
-                continue
-            im = ccd.data
-            # Create uncertainty image
-            diffs2 = (im[1:] - im[0:-1])**2
-            rdnoise = np.sqrt(biweight_location(diffs2))
-            uncertainty = np.multiply(rdnoise, np.ones(im.shape))
-            ccd.uncertainty = StdDevUncertainty(uncertainty)
-            # --> NOTE: this keeps all of the files open and therefore
-            # this saves everything in memory.  Might want to write
-            # files and save filenames instead to enable
-            # multiprocessing and make sure I don't fill up the
-            # memory.  Snipe's PERC H730P RAID card has a 2G cache and
-            # runs transfers at 12 Gb/s, so file re-reads might not be
-            # that bad
-            lccds.append(ccd)
-            # Prepare to create a pandas data frame to track relevant
-            # quantities
-            tm = Time(ccd.meta['DATE-OBS'], format='fits')
-            ccdt = ccd.meta['CCD-TEMP']
-            tt = tm.tt.datetime
-            jds.append(tm.jd)
-            stats.append({'time': tt,
-                          'ccdt': ccdt,
-                          'median': np.median(im),
-                          'mean': np.mean(im),
-                          'std': np.std(im)*gain,
-                          'rdnoise': rdnoise*gain,
-                          'min': np.min(im),  
-                          'max': np.max(im)})
-            mean_t = fdict['T']
-        if len(stats) < 3:
+        gains = [gain]*len(fdict['fnames'])
+        with Pool(processes=num_processes) as p:
+            dfdlist = p.starmap(bias_dataframe,
+                                zip(fdict['fnames'], gains))
+        # Unpack        
+        good_fnames = [dfd['fname'] for dfd in dfdlist if dfd['good']]
+        stats = [dfd['dataframe'] for dfd in dfdlist if dfd['good']]
+        jds = [dfd['jd'] for dfd in dfdlist if dfd['good']]
+
+
+        #good_fnames = []
+        #stats = []
+        #jds = []
+        #for fname in fdict['fnames']:
+        #    ccd = ccddata_read(fname, add_metadata=True)
+        #    if not full_frame(ccd):
+        #        log.debug('bias wrong shape: ' + fname)
+        #        continue
+        #    if light_image(ccd):
+        #        log.debug('bias recorded during light conditions: ' +
+        #                  fname)
+        #        continue
+        #    good_fnames.append(fname)
+        #    im = ccd.data
+        #    # Create uncertainty image
+        #    diffs2 = (im[1:] - im[0:-1])**2
+        #    rdnoise = np.sqrt(biweight_location(diffs2))
+        #    uncertainty = np.multiply(rdnoise, np.ones(im.shape))
+        #    ccd.uncertainty = StdDevUncertainty(uncertainty)
+        #    # Prepare to create a pandas data frame to track relevant
+        #    # quantities
+        #    tm = Time(ccd.meta['DATE-OBS'], format='fits')
+        #    ccdt = ccd.meta['CCD-TEMP']
+        #    tt = tm.tt.datetime
+        #    jds.append(tm.jd)
+        #    stats.append({'time': tt,
+        #                  'ccdt': ccdt,
+        #                  'median': np.median(im),
+        #                  'mean': np.mean(im),
+        #                  'std': np.std(im)*gain,
+        #                  'rdnoise': rdnoise*gain,
+        #                  'min': np.min(im),  
+        #                  'max': np.max(im)})
+
+        mean_t = fdict['T']
+        if len(stats) < min_num_biases:
             log.debug('Not enough good biases found at CCDT = {} C in {}'.format(mean_t, directory))
             continue
         df = pd.DataFrame(stats)
@@ -591,11 +654,10 @@ def bias_combine(directory=None,
         #plt.show()
             
         # Make sure outdir exists
-        if not os.path.exists(outdir):
-            os.mkdir(outdir)
-        fbase = os.path.join(outdir, this_dateb + '_ccdT_' + this_ccdt)
-        fname = fbase + '_combined_bias.fits'
-        plt.savefig((fbase + '_vs_time.png'), transparent=True)
+        os.makedirs(outdir, exist_ok=True)
+        outbase = os.path.join(outdir, this_dateb + '_ccdT_' + this_ccdt)
+        out_fname = outbase + '_combined_bias.fits'
+        plt.savefig((outbase + '_vs_time.png'), transparent=True)
         if show:
             plt.show()
         plt.close()
@@ -604,29 +666,33 @@ def bias_combine(directory=None,
         av_rdnoise = np.mean(df['rdnoise'])            
         if (np.abs(av_rdnoise/sx694_example_readnoise - 1)
             > readnoise_tolerance):
-            log.warning('High readnoise {}, skipping {}'.format(av_rdnoise, fname))
+            log.warning('High readnoise {}, skipping {}'.format(av_rdnoise, out_fname))
             continue
 
-        # Go through each image and subtract the median, since that
-        # value wanders as a function of ambient (not CCD)
-        # temperature.  To use ccd.subtract, type must match type of
-        # array.  And they are integers anyway
+        # "Overscan subtract."  Go through each image and subtract the
+        # median, since that value wanders as a function of ambient
+        # (not CCD) temperature.  This leaves just the bias pattern.
+        # To use ccd.subtract, unit must match type of array.  Note
+        # that we need to save our images to disk to avoid
+        # overwhelming memory when we have lots of biases
 
-        # We need another list to keep track of the
-        # overscan-subtracted ccds, since ccd.subtract returns a copy
-        # which doesn't get put back into the original lccd.  And when
-        # I tried to put it in the original lccd wierd things happened
-        # anyway
-        # --> NOTE: See note about memory above
-        os_lccds = []
-        for ccd, m in zip(lccds, medians):
+        # Make a date subdirectory in our calibration scratch dir
+        sdir = os.path.join(calibration_scratch, this_dateb)
+        os.makedirs(sdir, exist_ok=True)
+        os_fnames = []
+        for fname, m in zip(good_fnames, medians):
+            ccd = ccddata_read(fname, add_metadata=True)
             ccd = ccd.subtract(m*u.adu, handle_meta='first_found')
-            os_lccds.append(ccd)
-            lccds = os_lccds
+            # Get our filename only, hack off extension, add _os.fits
+            os_fname = os.path.split(fname)[1]
+            os_fname = os.path.splitext(os_fname)[0] + '_os.fits'
+            os_fname = os.path.join(sdir, os_fname)
+            ccd.write(os_fname, overwrite=True)
+            os_fnames.append(os_fname)
 
         ### Use ccdproc Combiner object iteratively as per example to
         ### mask out bad pixels
-        ##combiner = ccdp.Combiner(lccds)
+        ##combiner = ccdp.Combiner(os_fnames)
         ##old_n_masked = -1  # dummy value to make loop execute at least once
         ##new_n_masked = 0
         ##while (new_n_masked > old_n_masked):
@@ -649,7 +715,7 @@ def bias_combine(directory=None,
         # images away)
         mem = psutil.virtual_memory()
         im = \
-            ccdp.combine(lccds,
+            ccdp.combine(os_fnames,
                          method='average',
                          sigma_clip=True,
                          sigma_clip_low_thresh=5,
@@ -693,7 +759,7 @@ def bias_combine(directory=None,
         im.meta['MAX'] = (tmax, 'Max of image (electron)')
         im.meta['HIERARCH OVERSCAN_VALUE'] = (overscan, 'Average of raw bias medians (ADU)')
         im.meta['HIERARCH SUBTRACT_OVERSCAN'] = (True, 'Overscan has been subtracted')
-        im.meta['NCOMBINE'] = (len(lccds), 'Number of biases combined')
+        im.meta['NCOMBINE'] = (len(good_fnames), 'Number of biases combined')
         # Record each filename
         for i, f in enumerate(fdict['fnames']):
             im.meta['FILE{0:02}'.format(i)] = f
@@ -705,14 +771,14 @@ def bias_combine(directory=None,
         # final results that primarily sit on disk in bulk small
         #im.data = im.data.astype('float32')
         #im.uncertainty.array = im.uncertainty.array.astype('float32')
-        im.write(fname, overwrite=True)
+        im.write(out_fname, overwrite=True)
         # Always display image in electrons
         impl = plt.imshow(im.multiply(im_gain), origin='lower',
                           cmap=plt.cm.gray,
                           filternorm=0, interpolation='none',
                           vmin=med-std, vmax=med+std)
         plt.title('CCDT = {} C on {} (electrons)'.format(this_ccdt, this_dateb))
-        plt.savefig((fbase + '_combined_bias.png'), transparent=True)
+        plt.savefig((outbase + '_combined_bias.png'), transparent=True)
         if show:
             plt.show()
         plt.close()
@@ -1252,7 +1318,8 @@ def dark_combine(directory=None,
                  subdirs=calibration_subdirs,
                  glob_include=dark_glob,
                  master_bias=None, # This is going to have to be True or something like that to trigger search for optimum
-                 outdir='/data/io/IoIO/reduced/bias_dark', 
+                 calibration=calibration,
+                 outdir=calibration_root,
                  show=False,
                  dccdt_tolerance=dccdt_tolerance,
                  mask_threshold=3): #Units of readnoise
@@ -1292,14 +1359,14 @@ def dark_combine(directory=None,
             jds.append(tm.jd)
         mean_t = fdict['T']
         exptime = fdict['EXPTIME']
-        if len(jds) < 3:
-            log.debug('Not enough good darks found at CCDT = {} C EXPTIME = {} in {}'.format(mean_t, exptime, directory))
+        if len(jds) == 0:
+            log.debug('No good darks found at CCDT = {} C EXPTIME = {} in {}'.format(mean_t, exptime, directory))
             continue
         tm = Time(np.mean(jds), format='jd')
         this_date = tm.fits
         this_dateb = this_date.split('T')[0]
         this_ccdt = '{:.1f}'.format(mean_t)
-        fbase = '{}_ccdT_{}_exptime_{}s'.format(
+        outbase = '{}_ccdT_{}_exptime_{}s'.format(
             this_dateb, this_ccdt, exptime)
 
         mem = psutil.virtual_memory()
@@ -1347,7 +1414,7 @@ def dark_combine(directory=None,
         tmin = np.min(tim)
         tmax = np.max(tim)
         rdnoise = np.sqrt(np.median((tim[1:] - tim[0:-1])**2))
-        print('combined dark statistics for ' + fbase)
+        print('combined dark statistics for ' + outbase)
         print('std, rdnoise, mean, med, min, max, n_dark_pix')
         print(std, rdnoise, mean, med, tmin, tmax, n_dark_pix)
         im.meta['STD'] = (std, 'Standard deviation of image (electron)')
@@ -1368,13 +1435,13 @@ def dark_combine(directory=None,
         # Prepare to write
         if not os.path.exists(outdir):
             os.mkdir(outdir)
-        fbase = os.path.join(outdir, fbase)
-        fname = fbase + '_combined_dark.fits'
+        outbase = os.path.join(outdir, outbase)
+        out_fname = outbase + '_combined_dark.fits'
         # Leave these large for fast calculations downstream and make
         # final results that primarily sit on disk in bulk small
         #im.data = im.data.astype('float32')
         #im.uncertainty.array = im.uncertainty.array.astype('float32')
-        im.write(fname, overwrite=True)
+        im.write(out_fname, overwrite=True)
         if show:
             impl = plt.imshow(im, origin='lower', cmap=plt.cm.gray,
                               filternorm=0, interpolation='none',
@@ -1388,7 +1455,8 @@ def flat_combine(directory=None,
                  glob_include=flat_glob,
                  master_bias=None, # This is going to have to be True or something like that to trigger search for optimum
                  dark_frame=None, # similarly here
-                 outdir='/data/io/IoIO/reduced/bias_dark', # --> change this
+                 outdir=calibration_root,
+                 min_num_flats=min_num_flats,
                  show=False,
                  flat_cut=0.75,
                  init_threshold=100, # units of readnoise
@@ -1409,6 +1477,7 @@ def flat_combine(directory=None,
                                 master_bias=master_bias,
                                 dark_frame=dark_frame, # similarly here
                                 outdir=outdir,
+                                min_num_flats=min_num_flats,
                                 show=show)
         log.debug('No [matching] FITS files found in  ' + directory)
         return False
@@ -1456,7 +1525,7 @@ def flat_combine(directory=None,
             tt = tm.tt.datetime
             jds.append(tm.jd)
         
-        if len(jds) < 3:
+        if len(jds) < min_num_flats:
             log.debug('Not enough good flats found for filter = {} in {}'.format(this_filter, directory))
             continue
         # Combine our flats
@@ -1500,12 +1569,12 @@ def flat_combine(directory=None,
         tm = Time(np.mean(jds), format='jd')
         this_date = tm.fits
         this_dateb = this_date.split('T')[0]
-        fbase = '{}_{}'.format(this_dateb, this_filter)
+        outbase = '{}_{}'.format(this_dateb, this_filter)
         if not os.path.exists(outdir):
             os.mkdir(outdir)
-        fbase = os.path.join(outdir, fbase)
-        fname = fbase + '_flat.fits'
-        im.write(fname, overwrite=True)
+        outbase = os.path.join(outdir, outbase)
+        out_fname = outbase + '_flat.fits'
+        im.write(out_fname, overwrite=True)
         if show:
             impl = plt.imshow(im, origin='upper', cmap=plt.cm.gray)
             plt.show()
@@ -1927,39 +1996,41 @@ log.setLevel('DEBUG')
 
 bname = '2020-10-01_ccdT_-10.3_combined_bias.fits'
 
-bias_dark_dir = '/data/io/IoIO/reduced/bias_dark'
-bnames = glob.glob(bias_dark_dir + '/*_combined_bias.fits')
+#bias_dark_dir = '/data/io/IoIO/reduced/bias_dark'
+#bnames = glob.glob(bias_dark_dir + '/*_combined_bias.fits')
 
-Ts = []
-dates = []
-for bname in bnames:
-    bbname = os.path.basename(bname)
-    sbname = bbname.split('_')
-    date = Time(sbname[0], format='fits')
-    T = float(sbname[2])
-    dates.append(date)
-    Ts.append(T)
-dates = np.asarray(dates)
-Ts = np.asarray(Ts)
+#Ts = []
+#dates = []
+#for bname in bnames:
+#    bbname = os.path.basename(bname)
+#    sbname = bbname.split('_')
+#    date = Time(sbname[0], format='fits')
+#    T = float(sbname[2])
+#    dates.append(date)
+#    Ts.append(T)
+#dates = np.asarray(dates)
+#Ts = np.asarray(Ts)
+#
+#sample = '/data/io/IoIO/raw/20201001/Dark-S001-R003-C009-B1.fts'
+#ccd = ccddata_read(sample)
+#tm = Time(ccd.meta['DATE-OBS'], format='fits')
+#ccdt = ccd.meta['CCD-TEMP']
+#dTs = ccdt - Ts
+#good_T_idx = np.flatnonzero(np.abs(dTs) < 2)
+##good_T_idx = np.flatnonzero(np.abs(dTs) < 0.0000003)
+#if len(good_T_idx) == 0:
+#    print('yuck')
+#ddates = tm - dates
+#best_T_date_idx = np.argmin(ddates[good_T_idx])
+## unwrap
+#best_T_date_idx = good_T_idx[best_T_date_idx]
+#print(bnames[best_T_date_idx])
+#
+#def time_to_date(time):
+#    timestring = time.fits
+#    return timestring.split('T')[0]
+###############################
 
-sample = '/data/io/IoIO/raw/20201001/Dark-S001-R003-C009-B1.fts'
-ccd = ccddata_read(sample)
-tm = Time(ccd.meta['DATE-OBS'], format='fits')
-ccdt = ccd.meta['CCD-TEMP']
-dTs = ccdt - Ts
-good_T_idx = np.flatnonzero(np.abs(dTs) < 2)
-#good_T_idx = np.flatnonzero(np.abs(dTs) < 0.0000003)
-if len(good_T_idx) == 0:
-    print('yuck')
-ddates = tm - dates
-best_T_date_idx = np.argmin(ddates[good_T_idx])
-# unwrap
-best_T_date_idx = good_T_idx[best_T_date_idx]
-print(bnames[best_T_date_idx])
-
-def time_to_date(time):
-    timestring = time.fits
-    return timestring.split('T')[0]
 
 def dir_has_calibration(directory, glob_include, subdirs=[]):
     """Returns True if directory has calibration files matching pattern(s)
@@ -1989,6 +2060,7 @@ class Calibration():
                  start_date=None,
                  stop_date=None,
                  gain_correct=True, # This is gain correcting the bias and dark
+                 num_processes=num_processes,
                  bias_glob=bias_glob, 
                  dark_glob=dark_glob,
                  flat_glob=flat_glob):
@@ -2004,6 +2076,7 @@ class Calibration():
         self._bias_glob = bias_glob
         self._dark_glob = dark_glob
         self._flat_glob = flat_glob
+        self.num_processes = num_processes
         if start_date is None:
             start_date = datetime.datetime(1,1,1)
         else:
@@ -2044,15 +2117,17 @@ class Calibration():
         to_reduce = [d for d in to_check
                      if dir_has_calibration(d, glob_include, subdirs=subdirs)]
         # Remove duplicates
-        return list(set(to_reduce))
+        return sorted(list(set(to_reduce)))
 
     def reduce_bias(self):
         for d in self.dirs_to_reduce(self.bias_table_create, self._bias_glob):
+            log.info('Reducing biases in {}'.format(d))
             bias_combine(d,
                          subdirs=self._subdirs,
                          glob_include=self._bias_glob,
                          outdir=self._calibration_root,
-                         gain_correct=self._gain_correct)
+                         gain_correct=self._gain_correct,
+                         num_processes=self.num_processes)
         self.bias_table_create(rescan=True, autoreduce=False)
 
     def bias_table_create(self,
@@ -2109,8 +2184,8 @@ class Calibration():
         ccdt = hdr['CCD-TEMP']
         dccdts = ccdt - self.bias_table['ccdts']
         good_ccdt_idx = np.flatnonzero(np.abs(dccdts) < ccdt_tolerance)
-        if len(good_T_idx) == 0:
-            log.warning('No biases found within {}C, broadening by factor of 2',format(ccdt_tolerance))
+        if len(good_ccdt_idx) == 0:
+            log.warning('No biases found within {}C, broadening by factor of 2'.format(ccdt_tolerance))
             return self.best_bias(hdr, ccdt_tolerance=ccdt_tolerance*2)
         ddates = tm - self.bias_table['dates']
         best_ccdt_date_idx = np.argmin(ddates[good_ccdt_idx])
@@ -2118,18 +2193,31 @@ class Calibration():
         best_ccdt_date_idx = good_ccdt_idx[best_ccdt_date_idx]
         return self._bias_table['fnames'][best_ccdt_date_idx]
 
-c = Calibration(calibration_root=bias_dark_dir)
-print(c.best_bias(sample))
+
+sample = '/data/io/IoIO/raw/20201001/Dark-S001-R003-C009-B1.fts'
+
+#bias_dark_dir = '/data/io/IoIO/reduced/bias_dark'
+#c = Calibration(calibration_root=bias_dark_dir)
+#print(c.best_bias(sample))
+##print(c.dirs_to_reduce(c.bias_table_create, c._bias_glob))
+#
+#d = Calibration(start_date='2018-01-01', stop_date='2019-01-01')
+#print(d.dirs_to_reduce(d.bias_table_create, c._bias_glob))
+#
+#d = Calibration(start_date='2017-01-01', stop_date='2018-01-01')
+#print(d.dirs_to_reduce(d.bias_table_create, c._bias_glob))
+
+#c = Calibration(start_date='2020-07-01', stop_date='2020-08-01')
 #print(c.dirs_to_reduce(c.bias_table_create, c._bias_glob))
-
-d = Calibration(start_date='2018-01-01', stop_date='2019-01-01')
-print(d.dirs_to_reduce(d.bias_table_create, c._bias_glob))
-
-d = Calibration(start_date='2017-01-01', stop_date='2018-01-01')
-print(d.dirs_to_reduce(d.bias_table_create, c._bias_glob))
 
 
 #gi = ['Bias*', '*_bias.fit', 'Dark*', '*_dark.fit', '*Flat*']
 #print(dir_has_calibration('/data/io/IoIO/raw/20200711', gi))
 #print(dir_has_calibration('/data/io/IoIO/raw/20200712', gi))
 #print(dir_has_calibration('/data/io/IoIO/raw/202007122', gi))
+
+#c = Calibration(start_date='2020-07-11', stop_date='2020-07-12')
+#print(c.dirs_to_reduce(c.bias_table_create, c._bias_glob))
+#print(c.best_bias(sample))
+
+#bias_combine('/data/io/IoIO/raw/20200711', show=True, gain_correct=True)
