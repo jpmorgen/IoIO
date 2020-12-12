@@ -2116,16 +2116,16 @@ if __name__ == "__main__":
 # c.write_videofile('/tmp/test.mp4')
 
 
-on_band = os.path.join(data_root, 'raw', '20200921', 'SII_on-band_004.fits')
-off_band = os.path.join(data_root, 'raw', '20200921', 'SII_off-band_004.fits')
-on_band = os.path.join(data_root, 'raw', '20200921', 'Na_on-band_002.fits')
-off_band = os.path.join(data_root, 'raw', '20200921', 'Na_off-band_002.fits')
-#
-on_band = os.path.join(data_root, 'raw', '20200921', 'Jupiter-S001-R001-C001-Na_on.fts')
-off_band = os.path.join(data_root, 'raw', '20200921', 'Jupiter-S001-R001-C001-Na_off.fts')
-#
-#
-reduce_pair(on_band, off_band, recalculate=True)
+#on_band = os.path.join(data_root, 'raw', '20200921', 'SII_on-band_004.fits')
+#off_band = os.path.join(data_root, 'raw', '20200921', 'SII_off-band_004.fits')
+#on_band = os.path.join(data_root, 'raw', '20200921', 'Na_on-band_002.fits')
+#off_band = os.path.join(data_root, 'raw', '20200921', 'Na_off-band_002.fits')
+##
+#on_band = os.path.join(data_root, 'raw', '20200921', 'Jupiter-S001-R001-C001-Na_on.fts')
+#off_band = os.path.join(data_root, 'raw', '20200921', 'Jupiter-S001-R001-C001-Na_off.fts')
+##
+##
+#reduce_pair(on_band, off_band, recalculate=True)
 
 #directory = os.path.join(data_root, 'raw', '20200921')
 ## Sort on whether or not images are recorded with Jupiter centered or

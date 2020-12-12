@@ -963,6 +963,46 @@ def ACP_IPT_Na_R(args):
                 log.info('Exposure would extend past end of ACP exposure, returning') 
                 return
             for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_07_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=6)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_071_', d),
+                                exptime=0.71,
+                                binning=1,
+                                filt=6)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_10_', d),
+                                exptime=10,
+                                binning=1,
+                                filt=6)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_15_', d),
+                                exptime=15,
+                                binning=1,
+                                filt=6)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_off_cal_07_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=3)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_off_cal_071_', d),
+                                exptime=0.71,
+                                binning=1,
+                                filt=3)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('SII_off_cal_07_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=2)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('SII_off_cal_071_', d),
+                                exptime=0.71,
+                                binning=1,
+                                filt=2)
+            for ifilt in range(1):
                 P.MC.acquire_im(pg.uniq_fname('SII_on_cal_07_', d),
                                 exptime=0.7,
                                 binning=1,
@@ -987,46 +1027,6 @@ def ACP_IPT_Na_R(args):
                                 exptime=20,
                                 binning=1,
                                 filt=1)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('SII_off_cal_07_', d),
-                                exptime=0.7,
-                                binning=1,
-                                filt=2)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('SII_off_cal_071_', d),
-                                exptime=0.71,
-                                binning=1,
-                                filt=2)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_off_cal_07_', d),
-                                exptime=0.7,
-                                binning=1,
-                                filt=3)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_off_cal_071_', d),
-                                exptime=0.71,
-                                binning=1,
-                                filt=3)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_07_', d),
-                                exptime=0.7,
-                                binning=1,
-                                filt=6)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_071_', d),
-                                exptime=0.71,
-                                binning=1,
-                                filt=6)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_10_', d),
-                                exptime=10,
-                                binning=1,
-                                filt=6)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_15_', d),
-                                exptime=15,
-                                binning=1,
-                                filt=6)
             log.debug('CENTERING WITH GUIDEBOX MOVES') 
             P.center_loop()
             while True:
@@ -1059,25 +1059,25 @@ def ACP_IPT_Na_R(args):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
                     return
                 for ifilt in range(2):
-                    P.MC.acquire_im(pg.uniq_fname('V_', d),
-                                    exptime=0.2,
+                    P.MC.acquire_im(pg.uniq_fname('R_', d),
+                                    exptime=0.1,
                                     binning=1,
-                                    filt=4)
-                for ifilt in range(2):
-                    P.MC.acquire_im(pg.uniq_fname('U_', d),
-                                    exptime=20,
-                                    binning=1,
-                                    filt=5)
+                                    filt=0)
                 for ifilt in range(2):
                     P.MC.acquire_im(pg.uniq_fname('B_', d),
                                     exptime=0.7,
                                     binning=1,
                                     filt=7)
                 for ifilt in range(2):
-                    P.MC.acquire_im(pg.uniq_fname('R_', d),
-                                    exptime=0.1,
+                    P.MC.acquire_im(pg.uniq_fname('U_', d),
+                                    exptime=20,
                                     binning=1,
-                                    filt=0)
+                                    filt=5)
+                for ifilt in range(2):
+                    P.MC.acquire_im(pg.uniq_fname('V_', d),
+                                    exptime=0.2,
+                                    binning=1,
+                                    filt=4)
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
                 P.center_loop()
                 log.info('Collecting Na')
@@ -1088,6 +1088,8 @@ def ACP_IPT_Na_R(args):
                 P.MC.acquire_im(pg.uniq_fname('Na_off-band_', d),
                                 exptime=exptime,
                                 filt=3)
+                log.debug('CENTERING WITH GUIDEBOX MOVES') 
+                P.center_loop()
                 exptime=300
                 if ((time.time() + exptime) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
@@ -1095,19 +1097,10 @@ def ACP_IPT_Na_R(args):
                 P.MC.acquire_im(pg.uniq_fname('Na_on-band_', d),
                                 exptime=exptime,
                                 filt=6)
-                log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                P.center_loop()
-                
+
                 for i in range(4):
                     P.diff_flex()
                     log.info('Collecting [SII]')
-                    exptime=300
-                    if ((time.time() + exptime) > Tend):
-                        log.info('Exposure would extend past end of ACP exposure, returning') 
-                        return
-                    P.MC.acquire_im(pg.uniq_fname('SII_on-band_', d),
-                                    exptime=exptime,
-                                    filt=1)
                     exptime=60
                     if ((time.time() + exptime) > Tend):
                         log.info('Exposure would extend past end of ACP exposure, returning') 
@@ -1115,6 +1108,13 @@ def ACP_IPT_Na_R(args):
                     P.MC.acquire_im(pg.uniq_fname('SII_off-band_', d),
                                     exptime=exptime,
                                     filt=2)
+                    exptime=300
+                    if ((time.time() + exptime) > Tend):
+                        log.info('Exposure would extend past end of ACP exposure, returning') 
+                        return
+                    P.MC.acquire_im(pg.uniq_fname('SII_on-band_', d),
+                                    exptime=exptime,
+                                    filt=1)
                     P.diff_flex()
                     log.debug('CENTERING WITH GUIDEBOX MOVES') 
                     P.center_loop()
