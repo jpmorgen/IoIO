@@ -36,7 +36,7 @@ onoff = 'On'	# on-band images after bias and dark subtraction and rayleigh calib
 
 ap_sum_fname = '/data/io/IoIO/reduced/ap_sum.csv'
 #ap_sum_fname = '/data/io/IoIO/reduced/ap_sum_20190411+.csv'
-ap_sum_fname = '/data/io/IoIO/NO_BACKUP/reduced.previous_versions/202009_before_off_jup/ap_sum.csv'
+#ap_sum_fname = '/data/io/IoIO/NO_BACKUP/reduced.previous_versions/202009_before_off_jup/ap_sum.csv'
 
 
 # list of days in matplotlib plot_date format, which happen to start
@@ -50,9 +50,14 @@ if line == 'Na':
     #ADU2R_recalib = 1
     #ADU2R_recalib = 1/2
     #ADU2R_recalib = 1/4
-     ADU2R_recalib = 0.4
-     # --> long-term I need to change this in RedCorObs
-     on_loss_adjust = 0.5/0.8
+    #ADU2R_recalib = 0.4
+    ADU2R_recalib = 0.41
+    #ADU2R_recalib = 0.45  # Too low
+    # --> long-term I need to change this in RedCorObs
+    #on_loss_adjust = 0.5/0.8
+    #on_loss_adjust = 0.6/0.8 # too high, clearly over-subtracting
+    on_loss_adjust = 1
+    #on_loss_adjust = 0.9
 if line == '[SII]':
     ADU2R_recalib = 1/4.8
     on_loss_adjust = 1
@@ -145,15 +150,16 @@ ap_keys = [k for k in saverow.keys()
 pds = np.asarray(pdlist)
 idays = pds.astype(int)
 
+print('Total number of observations: ', len(pds))
+print('Total number of days: ', len(np.unique(idays)))
+
 T0 = Time('2017-12-01T00:00:00', format='fits')
 T1 = Time('2018-07-10T00:00:00', format='fits')
 
-good_idx = np.where(np.logical_and(T0.plot_date < pds, pds < T1.plot_date))
-good_idx = np.where(pds < T1.plot_date)
-
-
-print(len(np.squeeze(good_idx)))
-print(len(pds))
+#good_idx = np.where(np.logical_and(T0.plot_date < pds, pds < T1.plot_date))
+#good_idx = np.where(pds < T1.plot_date)
+#print(len(np.squeeze(good_idx)))
+#print(len(pds))
 
 # Compute daily medians and linear regressions between apertures
 median_ap_list = []
@@ -220,7 +226,7 @@ else:
     if onoff == 'On':
         axes.set_ylim([0, 15000])
     else:
-        axes.set_ylim([0, 8000])
+        axes.set_ylim([0, 2000])
     ylabel = onoff + '-band'
 plt.legend(['Rj < 7.5 nightly median', 'Rj < 15 nightly median', 'Rj < 15 surface brightness', '20 < Rj < 25 nightly median'], ncol=2)
 plt.xlabel('UT Date')
@@ -424,6 +430,7 @@ plt.show()
 
 
 ##-## ######### Check offsets and scaling for final reduced images
+##-## ### Morgenthaler et al 2019 value for 2018
 ##-## if onoff == 'AP':
 ##-##     plt.plot_date(mpds - pdconvert, 
 ##-##                   [row[onoff + 'Rjp15'] - 900*ADU2R_adjust for row in median_ap_list], '^')
@@ -440,6 +447,61 @@ plt.show()
 ##-##     plt.gcf().autofmt_xdate()  # orient date labels at a slant
 ##-##     plt.show()
 
+##-## ######### Check offsets and scaling for final reduced images
+##-## ### 2018
+##-## if onoff == 'AP':
+##-##     plt.plot_date(mpds - pdconvert, 
+##-##                   [row[onoff + 'Rjp15'] - 950*ADU2R_adjust for row in median_ap_list], '^')
+##-##     plt.plot_date(mpds - pdconvert, 
+##-##                   [(row[onoff + 'Rjp30'] - 330*ADU2R_adjust) * 1.5 for row in median_ap_list], 's')
+##-##     plt.plot_date(mpds - pdconvert, 
+##-##                   [(row[onoff + 'back'] - 70*ADU2R_adjust) * 2.2 for row in median_ap_list], 'x')
+##-##     axes = plt.gca()
+##-##     #axes.set_ylim([-50, 700])
+##-##     axes.set_ylim([-500, 7000])
+##-##     plt.xlabel('UT Date')
+##-##     plt.ylabel(line + ' Surface Brightness (R)')
+##-##     plt.legend(['Rj < 7.5 nightly median - 900', '(Rj < 15 nightly median - 320) * 1.5', '(20 < Rj < 25 nightly median - 70) * 2.2'])
+##-##     plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-##     plt.show()
+
+##-## ######### Check offsets and scaling for final reduced images
+##-## ### 2019
+##-## if onoff == 'AP':
+##-##     plt.plot_date(mpds - pdconvert, 
+##-##                   [row[onoff + 'Rjp15'] - (730)*ADU2R_adjust for row in median_ap_list], '^')
+##-##     plt.plot_date(mpds - pdconvert, 
+##-##                   [(row[onoff + 'Rjp30'] - (280)*ADU2R_adjust) * 1 for row in median_ap_list], 's')
+##-##     plt.plot_date(mpds - pdconvert, 
+##-##                   [(row[onoff + 'back'] - (70)*ADU2R_adjust) * 1 for row in median_ap_list], 'x')
+##-##     axes = plt.gca()
+##-##     #axes.set_ylim([-50, 700])
+##-##     axes.set_ylim([-500, 2000])
+##-##     plt.xlabel('UT Date')
+##-##     plt.ylabel(line + ' Surface Brightness (R)')
+##-##     plt.legend(['Rj < 7.5 nightly median - 900', '(Rj < 15 nightly median - 320) * 1.5', '(20 < Rj < 25 nightly median - 70) * 2.2'])
+##-##     plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-##     plt.show()
+
+##-## ######### Check offsets and scaling for final reduced images
+##-## ### 2020
+##-## if onoff == 'AP':
+##-##     plt.plot_date(mpds - pdconvert, 
+##-##                   [row[onoff + 'Rjp15'] - (670)*ADU2R_adjust for row in median_ap_list], '^')
+##-##     plt.plot_date(mpds - pdconvert, 
+##-##                   [(row[onoff + 'Rjp30'] - (260)*ADU2R_adjust) * 1.5 for row in median_ap_list], 's')
+##-##     plt.plot_date(mpds - pdconvert, 
+##-##                   [(row[onoff + 'back'] - (60)*ADU2R_adjust) * 2.5 for row in median_ap_list], 'x')
+##-##     axes = plt.gca()
+##-##     #axes.set_ylim([-50, 700])
+##-##     axes.set_ylim([-500, 2000])
+##-##     plt.xlabel('UT Date')
+##-##     plt.ylabel(line + ' Surface Brightness (R)')
+##-##     plt.legend(['Rj < 7.5 nightly median - 900', '(Rj < 15 nightly median - 320) * 1.5', '(20 < Rj < 25 nightly median - 70) * 2.2'])
+##-##     plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-##     plt.show()
+
+    
 
 ##-## ####### Plot ADU2R
 ##-## plt.plot_date(pds,
@@ -484,25 +546,42 @@ plt.show()
 ## plt.show()
 
 
-# plt.plot_date(pds, 
-#               [row[onoff + 'back'] for row in rlist], '.')
-# plt.plot_date(pds, 
-#               [row[onoff + 'fore'] for row in rlist], '.')
-# plt.plot_date(pds, 
-#               [row[onoff + 'center'] for row in rlist], '.')
-
+#plt.plot_date(pds, 
+#              [row[onoff + 'back'] for row in rlist], '.')
+#plt.plot_date(pds, 
+#              [row[onoff + 'fore'] for row in rlist], '.')
+#plt.plot_date(pds, 
+#              [row[onoff + 'center'] for row in rlist], '.')
+#plt.show()
+#
 #plt.plot_date(mpds, 
 #              [row[onoff + 'center'] for row in median_ap_list], '.')
+#plt.plot_date(mpds, 
+#              [row[onoff + 'fore'] for row in median_ap_list], '.')
+#plt.plot_date(mpds, 
+#              [row[onoff + 'back'] for row in median_ap_list], '.')
+#plt.show()
 
 
-# plt.plot_date(pds, 
-#               [row[onoff + 'fore']
-#                - row[onoff + 'back']
-#                   for row in rlist], '.')
-# plt.plot_date(pds, 
-#               [row[onoff + 'center']
-#                - row[onoff + 'back']
-#                   for row in rlist], '.')
+## plt.plot_date(pds - pdconvert,
+##               [row[onoff + 'fore']
+##                - row[onoff + 'back']
+##                for row in rlist], 'k.', ms=1)
+## plt.plot_date(mpds - pdconvert,
+##               [row[onoff + 'fore']
+##                - row[onoff + 'back']
+##                   for row in median_ap_list], '.')
+## plt.ylabel(line + ' foreground - background Surface Brightness (R)')
+## plt.gcf().autofmt_xdate()  # orient date labels at a slant
+## plt.show()
+## plt.show()
+
+
+
+#plt.plot_date(pds, 
+#              [row[onoff + 'center']
+#               - row[onoff + 'back']
+#                  for row in rlist], '.')
 
 #plt.plot_date(pds, 
 #              [row[onoff + 'center']
