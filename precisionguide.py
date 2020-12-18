@@ -31,6 +31,7 @@ from astropy import units as u
 from astropy.time import Time, TimeDelta
 
 if sys.platform == 'win32':
+    # --> also check out pythonnet
     try:
         import win32com.client
     except:

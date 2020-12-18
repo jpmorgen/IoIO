@@ -42,8 +42,9 @@ from photutils import Background2D, MedianBackground
 
 import ccdproc as ccdp
 
-# From pip install https://github.com/kinderhead/mp_tools/releases/download/v1.0/mp_tools-1.0.0-py3-none-any.whl
+# From pip3 install https://github.com/kinderhead/mp_tools/releases/download/v1.1/mp_tools-1.1.0-py3-none-any.whl
 from mp_tools.process_limiter import p_limit
+#from mp_tools_devel.process_limiter import p_limit
 from IoIO import CorObsData
 
 # Record in global variables Starlight Xpress Trius SX694 CCD
@@ -137,9 +138,7 @@ calibration_scratch = os.path.join(calibration_root, 'scratch')
 
 # Lockfiles to prevent multiple upstream parallel processes from
 # simultanously autoreducing calibration data
-bias_lockfile = '/tmp/calibration_reduce_bias.lock'
-dark_lockfile = '/tmp/calibration_reduce_dark.lock'
-flat_lockfile = '/tmp/calibration_reduce_flat.lock'
+lockfile = '/tmp/calibration_reduce.lock'
 
 # Raw (and reduced) data are stored in directories by UT date, but
 # some have subdirectories that contain calibration files.
@@ -234,12 +233,13 @@ class NestablePool(multiprocessing.pool.Pool):
     Process = NoDaemonProcess
 
 
-def get_dirs(directory,
-             filt_list=None,
-             start=None,
-             stop=None):
-    """Returns list of date-formated subdirectories sorted by date
-    Handles two cases of date formatting YYYYMMDD (ACP) YYYY-MM-DD (MaxIm)
+def get_dirs_dates(directory,
+                   filt_list=None,
+                   start=None,
+                   stop=None):
+    """Returns list of tuples (subdir, date) sorted by date.  Handles two
+    cases of directory date formatting YYYYMMDD (ACP) and YYYY-MM-DD
+    (MaxIm)
 
     Parameters
     ----------
@@ -253,6 +253,7 @@ def get_dirs(directory,
         Start date (inclusive).  Default = first date
     stop : string YYYY-MM-DD
         Stop date (inclusive).  Default = last date
+
     """
     assert os.path.isdir(directory)
     fulldirs = [os.path.join(directory, d) for d in os.listdir(directory)]
@@ -304,7 +305,8 @@ def get_dirs(directory,
     ddsorted = [dd for dd in ddsorted
                 if start <= dd[1] and dd[1] <= stop]
     dirs, dates = zip(*ddsorted)
-    return [os.path.join(directory, d) for d in dirs]
+    dirs = [os.path.join(directory, d) for d in dirs]
+    return list(zip(dirs, dates))
 
 def ccd_metadata(ccd,
                  camera_description=sx694_camera_description,
@@ -500,8 +502,14 @@ def fname_by_imagetyp_ccdt_exp(directory=None,
             # per comment above, if None passed to glob_include, this
             # runs once with None passed to ccdp.ImageFileCollection's
             # glob_include
+            # Avoid anoying warning abotu empty collection
+            flist = glob.glob(os.path.join(directory, gi))
+            if len(flist) == 0:
+                continue
             collection = ccdp.ImageFileCollection(directory,
-                                                  glob_include=gi)
+                                                  filenames=flist)
+            #collection = ccdp.ImageFileCollection(directory,
+            #                                      glob_include=gi)
             # Call ourselves recursively, but using the code below,
             # since collection is now defined
             gi_fdict_list = fname_by_imagetyp_ccdt_exp \
@@ -567,8 +575,6 @@ def bias_dataframe(fname, gain):
     """Worker routine to enable parallel processing of time-consuming
     matrix calculation"""
 
-    print(f'bias_dataframe: {fname}')
-
     ccd = ccddata_read(fname, add_metadata=True)
     if not full_frame(ccd):
         log.debug('bias wrong shape: ' + fname)
@@ -604,6 +610,8 @@ def bias_dataframe(fname, gain):
 def bias_combine_one_fdict(fdict,
                            directory,
                            outdir=calibration_root,
+                           calibration_scratch=calibration_scratch,
+                           keep_intermediate=False,
                            show=False,
                            min_num_biases=min_num_biases,
                            dccdt_tolerance=dccdt_tolerance,
@@ -634,15 +642,14 @@ def bias_combine_one_fdict(fdict,
     num_files = len(fdict['fnames'])
     mean_t = fdict['T']
     if num_files < min_num_biases:
-        #log.debug(f'Not enough good biases found at CCDT = {mean_t} C in {directory}')
-        print(f'Not enough good biases {num_files} at CCDT = {mean_t} C in {directory}')
+        log.debug(f'Not enough good biases found at CCDT = {mean_t} C in {directory}')
         return
     mem = psutil.virtual_memory()
     num_files_can_fit = \
         int(min(num_files,
                 mem.available*mem_frac/max_ccddata_size))
     num_can_process = min(num_processes, num_files_can_fit)
-    print('bias_combine_one_fdict: num_processes = {}, mem_frac = {}, num_files= {}, num_files_can_fit = {}, num_can_process = {}'.format(num_processes, mem_frac, num_files, num_files_can_fit, num_can_process))
+    #print('bias_combine_one_fdict: num_processes = {}, mem_frac = {}, num_files= {}, num_files_can_fit = {}, num_can_process = {}'.format(num_processes, mem_frac, num_files, num_files_can_fit, num_can_process))
     gains = [gain] * num_files
     try:
         with Pool(processes=num_can_process) as p:
@@ -786,7 +793,6 @@ def bias_combine_one_fdict(fdict,
     # images away).  --> eventually it would be great to
     # parallelize this primitive, since it is very slow
     mem = psutil.virtual_memory()
-    print(f'bias_combine_one_fdict: {directory} pre combine mem.available = {mem.available/1024**2}')
     im = \
         ccdp.combine(os_fnames,
                      method='average',
@@ -796,7 +802,6 @@ def bias_combine_one_fdict(fdict,
                      sigma_clip_func=np.ma.median,
                      sigma_clip_dev_func=mad_std,
                      mem_limit=mem.available*mem_frac)
-    print(f'bias_combine_one_fdict: {directory} post combine mem.available = {mem.available/1024**2}')
     ccd_metadata(im)
     if gain_correct:
         im = ccdp.gain_correct(im, gain*u.electron/u.adu)
@@ -856,6 +861,22 @@ def bias_combine_one_fdict(fdict,
     if show:
         plt.show()
     plt.close()
+    if not keep_intermediate:
+        for f in os_fnames:
+            try:
+                os.remove(f)
+            except Exception as e:
+                log.debug(f'Remove {f} failed: ' + str(e))
+        try:
+            os.rmdir(sdir)
+        except Exception as e:
+            log.debug(f'Remove {calibration_scratch} failed: ' + str(e))
+        try:
+            os.rmdir(calibration_scratch)
+        except Exception as e:
+            log.debug(f'Remove {calibration_scratch} failed: ' + str(e))
+                
+
 
 #def process_runner(plist, num_processes):
 #    nps = len(plist)
@@ -919,7 +940,7 @@ def bias_combine(directory=None,
         directory = collection.location
     nfdicts = len(fdict_list)
     our_num_processes = min(nfdicts, num_processes)
-    print(f'bias_combine: {directory}, nfdicts = {nfdicts}, our_num_processes = {our_num_processes}')
+    log.debug(f'bias_combine: {directory}, nfdicts = {nfdicts}, our_num_processes = {our_num_processes}')
     if nfdicts == 0:
         log.debug('No biases found in: ' + directory)
         return False
@@ -934,7 +955,7 @@ def bias_combine(directory=None,
         num_subprocesses = int(num_processes / our_num_processes)
         # Similarly, the memory fraction for each process we will spawn
         subprocess_mem_frac = mem_frac / our_num_processes
-        print('bias_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
+        log.debug('bias_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
         # Initiate all our processes
         plist = [Process(target=bias_combine_one_fdict,
                          args=(fdict, directory),
@@ -945,232 +966,6 @@ def bias_combine(directory=None,
                  for fdict in fdict_list]
         p_limit(plist, num_processes)
             
-
-#    for fdict in fdict_list:
-#        # Parallelize collection of stats.  Make sure we don't read in
-#        # too many files for our instantaneous memory available.  Also
-#        # make sure we don't use too many processors.  Using the
-#        # global max_ccddata_size assures this is a reaosnably
-#        # conservative calculation, though I haven't check the details
-#        # of intermediate calculations
-#        num_files = len(fdict['fnames'])
-#        mem = psutil.virtual_memory()
-#        num_files_can_fit = \
-#            int(min(num_files,
-#                    mem.available*mem_frac/max_ccddata_size))
-#        num_can_process = min(num_processes, num_files_can_fit)
-#        gains = [gain] * num_files
-#        try:
-#            with Pool(processes=num_can_process) as p:
-#                dfdlist = p.starmap(bias_dataframe,
-#                                    zip(fdict['fnames'], gains))
-#        except Exception as e:
-#            log.debug('Single-process mode: ' + str(e))
-#            dfdlist = [bias_dataframe(d, gain) for d in fdict['fnames']]
-#
-#        # Unpack        
-#        good_fnames = [dfd['fname'] for dfd in dfdlist if dfd['good']]
-#        stats = [dfd['dataframe'] for dfd in dfdlist if dfd['good']]
-#        jds = [dfd['jd'] for dfd in dfdlist if dfd['good']]
-#
-#        mean_t = fdict['T']
-#        if len(stats) < min_num_biases:
-#            log.debug('Not enough good biases found at CCDT = {} C in {}'.format(mean_t, directory))
-#            continue
-#        df = pd.DataFrame(stats)
-#        tm = Time(np.mean(jds), format='jd')
-#        this_date = tm.fits
-#        this_dateb = this_date.split('T')[0]
-#        this_ccdt = '{:.1f}'.format(mean_t)
-#        f = plt.figure(figsize=[8.5, 11])
-#
-#        # In the absence of a formal overscan region, this is the best
-#        # I can do
-#        medians = df['median']
-#        overscan = np.mean(medians)
-#
-#        ax = plt.subplot(6, 1, 1)
-#        plt.title('CCDT = {} C on {}'.format(this_ccdt, this_dateb))
-#        ax.yaxis.set_minor_locator(AutoMinorLocator())
-#        ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-#        plt.plot(df['time'], df['ccdt'], 'k.')
-#        plt.ylabel('CCDT (C)')
-#
-#        ax = plt.subplot(6, 1, 2)
-#        ax.yaxis.set_minor_locator(AutoMinorLocator())
-#        ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-#        plt.plot(df['time'], df['max'], 'k.')
-#        plt.ylabel('max (ADU)')
-#
-#        ax = plt.subplot(6, 1, 3)
-#        ax.yaxis.set_minor_locator(AutoMinorLocator())
-#        ax.tick_params(which='both', bottom=True, top=True, left=True, right=False)
-#        plt.plot(df['time'], df['median'], 'k.')
-#        plt.plot(df['time'], df['mean'], 'r.')
-#        plt.ylabel('median & mean (ADU)')
-#        plt.legend(['median', 'mean'])
-#        secax = ax.secondary_yaxis \
-#            ('right',
-#             functions=(lambda adu: (adu - overscan)*gain,
-#                        lambda e: e/gain + overscan))
-#        secax.set_ylabel('Electrons')
-#
-#        ax=plt.subplot(6, 1, 4)
-#        ax.yaxis.set_minor_locator(AutoMinorLocator())
-#        ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-#        plt.plot(df['time'], df['min'], 'k.')
-#        plt.ylabel('min (ADU)')
-#
-#        ax=plt.subplot(6, 1, 5)
-#        ax.yaxis.set_minor_locator(AutoMinorLocator())
-#        ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-#        plt.plot(df['time'], df['std'], 'k.')
-#        plt.ylabel('std (electron)')
-#
-#        ax=plt.subplot(6, 1, 6)
-#        ax.yaxis.set_minor_locator(AutoMinorLocator())
-#        ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-#        plt.plot(df['time'], df['rdnoise'], 'k.')
-#        plt.ylabel('rdnoise (electron)')
-#
-#        plt.gcf().autofmt_xdate()
-#
-#        # At the 0.5 deg level, there seems to be no correlation between T and bias level
-#        #plt.plot(df['ccdt'], df['mean'], 'k.')
-#        #plt.xlabel('ccdt')
-#        #plt.ylabel('mean')
-#        #plt.show()
-#            
-#        # Make sure outdir exists
-#        os.makedirs(outdir, exist_ok=True)
-#        outbase = os.path.join(outdir, this_dateb + '_ccdT_' + this_ccdt)
-#        out_fname = outbase + '_combined_bias.fits'
-#        plt.savefig((outbase + '_vs_time.png'), transparent=True)
-#        if show:
-#            plt.show()
-#        plt.close()
-#
-#        # Do a sanity check of readnoise
-#        av_rdnoise = np.mean(df['rdnoise'])            
-#        if (np.abs(av_rdnoise/sx694_example_readnoise - 1)
-#            > readnoise_tolerance):
-#            log.warning('High readnoise {}, skipping {}'.format(av_rdnoise, out_fname))
-#            continue
-#
-#        # "Overscan subtract."  Go through each image and subtract the
-#        # median, since that value wanders as a function of ambient
-#        # (not CCD) temperature.  This leaves just the bias pattern.
-#        # To use ccd.subtract, unit must match type of array.  Note
-#        # that we need to save our images to disk to avoid
-#        # overwhelming memory when we have lots of biases
-#
-#        # Make a date subdirectory in our calibration scratch dir
-#        sdir = os.path.join(calibration_scratch, this_dateb)
-#        os.makedirs(sdir, exist_ok=True)
-#        os_fnames = []
-#        for fname, m in zip(good_fnames, medians):
-#            ccd = ccddata_read(fname, add_metadata=True)
-#            ccd = ccd.subtract(m*u.adu, handle_meta='first_found')
-#            # Get our filename only, hack off extension, add _os.fits
-#            os_fname = os.path.split(fname)[1]
-#            os_fname = os.path.splitext(os_fname)[0] + '_os.fits'
-#            os_fname = os.path.join(sdir, os_fname)
-#            ccd.write(os_fname, overwrite=True)
-#            os_fnames.append(os_fname)
-#
-#        ### Use ccdproc Combiner object iteratively as per example to
-#        ### mask out bad pixels
-#        ##combiner = ccdp.Combiner(os_fnames)
-#        ##old_n_masked = -1  # dummy value to make loop execute at least once
-#        ##new_n_masked = 0
-#        ##while (new_n_masked > old_n_masked):
-#        ##    #combiner.sigma_clipping(low_thresh=2, high_thresh=5,
-#        ##    #                        func=np.ma.median)
-#        ##    # Default to 1 std and np.ma.mean for func
-#        ##    combiner.sigma_clipping()
-#        ##    old_n_masked = new_n_masked
-#        ##    new_n_masked = combiner.data_arr.mask.sum()
-#        ##    print(old_n_masked, new_n_masked)
-#        ###Just one iteration for testing
-#        ###combiner.sigma_clipping(low_thresh=2, high_thresh=5, func=np.ma.median)
-#        ##combiner.sigma_clipping(low_thresh=1, high_thresh=1, func=np.ma.mean)
-#        ## I prefer average to get sub-ADU accuracy.  Median outputs in
-#        ## double-precision anyway, so it doesn't save space
-#        #combined_average = combiner.average_combine()
-#
-#        # Use ccdp.combine since it enables memory management by
-#        # breaking up images to smaller chunks (better than throwing
-#        # images away).  --> eventually it would be great to
-#        # parallelize this step
-#        mem = psutil.virtual_memory()
-#        im = \
-#            ccdp.combine(os_fnames,
-#                         method='average',
-#                         sigma_clip=True,
-#                         sigma_clip_low_thresh=5,
-#                         sigma_clip_high_thresh=5,
-#                         sigma_clip_func=np.ma.median,
-#                         sigma_clip_dev_func=mad_std,
-#                         mem_limit=mem.available*mem_frac)
-#        ccd_metadata(im)
-#        if gain_correct:
-#            im = ccdp.gain_correct(im, gain*u.electron/u.adu)
-#            im_gain = 1
-#        else:
-#            im_gain = gain
-#        mask_above(im, 'SATLEVEL')
-#        mask_above(im, 'NONLIN')
-#            
-#        # Collect image metadata.  For some reason, masked pixels
-#        # aren't ignored by std, etc. even though they output masked
-#        # arrays (which is annoying in its own right -- see example
-#        # commented mean).  So just create a new array, if needed, and
-#        # only put into it the good pixels
-#        if im.mask is None:
-#            tim = im
-#        else:
-#            tim = im.data[im.mask == 0]
-#        std =  np.std(tim)*im_gain
-#        med =  np.median(tim)*im_gain
-#        #mean = np.asscalar(np.mean(tim).data  )
-#        mean = np.mean(tim)*im_gain
-#        tmin = np.min(tim)*im_gain
-#        tmax = np.max(tim)*im_gain
-#        print('std, mean, med, tmin, tmax (electron)')
-#        print(std, mean, med, tmin, tmax)
-#        im.meta['DATE-OBS'] = (this_date, 'Average of DATE-OBS from set of biases')
-#        im.meta['CCD-TEMP'] = (mean_t, 'Average CCD temperature for combined biases')
-#        im.meta['RDNOISE'] = (av_rdnoise, 'Measured readnoise (electron)')
-#        im.meta['STD'] = (std, 'Standard deviation of image (electron)')
-#        im.meta['MEDIAN'] = (med, 'Median of image (electron)')
-#        im.meta['MEAN'] = (mean, 'Mean of image (electron)')
-#        im.meta['MIN'] = (tmin, 'Min of image (electron)')
-#        im.meta['MAX'] = (tmax, 'Max of image (electron)')
-#        im.meta['HIERARCH OVERSCAN_VALUE'] = (overscan, 'Average of raw bias medians (ADU)')
-#        im.meta['HIERARCH SUBTRACT_OVERSCAN'] = (True, 'Overscan has been subtracted')
-#        im.meta['NCOMBINE'] = (len(good_fnames), 'Number of biases combined')
-#        # Record each filename
-#        for i, f in enumerate(fdict['fnames']):
-#            im.meta['FILE{0:02}'.format(i)] = f
-#        add_history(im.meta,
-#                    'Combining NCOMBINE biases indicated in FILENN')
-#        add_history(im.meta,
-#                    'SATLEVEL and NONLIN apply to pre-overscan subtraction')
-#        # Leave these large for fast calculations downstream and make
-#        # final results that primarily sit on disk in bulk small
-#        #im.data = im.data.astype('float32')
-#        #im.uncertainty.array = im.uncertainty.array.astype('float32')
-#        im.write(out_fname, overwrite=True)
-#        # Always display image in electrons
-#        impl = plt.imshow(im.multiply(im_gain), origin='lower',
-#                          cmap=plt.cm.gray,
-#                          filternorm=0, interpolation='none',
-#                          vmin=med-std, vmax=med+std)
-#        plt.title('CCDT = {} C on {} (electrons)'.format(this_ccdt, this_dateb))
-#        plt.savefig((outbase + '_combined_bias.png'), transparent=True)
-#        if show:
-#            plt.show()
-#        plt.close()
 
 def hist_of_im(im, binsize=1, show=False):
     """Returns a tuple of the histogram of image and index into *centers* of
@@ -1541,7 +1336,7 @@ def ccd_process(fname_or_ccd, calibration=None,
         calibration  = Calibration()
 
     if (isinstance(calibration, Calibration)
-        and master_bias) is True:
+        and master_bias is True):
         # --> Document this
         master_bias = calibration.best_bias(nccd)
 
@@ -2472,12 +2267,14 @@ bname = '2020-10-01_ccdT_-10.3_combined_bias.fits'
 ###############################
 
 
-def dir_has_calibration(directory, glob_include, subdirs=[]):
+def dir_has_calibration(directory, glob_include, subdirs=None):
     """Returns True if directory has calibration files matching pattern(s)
 in glob_include.  Optionally checks subdirs"""
     if not os.path.isdir(directory):
         # This is the end of our recursive line
         return False
+    if subdirs is None:
+        subdirs = []
     for sd in subdirs:
         subdir = os.path.join(directory, sd)
         if dir_has_calibration(subdir, glob_include):
@@ -2490,6 +2287,33 @@ in glob_include.  Optionally checks subdirs"""
             return True
     return False
 
+class Lockfile():
+    def __init__(self,
+                 fname=None,
+                 check_every=10):
+        assert fname is not None
+        self._fname = fname
+        self.check_every = check_every
+
+    @property
+    def is_set(self):
+        return os.path.isfile(self._fname)
+
+    # --> could add a timeout and a user-specified optional message
+    def wait(self):
+        while self.is_set:
+            with open(self._fname, "r") as f:
+                log.debug(f'lockfile {self._fname} detected for {f.read()}')
+            time.sleep(self.check_every)
+
+    def create(self):
+        self.wait()
+        with open(lockfile, "w") as f:
+            f.write('PID: ' + str(os.getpid()))
+
+    def clear(self):
+        os.remove(lockfile)
+
 class Calibration():
     """Class for conducting CCD calibrations"""
     def __init__(self,
@@ -2497,6 +2321,7 @@ class Calibration():
                  raw_data_root=raw_data_root,
                  calibration_root=calibration_root,
                  subdirs=calibration_subdirs,
+                 keep_intermediate=False,
                  ccdt_tolerance=ccdt_tolerance,
                  start_date=None,
                  stop_date=None,
@@ -2508,10 +2333,12 @@ class Calibration():
                  num_filts=num_filts,
                  bias_glob=bias_glob, 
                  dark_glob=dark_glob,
-                 flat_glob=flat_glob):
+                 flat_glob=flat_glob,
+                 lockfile=lockfile):
         self._raw_data_root = raw_data_root
         self._calibration_root = calibration_root
         self._subdirs = subdirs
+        self.keep_intermediate = keep_intermediate
         self._ccdt_tolerance = ccdt_tolerance
         self._bias_table = None
         self._dark_table = None
@@ -2520,6 +2347,7 @@ class Calibration():
         self._bias_glob = bias_glob
         self._dark_glob = dark_glob
         self._flat_glob = flat_glob
+        self._lockfile = lockfile
         self.num_processes = num_processes
         self.mem_frac = mem_frac
         self.num_ccdts = num_ccdts
@@ -2538,12 +2366,13 @@ class Calibration():
             self._stop_date = datetime.datetime.strptime(stop_date, "%Y-%m-%d")
         assert self._start_date <= self._stop_date
         # These need to be on a per-instantiation basis, since they
-        # depend on our particular start-stop range.  The cost of
-        # checking for new reductions is relatively low, since it is
-        # mostly a directory listing exercise
-        self._bias_last_reduced = datetime.datetime(1,1,1)
-        self._dark_last_reduced = datetime.datetime(1,1,1)
-        self._flat_last_reduced = datetime.datetime(1,1,1)
+        # depend on our particular start-stop range.  These are also
+        # important, since we don't take calibrations every night.  The
+        # cost of checking for new reductions is relatively low, since
+        # it is mostly a directory listing exercise
+        self._bias_dirs_dates_checked = None
+        self._dark_dirs_dates_checked = None
+        self._flat_dirs_dates_checked = None
         if reduce:
             self.reduce()
 
@@ -2551,77 +2380,128 @@ class Calibration():
     def gain_correct(self):
         return self._gain_correct
 
-    def dirs_to_reduce(self, table_creator, glob_include):
-        subdirs = self._subdirs
-        t = table_creator(autoreduce=False, rescan=True)
-        # Find next date to reduce
-        if t is None:
-            next_to_reduce = datetime.datetime(1,1,1)
-        else:
-            # Find last reduction within our desired star-stop range.
-            # Table reads in astropy Time objects...
-            start_time = Time(self._start_date)
-            stop_time = Time(self._stop_date)
-            good_idx = np.logical_and(start_time <= t['dates'],
-                                       t['dates'] <= stop_time)
-            next_to_reduce = np.max(t['dates'][good_idx])
-            # Don't re-reduce our last day
-            next_to_reduce = next_to_reduce + TimeDelta(1, format='jd')
-            if next_to_reduce > stop_time:
-                print('No reductions need to be done')
+    def dirs_dates_to_reduce(self, table_creator,
+                             glob_include,
+                             dirs_dates_checked=None,
+                             subdirs=None):
+        to_check = get_dirs_dates(self._raw_data_root,
+                                  start=self._start_date,
+                                  stop=self._stop_date)
+        # See if we have reduced/checked any/everything in this
+        # instantiation.  This is not as efficient as it could be
+        # since we have sorted lists, but we don't have many elements,
+        # so there is not much point in getting fancier
+        if dirs_dates_checked is not None:
+            to_check = [dt for dt in to_check
+                        if not dt in dirs_dates_checked]
+            if len(to_check) == 0:
                 return []
-            next_to_reduce = next_to_reduce.to_datetime()
-        # Usual case of running pipeline on latest files, don't
-        # re-reduce, but we can skip ahead if we want
-        start = max(next_to_reduce, self._start_date)
-        if start > self._stop_date:
-            # Catch case where we want to work with older data
-            start = self._start_date
-        to_check = get_dirs(self._raw_data_root,
-                            start=start,
-                            stop=self._stop_date)
-        to_reduce = [d for d in to_check
-                     if dir_has_calibration(d, glob_include, subdirs=subdirs)]
+        # Take any reductions on disk out of the list.  Note, we check
+        # for date only, since we have lost the original directory
+        # information once reduced
+        tbl = table_creator(autoreduce=False, rescan=True)
+        if tbl is not None:
+            reduced_ts = [tm.to_datetime() for tm in tbl['dates']]
+            # Remove duplicates
+            reduced_ts = list(set(reduced_ts))
+            to_check = [dt for dt in to_check
+                        if not dt[1] in reduced_ts]
+            if len(to_check) == 0:
+                return []
+        to_reduce = [dt for dt in to_check
+                     if dir_has_calibration(dt[0],
+                                            glob_include,
+                                            subdirs=subdirs)]
         # Remove duplicates
         return sorted(list(set(to_reduce)))
 
+        #to_reduce = [dt[0] for dt in to_check
+        #             if dir_has_calibration(dt[0],
+        #                                    glob_include,
+        #                                    subdirs=subdirs)]
+        ## Remove duplicates
+        #return sorted(list(set(to_reduce)))
+
+
+
+        ## Find next date to reduce
+        #if t is None:
+        #    next_to_reduce = datetime.datetime(1,1,1)
+        #else:
+        #    # Work in astropy.Time
+        #    start_time = Time(self._start_date)
+        #    stop_time = Time(self._stop_date)
+        #    # Find the first unreduced directory in our start-stop range
+        #    reduced_idx = np.logical_and(start_time <= t['dates'],
+        #                                 t['dates'] <= stop_time)
+        #
+        #
+        #    # Find last reduction within our desired star-stop range.
+        #    # Table reads in astropy Time objects...
+        #    good_idx = np.logical_and(start_time <= t['dates'],
+        #                               t['dates'] <= stop_time)
+        #    next_to_reduce = np.max(t['dates'][good_idx])
+        #    # Don't re-reduce our last day
+        #    next_to_reduce = next_to_reduce + TimeDelta(1, format='jd')
+        #    if next_to_reduce > stop_time:
+        #        print('No reductions need to be done')
+        #        return []
+        #    next_to_reduce = next_to_reduce.to_datetime()
+        ## Usual case of running pipeline on latest files, don't
+        ## re-reduce, but we can skip ahead if we want
+        #start = max(next_to_reduce, self._start_date)
+        #if start > self._stop_date:
+        #    # Catch case where we want to work with older data
+        #    start = self._start_date
+        #to_check = get_dirs(self._raw_data_root,
+        #                    start=start,
+        #                    stop=self._stop_date)
+        #to_reduce = [d for d in to_check
+        #             if dir_has_calibration(d, glob_include, subdirs=subdirs)]
+        ## Remove duplicates
+        #return sorted(list(set(to_reduce)))
+
     def reduce_bias(self):
-        if self._bias_last_reduced == self._stop_date:
+        dirs_dates = \
+            self.dirs_dates_to_reduce(self.bias_table_create,
+                                      self._bias_glob,
+                                      self._bias_dirs_dates_checked,
+                                      self._subdirs)
+        ndirs_dates = len(dirs_dates)
+        if ndirs_dates == 0:
             return
-        while os.path.isfile(bias_lockfile):
-            with open(bias_lockfile, "r") as f:
-                log.debug('lockfile detected for ' + f.read())
-                log.debug('In multi-process mode waiting for another calibration batch to finish.  You would actually be better off to instantiate with Calibration(reduce=True)')
-            time.sleep(10)
-        with open(bias_lockfile, "w") as f:
-            f.write('PID: ' + str(os.getpid()))
-        dirs = self.dirs_to_reduce(self.bias_table_create, self._bias_glob)
-        ndirs = len(dirs)
+
+        # If we made it here, we have some real work to do
+        # Set a simple lockfile so we don't have multiple processes reducing
+        lock = Lockfile(self._lockfile)
+        lock.create()
+
         # Make sure each directory we process has enough processes to
         # work with to parallelize the slowest step (combining images)
-        our_num_processes = min(ndirs,
+        our_num_processes = min(ndirs_dates,
                                 int(self.num_processes / self.num_ccdts))
-        if ndirs == 0:
+        if ndirs_dates == 0:
             pass
-        elif ndirs == 1 or our_num_processes == 1:
-            for d in dirs:
-                bias_combine(d,
+        elif ndirs_dates == 1 or our_num_processes == 1:
+            for dt in dirs_dates:
+                bias_combine(dt[0],
                              subdirs=self._subdirs,
                              glob_include=self._bias_glob,
                              outdir=self._calibration_root,
                              gain_correct=self._gain_correct,
                              num_processes=self.num_processes,
-                             mem_frac=self.mem_frac)
+                             mem_frac=self.mem_frac,
+                             keep_intermediate=self.keep_intermediate)
         else:
             num_subprocesses = int(self.num_processes / our_num_processes)
             subprocess_mem_frac = self.mem_frac / our_num_processes
-            print(f'ndirs = {ndirs}')
-            print('Calibration.reduce_bias: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
+            log.debug(f'Calibration.reduce_bias: ndirs_dates = {ndirs_dates}')
+            log.debug('Calibration.reduce_bias: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
             #return
 
             plist = \
                 [Process(target=bias_combine,
-                         args=(d,),
+                         args=(dt[0],),
                          kwargs= {'subdirs': self._subdirs,
                                   'glob_include': self._bias_glob,
                                   'outdir': self._calibration_root,
@@ -2629,12 +2509,17 @@ class Calibration():
                                   'num_processes': num_subprocesses,
                                   'mem_frac': subprocess_mem_frac},
                          daemon=False) # Let subprocesses create more children
-                 for d in dirs]
+                 for dt in dirs_dates]
             p_limit(plist, our_num_processes)
 
         self.bias_table_create(rescan=True, autoreduce=False)
-        self._bias_last_reduced = self._stop_date
-        os.remove(bias_lockfile)
+        # This could potentially get set in dirs_dates_to_reduce, but
+        # it seems better to set it after we have actually done the work
+        all_dirs_dates = get_dirs_dates(self._raw_data_root,
+                                  start=self._start_date,
+                                  stop=self._stop_date)
+        self._bias_dirs_dates_checked = all_dirs_dates
+        lock.clear()
 
     def reduce(self):
         self.reduce_bias()
@@ -2693,6 +2578,7 @@ class Calibration():
             hdr = ccd.meta
         tm = Time(hdr['DATE-OBS'], format='fits')
         ccdt = hdr['CCD-TEMP']
+        # This is the entry point for reduction 
         dccdts = ccdt - self.bias_table['ccdts']
         good_ccdt_idx = np.flatnonzero(np.abs(dccdts) < ccdt_tolerance)
         if len(good_ccdt_idx) == 0:
@@ -2774,8 +2660,44 @@ class Calibration():
 #                                 imagetyp='BIAS',
 #                                 debug=True))
 
-sample = '/data/io/IoIO/raw/20200711/Dark-S005-R008-C001-B1.fts'
+#sample = '/data/io/IoIO/raw/20200711/Dark-S005-R008-C001-B1.fts'
+#c = Calibration(start_date='2020-07-11', stop_date='2020-08-22')
+#ccd = ccd_process(sample, calibration=c, oscan=True, master_bias=True,
+#                  gain=True, error=True)
+#ccd.write('/tmp/test.fits', overwrite=True)
+
+#bias_combine('/data/io/IoIO/raw/20200711', show=False, gain_correct=True)
+
+#c = Calibration(start_date='2020-07-11', stop_date='2020-08-22')
+##print(c.dirs_dates_to_reduce(c.bias_table_create, c._bias_glob))
+#
+#print('DIRS TO REDUCE PRE')
+#print(c.dirs_dates_to_reduce(c.bias_table_create,
+#                             c._bias_glob,
+#                             c._bias_dirs_dates_checked,
+#                             c._subdirs))
+#c.reduce()
+#print('DIRS TO REDUCE POST')
+#print(c.dirs_dates_to_reduce(c.bias_table_create,
+#                             c._bias_glob,
+#                             c._bias_dirs_dates_checked,
+#                             c._subdirs))
+#
+
+#print('MADE IT HERE')
+#print(c._bias_dirs_dates_checked)
+
+#l = Lockfile(lockfile)
+#l.create()
+#
 c = Calibration(start_date='2020-07-11', stop_date='2020-08-22')
+sample = '/data/io/IoIO/raw/20200711/Dark-S005-R008-C001-B1.fts'
 ccd = ccd_process(sample, calibration=c, oscan=True, master_bias=True,
                   gain=True, error=True)
 ccd.write('/tmp/test.fits', overwrite=True)
+
+print('SECOND TRY')
+ccd = ccd_process(sample, calibration=c, oscan=True, master_bias=True,
+                  gain=True, error=True)
+ccd.write('/tmp/test.fits', overwrite=True)
+
