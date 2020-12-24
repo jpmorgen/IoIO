@@ -10,7 +10,6 @@ import time
 import datetime
 import glob
 import psutil
-import csv
 
 # For NoDaemonPool
 import multiprocessing
@@ -179,6 +178,10 @@ ccdt_tolerance = 2
 # I got lots of nights with a smattering of biases.  Discard these
 min_num_biases = 7
 min_num_flats = 3
+
+# Accept as match darks with this much more exposure time
+dark_exp_margin = 3
+
 
 def add_history(header, text='', caller=1):
     """Add a HISTORY card to a FITS header with the caller's name inserted 
@@ -448,6 +451,17 @@ def ccddata_read(fname_or_ccd, add_metadata=False, *args, **kwargs):
         ccd.meta = ccd_metadata(ccd.meta, **kwargs)
     return ccd
 
+def binned(im,
+           naxis1=sx694_naxis1,
+           naxis2=sx694_naxis2):
+    """Returns True if image is binned.
+    """
+    s = im.shape
+    # Note Pythonic C index ordering
+    if s != (naxis2, naxis1):
+        return True
+    return False
+
 def full_frame(im,
                naxis1=sx694_naxis1,
                naxis2=sx694_naxis2):
@@ -462,7 +476,6 @@ def full_frame(im,
     return True    
 
 def light_image(im, tolerance=3):
-    
     """Returns True if light detected in image"""
     s = im.shape
     m = np.asarray(s)/2 # Middle of CCD
@@ -1290,6 +1303,7 @@ def ccd_process_multi(fnames,
 
 # Copy and tweak ccdp.ccd_process
 def ccd_process(fname_or_ccd,
+                filter_func_list=[binned],
                 calibration=None,
                 auto=False,
                 imagetyp=None,
@@ -1350,6 +1364,12 @@ def ccd_process(fname_or_ccd,
     ----------
     fname_or_ccd : str or `~astropy.nddata.CCDData`
         Filename or CCDData of image to be reduced.
+
+    filter_func_list : list or None
+        List of functions to run on image just after it is read used to
+        reject image.  Functions must return True to result in
+        rejection.  Rejected images result in return value of None.
+        Default is [:func:`binned`]
 
     calibration : `~Calibration`, bool, or None, optional
         Calibration object to be used to find best bias, dark, and
@@ -1534,6 +1554,11 @@ def ccd_process(fname_or_ccd,
     # assigned.
     nccd = ccddata_read(fname_or_ccd)
 
+    if filter_func_list is not None:
+        for ff in filter_func_list:
+            if ff(nccd):
+                return None
+
     # Handle our calibration object
     if calibration is True:
         calibration  = Calibration()
@@ -1682,6 +1707,21 @@ def ccd_process(fname_or_ccd,
     if isinstance(calibration, Calibration) and dark_frame is True:
         dark_frame = calibration.best_dark(nccd.meta)
 
+    if dark_frame is True:
+        raise ValueError('dark_frame=True but no Calibration object supplied')
+
+    # Make our dark_frame easy to input and capture the name for
+    # metadata purposes
+    if isinstance(dark_frame, str):
+        subtract_dark_keyword = \
+            {'HIERARCH SUBTRACT_DARK': 'subdark',
+             'SUBDARK': 'ccdproc.subtract_dark ccd=<CCDData>, master=DARKFILE',
+             'DARKFILE': dark_frame}
+        dark_frame = ccddata_read(dark_frame)
+    else:
+        subtract_dark_keyword = None
+        
+
     # Subtract the dark frame.  Generally this will just use the
     # default exposure_key we create in our parameters to ccd_process
     if isinstance(dark_frame, CCDData):
@@ -1690,7 +1730,8 @@ def ccd_process(fname_or_ccd,
                                   data_exposure=data_exposure,
                                   exposure_time=exposure_key,
                                   exposure_unit=exposure_unit,
-                                  scale=dark_scale)
+                                  scale=dark_scale,
+                                  add_keyword=subtract_dark_keyword)
     elif dark_frame is None:
         pass
     else:
@@ -2790,6 +2831,7 @@ class Calibration():
                  subdirs=calibration_subdirs,
                  keep_intermediate=False,
                  ccdt_tolerance=ccdt_tolerance,
+                 dark_exp_margin=dark_exp_margin,
                  start_date=None,
                  stop_date=None,
                  gain_correct=True, # This is gain correcting the bias and dark
@@ -2807,6 +2849,7 @@ class Calibration():
         self._subdirs = subdirs
         self.keep_intermediate = keep_intermediate
         self._ccdt_tolerance = ccdt_tolerance
+        self._dark_exp_margin=dark_exp_margin
         self._bias_table = None
         self._dark_table = None
         self._flat_table = None
@@ -2882,52 +2925,65 @@ class Calibration():
         # Remove duplicates
         return sorted(list(set(to_reduce)))
 
-        #to_reduce = [dt[0] for dt in to_check
-        #             if dir_has_calibration(dt[0],
-        #                                    glob_include,
-        #                                    subdirs=subdirs)]
-        ## Remove duplicates
-        #return sorted(list(set(to_reduce)))
+    def reduce_bias(self):
+        dirs_dates = \
+            self.dirs_dates_to_reduce(self.bias_table_create,
+                                      self._bias_glob,
+                                      self._bias_dirs_dates_checked,
+                                      self._subdirs)
+        ndirs_dates = len(dirs_dates)
+        if ndirs_dates == 0:
+            return
 
+        # If we made it here, we have some real work to do
+        # Set a simple lockfile so we don't have multiple processes reducing
+        lock = Lockfile(self._lockfile)
+        lock.create()
 
+        # Make sure each directory we process has enough processes to
+        # work with to parallelize the slowest step (combining images)
+        our_num_processes = min(ndirs_dates,
+                                int(self.num_processes / self.num_ccdts))
+        if ndirs_dates == 0:
+            pass
+        elif ndirs_dates == 1 or our_num_processes == 1:
+            for dt in dirs_dates:
+                bias_combine(dt[0],
+                             subdirs=self._subdirs,
+                             glob_include=self._bias_glob,
+                             outdir=self._calibration_root,
+                             gain_correct=self._gain_correct,
+                             num_processes=self.num_processes,
+                             mem_frac=self.mem_frac,
+                             keep_intermediate=self.keep_intermediate)
+        else:
+            num_subprocesses = int(self.num_processes / our_num_processes)
+            subprocess_mem_frac = self.mem_frac / our_num_processes
+            log.debug(f'Calibration.reduce_bias: ndirs_dates = {ndirs_dates}')
+            log.debug('Calibration.reduce_bias: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
+            #return
 
-        ## Find next date to reduce
-        #if t is None:
-        #    next_to_reduce = datetime.datetime(1,1,1)
-        #else:
-        #    # Work in astropy.Time
-        #    start_time = Time(self._start_date)
-        #    stop_time = Time(self._stop_date)
-        #    # Find the first unreduced directory in our start-stop range
-        #    reduced_idx = np.logical_and(start_time <= t['dates'],
-        #                                 t['dates'] <= stop_time)
-        #
-        #
-        #    # Find last reduction within our desired star-stop range.
-        #    # Table reads in astropy Time objects...
-        #    good_idx = np.logical_and(start_time <= t['dates'],
-        #                               t['dates'] <= stop_time)
-        #    next_to_reduce = np.max(t['dates'][good_idx])
-        #    # Don't re-reduce our last day
-        #    next_to_reduce = next_to_reduce + TimeDelta(1, format='jd')
-        #    if next_to_reduce > stop_time:
-        #        print('No reductions need to be done')
-        #        return []
-        #    next_to_reduce = next_to_reduce.to_datetime()
-        ## Usual case of running pipeline on latest files, don't
-        ## re-reduce, but we can skip ahead if we want
-        #start = max(next_to_reduce, self._start_date)
-        #if start > self._stop_date:
-        #    # Catch case where we want to work with older data
-        #    start = self._start_date
-        #to_check = get_dirs(self._raw_data_root,
-        #                    start=start,
-        #                    stop=self._stop_date)
-        #to_reduce = [d for d in to_check
-        #             if dir_has_calibration(d, glob_include, subdirs=subdirs)]
-        ## Remove duplicates
-        #return sorted(list(set(to_reduce)))
+            plist = \
+                [Process(target=bias_combine,
+                         args=(dt[0],),
+                         kwargs= {'subdirs': self._subdirs,
+                                  'glob_include': self._bias_glob,
+                                  'outdir': self._calibration_root,
+                                  'gain_correct': self._gain_correct,
+                                  'num_processes': num_subprocesses,
+                                  'mem_frac': subprocess_mem_frac},
+                         daemon=False) # Let subprocesses create more children
+                 for dt in dirs_dates]
+            p_limit(plist, our_num_processes)
 
+        self.bias_table_create(rescan=True, autoreduce=False)
+        # This could potentially get set in dirs_dates_to_reduce, but
+        # it seems better to set it after we have actually done the work
+        all_dirs_dates = get_dirs_dates(self._raw_data_root,
+                                  start=self._start_date,
+                                  stop=self._stop_date)
+        self._bias_dirs_dates_checked = all_dirs_dates
+        lock.clear()
     def reduce_bias(self):
         dirs_dates = \
             self.dirs_dates_to_reduce(self.bias_table_create,
@@ -2988,9 +3044,73 @@ class Calibration():
         self._bias_dirs_dates_checked = all_dirs_dates
         lock.clear()
 
+    def reduce_dark(self):
+        dirs_dates = \
+            self.dirs_dates_to_reduce(self.dark_table_create,
+                                      self._dark_glob,
+                                      self._dark_dirs_dates_checked,
+                                      self._subdirs)
+        ndirs_dates = len(dirs_dates)
+        if ndirs_dates == 0:
+            return
+
+        # If we made it here, we have some real work to do
+        # Set a simple lockfile so we don't have multiple processes reducing
+        lock = Lockfile(self._lockfile)
+        lock.create()
+
+        # Make sure each directory we process has enough processes to
+        # work with to parallelize the slowest step (combining images)
+        our_num_processes = min(ndirs_dates,
+                                int(self.num_processes / self.num_ccdts))
+        if ndirs_dates == 0:
+            pass
+        elif ndirs_dates == 1 or our_num_processes == 1:
+            for dt in dirs_dates:
+                dark_combine(dt[0],
+                             subdirs=self._subdirs,
+                             glob_include=self._dark_glob,
+                             outdir=self._calibration_root,
+                             gain_correct=self._gain_correct,
+                             calibration=self,
+                             auto=True, # A little dangerous, but just one place for changes
+                             num_processes=self.num_processes,
+                             mem_frac=self.mem_frac,
+                             keep_intermediate=self.keep_intermediate)
+        else:
+            num_subprocesses = int(self.num_processes / our_num_processes)
+            subprocess_mem_frac = self.mem_frac / our_num_processes
+            log.debug(f'Calibration.reduce_dark: ndirs_dates = {ndirs_dates}')
+            log.debug('Calibration.reduce_dark: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
+            #return
+
+            plist = \
+                [Process(target=dark_combine,
+                         args=(dt[0],),
+                         kwargs= {'subdirs': self._subdirs,
+                                  'glob_include': self._dark_glob,
+                                  'outdir': self._calibration_root,
+                                  'gain_correct': self._gain_correct,
+                                  'calibration': self,
+                                  'auto': True,
+                                  'num_processes': num_subprocesses,
+                                  'mem_frac': subprocess_mem_frac},
+                         daemon=False) # Let subprocesses create more children
+                 for dt in dirs_dates]
+            p_limit(plist, our_num_processes)
+
+        self.dark_table_create(rescan=True, autoreduce=False)
+        # This could potentially get set in dirs_dates_to_reduce, but
+        # it seems better to set it after we have actually done the work
+        all_dirs_dates = get_dirs_dates(self._raw_data_root,
+                                  start=self._start_date,
+                                  stop=self._stop_date)
+        self._dark_dirs_dates_checked = all_dirs_dates
+        lock.clear()
+
     def reduce(self):
         self.reduce_bias()
-        #self.reduce_dark()
+        self.reduce_dark()
         #self.reduce_flat()
 
     def bias_table_create(self,
@@ -3016,8 +3136,8 @@ class Calibration():
             # Catch the not autoreduce case when we still have no files
             return None
         # If we made it here, we have files to populate our table
-        ccdts = []
         dates = []
+        ccdts = []
         for fname in fnames:
             bfname = os.path.basename(fname)
             sfname = bfname.split('_')
@@ -3030,9 +3150,55 @@ class Calibration():
                                   meta={'name': 'Bias information table'})
         return self._bias_table
 
+    def dark_table_create(self,
+                          rescan=False, # Set to True after new biases have been added
+                          autoreduce=True): # Set to False to break recursion
+                                            # when first looking for 
+        """Create table of bias info from calibration directory"""
+        if autoreduce:
+            # By default always do auto reduction to catch the latest downloads
+            self.reduce_dark()
+            return self._dark_table
+        # If we made it here, autoreduce is guaranteed to be false
+        if rescan:
+            self._dark_table = None
+        if self._dark_table is not None:
+            return self._dark_table
+        if not os.path.isdir(self._calibration_root):
+            # We haven't reduced any calibration images yet and we
+            # don't want to automatically do so (just yet)
+            return None
+        fnames = glob.glob(os.path.join(self._calibration_root, '*_combined_dark.fits'))
+        if len(fnames) == 0:
+            # Catch the not autoreduce case when we still have no files
+            return None
+        # If we made it here, we have files to populate our table
+        dates = []
+        ccdts = []
+        exptimes = []
+        for fname in fnames:
+            bfname = os.path.basename(fname)
+            sfname = bfname.split('_')
+            date = Time(sfname[0], format='fits')
+            ccdt = float(sfname[2])
+            exptime = sfname[4]
+            exptime = float(exptime[:-1])
+            dates.append(date)
+            ccdts.append(ccdt)
+            exptimes.append(exptime)
+        self._dark_table = \
+            QTable([fnames, dates, ccdts, exptimes],
+                   names=('fnames', 'dates', 'ccdts', 'exptimes'),
+                   meta={'name': 'Dark information table'})
+        return self._dark_table
+
     @property
     def bias_table(self):
         return self.bias_table_create()
+
+    @property
+    def dark_table(self):
+        return self.dark_table_create()
 
     def best_bias(self, fname_ccd_or_hdr, ccdt_tolerance=None):
         """Returns filename of best-matched bias for a file"""
@@ -3057,6 +3223,50 @@ class Calibration():
         best_ccdt_date_idx = good_ccdt_idx[best_ccdt_date_idx]
         return self._bias_table['fnames'][best_ccdt_date_idx]
 
+    def best_dark(self,
+                  fname_ccd_or_hdr,
+                  ccdt_tolerance=None,
+                  dark_exp_margin=None):
+        """Returns filename of best-matched dark for a file"""
+        if ccdt_tolerance is None:
+            ccdt_tolerance = self._ccdt_tolerance
+        if dark_exp_margin is None:
+            dark_exp_margin = self._dark_exp_margin
+        
+        if isinstance(fname_ccd_or_hdr, fits.Header):
+            hdr = fname_ccd_or_hdr
+        else:
+            ccd = ccddata_read(fname_ccd_or_hdr)
+            hdr = ccd.meta
+        tm = Time(hdr['DATE-OBS'], format='fits')
+        ccdt = hdr['CCD-TEMP']
+        exptime = hdr['EXPTIME']
+        # This is the entry point for reduction 
+        dccdts = ccdt - self.dark_table['ccdts']
+        good_ccdt_idx = np.flatnonzero(np.abs(dccdts) < ccdt_tolerance)
+        if len(good_ccdt_idx) == 0:
+            log.warning(f'No darks found within {ccdt_tolerance} C, broadening by factor of 2')
+            return self.best_dark(hdr, ccdt_tolerance=ccdt_tolerance*2)
+        # Find the longest exposure time in our collection of darks
+        # that matches our exposure.  Prefer longer exposure times by
+        # dark_exp_margin
+        dexptimes = exptime - self.dark_table['exptimes']
+        good_exptime_idx = np.flatnonzero(
+            abs(dexptimes[good_ccdt_idx]) <  dark_exp_margin)
+        if len(good_exptime_idx) == 0:
+            log.warning(f'No darks found with exptimes within {dark_exp_margin} s, broadening margin by factor of 2')
+            return self.best_dark(hdr,
+                                  ccdt_tolerance=ccdt_tolerance,
+                                  dark_exp_margin=dark_exp_margin*2)
+        # unwrap
+        good_exptime_idx = good_ccdt_idx[good_exptime_idx]
+        ddates = tm - self.dark_table['dates']
+        best_exptime_date_idx = np.argmin(np.abs(ddates[good_exptime_idx]))
+        # unwrap
+        best_exptime_date_idx = good_exptime_idx[best_exptime_date_idx]
+        return self._dark_table['fnames'][best_exptime_date_idx]
+    # --> TODO: possibly put in the number of darks as a factor as
+    # --> well, weighted by difference in time
 
 #sample = '/data/io/IoIO/raw/20201001/Dark-S001-R003-C009-B1.fts'
 
@@ -3236,6 +3446,19 @@ class Calibration():
 #print(create_outname(dsample, outdir=calibration_scratch, create_outdir=True))
 #dfd = dark_process_one_file(dsample, calibration_scratch='/tmp', calibration=c, auto=True, create_outdir=True, show=False)
 
-dark_dir = '/data/io/IoIO/raw/20200711'
-c = Calibration(start_date='2020-07-11', stop_date='2020-08-22', reduce=True)
-dark_combine(dark_dir, calibration=c, auto=True, create_outdir=True, show=False)
+#dark_dir = '/data/io/IoIO/raw/20200711'
+#c = Calibration(start_date='2020-07-11', stop_date='2020-08-22', reduce=True)
+#dark_combine(dark_dir, calibration=c, auto=True, create_outdir=True, show=False)
+
+#dsample = '/data/io/IoIO/raw/20200711/Dark-S005-R004-C003-B1.fts'
+##c = Calibration(start_date='2020-07-11', stop_date='2020-07-12')
+#c = Calibration(start_date='2020-07-11', stop_date='2020-08-22')
+##t = c.bias_table_create(autoreduce=False)
+#t = c.dark_table_create(autoreduce=False)
+#print(c.best_bias(dsample))
+#print(c.best_dark(dsample))
+
+c = Calibration(start_date='2020-07-11', stop_date='2020-08-22')
+fname = '/data/io/IoIO/raw/2020-07-07/Sky_Flat-0002_R.fit'
+f = ccd_process(fname, calibration=c, auto=True)
+f.write('/tmp/test.fits')
