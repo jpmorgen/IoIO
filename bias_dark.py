@@ -405,9 +405,11 @@ def ccddata_read(fname_or_ccd,
     Catches the case where the raw FITS file does not have a BUNIT
     keyword, which otherwise causes CCDData.read() to crash.  In this
     case, ccddata_read assigns ccddata units of ``raw_unit``.  Also
-    ads comment to BUNIT "physical units of the array values" which is
-    from official FITS documentation
-    https://heasarc.gsfc.nasa.gov/docs/fcg/standard_dict.html
+    ads comment to BUNIT "physical units of the array values," which
+    is curiously omitted in the astropy fits writing system.  Comment
+    is from official FITS documentation
+    https://heasarc.gsfc.nasa.gov/docs/fcg/standard_dict.html where
+    BUNIT is in the same family as BZERO and BSCALE
 
     Parameters
     ----------
@@ -438,26 +440,28 @@ def ccddata_read(fname_or_ccd,
         ccd = fname_or_ccd.copy()
     assert isinstance(ccd, CCDData)
     if ccd.unit is None:
-        log.warning('ccddata_read: CCDData.read read a file and did not assign any units to it.  Not sure why.  Setting units to ADU')
-        ccd.unit = u.adu
-    # This comment is from the official FITS definition.  Not sure
-    # why astropy stuff doesn't write it.  BUNIT is in the same
-    # family is BZERO and BSCALE
-    # https://heasarc.gsfc.nasa.gov/docs/fcg/standard_dict.html
-    ccd.meta.comments['BUNIT'] = 'physical units of the array values'
+        log.warning('ccddata_read: CCDData.read read a file and did not assign any units to it.  Not sure why.  Setting units to' + raw_unit.to_string())
+        ccd.unit = raw_unit
+    # Setting ccd.unit to something does not set the BUNIT keyword
+    # until file write.  So to write the comment before we write the
+    # file, we need to set BUNIT ourselves.  If ccd,unit changes
+    # during our calculations (e.g. gain correction), the BUNIT
+    # keyword is changed but the comment is not.
+    ccd.meta['BUNIT'] = (ccd.unit.to_string(),
+                         'physical units of the array values')
     return ccd
 
-def not_full_frame(im,
-                   naxis1=sx694_naxis1,
-                   naxis2=sx694_naxis2,
-                   **kwargs):
-    """Returns True if image is not full-frame as per naxisN keywords
+def full_frame(im,
+               naxis1=sx694_naxis1,
+               naxis2=sx694_naxis2,
+               **kwargs):
+    """cor_pipeline pre-processing routine to select full-frame images
     """
     s = im.shape
     # Note Pythonic C index ordering
     if s != (naxis2, naxis1):
-        return True
-    return False
+        return (None, {})
+    return (im, {})
 
 #def full_frame(im,
 #               naxis1=sx694_naxis1,
@@ -473,7 +477,8 @@ def not_full_frame(im,
 #    return True    
 
 def light_image(im, light_tolerance=3, **kwargs):
-    """Returns True if light detected in image"""
+    """cor_pipeline pre-processing routine to reject light-contaminated bias & dark images
+    """
     s = im.shape
     m = np.asarray(s)/2 # Middle of CCD
     q = np.asarray(s)/4 # 1/4 point
@@ -487,8 +492,8 @@ def light_image(im, light_tolerance=3, **kwargs):
     mlp = np.median(light_patch)
     if (np.median(light_patch) - np.median(dark_patch) > light_tolerance):
         log.debug('light, dark patch medians ({:.4f}, {:.4f})'.format(mdp, mlp))
-        return True
-    return False
+        return (None, {})
+    return (im, {})
 
 def mask_above(ccd_in, key, margin=0.1):
     ccd = ccd_in.copy()
@@ -512,7 +517,9 @@ def mask_above(ccd_in, key, margin=0.1):
     return ccd, n_masked
     
 #def mask_saturated(ccd):
-#    """Record the number of saturated pixels in image metadata and log a warning if > 0"""
+#
+
+    """Record the number of saturated pixels in image metadata and log a warning if > 0"""
 #    satlevel = ccd.meta['SATLEVEL']
 #    # Saturation level is subject to overscan subtraction and multiplication by gain, so don't do strict = testing, but give ourselves a little margin.
 #    mask = ccd.data >= satlevel - 0.1
@@ -644,15 +651,19 @@ def fname_by_imagetyp_ccdt_exp(directory=None,
 
 def jd_meta(ccd, **kwargs):
     tm = Time(ccd.meta['DATE-OBS'], format='fits')
-    return {'jd': tm.jd}
+    return (ccd, {'jd': tm.jd})
 
-def bias_dataframe(ccd, gain=sx694_gain, **kwargs):
-    """Returns dictionary of bias statistics"""
-
+def bias_stats(ccd, gain=sx694_gain, **kwargs):
+    """cor_pipeline post-processing routine for bias_combine
+    Returns dictionary of bias statistics for pandas dataframe
+    """
     im = ccd.data
-    # Create uncertainty image
+    hdr = ccd.meta
+    # Calculate readnoise.  This is time-consuming
     diffs2 = (im[1:] - im[0:-1])**2
     rdnoise = np.sqrt(biweight_location(diffs2))
+    # Skip uncertainty creation, since it is not used in any
+    # subsequent calcs
     #uncertainty = np.multiply(rdnoise, np.ones(im.shape))
     #ccd.uncertainty = StdDevUncertainty(uncertainty)
     # Prepare to create a pandas data frame to track relevant
@@ -660,15 +671,18 @@ def bias_dataframe(ccd, gain=sx694_gain, **kwargs):
     tm = Time(ccd.meta['DATE-OBS'], format='fits')
     ccdt = ccd.meta['CCD-TEMP']
     tt = tm.tt.datetime
-    dataframe = {'time': tt,
-                 'ccdt': ccdt,
-                 'median': np.median(im),
-                 'mean': np.mean(im),
-                 'std': np.std(im)*gain,
-                 'rdnoise': rdnoise*gain,
-                 'min': np.min(im),  
-                 'max': np.max(im)}
-    return {'dataframe': dataframe}
+    # We have already subtracted overscan, so add it back in where
+    # appropriate
+    median = hdr['OVERSCAN_MEDIAN']
+    stats = {'time': tt,
+             'ccdt': ccdt,
+             'median': median,
+             'mean': np.mean(im) + median,
+             'std': np.std(im)*gain,
+             'rdnoise': rdnoise*gain,
+             'min': np.min(im) + median,  
+             'max': np.max(im) + median}
+    return (ccd, {'stats': stats})
 
 #def bias_dataframe(fname, gain):
 #    """Worker routine to enable parallel processing of time-consuming
@@ -706,8 +720,8 @@ def bias_dataframe(ccd, gain=sx694_gain, **kwargs):
 #            'dataframe': dataframe,
 #            'jd': tm.jd}
 
-def bias_subtract_one_median(fname, med, **kwargs):
-    return ccd_process(fname, oscan=med, **kwargs)
+#def bias_subtract_one_median(fname, med, **kwargs):
+#    return ccd_process(fname, oscan=med, **kwargs)
 
 
 def bias_combine_one_fdict(fdict,
@@ -719,7 +733,7 @@ def bias_combine_one_fdict(fdict,
                            dccdt_tolerance=dccdt_tolerance,
                            num_processes=max_num_processes,
                            mem_frac=max_mem_frac,
-                           ccddata_size=max_ccddata_size,
+                           process_size=max_ccddata_size,
                            camera_description=sx694_camera_description,
                            gain=sx694_gain,
                            satlevel=sx694_satlevel,
@@ -748,29 +762,58 @@ def bias_combine_one_fdict(fdict,
     if num_files < min_num_biases:
         log.debug(f"Not enough good biases found at CCDT = {mean_ccdt} C in {directory}")
         return False
-    mem = psutil.virtual_memory()
-    num_files_can_fit = \
-        int(min(num_files,
-                mem.available*mem_frac/ccddata_size))
-    num_can_process = min(num_processes, num_files_can_fit)
+    tmp = ccddata_read(fdict['fnames'][0])
+    tm = tmp.meta['DATE-OBS']
+    this_dateb1, _ = tm.split('T')
+    sdir = os.path.join(calibration_scratch, this_dateb1)
+
+    #mem = psutil.virtual_memory()
+    #num_files_can_fit = \
+    #    int(min(num_files,
+    #            mem.available*mem_frac/ccddata_size))
+    #num_can_process = min(num_processes, num_files_can_fit)
     #print('bias_combine_one_fdict: num_processes = {}, mem_frac = {}, num_files= {}, num_files_can_fit = {}, num_can_process = {}'.format(num_processes, mem_frac, num_files, num_files_can_fit, num_can_process))
-    gains = [gain] * num_files
-    try:
-        with Pool(processes=num_can_process) as p:
-            dfdlist = p.starmap(bias_dataframe,
-                                zip(fdict['fnames'], gains))
-    except Exception as e:
-        log.debug('Single-process mode: ' + str(e))
-        dfdlist = [bias_dataframe(d, gain) for d in fdict['fnames']]
 
-    # Unpack        
-    good_fnames = [dfd['fname'] for dfd in dfdlist if dfd['good']]
-    stats = [dfd['dataframe'] for dfd in dfdlist if dfd['good']]
-    jds = [dfd['jd'] for dfd in dfdlist if dfd['good']]
-
-    if len(stats) < min_num_biases:
-        log.debug(f"Not enough good biases {len(stats)} found at CCDT = {mean_ccdt} C in {directory}")
+    # Use the cor_pipeline to subtract the median from each bias and
+    # create a dict of stats for a pandas dataframe
+    pout = cor_pipeline(fdict['fnames'],
+                        num_processes=num_processes,
+                        mem_frac=mem_frac,
+                        process_size=process_size,
+                        outdir=sdir,
+                        create_outdir=True,
+                        overwrite=True,
+                        pre_process_list=[full_frame, light_image],
+                        post_process_list=[bias_stats, jd_meta],
+                        oscan=True)
+    pout = [p for p in pout if p[0] is not None]
+    if len(pout) < min_num_biases:
+        log.debug(f"Not enough good biases {len(pout)} found at CCDT = {mean_ccdt} C in {directory}")
         return False
+
+    os_fnames, meta = zip(*pout)
+    stats_jds = [(m['stats'], m['jd']) for m in meta]
+    stats, jds = zip(*stats_jds)
+
+    #if num_can_process == 1:
+    #    ccd_dfdlist = [bias_dataframe(ccd, gain=gain, **kwargs)
+    #try:
+    #    with Pool(processes=num_can_process) as p:
+    #        dfdlist = p.starmap(bias_dataframe,
+    #                            zip(fdict['fnames'], gains))
+    #except Exception as e:
+    #    log.debug('Single-process mode: ' + str(e))
+    #    dfdlist = [bias_dataframe(d, gain) for d in fdict['fnames']]
+    #
+    ## Unpack        
+    #good_fnames = [dfd['fname'] for dfd in dfdlist if dfd['good']]
+    #stats = [dfd['dataframe'] for dfd in dfdlist if dfd['good']]
+    #jds = [dfd['jd'] for dfd in dfdlist if dfd['good']]
+    #
+    #if len(stats) < min_num_biases:
+    #    log.debug(f"Not enough good biases {len(stats)} found at CCDT = {mean_ccdt} C in {directory}")
+    #    return False
+
     df = pd.DataFrame(stats)
     tm = Time(np.mean(jds), format='jd')
     this_date = tm.fits
@@ -851,29 +894,29 @@ def bias_combine_one_fdict(fdict,
         log.warning('High readnoise {}, skipping {}'.format(av_rdnoise, out_fname))
         return False
 
-    # "Overscan subtract."  Go through each image and subtract the
-    # median, since that value wanders as a function of ambient
-    # (not CCD) temperature.  This leaves just the bias pattern.
-    # To use ccd.subtract, unit must match type of array.  Note
-    # that we need to save our images to disk to avoid
-    # overwhelming memory when we have lots of biases.  Also note that
-    # we can't use the ccd_process_multi machinery because we have an
-    # argument, medians, which changes with each bias. 
-
-    # Make a date subdirectory in our calibration scratch dir
-    sdir = os.path.join(calibration_scratch, this_dateb)
-    nfnames = len(good_fnames)
-    mem = psutil.virtual_memory()
-    max_mem = mem.available*mem_frac
-    max_nframes = int(max_mem / ccddata_size)
-    our_num_processes = min(nfnames, num_processes, max_nframes)
-    pwk = PoolWorkerKwargs(bias_subtract_one_median,
-                           outdir=sdir,
-                           create_outdir=True,
-                           overwrite=True,
-                           return_outname=True)
-    with NoDaemonPool(processes=num_processes) as p:
-        os_fnames = p.starmap(pwk.worker, zip(good_fnames, medians))
+    ## "Overscan subtract."  Go through each image and subtract the
+    ## median, since that value wanders as a function of ambient
+    ## (not CCD) temperature.  This leaves just the bias pattern.
+    ## To use ccd.subtract, unit must match type of array.  Note
+    ## that we need to save our images to disk to avoid
+    ## overwhelming memory when we have lots of biases.  Also note that
+    ## we can't use the ccd_process_multi machinery because we have an
+    ## argument, medians, which changes with each bias. 
+    #
+    ## Make a date subdirectory in our calibration scratch dir
+    #sdir = os.path.join(calibration_scratch, this_dateb)
+    #nfnames = len(good_fnames)
+    #mem = psutil.virtual_memory()
+    #max_mem = mem.available*mem_frac
+    #max_nframes = int(max_mem / ccddata_size)
+    #our_num_processes = min(nfnames, num_processes, max_nframes)
+    #pwk = PoolWorkerKwargs(bias_subtract_one_median,
+    #                       outdir=sdir,
+    #                       create_outdir=True,
+    #                       overwrite=True,
+    #                       return_outname=True)
+    #with NoDaemonPool(processes=num_processes) as p:
+    #    os_fnames = p.starmap(pwk.worker, zip(good_fnames, medians))
         
     #os.makedirs(sdir, exist_ok=True)
     #os_fnames = []
@@ -907,13 +950,14 @@ def bias_combine_one_fdict(fdict,
     ## double-precision anyway, so it doesn't save space
     #combined_average = combiner.average_combine()
 
-    # Use ccdp.combine since it enables memory management by
-    # breaking up images to smaller chunks (better than throwing
-    # images away).  --> eventually it would be great to
-    # parallelize this primitive, since it is very slow
+    # Use ccdp.combine since it enables memory management by breaking
+    # up images to smaller chunks (better than throwing images away).
+    # --> eventually it would be great to parallelize this primitive,
+    # since it is very slow.  In the mean time I have parallelized all
+    # the higher steps!
     mem = psutil.virtual_memory()
     im = \
-        ccdp.combine(os_fnames,
+        ccdp.combine(list(os_fnames),
                      method='average',
                      sigma_clip=True,
                      sigma_clip_low_thresh=5,
@@ -936,8 +980,12 @@ def bias_combine_one_fdict(fdict,
     # commented mean).  So just create a new array, if needed, and
     # only put into it the good pixels
     if im.mask is None:
+        # This is not a copy!  But don't worry, we don't change tim,
+        # just collect info from it
         tim = im
     else:
+        # This is a new array with fewer elements.  We will collect
+        # stats and write the original im, below
         tim = im.data[im.mask == 0]
     std =  np.std(tim)*im_gain
     med =  np.median(tim)*im_gain
@@ -957,7 +1005,7 @@ def bias_combine_one_fdict(fdict,
     im.meta['MAX'] = (tmax, 'Max of image (electron)')
     im.meta['HIERARCH OVERSCAN_VALUE'] = (overscan, 'Average of raw bias medians (ADU)')
     im.meta['HIERARCH SUBTRACT_OVERSCAN'] = (True, 'Overscan has been subtracted')
-    im.meta['NCOMBINE'] = (len(good_fnames), 'Number of biases combined')
+    im.meta['NCOMBINE'] = (len(os_fnames), 'Number of biases combined')
     # Record each filename
     for i, f in enumerate(fdict['fnames']):
         im.meta['FILE{0:02}'.format(i)] = f
@@ -985,15 +1033,19 @@ def bias_combine_one_fdict(fdict,
             try:
                 os.remove(f)
             except Exception as e:
-                log.debug(f'Remove {f} failed: ' + str(e))
+                # We do not expect this, since we created these with
+                # our local process
+                log.debug(f'Unexpected!  Remove {f} failed: ' + str(e))
+        # These we expect to fail until all of our other parallel
+        # processes have finished
         try:
             os.rmdir(sdir)
         except Exception as e:
-            log.debug(f'Remove {calibration_scratch} failed: ' + str(e))
+            pass
         try:
             os.rmdir(calibration_scratch)
         except Exception as e:
-            log.debug(f'Remove {calibration_scratch} failed: ' + str(e))
+            pass
                 
 
 
@@ -1171,7 +1223,7 @@ def overscan_estimate(ccd_in, meta=None, master_bias=None,
     # This returns a copy of ccd_in, important for our metadata of
     # gain and readnoise
     ccd = ccddata_read(ccd_in)
-    ccd.meta = ccd_metadata(ccd.metadata)
+    ccd.meta = ccd_metadata(ccd.meta)
     if meta is None:
         meta = ccd.meta
     if ccd.unit != u.adu:
@@ -1288,27 +1340,53 @@ def subtract_overscan(fname_or_ccd, oscan=None, *args, **kwargs):
         nccd.meta['SATLEVEL'] = satlevel # still in ADU
     return nccd
 
-def create_outname(fname,
+#def get_calibration(ccd, auto=False,
+#                imagetyp=None,
+#                master_bias=None,
+#                dark_frame=None,
+#                master_flat=None,
+#
+#
+#def get_imagetyp(ccd, **kwargs):
+#    imagetyp = nccd.meta.get('imagetyp')
+#    outkwargs = {'imagetyp': imagetyp}
+#    return (ccd, outkwargs)
+#
+#def autocalibrate(ccd, imagetyp=None, **kwargs):
+#    if imagetyp is None:
+#        return (ccd, {})
+#    elif imagetyp.lower() == 'bias':
+#        outkwargs = {'oscan': True, 'gain': True}
+#    elif imagetyp.lower() == 'dark':
+#        outkwargs = {'oscan': True, 'gain': True, 'master_bias': True}
+#    elif imagetyp.lower() == 'flat':
+#        outkwargs = {'oscan': True, 'gain': True, 'master_bias': True,
+#                     'dark_frame': True}
+#    elif imagetyp.lower() == 'light':
+#        outkwargs = {'oscan': True, 'gain': True, 'master_bias': True,
+#                     'dark_frame': True, 'master_flat': True}
+#    else:
+#        raise ValueError(f'Unknown IMAGETYP keyword {imagetyp}')
+#    return (ccd, outkwargs)
+
+def outname_create(fname, ccd, meta,
                    outdir=None,
                    create_outdir=False,
-                   outname_append=outname_append,
-                   outname=None):
-    if outname is not None:
-        return outname
-    if outdir is not None:
-        if create_outdir:
-            os.makedirs(outdir, exist_ok=True)
-        assert os.path.isdir(outdir)
-        if outname is not None:
-            outname = os.path.join(outdir, outname)
-        else:
-            if not (isinstance(fname, str)
-                    and isinstance(outname_append, str)):
-                raise ValueError("Not enough information provided to create output filename.  Specify outname or use an input filename and spefify a string to append to that output filename to assure input is not overwritten")
-            bname = os.path.basename(fname)
-            prepend, ext = os.path.splitext(bname)
-            outbname = prepend + outname_append + ext
-            outname = os.path.join(outdir, outbname)
+                   outname_append='_ccdmp',
+                   **kwargs):
+    if not (isinstance(fname, str)
+            and isinstance(outname_append, str)):
+        raise ValueError("Not enough information provided to create output filename.  Specify outname or use an input filename and specify a string to append to that output filename to assure input is not overwritten")
+    if outdir is None:
+        outdir = os.getcwd()
+    if create_outdir:
+        os.makedirs(outdir, exist_ok=True)
+    if not os.path.isdir(outdir):
+        raise ValueError(f"outdir {outdir} does not exist.  Create directory or use create_outdir=True")
+    bname = os.path.basename(fname)
+    prepend, ext = os.path.splitext(bname)
+    outbname = prepend + outname_append + ext
+    outname = os.path.join(outdir, outbname)
     return outname
 
 def num_can_process(num_to_process,
@@ -1321,88 +1399,49 @@ def num_can_process(num_to_process,
     return min(num_to_process, num_processes, max_n)
 
 
-def cdd_pipeline(fnames_or_ccds,
+def ccd_pipeline(fnames,
                  num_processes=max_num_processes,
                  mem_frac=max_mem_frac,
                  process_size=max_ccddata_size,
                  **kwargs):
-    if not isinstance(fnames_or_ccds, list):
-        fnames_or_ccds = [fnames_or_ccds]
-    have_ccddata = next((f for f in fnames_or_ccds
-                         if isinstance(f, CCDData)),
-                        False)
-    if not have_ccddata:
-        # We have a CCDData, so we can't run in multi-processing mode
-        ncp = 1
-    else:
-        ncp = num_can_process(len(fnames_or_ccds),
-                              num_processes=num_processes,
-                              mem_frac=mem_frac,
-                              process_size=process_size)
+    ncp = num_can_process(len(fnames),
+                          num_processes=num_processes,
+                          mem_frac=mem_frac,
+                          process_size=process_size)
     if ncp == 1:
         retvals = [ccd_process_file(f, **kwargs)
-                   for f in fnames_or_ccds]
-        if len(retvals) == 1:
-            retvals = retvals[0]
+                   for f in fnames]
         return retvals
 
     pwk = PoolWorkerKwargs(ccd_process_file,
-                           multi=True,
-                           return_outname=True,
                            **kwargs)
     with NoDaemonPool(processes=ncp) as p:
-        retvals = p.map(pwk.worker, fnames_or_ccds)
+        retvals = p.map(pwk.worker, fnames)
     return retvals
 
-def ccd_process_file(fname_or_ccd,
-                     ccddata_reader=ccddata_read,
-                     multi=False,
-                     outdir=None,
-                     create_outdir=False,
-                     exist_ok=False,
-                     outname_append=outname_append,
-                     outname=None,
+def ccd_process_file(fname,
+                     ccddata_reader=None,
+                     outname_creator=None,
                      overwrite=False,
-                     return_outname=False,
                      **kwargs):
-
-    ccd = ccddata_reader(fname_or_ccd)
+    if ccddata_reader is None:
+        ccddata_reader = ccddata_read
+    if outname_creator is None:
+        outname_creator = outname_create
+    ccd = ccddata_reader(fname)
     ccd, meta = ccd_post_process(ccd, **kwargs)
-    if ccd is None and meta is {}:
-        return (ccd, meta)
-
-    # Write our file to disk, if desired
-    if outname is not None and multi:
-        log.warning(f"In multiprocessing mode!  Multiple files will be written to {outname}.  Use outdir option instead.")
-    if outdir is not None:
-        if create_outdir:
-            os.makedirs(outdir, exist_ok=exist_ok)
-        if not os.path.isdir(outdir):
-            raise ValueError(f"outdir {outdir} does not exist.  Create directory or use create_outdir=True")
-        if outname is not None:
-            outname = os.path.join(outdir, outname)
-        else:
-            if not (isinstance(fname_or_ccd, str)
-                    and isinstance(outname_append, str)):
-                raise ValueError("Not enough information provided to create output filename.  Specify outname or use an input filename and specify a string to append to that output filename to assure input is not overwritten")
-            bname = os.path.basename(fname_or_ccd)
-            prepend, ext = os.path.splitext(bname)
-            outbname = prepend + outname_append + ext
-            outname = os.path.join(outdir, outbname)
-
-    if multi and outname is None:
-        log.warning("In multiprocessing mode and no outname constructed via outdir or provided by outname.  CCDData objectds are generally too big to return via pickled Queues, so setting ccd return value to None.")
-        ccd = None
-
+    if ccd is None:
+        return (None, meta)
+    outname = outname_creator(fname, ccd, meta, **kwargs)
     if outname is not None:
         ccd.write(outname, overwrite=overwrite)
-        if return_outname:
-            return (outname, meta)
-    return (ccd, meta)
+    return (outname, meta)
     
 def ccd_post_process(ccd,
-                     post_process_list=[],
+                     post_process_list=None,
                      **kwargs):
+    if post_process_list is None:
+        post_process_list = []
     ccd = ccd_pre_process(ccd, **kwargs)
     meta = {}
     if ccd is None:
@@ -1413,16 +1452,17 @@ def ccd_post_process(ccd,
     return (ccd, meta)
 
 def ccd_pre_process(ccd,
-                    pre_process_list=[],
-                    ccd_processor=ccdp.ccd_process,
+                    pre_process_list=None,
+                    ccd_processor=None,
                     **kwargs):
+    if pre_process_list is None:
+        pre_process_list = []
+    if ccd_processor is None:
+        ccd_processor = ccdp.ccd_process
     for pp in pre_process_list:
         ccd, these_kwargs = pp(ccd, **kwargs)
         kwargs.update(these_kwargs)
     return ccd_processor(ccd, **kwargs)
-
-
-
 
 def cor_process(ccd,
                 calibration=None,
@@ -1438,28 +1478,22 @@ def cor_process(ccd,
                 master_flat=None,
                 bad_pixel_mask=None,
                 gain=None,
-                gain_key=ccdp.Keyword('GAIN', u.electron/u.adu),
+                gain_key=None,
                 readnoise=None,
-                readnoise_key=ccdp.Keyword('RDNOISE', u.electron),
+                readnoise_key=None,
                 oscan_median=True,
                 oscan_model=None,
                 min_value=None,
-                min_value_key=ccdp.Keyword('FLAT_CUT', u.dimensionless_unscaled),
+                min_value_key=None,
                 flat_norm_value=1,
                 dark_exposure=None,
                 data_exposure=None,
-                exposure_key=ccdp.Keyword('EXPTIME', u.s),
+                exposure_key=None,
                 exposure_unit=None,
                 dark_scale=True,
                 gain_corrected=True,
                 outdir=None,
                 create_outdir=False,
-                outname_append=outname_append,
-                outname=None,
-                overwrite=False,
-                return_outname=False,
-                post_process_list=[],
-                meta_process_list=[],
                 *args, **kwargs):
 #def ccd_process(fname_or_ccd, calibration=None,
 #                oscan=None, error=False, master_bias=None,
@@ -1710,39 +1744,33 @@ def cor_process(ccd,
 
     """
 
-    # --> Wrap whole thin in try and return None if there is an error
+    if gain_key is None:
+        gain_key = ccdp.Keyword('GAIN', u.electron/u.adu)
+    if readnoise_key is None:
+        readnoise_key = ccdp.Keyword('RDNOISE', u.electron)
+    if min_value_key is None:
+        min_value_key = ccdp.Keyword('FLAT_CUT', u.dimensionless_unscaled)
+    if exposure_key is None:
+        exposure_key = ccdp.Keyword('EXPTIME', u.s)
 
-    # This politely makes a copy of the input if it is a CCDData.  It
-    # also handles assignment of BUNIT to ADU if it is otherwise not
-    # assigned.
-    if (multi
-        and not isinstance(fname_or_ccd, str)
-        and not isinstance(outdir, str):
-        raise ValueError("In multi-processsing mode")
-        
-    nccd = ccddata_read(fname_or_ccd)
-
-    for ff in filter_func_list:
-        # --> Add all keywords of ccd_combine
-        if ff(nccd, **kwargs):
-            return None
+    # make a copy of the object
+    nccd = ccd.copy()
 
     # Handle our calibration object
     if calibration is True:
         calibration  = Calibration()
 
-    #if auto and not isinstance(calibration, Calibration):
-    #    raise ValueError("Must specify calibration object for auto-calibration")
-
+    # Enable autocalibration through imagetyp keyword
     if auto:
         imagetyp = nccd.meta.get('imagetyp')
         if imagetyp is None:
             raise ValueError("CCD metadata contains no IMAGETYP keyword, can't proceed with automatic reduction")
 
+    # Enable imagetyp to select reduction level
     if imagetyp is None:
         pass
     elif imagetyp.lower() == 'bias':
-        oscan=True; gain=True
+        oscan=True
     elif imagetyp.lower() == 'dark':
         oscan=True; gain=True; master_bias=True
     elif imagetyp.lower() == 'flat':
@@ -1752,23 +1780,24 @@ def cor_process(ccd,
     else:
         raise ValueError(f'Unknown IMAGETYP keyword {imagetyp}')
 
-    if ccd_meta:
-        # Put in our SX694 camera metadata
-        nccd.meta = ccd_metadata(nccd.meta, *args, **kwargs)
-
-    if exp_correct:
-        # Correct exposure time for driver bug
-        nccd.meta = ccd_exp_correct(nccd.meta, *args, **kwargs)
-
-    if (isinstance(calibration, Calibration)
-        and master_bias is True):
-        master_bias = calibration.best_bias(nccd)
+    # Convert "yes use this calibration" to calibration _filenames_
+    if isinstance(calibration, Calibration):
+        if master_bias is True:
+            master_bias = calibration.best_bias(nccd)
+        if dark_frame is True:
+            dark_frame = calibration.best_dark(nccd)
+        if master_flat is True:
+            master_flat = calibration.best_flat(nccd.meta)
 
     if master_bias is True:
         raise ValueError('master_bias=True but no Calibration object supplied')
+    if dark_frame is True:
+        raise ValueError('dark_frame=True but no Calibration object supplied')
+    if master_flat is True:
+        raise ValueError('master_flat=True but no Calibration object supplied')
 
-    # Make our master_bias easy to input and capture the name for
-    # metadata purposes
+    # Convert calibration filenames to CCDData objects, capturing the
+    # names for metadata purposes
     if isinstance(master_bias, str):
         subtract_bias_keyword = \
             {'HIERARCH SUBTRACT_BIAS': 'subbias',
@@ -1777,6 +1806,30 @@ def cor_process(ccd,
         master_bias = ccddata_read(master_bias)
     else:
         subtract_bias_keyword = None
+    if isinstance(dark_frame, str):
+        subtract_dark_keyword = \
+            {'HIERARCH SUBTRACT_DARK': 'subdark',
+             'SUBDARK': 'ccdproc.subtract_dark ccd=<CCDData>, master=DARKFILE',
+             'DARKFILE': dark_frame}
+        dark_frame = ccddata_read(dark_frame)
+    else:
+        subtract_dark_keyword = None
+    if isinstance(master_flat, str):
+        flat_correct_keyword = \
+            {'HIERARCH FLAT_CORRECT': 'flatcor',
+             'FLATCOR': 'ccdproc.flat_correct ccd=<CCDData>, master=FLATFILE',
+             'FLATFILE': master_flat}
+        master_flat = ccddata_read(master_flat)
+    else:
+        flat_correct_keyword = None
+
+    if ccd_meta:
+        # Put in our SX694 camera metadata
+        nccd.meta = ccd_metadata(nccd.meta, *args, **kwargs)
+
+    if exp_correct:
+        # Correct exposure time for driver bug
+        nccd.meta = ccd_exp_correct(nccd.meta, *args, **kwargs)
         
     # Apply overscan correction unique to the IoIO SX694 CCD.  This
     # also adds our CCD metadata
@@ -1870,26 +1923,6 @@ def cor_process(ccd,
         raise TypeError(
             'master_bias is not None, fname or a CCDData object.')
     
-    # Make it convenient to just specify dark_frame to do dark
-    # subtraction the way I want
-    if isinstance(calibration, Calibration) and dark_frame is True:
-        dark_frame = calibration.best_dark(nccd.meta)
-
-    if dark_frame is True:
-        raise ValueError('dark_frame=True but no Calibration object supplied')
-
-    # Make our dark_frame easy to input and capture the name for
-    # metadata purposes
-    if isinstance(dark_frame, str):
-        subtract_dark_keyword = \
-            {'HIERARCH SUBTRACT_DARK': 'subdark',
-             'SUBDARK': 'ccdproc.subtract_dark ccd=<CCDData>, master=DARKFILE',
-             'DARKFILE': dark_frame}
-        dark_frame = ccddata_read(dark_frame)
-    else:
-        subtract_dark_keyword = None
-        
-
     # Subtract the dark frame.  Generally this will just use the
     # default exposure_key we create in our parameters to ccd_process
     if isinstance(dark_frame, CCDData):
@@ -1906,9 +1939,6 @@ def cor_process(ccd,
         raise TypeError(
             'dark_frame is not None or a CCDData object.')
     
-    if isinstance(calibration, Calibration) and master_flat is True:
-        master_flat = ccddata_read(calibration.best_flat(nccd.meta))
-
     if master_flat is None:
         pass
     else:
@@ -1916,46 +1946,14 @@ def cor_process(ccd,
             min_value = min_value_key.value_from(nccd.meta)
         nccd = ccdp.flat_correct(nccd, master_flat,
                                  min_value=min_value,
-                                 norm_value=flat_norm_value)
+                                 norm_value=flat_norm_value,
+                                 add_keyword=flat_correct_keyword)
 
     # apply the gain correction only at the end if gain_corrected is False
     if gain is not None and not gain_corrected:
         nccd = ccdp.gain_correct(nccd, gain)
 
-    # Write our file to disk, if desired
-    if outdir is not None:
-        if create_outdir:
-            os.makedirs(outdir, exist_ok=True)
-        assert os.path.isdir(outdir)
-        if outname is not None:
-            outname = os.path.join(outdir, outname)
-        else:
-            if not (isinstance(fname_or_ccd, str)
-                    and isinstance(outname_append, str)):
-                raise ValueError("Not enough information provided to create output filename.  Specify outname or use an input filename and spefify a string to append to that output filename to assure input is not overwritten")
-            bname = os.path.basename(fname_or_ccd)
-            prepend, ext = os.path.splitext(bname)
-            outbname = prepend + outname_append + ext
-            outname = os.path.join(outdir, outbname)
-        
-    for pp in post_process_list:
-        # --> Add all keywords of ccd_combine
-        nccd = pp(nccd, **kwargs)
-
-    meta = {}
-    for mp in meta_process_list:
-        this_meta = mp(nccd, gain=gain, **kwargs)
-        meta.update(this_meta)
-
-    if outname is not None:
-        nccd.write(outname, overwrite=overwrite)
-
-    retval = nccd
-    if return_outname:
-        retval = outname
-    if meta:
-        retval = (retval, meta)
-    return retval
+    return nccd
     
 
     #### make a copy of the object
@@ -2041,6 +2039,19 @@ def cor_process(ccd,
     ###    nccd = gain_correct(nccd, gain)
     ###
     ###return nccd
+
+def cor_pipeline(fnames,
+                 pre_process_list=None,
+                 ccd_processor=None,
+                 **kwargs):
+    if pre_process_list is None:
+        pre_process_list = [full_frame]
+    if ccd_processor is None:
+        ccd_processor = cor_process
+    return ccd_pipeline(fnames,
+                        pre_process_list=pre_process_list,
+                        ccd_processor=ccd_processor,
+                        **kwargs)
 
 def dark_process_one_file(fname,
                           calibration_scratch=calibration_scratch,
@@ -3650,21 +3661,57 @@ fsample = '/data/io/IoIO/raw/2020-07-07/Sky_Flat-0002_R.fit'
 #bias = c.best_bias(fsample)
 #print(overscan_estimate(fsample, master_bias=bias))
 
-bsample = '/data/io/IoIO/raw/20200711/Bias-S005-R002-C001-B1.fts'
-bsample1 = '/data/io/IoIO/raw/20200711/Bias-S005-R001-C001-B1.fts'
+#bsample = '/data/io/IoIO/raw/20200711/Bias-S005-R002-C001-B1.fts'
+#bsample1 = '/data/io/IoIO/raw/20200711/Bias-S005-R001-C001-B1.fts'
 #print(overscan_estimate(bsample))
 #ccd = ccddata_read(bsample)
 #print(overscan_estimate(bsample, meta=ccd.meta))
 #ccd = subtract_overscan(bsample)
-
 #b = ccd_process(bsample)
 #b = ccd_process(bsample, auto=True,
 #                filter_func_list=[not_full_frame, light_image])
 #b, m = ccd_process(bsample, auto=True,
 #                   filter_func_list=[not_full_frame, light_image],
 #                   meta_process_list=[bias_dataframe, jd_meta])
+#outlist = cor_process([bsample, bsample1], auto=True,
+#                      filter_func_list=[not_full_frame, light_image],
+#                      meta_process_list=[bias_dataframe, jd_meta])
 
-outlist = ccd_process([bsample, bsample1], auto=True,
-                   filter_func_list=[not_full_frame, light_image],
-                   meta_process_list=[bias_dataframe, jd_meta])
+bsample = ccddata_read('/data/io/IoIO/raw/20200711/Bias-S005-R002-C001-B1.fts')
+#bsample1 = ccddata_read('/data/io/IoIO/raw/20200711/Bias-S005-R001-C001-B1.fts')
+c = Calibration(start_date='2020-07-11', stop_date='2020-08-22')
+#ccd = cor_process(bsample, calibration=c, auto=True)
+#ccd = cor_process(bsample, calibration=c, auto=True, gain=True)
+#ccd = ccd_pre_process(bsample, ccd_processor=cor_process,
+#                      calibration=c, auto=True, gain=True,
+#                      pre_process_list=[full_frame, light_image])
+#ccd, meta = ccd_post_process(bsample, ccd_processor=cor_process,
+#                             calibration=c, auto=True, gain=True,
+#                             pre_process_list=[full_frame, light_image])
+#ccd, meta = ccd_post_process(bsample, ccd_processor=cor_process,
+#                             calibration=c, auto=True, gain=True,
+#                             pre_process_list=[full_frame, light_image],
+#                             post_process_list=[bias_dataframe])
+#ccd, meta = ccd_post_process(bsample, ccd_processor=cor_process,
+#                             calibration=c, auto=True, gain=True,
+#                             pre_process_list=[full_frame, light_image],
+#                             post_process_list=[bias_dataframe, jd_meta])
+#bfname = '/data/io/IoIO/raw/20200711/Bias-S005-R002-C001-B1.fts'
+#bfname1 = '/data/io/IoIO/raw/20200711/Bias-S005-R001-C001-B1.fts'
+#pout = ccd_pipeline([bfname, bfname1], ccd_processor=cor_process,
+#                    calibration=c, auto=True, gain=True,
+#                    pre_process_list=[full_frame, light_image],
+#                    post_process_list=[bias_dataframe, jd_meta],
+#                    outdir='/tmp')
+#pout = ccd_pipeline([bfname, bfname1], ccd_processor=cor_process,
+#                    calibration=c, auto=True, gain=True,
+#                    pre_process_list=[full_frame, light_image],
+#                    post_process_list=[bias_dataframe, jd_meta],
+#                    outdir='/tmp', overwrite=True)
+#onames, ometa = zip(*pout)
 
+#bias_combine('/data/io/IoIO/raw/20200711', show=True, gain_correct=True,
+#                        keep_intermediate=True)
+#bias_combine('/data/io/IoIO/raw/20200711', show=False, gain_correct=True,
+#                        keep_intermediate=True)
+bias_combine('/data/io/IoIO/raw/20200711', show=False, gain_correct=True)
