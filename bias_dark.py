@@ -134,13 +134,14 @@ max_mem_frac = 0.8
 # psutil.virtual_memory() at runtime to optimize computational tasks
 max_ccddata_size = (sx694_naxis1 * sx694_naxis2
                     * (2 * 64 + 8)) / 8
+griddata_expansion_factor = 100
 
 # These are use to optimize parallelization until such time as
 # ccdproc.combiner can be parallelized
 num_ccdts = int((35 - (-10)) / 5)
 num_dark_exptimes = 8
 num_filts = 9
-
+num_calibration_files = 11
 
 data_root = '/data/io/IoIO'
 raw_data_root = os.path.join(data_root, 'raw')
@@ -165,7 +166,7 @@ calibration_subdirs = ['Calibration', 'AutoFlat']
 # each file
 bias_glob = ['Bias*', '*_bias.fit']
 dark_glob = ['Dark*', '*_dark.fit']
-flat_glob = ['*Flat*']
+flat_glob = '*Flat*'
 
 # During the creation of master biases and darks files are grouped by
 # CCD temperature.  This is the change in temperature seen as a
@@ -555,11 +556,60 @@ def mask_above(ccd_in, key, margin=0.1):
 #        = (n_nonlin, 'number of pixels > nonlinearity point')
 #    return (n_nonlin, mask)
 
+# --> Could make something general that does all of the code below to
+# --> the "If we made it here".  It would have a file_grouper or
+# --> something like that.  I am using fdict_list, so maybe I should
+# --> just call it an fdict_creator.  There would be
+# --> bias_dark_fdict_creator and flat_fdict_creator
+
+# Maybe it should be subdir searcher or something like that
+
+#def subdir_processor(directory=None,
+#                     subdirs=None,
+#                     sp_output_creator=None,
+#                     debug=False,
+#                     **kwargs):
+#    """
+#    Runs output_creator in `directory` and on one level of `subdirs`.
+#    Collects results in a list
+#    """
+#    if directory is None:
+#        directory = os.getcwd()
+#    if subdirs is None:
+#        subdirs = []
+#    if subdirs is True:
+#        subdirs = [s for s in os.listdir(directory)
+#                   if os.path.isdir(os.path.join(directory, s))]
+#    out_list = []
+#    # Prepare to call ourselves recursively to build up a list of
+#    # products in the provided directory and optional subdirectories
+#    if not os.path.isdir(directory):
+#        # This is the end of our recursive line
+#        return out_list
+#    for sd in subdirs:
+#        subdir = os.path.join(directory, sd)
+#        sub_out_list = subdir_processor(subdir,
+#                                        output_creator=output_creator,
+#                                        debug=debug,
+#                                        **kwargs)
+#        for sl in sub_out_list:
+#            out_list.append(sl)
+#    # After processing our subdirs, process 'directory.'
+#    root_out_list = output_creator(directory, debug=debug, **kwargs)
+#    for sl in root_out_list:
+#        out_list.append(sl)
+#    return out_list
+#
+#def glob_list_processor(directory
+#                       glob_include=flat_glob):
+#    for gi in glob_include:
+
+
 def fname_by_imagetyp_ccdt_exp(directory=None,
                                collection=None,
                                subdirs=None,
-                               imagetyp=None,
                                glob_include=None,
+                               imagetyp=None,
                                dccdt_tolerance=dccdt_tolerance,
                                debug=False):
     """For a given IMAGETYP, returns a list of dictionaries with keys T (CCD-TEMP), EXPTIME, and fnames"""
@@ -616,6 +666,7 @@ def fname_by_imagetyp_ccdt_exp(directory=None,
     if collection.summary is None:
         # We were probably called on a glob_include that yielded no results
         return fdict_list
+
     # If we made it here, we have a collection, possibly from calling
     # ourselves recursively
     our_imagetyp = collection.summary['imagetyp'] == imagetyp
@@ -745,15 +796,15 @@ def bias_combine_one_fdict(fdict,
                            show=False,
                            min_num_biases=min_num_biases,
                            dccdt_tolerance=dccdt_tolerance,
-                           num_processes=max_num_processes,
-                           mem_frac=max_mem_frac,
-                           process_size=max_ccddata_size,
                            camera_description=sx694_camera_description,
                            gain=sx694_gain,
                            satlevel=sx694_satlevel,
                            readnoise=sx694_example_readnoise,
                            readnoise_tolerance=sx694_readnoise_tolerance,
-                           gain_correct=False):
+                           gain_correct=False,
+                           num_processes=max_num_processes,
+                           mem_frac=max_mem_frac,
+                           ccddata_size=max_ccddata_size):
 
     """Worker that allows the parallelization of calibrations taken at one
     temperature, exposure time, filter, etc.
@@ -771,7 +822,7 @@ def bias_combine_one_fdict(fdict,
         log.debug(f"Not enough good biases found at CCDT = {mean_ccdt} C in {directory}")
         return False
 
-    # Make a scratch directory that is the data of the first file.
+    # Make a scratch directory that is the date of the first file.
     # Not as fancy as the biases, but, hey, it is a scratch directory
     tmp = ccddata_read(fdict['fnames'][0])
     tm = tmp.meta['DATE-OBS']
@@ -790,7 +841,7 @@ def bias_combine_one_fdict(fdict,
     pout = cor_pipeline(fdict['fnames'],
                         num_processes=num_processes,
                         mem_frac=mem_frac,
-                        process_size=process_size,
+                        process_size=ccddata_size,
                         outdir=sdir,
                         create_outdir=True,
                         overwrite=True,
@@ -802,9 +853,9 @@ def bias_combine_one_fdict(fdict,
         log.debug(f"Not enough good biases {len(pout)} found at CCDT = {mean_ccdt} C in {directory}")
         return False
 
-    os_fnames, pipe_meta = zip(*pout)
-    stats_jds = [(m['stats'], m['jd']) for m in pipe_meta]
-    stats, jds = zip(*stats_jds)
+    out_fnames, pipe_meta = zip(*pout)
+    stats = [m['stats'] for m in pipe_meta]
+    jds = [m['jd'] for m in pipe_meta]
 
     #if num_can_process == 1:
     #    ccd_dfdlist = [bias_dataframe(ccd, gain=gain, **kwargs)
@@ -930,10 +981,10 @@ def bias_combine_one_fdict(fdict,
     #                       overwrite=True,
     #                       return_outname=True)
     #with NoDaemonPool(processes=num_processes) as p:
-    #    os_fnames = p.starmap(pwk.worker, zip(good_fnames, medians))
+    #    out_fnames = p.starmap(pwk.worker, zip(good_fnames, medians))
         
     #os.makedirs(sdir, exist_ok=True)
-    #os_fnames = []
+    #out_fnames = []
     #for fname, m in zip(good_fnames, medians):
     #    ccd = ccddata_read(fname, add_metadata=True)
     #    ccd = ccd.subtract(m*u.adu, handle_meta='first_found')
@@ -942,11 +993,11 @@ def bias_combine_one_fdict(fdict,
     #    os_fname = os.path.splitext(os_fname)[0] + '_os.fits'
     #    os_fname = os.path.join(sdir, os_fname)
     #    ccd.write(os_fname, overwrite=True)
-    #    os_fnames.append(os_fname)
+    #    out_fnames.append(os_fname)
 
     ### Use ccdproc Combiner object iteratively as per example to
     ### mask out bad pixels
-    ##combiner = ccdp.Combiner(os_fnames)
+    ##combiner = ccdp.Combiner(out_fnames)
     ##old_n_masked = -1  # dummy value to make loop execute at least once
     ##new_n_masked = 0
     ##while (new_n_masked > old_n_masked):
@@ -971,7 +1022,7 @@ def bias_combine_one_fdict(fdict,
     # the higher steps!
     mem = psutil.virtual_memory()
     im = \
-        ccdp.combine(list(os_fnames),
+        ccdp.combine(list(out_fnames),
                      method='average',
                      sigma_clip=True,
                      sigma_clip_low_thresh=5,
@@ -1019,7 +1070,7 @@ def bias_combine_one_fdict(fdict,
     im.meta['MAX'] = (tmax, 'Max of image (electron)')
     im.meta['HIERARCH OVERSCAN_VALUE'] = (overscan, 'Average of raw bias medians (ADU)')
     im.meta['HIERARCH SUBTRACT_OVERSCAN'] = (True, 'Overscan has been subtracted')
-    im.meta['NCOMBINE'] = (len(os_fnames), 'Number of biases combined')
+    im.meta['NCOMBINE'] = (len(out_fnames), 'Number of biases combined')
     # Record each filename
     for i, f in enumerate(fdict['fnames']):
         im.meta['FILE{0:02}'.format(i)] = f
@@ -1043,7 +1094,7 @@ def bias_combine_one_fdict(fdict,
         plt.show()
     plt.close()
     if not keep_intermediate:
-        for f in os_fnames:
+        for f in out_fnames:
             try:
                 os.remove(f)
             except Exception as e:
@@ -1077,6 +1128,8 @@ def bias_combine(directory=None,
                  dccdt_tolerance=dccdt_tolerance,
                  num_processes=max_num_processes,
                  mem_frac=max_mem_frac,
+                 num_calibration_files=num_calibration_files,
+                 max_ccddata_size=max_ccddata_size,
                  **kwargs):
     """Combine biases in a directory
 
@@ -1124,34 +1177,57 @@ def bias_combine(directory=None,
         # Make sure 'directory' is a valid variable
         directory = collection.location
     nfdicts = len(fdict_list)
-    # Combining files is the slow part, so we want the maximum of
-    # processes doing that in parallel
-    our_num_processes = min(nfdicts, num_processes)
-    log.debug(f'bias_combine: {directory}, nfdicts = {nfdicts}, our_num_processes = {our_num_processes}')
     if nfdicts == 0:
         log.debug('No biases found in: ' + directory)
         return False
-    elif nfdicts == 1 or our_num_processes == 1:
+
+    one_fdict_size = num_calibration_files * max_ccddata_size
+    our_num_processes = num_can_process(nfdicts,
+                                        num_processes=num_processes,
+                                        mem_frac=mem_frac,
+                                        process_size=one_fdict_size)
+
+    num_subprocesses = int(num_processes / our_num_processes)
+    subprocess_mem_frac = mem_frac / our_num_processes
+    log.debug('bias_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
+
+    pwk = PoolWorkerKwargs(bias_combine_one_fdict,
+                           num_processes=num_subprocesses,
+                           mem_frac=subprocess_mem_frac,
+                           **kwargs)
+    if nfdicts == 1:
         for fdict in fdict_list:
-            bias_combine_one_fdict(fdict,
-                                   num_processes=num_processes,
-                                   mem_frac=mem_frac,
-                                   **kwargs)
+                pwk.worker(fdict)
     else:
-        # Number of sub-processes in each process we will spawn
-        num_subprocesses = int(num_processes / our_num_processes)
-        # Similarly, the memory fraction for each process we will spawn
-        subprocess_mem_frac = mem_frac / our_num_processes
-        log.debug('bias_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
-        # Initiate all our processes
-        plist = [Process(target=bias_combine_one_fdict,
-                         args=(fdict,),
-                         kwargs={"num_processes": num_subprocesses,
-                                 "mem_frac": subprocess_mem_frac,
-                                 **kwargs},
-                         daemon=False) # Let subprocesses create more children
-                 for fdict in fdict_list]
-        p_limit(plist, our_num_processes)
+        with NoDaemonPool(processes=our_num_processes) as p:
+            p.map(pwk.worker, fdict_list)
+
+
+    ## Combining files is the slow part, so we want the maximum of
+    ## processes doing that in parallel
+    #our_num_processes = min(nfdicts, num_processes)
+    #log.debug(f'bias_combine: {directory}, nfdicts = {nfdicts}, our_num_processes = {our_num_processes}')
+    #elif nfdicts == 1 or our_num_processes == 1:
+    #    for fdict in fdict_list:
+    #        bias_combine_one_fdict(fdict,
+    #                               num_processes=num_processes,
+    #                               mem_frac=mem_frac,
+    #                               **kwargs)
+    #else:
+    #    # Number of sub-processes in each process we will spawn
+    #    num_subprocesses = int(num_processes / our_num_processes)
+    #    # Similarly, the memory fraction for each process we will spawn
+    #    subprocess_mem_frac = mem_frac / our_num_processes
+    #    log.debug('bias_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
+    #    # Initiate all our processes
+    #    plist = [Process(target=bias_combine_one_fdict,
+    #                     args=(fdict,),
+    #                     kwargs={"num_processes": num_subprocesses,
+    #                             "mem_frac": subprocess_mem_frac,
+    #                             **kwargs},
+    #                     daemon=False) # Let subprocesses create more children
+    #             for fdict in fdict_list]
+    #    p_limit(plist, our_num_processes)
             
 
 def hist_of_im(im, binsize=1, show=False):
@@ -1380,6 +1456,18 @@ def subtract_overscan(fname_or_ccd, oscan=None, *args, **kwargs):
 #        raise ValueError(f'Unknown IMAGETYP keyword {imagetyp}')
 #    return (ccd, outkwargs)
 
+def prune_pout(pout, fnames):
+    pruned_pout = []
+    pruned_fnames = []
+    for i in range(len(pout)):
+        if pout[i][0] is None:
+            # ccd is None
+            continue
+        pruned_pout.append(pout[i])
+        pruned_fnames.append(fnames[i])
+    return (pruned_pout, pruned_fnames)
+
+
 def multi_logging(level, pipe_meta, message):
     """Implements logging on a per-process basis in ccd_pipeline post-processing"""
     # Work directly with the pipe_meta dictionary, thus a return value
@@ -1412,10 +1500,14 @@ def outname_create(fname, ccd, pipe_meta,
 def num_can_process(num_to_process,
                     num_processes=max_num_processes,
                     mem_frac=max_mem_frac,
-                    process_size=max_ccddata_size):
+                    process_size=max_ccddata_size,
+                    error_if_zero=True):
     mem = psutil.virtual_memory()
     max_mem = mem.available*mem_frac
     max_n = int(max_mem / process_size)
+    if error_if_zero and max_n == 0:
+        raise EnvironmentError(f'Current memory {max_mem/2**20} MiB insufficient for process size {process_size/2**20} MiB')
+
     return min(num_to_process, num_processes, max_n)
 
 
@@ -1482,6 +1574,8 @@ def ccd_pre_process(ccd,
     for pp in pre_process_list:
         ccd, these_kwargs = pp(ccd, **kwargs)
         kwargs.update(these_kwargs)
+    if ccd is None:
+        return None
     return ccd_processor(ccd, **kwargs)
 
 def cor_process(ccd,
@@ -2111,7 +2205,6 @@ def dark_process_one_file(fname,
 def dark_combine_one_fdict(fdict,
                            outdir=calibration_root,
                            calibration_scratch=calibration_scratch,
-                           create_calibration_scratch=True,
                            outname_append=outname_append,
                            keep_intermediate=False,
                            show=False,
@@ -2130,7 +2223,7 @@ def dark_combine_one_fdict(fdict,
     exptime = fdict['EXPTIME']
     directory = fdict['directory']
 
-    # Make a scratch directory that is the data of the first file.
+    # Make a scratch directory that is the date of the first file.
     # Not as fancy as the biases, but, hey, it is a scratch directory
     tmp = ccddata_read(fdict['fnames'][0])
     tm = tmp.meta['DATE-OBS']
@@ -2402,6 +2495,8 @@ def dark_combine(directory=None,
                  dccdt_tolerance=dccdt_tolerance,
                  num_processes=max_num_processes,
                  mem_frac=max_mem_frac,
+                 num_calibration_files=num_calibration_files,
+                 max_ccddata_size=max_ccddata_size,
                  **kwargs):
     fdict_list = \
         fname_by_imagetyp_ccdt_exp(directory=directory,
@@ -2414,159 +2509,365 @@ def dark_combine(directory=None,
         # Make sure 'directory' is a valid variable
         directory = collection.location
     nfdicts = len(fdict_list)
-    our_num_processes = min(nfdicts, num_processes)
-    log.debug(f'dark_combine: {directory}, nfdicts = {nfdicts}, our_num_processes = {our_num_processes}')
     if len(fdict_list) == 0:
         log.debug('No darks found in: ' + directory)
         return False
-    elif nfdicts == 1 or our_num_processes == 1:
+
+    one_fdict_size = num_calibration_files * max_ccddata_size
+    our_num_processes = num_can_process(nfdicts,
+                                        num_processes=num_processes,
+                                        mem_frac=mem_frac,
+                                        process_size=one_fdict_size)
+    num_subprocesses = int(num_processes / our_num_processes)
+    subprocess_mem_frac = mem_frac / our_num_processes
+    log.debug('dark_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
+
+    pwk = PoolWorkerKwargs(dark_combine_one_fdict,
+                           num_processes=num_subprocesses,
+                           mem_frac=subprocess_mem_frac,
+                           **kwargs)
+    if nfdicts == 1:
         for fdict in fdict_list:
-            dark_combine_one_fdict(fdict,
-                                   num_processes=num_processes,
-                                   mem_frac=mem_frac,
-                                   **kwargs)
+                pwk.worker(fdict)
     else:
-        num_subprocesses = int(num_processes / our_num_processes)
-        subprocess_mem_frac = mem_frac / our_num_processes
-        log.debug('dark_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
-        pwk = PoolWorkerKwargs(dark_combine_one_fdict,
-                               num_processes=num_subprocesses,
-                               mem_frac=subprocess_mem_frac,
-                               **kwargs)
         with NoDaemonPool(processes=our_num_processes) as p:
             p.map(pwk.worker, fdict_list)
 
+def flat_process(ccd, pipe_meta,
+                 init_threshold=100, # units of readnoise
+                 edge_mask=-40, # CorObsData parameter for ND filter coordinate
+                 **kwargs): 
+    # Use photutils.Background2D to smooth each flat and get a
+    # good maximum value.  Mask edges and ND filter so as to
+    # increase quality of background map
+    mask = np.zeros(ccd.shape, bool)
+    # Use the CorObsData ND filter stuff with a negative
+    # edge_mask to blank out all of the fuzz from the ND filter cut
+    obs_data = CorObsData(ccd.to_hdu(), edge_mask=edge_mask)
+    mask[obs_data.ND_coords] = True
+    rdnoise = ccd.meta['RDNOISE']
+    mask[ccd.data < rdnoise * init_threshold] = True
+    ccd.mask = mask
+    bkg_estimator = MedianBackground()
+    b = Background2D(ccd, 20, mask=mask, filter_size=5,
+                     bkg_estimator=bkg_estimator)
+    max_flat = np.max(b.background)
+    if max_flat > ccd.meta['NONLIN']:
+        log.warning(f'flat max value of {max_flat} too bright: {fname}')
+        return (None, {})
+    ccd.mask = None
+    ccd = ccd.divide(max_flat, handle_meta='first_found')
+    ccd.meta['FLATDIV'] = (max_flat, 'Value used to normalize (smoothed max)')
+    # Get ready to capture the mean DATE-OBS
+    tm = Time(ccd.meta['DATE-OBS'], format='fits')
+    return (ccd, {'jd': tm.jd})
+
+def flat_combine_one_filt(this_filter,
+                          collection=None,
+                          outdir=calibration_root,
+                          calibration_scratch=calibration_scratch,
+                          keep_intermediate=False,
+                          min_num_flats=min_num_flats,
+                          num_processes=max_num_processes,
+                          mem_frac=max_mem_frac,
+                          ccddata_size=max_ccddata_size,
+                          show=False,
+                          flat_cut=0.75,
+                          edge_mask=-40, # CorObsData parameter for ND filter coordinates    
+                          **kwargs):
+    flat_fnames = collection.files_filtered(imagetyp='FLAT',
+                                            filter=this_filter,
+                                            include_path=True)
+
+    if len(flat_fnames) < min_num_flats:
+        log.debug(f"Not enough good flats found for filter {this_filter} in {directory}")
+        return False
+
+    # Make a scratch directory that is the date of the first file.
+    # Not as fancy as the biases, but, hey, it is a scratch directory
+    tmp = ccddata_read(flat_fnames[0])
+    tm = tmp.meta['DATE-OBS']
+    this_dateb1, _ = tm.split('T')
+    sdir = os.path.join(calibration_scratch, this_dateb1)
+
+    pout = cor_pipeline(flat_fnames,
+                        num_processes=num_processes,
+                        mem_frac=mem_frac,
+                        process_size=ccddata_size,
+                        outdir=sdir,
+                        create_outdir=True,
+                        overwrite=True,
+                        pre_process_list=[full_frame],
+                        post_process_list=[flat_process, jd_meta, check_oscan],
+                        **kwargs)
+    pout, flat_fnames = prune_pout(pout, flat_fnames)
+    if len(pout) < min_num_flats:
+        log.debug(f"Not enough good flats found for filter {this_filter} in {directory}")
+        return False
+
+    out_fnames, pipe_meta = zip(*pout)
+    jds = [m['jd'] for m in pipe_meta]
+
+    # Combine our flats
+    mem = psutil.virtual_memory()
+    #print(f'flat_combine_one_filt: mem_frac {mem_frac}; num_processes {num_processes}')
+    #print(f'flat_combine_one_filt: mem_limit {mem.available*mem_frac/2**20}')
+    im = \
+        ccdp.combine(list(out_fnames),
+                     method='average',
+                     sigma_clip=True,
+                     sigma_clip_low_thresh=5,
+                     sigma_clip_high_thresh=5,
+                     sigma_clip_func=np.ma.median,
+                     sigma_clip_dev_func=mad_std,
+                     mem_limit=mem.available*mem_frac)
+    im.meta['NCOMBINE'] = (len(out_fnames), 'Number of flats combined')
+    # Record each filename
+    for i, f in enumerate(flat_fnames):
+        im.meta['FILE{0:02}'.format(i)] = f
+    add_history(im.meta,
+                'Combining NCOMBINE biases indicated in FILENN')
+
+    # Interpolate over our ND filter
+    #print(f'flat_combine_one_filt pre CorObsData: mem available: {mem.available/2**20}')
+    hdul = im.to_hdu()
+    obs_data = CorObsData(hdul, edge_mask=edge_mask)
+    # Capture our ND filter metadata
+    im.meta = hdul[0].header
+    good_pix = np.ones(im.shape, bool)
+    good_pix[obs_data.ND_coords] = False
+    points = np.where(good_pix)
+    values = im[points]
+    xi = obs_data.ND_coords
+    print(f'flat_combine_one_filt post CorObsData: mem available: {mem.available/2**20}')
+
+    # Linear behaved much better
+    nd_replacement = interpolate.griddata(points,
+                                          values,
+                                          xi,
+                                          method='linear')
+                                          #method='cubic')
+    print(f'flat_combine_one_filt post interpolate.griddata mem available: {mem.available/2**20}')
+    im.data[xi] = nd_replacement
+    # Do one last smoothing and renormalization
+    bkg_estimator = MedianBackground()
+    b = Background2D(im, 20, mask=(im.data<flat_cut), filter_size=5,
+                     bkg_estimator=bkg_estimator)
+    max_flat = np.max(b.background)
+    print(f'flat_combine_one_filt post Background2D mem available: {mem.available/2**20}')
+    im = im.divide(max_flat, handle_meta='first_found')
+    im.mask = im.data < flat_cut
+    im.meta['FLAT_CUT'] = (flat_cut, 'Value below which flat is masked')
+
+    # Prepare to write
+    tm = Time(np.mean(jds), format='jd')
+    this_date = tm.fits
+    this_dateb = this_date.split('T')[0]
+    if this_dateb != this_dateb1:
+        log.warning(f"first flat is on {this_dateb1} but average is {this_dateb}")
+
+    outbase = '{}_{}'.format(this_dateb, this_filter)
+    if not os.path.exists(outdir):
+        os.mkdir(outdir)
+    outbase = os.path.join(outdir, outbase)
+    out_fname = outbase + '_flat.fits'
+    im.write(out_fname, overwrite=True)
+    if show:
+        impl = plt.imshow(im, origin='upper', cmap=plt.cm.gray)
+        plt.show()
+    plt.close()
+    if not keep_intermediate:
+        for f in out_fnames:
+            try:
+                os.remove(f)
+            except Exception as e:
+                # We do not expect this, since we created these with
+                # our local process
+                log.debug(f'Unexpected!  Remove {f} failed: ' + str(e))
+        # These we expect to fail until all of our other parallel
+        # processes have finished
+        try:
+            os.rmdir(sdir)
+        except Exception as e:
+            pass
+        try:
+            os.rmdir(calibration_scratch)
+        except Exception as e:
+            pass
+    
 def flat_combine(directory=None,
                  collection=None,
-                 subdir=calibration_subdirs,
+                 subdirs=calibration_subdirs,
                  glob_include=flat_glob,
-                 master_bias=None, # This is going to have to be True or something like that to trigger search for optimum
-                 dark_frame=None, # similarly here
-                 outdir=calibration_root,
-                 min_num_flats=min_num_flats,
                  num_processes=max_num_processes,
                  mem_frac=max_mem_frac,
-                 show=False,
-                 flat_cut=0.75,
-                 init_threshold=100, # units of readnoise
-                 edge_mask=-40): # CorObsData parameter for ND filter coordinates    
+                 num_calibration_files=num_calibration_files,
+                 max_ccddata_size=max_ccddata_size,
+                 griddata_expansion_factor=griddata_expansion_factor,
+                 **kwargs):
+    if subdirs is None:
+        subdirs = []
     if collection is None:
         if not os.path.isdir(directory):
-            log.debug('No directory ' + directory)
             return False
         collection = ccdp.ImageFileCollection(directory,
                                               glob_include=glob_include)
     directory = collection.location
     if collection.summary is None:
-        if subdir is not None:
-            newdir = os.path.join(directory, subdir)
+        for sd in subdirs:
+            newdir = os.path.join(directory, sd)
             return flat_combine(newdir,
-                                subdir=None,
+                                subdirs=None,
                                 glob_include=glob_include,
-                                master_bias=master_bias,
-                                dark_frame=dark_frame, # similarly here
-                                outdir=outdir,
-                                min_num_flats=min_num_flats,
-                                show=show)
+                                num_processes=max_num_processes,
+                                mem_frac=mem_frac,
+                                **kwargs)
         log.debug('No [matching] FITS files found in  ' + directory)
         return False
     # If we made it here, we have a collection with files in it
-    # --> This loop could be parallelized
     filters = np.unique(collection.summary['filter'])
-    for this_filter in filters:
-        flat_fnames = collection.files_filtered(imagetyp='FLAT',
-                                                filter=this_filter,
-                                                include_path=True)
-        lccds = []
-        jds = []
-        for fname in flat_fnames:
-            ccd = ccddata_read(fname, add_metadata=True)
-            ccd = ccd_process(ccd,
-                              oscan=True,
-                              master_bias=master_bias,
-                              gain=True,
-                              error=True,
-                              dark_frame=dark_frame)
-            # Use photutils.Background2D to smooth each flat and get a
-            # good maximum value.  Mask edges and ND filter so as to
-            # increase quality of background map
-            mask = np.zeros(ccd.shape, bool)
-            # Use the CorObsData ND filter stuff with a negative
-            # edge_mask to blank out all of the fuzz from the ND filter cut
-            obs_data = CorObsData(ccd.to_hdu(), edge_mask=edge_mask)
-            mask[obs_data.ND_coords] = True
-            rdnoise = ccd.meta['RDNOISE']
-            mask[ccd.data < rdnoise * init_threshold] = True
-            ccd.mask = mask
-            bkg_estimator = MedianBackground()
-            b = Background2D(ccd, 20, mask=mask, filter_size=5,
-                             bkg_estimator=bkg_estimator)
-            max_flat = np.max(b.background)
-            if max_flat > ccd.meta['NONLIN']:
-                log.warning('flat max value of {} too bright: {}'.format(
-                    max_flat, fname))
-                continue
-            ccd.mask = None
-            ccd = ccd.divide(max_flat, handle_meta='first_found')
-            lccds.append(ccd)
-            # Get ready to capture the mean DATE-OBS
-            tm = Time(ccd.meta['DATE-OBS'], format='fits')
-            tt = tm.tt.datetime
-            jds.append(tm.jd)
-        
-        if len(jds) < min_num_flats:
-            log.debug('Not enough good flats found for filter = {} in {}'.format(this_filter, directory))
-            continue
-        # Combine our flats
-        mem = psutil.virtual_memory()
-        im = \
-            ccdp.combine(lccds,
-                         method='average',
-                         sigma_clip=True,
-                         sigma_clip_low_thresh=5,
-                         sigma_clip_high_thresh=5,
-                         sigma_clip_func=np.ma.median,
-                         sigma_clip_dev_func=mad_std,
-                         mem_limit=mem.available*mem_frac)
-        # Interpolate over our ND filter
-        hdul = ccd.to_hdu()
-        obs_data = CorObsData(hdul, edge_mask=edge_mask)
-        # Capture our ND filter metadata
-        im.meta = hdul[0].header
-        good_pix = np.ones(ccd.shape, bool)
-        good_pix[obs_data.ND_coords] = False
-        points = np.where(good_pix)
-        values = im[points]
-        xi = obs_data.ND_coords
-        # Linear behaved much better
-        nd_replacement = interpolate.griddata(points,
-                                              values,
-                                              xi,
-                                              method='linear')
-                                              #method='cubic')
-        im.data[xi] = nd_replacement
-        # Do one last smoothing and renormalization
-        bkg_estimator = MedianBackground()
-        b = Background2D(im, 20, mask=(im.data<flat_cut), filter_size=5,
-                         bkg_estimator=bkg_estimator)
-        max_flat = np.max(b.background)
-        im = im.divide(max_flat, handle_meta='first_found')
-        im.mask = im.data < flat_cut
-        im.meta['FLAT_CUT'] = (flat_cut, 'Value below which flat is masked')
+    nfilts = len(filters)
+    if nfilts == 0:
+        log.debug('No flats found in: ' + directory)
+        return False
 
-        # Prepare to write
-        tm = Time(np.mean(jds), format='jd')
-        this_date = tm.fits
-        this_dateb = this_date.split('T')[0]
-        outbase = '{}_{}'.format(this_dateb, this_filter)
-        if not os.path.exists(outdir):
-            os.mkdir(outdir)
-        outbase = os.path.join(outdir, outbase)
-        out_fname = outbase + '_flat.fits'
-        im.write(out_fname, overwrite=True)
-        if show:
-            impl = plt.imshow(im, origin='upper', cmap=plt.cm.gray)
-            plt.show()
+    one_filt_size = max(num_calibration_files * max_ccddata_size,
+                        max_ccddata_size * griddata_expansion_factor)
+    our_num_processes = num_can_process(nfilts,
+                                        num_processes=num_processes,
+                                        mem_frac=mem_frac,
+                                        process_size=one_filt_size)
+    # Combining files is the slow part, so we want the maximum of
+    # processes doing that in parallel
+    log.debug(f'flat_combine: {directory}, nfilts = {nfilts}, our_num_processes = {our_num_processes}')
+    # Number of sub-processes in each process we will spawn
+    num_subprocesses = int(num_processes / our_num_processes)
+    # Similarly, the memory fraction for each process we will spawn
+    subprocess_mem_frac = mem_frac / our_num_processes
+    log.debug('flat_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
+    pwk = PoolWorkerKwargs(flat_combine_one_filt,
+                           collection=collection,
+                           num_processes=num_subprocesses,
+                           mem_frac=subprocess_mem_frac,
+                           **kwargs)
+    if nfilts == 1 or our_num_processes == 1:
+        for filt in filters:
+                pwk.worker(filt)
+    else:
+        with NoDaemonPool(processes=our_num_processes) as p:
+            p.map(pwk.worker, filters)
+    
+        ## Initiate all our processes
+        #plist = [Process(target=flat_combine_one_filt,
+        #                 args=(filt,),
+        #                 kwargs={"collection": collection,
+        #                         "num_processes": num_subprocesses,
+        #                         "mem_frac": subprocess_mem_frac,
+        #                         **kwargs},
+        #                 daemon=False) # Let subprocesses create more children
+        #         for filt in filters]
+        #p_limit(plist, our_num_processes)
+
+
+
+
+
+## --> This loop could be parallelized
+#filters = np.unique(collection.summary['filter'])
+#for this_filter in filters:
+#    flat_fnames = collection.files_filtered(imagetyp='FLAT',
+#                                            filter=this_filter,
+#                                            include_path=True)
+#    lccds = []
+#    jds = []
+#    for fname in flat_fnames:
+#        ccd = ccddata_read(fname, add_metadata=True)
+#        ccd = ccd_process(ccd,
+#                          oscan=True,
+#                          master_bias=master_bias,
+#                          gain=True,
+#                          error=True,
+#                          dark_frame=dark_frame)
+#        # Use photutils.Background2D to smooth each flat and get a
+#        # good maximum value.  Mask edges and ND filter so as to
+#        # increase quality of background map
+#        mask = np.zeros(ccd.shape, bool)
+#        # Use the CorObsData ND filter stuff with a negative
+#        # edge_mask to blank out all of the fuzz from the ND filter cut
+#        obs_data = CorObsData(ccd.to_hdu(), edge_mask=edge_mask)
+#        mask[obs_data.ND_coords] = True
+#        rdnoise = ccd.meta['RDNOISE']
+#        mask[ccd.data < rdnoise * init_threshold] = True
+#        ccd.mask = mask
+#        bkg_estimator = MedianBackground()
+#        b = Background2D(ccd, 20, mask=mask, filter_size=5,
+#                         bkg_estimator=bkg_estimator)
+#        max_flat = np.max(b.background)
+#        if max_flat > ccd.meta['NONLIN']:
+#            log.warning('flat max value of {} too bright: {}'.format(
+#                max_flat, fname))
+#            continue
+#        ccd.mask = None
+#        ccd = ccd.divide(max_flat, handle_meta='first_found')
+#        lccds.append(ccd)
+#        # Get ready to capture the mean DATE-OBS
+#        tm = Time(ccd.meta['DATE-OBS'], format='fits')
+#        tt = tm.tt.datetime
+#        jds.append(tm.jd)
+#    
+#    if len(jds) < min_num_flats:
+#        log.debug('Not enough good flats found for filter = {} in {}'.format(this_filter, directory))
+#        continue
+#    # Combine our flats
+#    mem = psutil.virtual_memory()
+#    im = \
+#        ccdp.combine(lccds,
+#                     method='average',
+#                     sigma_clip=True,
+#                     sigma_clip_low_thresh=5,
+#                     sigma_clip_high_thresh=5,
+#                     sigma_clip_func=np.ma.median,
+#                     sigma_clip_dev_func=mad_std,
+#                     mem_limit=mem.available*mem_frac)
+#    # Interpolate over our ND filter
+#    hdul = ccd.to_hdu()
+#    obs_data = CorObsData(hdul, edge_mask=edge_mask)
+#    # Capture our ND filter metadata
+#    im.meta = hdul[0].header
+#    good_pix = np.ones(ccd.shape, bool)
+#    good_pix[obs_data.ND_coords] = False
+#    points = np.where(good_pix)
+#    values = im[points]
+#    xi = obs_data.ND_coords
+#    # Linear behaved much better
+#    nd_replacement = interpolate.griddata(points,
+#                                          values,
+#                                          xi,
+#                                          method='linear')
+#                                          #method='cubic')
+#    im.data[xi] = nd_replacement
+#    # Do one last smoothing and renormalization
+#    bkg_estimator = MedianBackground()
+#    b = Background2D(im, 20, mask=(im.data<flat_cut), filter_size=5,
+#                     bkg_estimator=bkg_estimator)
+#    max_flat = np.max(b.background)
+#    im = im.divide(max_flat, handle_meta='first_found')
+#    im.mask = im.data < flat_cut
+#    im.meta['FLAT_CUT'] = (flat_cut, 'Value below which flat is masked')
+#
+#    # Prepare to write
+#    tm = Time(np.mean(jds), format='jd')
+#    this_date = tm.fits
+#    this_dateb = this_date.split('T')[0]
+#    outbase = '{}_{}'.format(this_dateb, this_filter)
+#    if not os.path.exists(outdir):
+#        os.mkdir(outdir)
+#    outbase = os.path.join(outdir, outbase)
+#    out_fname = outbase + '_flat.fits'
+#    im.write(out_fname, overwrite=True)
+#    if show:
+#        impl = plt.imshow(im, origin='upper', cmap=plt.cm.gray)
+#        plt.show()
 
 
 def bias_analyze(directory='/data/io/IoIO/reduced/bias_dark'):
@@ -3073,6 +3374,9 @@ class Calibration():
                  num_ccdts=num_ccdts,
                  num_dark_exptimes=num_dark_exptimes,
                  num_filts=num_filts,
+                 num_calibration_files=num_calibration_files,
+                 max_ccddata_size=max_ccddata_size,
+                 griddata_expansion_factor=griddata_expansion_factor,
                  bias_glob=bias_glob, 
                  dark_glob=dark_glob,
                  flat_glob=flat_glob,
@@ -3086,6 +3390,8 @@ class Calibration():
         self._bias_table = None
         self._dark_table = None
         self._flat_table = None
+        # gain_correct is set only in the biases and propagated
+        # through the rest of the pipeline in cor_process
         self._gain_correct = gain_correct
         self._bias_glob = bias_glob
         self._dark_glob = dark_glob
@@ -3096,6 +3402,9 @@ class Calibration():
         self.num_ccdts = num_ccdts
         self.num_dark_exptimes = num_dark_exptimes
         self.num_filts = num_filts
+        self.num_calibration_files = num_calibration_files
+        self.max_ccddata_size = max_ccddata_size
+        self.griddata_expansion_factor = griddata_expansion_factor
         if start_date is None:
             self._start_date = datetime.datetime(1,1,1)
         else:
@@ -3173,41 +3482,35 @@ class Calibration():
         lock = Lockfile(self._lockfile)
         lock.create()
 
-        # Make sure each directory we process has enough processes to
-        # work with to parallelize the slowest step (combining images)
-        our_num_processes = min(ndirs_dates,
-                                int(self.num_processes / self.num_ccdts))
-        if ndirs_dates == 0:
-            pass
-        elif ndirs_dates == 1 or our_num_processes == 1:
-            for dt in dirs_dates:
-                bias_combine(dt[0],
-                             subdirs=self._subdirs,
-                             glob_include=self._bias_glob,
-                             outdir=self._calibration_root,
-                             gain_correct=self._gain_correct,
-                             num_processes=self.num_processes,
-                             mem_frac=self.mem_frac,
-                             keep_intermediate=self.keep_intermediate)
-        else:
-            num_subprocesses = int(self.num_processes / our_num_processes)
-            subprocess_mem_frac = self.mem_frac / our_num_processes
-            log.debug(f'Calibration.reduce_bias: ndirs_dates = {ndirs_dates}')
-            log.debug('Calibration.reduce_bias: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
-            #return
+        one_fdict_size = self.num_calibration_files * self.max_ccddata_size
+        ncp = num_can_process(self.num_ccdts,
+                              num_processes=self.num_processes,
+                              mem_frac=self.mem_frac,
+                              process_size=self.num_ccdts * one_fdict_size)
+        our_num_processes = max(1, ncp)
+        num_subprocesses = int(self.num_processes / our_num_processes)
+        subprocess_mem_frac = self.mem_frac / our_num_processes
+        log.debug(f'Calibration.reduce_dark: ndirs_dates = {ndirs_dates}')
+        log.debug('Calibration.reduce_dark: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
+        #return
+        pwk = PoolWorkerKwargs(bias_combine,
+                               subdirs=self._subdirs,
+                               glob_include=self._bias_glob,
+                               outdir=self._calibration_root,
+                               gain_correct=self._gain_correct,
+                               num_processes=self.num_processes,
+                               max_ccddata_size=self.max_ccddata_size,
+                               num_calibration_files=self.num_calibration_files,
+                               mem_frac=self.mem_frac,
+                               keep_intermediate=self.keep_intermediate)
 
-            plist = \
-                [Process(target=bias_combine,
-                         args=(dt[0],),
-                         kwargs= {'subdirs': self._subdirs,
-                                  'glob_include': self._bias_glob,
-                                  'outdir': self._calibration_root,
-                                  'gain_correct': self._gain_correct,
-                                  'num_processes': num_subprocesses,
-                                  'mem_frac': subprocess_mem_frac},
-                         daemon=False) # Let subprocesses create more children
-                 for dt in dirs_dates]
-            p_limit(plist, our_num_processes)
+        dirs = [dt[0] for dt in dirs_dates]
+        if our_num_processes == 1:
+            for d in dirs:
+                pwk.worker(d)
+        else:
+            with NoDaemonPool(processes=our_num_processes) as p:
+                p.map(pwk.worker, dirs)
 
         self.bias_table_create(rescan=True, autoreduce=False)
         # This could potentially get set in dirs_dates_to_reduce, but
@@ -3217,65 +3520,42 @@ class Calibration():
                                   stop=self._stop_date)
         self._bias_dirs_dates_checked = all_dirs_dates
         lock.clear()
-    def reduce_bias(self):
-        dirs_dates = \
-            self.dirs_dates_to_reduce(self.bias_table_create,
-                                      self._bias_glob,
-                                      self._bias_dirs_dates_checked,
-                                      self._subdirs)
-        ndirs_dates = len(dirs_dates)
-        if ndirs_dates == 0:
-            return
 
-        # If we made it here, we have some real work to do
-        # Set a simple lockfile so we don't have multiple processes reducing
-        lock = Lockfile(self._lockfile)
-        lock.create()
-
-        # Make sure each directory we process has enough processes to
-        # work with to parallelize the slowest step (combining images)
-        our_num_processes = min(ndirs_dates,
-                                int(self.num_processes / self.num_ccdts))
-        if ndirs_dates == 0:
-            pass
-        elif ndirs_dates == 1 or our_num_processes == 1:
-            for dt in dirs_dates:
-                bias_combine(dt[0],
-                             subdirs=self._subdirs,
-                             glob_include=self._bias_glob,
-                             outdir=self._calibration_root,
-                             gain_correct=self._gain_correct,
-                             num_processes=self.num_processes,
-                             mem_frac=self.mem_frac,
-                             keep_intermediate=self.keep_intermediate)
-        else:
-            num_subprocesses = int(self.num_processes / our_num_processes)
-            subprocess_mem_frac = self.mem_frac / our_num_processes
-            log.debug(f'Calibration.reduce_bias: ndirs_dates = {ndirs_dates}')
-            log.debug('Calibration.reduce_bias: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
-            #return
-
-            plist = \
-                [Process(target=bias_combine,
-                         args=(dt[0],),
-                         kwargs= {'subdirs': self._subdirs,
-                                  'glob_include': self._bias_glob,
-                                  'outdir': self._calibration_root,
-                                  'gain_correct': self._gain_correct,
-                                  'num_processes': num_subprocesses,
-                                  'mem_frac': subprocess_mem_frac},
-                         daemon=False) # Let subprocesses create more children
-                 for dt in dirs_dates]
-            p_limit(plist, our_num_processes)
-
-        self.bias_table_create(rescan=True, autoreduce=False)
-        # This could potentially get set in dirs_dates_to_reduce, but
-        # it seems better to set it after we have actually done the work
-        all_dirs_dates = get_dirs_dates(self._raw_data_root,
-                                  start=self._start_date,
-                                  stop=self._stop_date)
-        self._bias_dirs_dates_checked = all_dirs_dates
-        lock.clear()
+        ## Make sure each directory we process has enough processes to
+        ## work with to parallelize the slowest step (combining images)
+        #our_num_processes = min(ndirs_dates,
+        #                        int(self.num_processes / self.num_ccdts))
+        #if ndirs_dates == 0:
+        #    pass
+        #elif ndirs_dates == 1 or our_num_processes == 1:
+        #    for dt in dirs_dates:
+        #        bias_combine(dt[0],
+        #                     subdirs=self._subdirs,
+        #                     glob_include=self._bias_glob,
+        #                     outdir=self._calibration_root,
+        #                     gain_correct=self._gain_correct,
+        #                     num_processes=self.num_processes,
+        #                     mem_frac=self.mem_frac,
+        #                     keep_intermediate=self.keep_intermediate)
+        #else:
+        #    num_subprocesses = int(self.num_processes / our_num_processes)
+        #    subprocess_mem_frac = self.mem_frac / our_num_processes
+        #    log.debug(f'Calibration.reduce_bias: ndirs_dates = {ndirs_dates}')
+        #    log.debug('Calibration.reduce_bias: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
+        #    #return
+        #
+        #    plist = \
+        #        [Process(target=bias_combine,
+        #                 args=(dt[0],),
+        #                 kwargs= {'subdirs': self._subdirs,
+        #                          'glob_include': self._bias_glob,
+        #                          'outdir': self._calibration_root,
+        #                          'gain_correct': self._gain_correct,
+        #                          'num_processes': num_subprocesses,
+        #                          'mem_frac': subprocess_mem_frac},
+        #                 daemon=False) # Let subprocesses create more children
+        #         for dt in dirs_dates]
+        #    p_limit(plist, our_num_processes)
 
     def reduce_dark(self):
         dirs_dates = \
@@ -3292,45 +3572,36 @@ class Calibration():
         lock = Lockfile(self._lockfile)
         lock.create()
 
-        # Make sure each directory we process has enough processes to
-        # work with to parallelize the slowest step (combining images)
-        our_num_processes = min(ndirs_dates,
-                                int(self.num_processes / self.num_ccdts))
-        if ndirs_dates == 0:
-            pass
-        elif ndirs_dates == 1 or our_num_processes == 1:
-            for dt in dirs_dates:
-                dark_combine(dt[0],
-                             subdirs=self._subdirs,
-                             glob_include=self._dark_glob,
-                             outdir=self._calibration_root,
-                             gain_correct=self._gain_correct,
-                             calibration=self,
-                             auto=True, # A little dangerous, but just one place for changes
-                             num_processes=self.num_processes,
-                             mem_frac=self.mem_frac,
-                             keep_intermediate=self.keep_intermediate)
-        else:
-            num_subprocesses = int(self.num_processes / our_num_processes)
-            subprocess_mem_frac = self.mem_frac / our_num_processes
-            log.debug(f'Calibration.reduce_dark: ndirs_dates = {ndirs_dates}')
-            log.debug('Calibration.reduce_dark: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
-            #return
+        one_fdict_size = self.num_calibration_files * self.max_ccddata_size
+        ncp = num_can_process(self.num_ccdts,
+                              num_processes=self.num_processes,
+                              mem_frac=self.mem_frac,
+                              process_size=self.num_ccdts * one_fdict_size)
+        our_num_processes = max(1, ncp)
+        num_subprocesses = int(self.num_processes / our_num_processes)
+        subprocess_mem_frac = self.mem_frac / our_num_processes
+        log.debug(f'Calibration.reduce_dark: ndirs_dates = {ndirs_dates}')
+        log.debug('Calibration.reduce_dark: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
+        #return
+        pwk = PoolWorkerKwargs(dark_combine,
+                               subdirs=self._subdirs,
+                               glob_include=self._dark_glob,
+                               outdir=self._calibration_root,
+                               calibration=self,
+                               auto=True, # A little dangerous, but just one place for changes
+                               num_processes=self.num_processes,
+                               max_ccddata_size=self.max_ccddata_size,
+                               num_calibration_files=self.num_calibration_files,
+                               mem_frac=self.mem_frac,
+                               keep_intermediate=self.keep_intermediate)
 
-            plist = \
-                [Process(target=dark_combine,
-                         args=(dt[0],),
-                         kwargs= {'subdirs': self._subdirs,
-                                  'glob_include': self._dark_glob,
-                                  'outdir': self._calibration_root,
-                                  'gain_correct': self._gain_correct,
-                                  'calibration': self,
-                                  'auto': True,
-                                  'num_processes': num_subprocesses,
-                                  'mem_frac': subprocess_mem_frac},
-                         daemon=False) # Let subprocesses create more children
-                 for dt in dirs_dates]
-            p_limit(plist, our_num_processes)
+        dirs = [dt[0] for dt in dirs_dates]
+        if our_num_processes == 1:
+            for d in dirs:
+                pwk.worker(d)
+        else:
+            with NoDaemonPool(processes=our_num_processes) as p:
+                p.map(pwk.worker, dirs)
 
         self.dark_table_create(rescan=True, autoreduce=False)
         # This could potentially get set in dirs_dates_to_reduce, but
@@ -3341,10 +3612,107 @@ class Calibration():
         self._dark_dirs_dates_checked = all_dirs_dates
         lock.clear()
 
+
+        #if ndirs_dates == 1 or our_num_processes == 1:
+        #    for dt in dirs_dates:
+        #        dark_combine(dt[0],
+        #                     subdirs=self._subdirs,
+        #                     glob_include=self._dark_glob,
+        #                     outdir=self._calibration_root,
+        #                     calibration=self,
+        #                     auto=True, # A little dangerous, but just one place for changes
+        #                     num_processes=self.num_processes,
+        #                     mem_frac=self.mem_frac,
+        #                     keep_intermediate=self.keep_intermediate)
+        #else:
+        #    num_subprocesses = int(self.num_processes / our_num_processes)
+        #    subprocess_mem_frac = self.mem_frac / our_num_processes
+        #
+        #    plist = \
+        #        [Process(target=dark_combine,
+        #                 args=(dt[0],),
+        #                 kwargs= {'subdirs': self._subdirs,
+        #                          'glob_include': self._dark_glob,
+        #                          'outdir': self._calibration_root,
+        #                          'calibration': self,
+        #                          'auto': True,
+        #                          'num_processes': num_subprocesses,
+        #                          'mem_frac': subprocess_mem_frac},
+        #                 daemon=False) # Let subprocesses create more children
+        #         for dt in dirs_dates]
+        #    p_limit(plist, our_num_processes)
+        #
+        #self.dark_table_create(rescan=True, autoreduce=False)
+        ## This could potentially get set in dirs_dates_to_reduce, but
+        ## it seems better to set it after we have actually done the work
+        #all_dirs_dates = get_dirs_dates(self._raw_data_root,
+        #                          start=self._start_date,
+        #                          stop=self._stop_date)
+        #self._dark_dirs_dates_checked = all_dirs_dates
+        #lock.clear()
+
+    def reduce_flat(self):
+        dirs_dates = \
+            self.dirs_dates_to_reduce(self.flat_table_create,
+                                      self._flat_glob,
+                                      self._flat_dirs_dates_checked,
+                                      self._subdirs)
+        ndirs_dates = len(dirs_dates)
+        if ndirs_dates == 0:
+            return
+
+        # If we made it here, we have some real work to do
+        # Set a simple lockfile so we don't have multiple processes reducing
+        lock = Lockfile(self._lockfile)
+        lock.create()
+
+        one_filt_size = max(self.num_calibration_files * self.max_ccddata_size,
+                            max_ccddata_size * self.griddata_expansion_factor)
+        # Our sub-process can divide and conquer if necessary
+        ncp = num_can_process(self.num_filts,
+                              num_processes=self.num_processes,
+                              mem_frac=self.mem_frac,
+                              process_size=self.num_filts * one_filt_size,
+                              error_if_zero=False)
+        our_num_processes = max(1, ncp)
+        num_subprocesses = int(self.num_processes / our_num_processes)
+        subprocess_mem_frac = self.mem_frac / our_num_processes
+        log.debug(f'Calibration.reduce_flat: ndirs_dates = {ndirs_dates}')
+        log.debug('Calibration.reduce_flat: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
+        pwk = PoolWorkerKwargs(flat_combine,
+                               subdirs=self._subdirs,
+                               glob_include=self._flat_glob,
+                               outdir=self._calibration_root,
+                               calibration=self,
+                               auto=True, # A little dangerous, but just one place for changes
+                               num_processes=self.num_processes,
+                               mem_frac=self.mem_frac,
+                               num_calibration_files=self.num_calibration_files,
+                               max_ccddata_size=self.max_ccddata_size,
+                               griddata_expansion_factor=self.griddata_expansion_factor,
+                               keep_intermediate=self.keep_intermediate)
+                               
+        dirs = [dt[0] for dt in dirs_dates]
+        if our_num_processes == 1:
+            for d in dirs:
+                pwk.worker(d)
+        else:
+            with NoDaemonPool(processes=our_num_processes) as p:
+                p.map(pwk.worker, dirs)
+
+        self.flat_table_create(rescan=True, autoreduce=False)
+        # This could potentially get set in dirs_dates_to_reduce, but
+        # it seems better to set it after we have actually done the work
+        all_dirs_dates = get_dirs_dates(self._raw_data_root,
+                                  start=self._start_date,
+                                  stop=self._stop_date)
+        self._flat_dirs_dates_checked = all_dirs_dates
+        lock.clear()
+
     def reduce(self):
         self.reduce_bias()
         self.reduce_dark()
-        #self.reduce_flat()
+        self.reduce_flat()
 
     def bias_table_create(self,
                           rescan=False, # Set to True after new biases have been added
@@ -3425,6 +3793,46 @@ class Calibration():
                    meta={'name': 'Dark information table'})
         return self._dark_table
 
+    def flat_table_create(self,
+                          rescan=False, # Set to True after new biases have been added
+                          autoreduce=True): # Set to False to break recursion
+                                            # when first looking for 
+        """Create table of bias info from calibration directory"""
+        if autoreduce:
+            # By default always do auto reduction to catch the latest downloads
+            self.reduce_flat()
+            return self._flat_table
+        # If we made it here, autoreduce is guaranteed to be false
+        if rescan:
+            self._flat_table = None
+        if self._flat_table is not None:
+            return self._flat_table
+        if not os.path.isdir(self._calibration_root):
+            # We haven't reduced any calibration images yet and we
+            # don't want to automatically do so (just yet)
+            return None
+        fnames = glob.glob(os.path.join(self._calibration_root, '*_flat.fits'))
+        if len(fnames) == 0:
+            # Catch the not autoreduce case when we still have no files
+            return None
+        # If we made it here, we have files to populate our table
+        dates = []
+        filts = []
+        for fname in fnames:
+            bfname = os.path.basename(fname)
+            sfname = bfname.split('_', 1)
+            date = Time(sfname[0], format='fits')
+            filttail = sfname[1]
+            filt_tail = filttail.split('_flat.fits')
+            filt = filt_tail[0]
+            dates.append(date)
+            filts.append(filt)
+        self._flat_table = \
+            QTable([fnames, dates, filts],
+                   names=('fnames', 'dates', 'filters'),
+                   meta={'name': 'Flat information table'})
+        return self._flat_table
+
     @property
     def bias_table(self):
         return self.bias_table_create()
@@ -3432,6 +3840,10 @@ class Calibration():
     @property
     def dark_table(self):
         return self.dark_table_create()
+
+    @property
+    def flat_table(self):
+        return self.flat_table_create()
 
     def best_bias(self, fname_ccd_or_hdr, ccdt_tolerance=None):
         """Returns filename of best-matched bias for a file"""
@@ -3500,6 +3912,27 @@ class Calibration():
         return self._dark_table['fnames'][best_exptime_date_idx]
     # --> TODO: possibly put in the number of darks as a factor as
     # --> well, weighted by difference in time
+
+    def best_flat(self, fname_ccd_or_hdr):
+        """Returns filename of best-matched flat for a file"""
+        if isinstance(fname_ccd_or_hdr, fits.Header):
+            hdr = fname_ccd_or_hdr
+        else:
+            ccd = ccddata_read(fname_ccd_or_hdr)
+            hdr = ccd.meta
+        tm = Time(hdr['DATE-OBS'], format='fits')
+        filt = hdr['FILTER']
+        # This is the entry point for reduction 
+        good_filt_idx = np.flatnonzero(filt == self.flat_table['filters'])
+        if len(good_filt_idx) == 0:
+            raise ValueError(f'No {filt} flats found')
+        ddates = tm - self.flat_table['dates']
+        best_filt_date_idx = np.argmin(np.abs(ddates[good_filt_idx]))
+        # unwrap
+        best_filt_date_idx = good_filt_idx[best_filt_date_idx]
+        return self._flat_table['fnames'][best_filt_date_idx]
+
+
 
 #sample = '/data/io/IoIO/raw/20201001/Dark-S001-R003-C009-B1.fts'
 
@@ -3697,7 +4130,7 @@ class Calibration():
 #f.write('/tmp/test.fits')
 
 #print(overscan_estimate('/tmp/test.fits'))
-fsample = '/data/io/IoIO/raw/2020-07-07/Sky_Flat-0002_R.fit'
+#fsample = '/data/io/IoIO/raw/2020-07-07/Sky_Flat-0002_R.fit'
 #print(overscan_estimate(fsample)
 #c = Calibration(start_date='2020-07-11', stop_date='2020-08-22')
 #bias = c.best_bias(fsample)
@@ -3773,9 +4206,40 @@ fsample = '/data/io/IoIO/raw/2020-07-07/Sky_Flat-0002_R.fit'
 #master_bias.meta = meta
 ##master_bias.write('/tmp/test.fits', overwrite=True)
 
-dark_dir = '/data/io/IoIO/raw/20200711'
-c = Calibration(start_date='2020-07-11', stop_date='2020-08-22', reduce=True)
+#dark_dir = '/data/io/IoIO/raw/20200711'
+#c = Calibration(start_date='2020-07-11', stop_date='2020-08-22', reduce=True)
+#
+#dark_combine(dark_dir, calibration=c, auto=True, show=False)
 
-dark_combine(dark_dir, calibration=c, auto=True, show=False)
+#c = Calibration(start_date='2020-07-11', stop_date='2020-08-22', reduce=True)
+#fsample = '/data/io/IoIO/raw/2020-07-07/Sky_Flat-0002_R.fit'
+#pout = cor_pipeline([fsample], auto=True, calibration=c)
 
+#flat_dir = '/data/io/IoIO/raw/2020-07-07'
+#collection = ccdp.ImageFileCollection(flat_dir)
+#flat_combine_one_filt('R', collection=collection, outdir='/tmp', keep_intermediate=True, calibration=c, auto=True)
+
+#flat_combine(flat_dir, calibration=c, auto=True, show=False)
+
+#print(num_can_process(5000, process_size=50000E99))
+
+#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
+#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22')
+#fname = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0007_Na-on.fit'
+#print(c.best_flat(fname))
+
+#print(c.dirs_dates_to_reduce(c.flat_table_create,
+#                             c._flat_glob,
+#                             c._flat_dirs_dates_checked,
+#                             c._subdirs))
+
+#print(c.flat_table_create( autoreduce=False))
+
+#c.reduce_flat()
+
+c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
+fname = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0007_Na-on.fit'
+ccd = ccddata_read(fname)
+ccd = cor_process(ccd, calibration=c, auto=True)
+ccd.write('/tmp/test.fits', overwrite=True)
 
