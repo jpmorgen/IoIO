@@ -174,6 +174,23 @@ min_num_flats = 3
 # Accept as match darks with this much more exposure time
 dark_exp_margin = 3
 
+def cor_pipeline(fnames,
+                 pre_process_list=None,
+                 post_process_list=None,
+                 ccd_processor=None,
+                 **kwargs):
+    if pre_process_list is None:
+        pre_process_list = [full_frame]
+    if post_process_list is None:
+        post_process_list=[]
+    if ccd_processor is None:
+        ccd_processor = cor_process
+    return ccdmp.ccd_pipeline(fnames,
+                        pre_process_list=pre_process_list,
+                        post_process_list=post_process_list,
+                        ccd_processor=ccd_processor,
+                        **kwargs)
+
 
 def add_history(header, text='', caller=1):
     """Add a HISTORY card to a FITS header with the caller's name inserted 
@@ -391,19 +408,19 @@ def light_image(im, light_tolerance=3, **kwargs):
         return (None, {})
     return (im, {})
 
-def check_oscan(ccd, pipe_meta, **kwargs):
-    hdr = ccd.meta
-    osbias = hdr.get('osbias')
-    biasfile = hdr.get('biasfile')
-    if osbias is None or biasfile is None:
-        return (ccd, {})
-    if osbias != biasfile:
-        ccdmp.multi_logging('warning', pipe_meta,
-                      'OSBIAS and BIASFILE are not the same')
-    else:
-        del hdr['OSBIAS']
-        hdr['OVERSCAN_MASTER_BIAS'] = 'BIASFILE'
-    return (ccd, {})
+#def check_oscan(ccd, pipe_meta, **kwargs):
+#    hdr = ccd.meta
+#    osbias = hdr.get('osbias')
+#    biasfile = hdr.get('biasfile')
+#    if osbias is None or biasfile is None:
+#        return (ccd, {})
+#    if osbias != biasfile:
+#        ccdmp.multi_logging('warning', pipe_meta,
+#                      'OSBIAS and BIASFILE are not the same')
+#    else:
+#        del hdr['OSBIAS']
+#        hdr['OVERSCAN_MASTER_BIAS'] = 'BIASFILE'
+#    return (ccd, {})
 
 def mask_above(ccd_in, key, margin=0.1):
     ccd = ccd_in.copy()
@@ -1555,6 +1572,19 @@ def cor_process(ccd,
         raise TypeError(
             'master_bias is not None, fname or a CCDData object.')
     
+    # Correct OVERSCAN_MASTER_BIAS keyword, if possible
+    hdr = nccd.meta
+    osbias = hdr.get('osbias')
+    biasfile = hdr.get('biasfile')
+    if osbias is None or biasfile is None:
+        pass
+    elif osbias != biasfile:
+        ccdmp.multi_logging('warning', pipe_meta,
+                      'OSBIAS and BIASFILE are not the same')
+    else:
+        del hdr['OSBIAS']
+        hdr['OVERSCAN_MASTER_BIAS'] = 'BIASFILE'
+
     # Subtract the dark frame.  Generally this will just use the
     # default exposure_key we create in our parameters to ccd_process
     if isinstance(dark_frame, CCDData):
@@ -1586,23 +1616,6 @@ def cor_process(ccd,
         nccd = ccdp.gain_correct(nccd, gain)
 
     return nccd
-
-def cor_pipeline(fnames,
-                 pre_process_list=None,
-                 post_process_list=None,
-                 ccd_processor=None,
-                 **kwargs):
-    if pre_process_list is None:
-        pre_process_list = [full_frame]
-    if post_process_list is None:
-        post_process_list=[check_oscan]
-    if ccd_processor is None:
-        ccd_processor = cor_process
-    return ccdmp.ccd_pipeline(fnames,
-                        pre_process_list=pre_process_list,
-                        post_process_list=post_process_list,
-                        ccd_processor=ccd_processor,
-                        **kwargs)
 
 def dark_process_one_file(fname,
                           calibration_scratch=calibration_scratch,
@@ -1669,7 +1682,7 @@ def dark_combine_one_fdict(fdict,
                         create_outdir=True,
                         overwrite=True,
                         pre_process_list=[full_frame, light_image],
-                        post_process_list=[jd_meta, check_oscan],
+                        post_process_list=[jd_meta],
                         **kwargs)
     pout, fnames = ccdmp.prune_pout(pout, fnames)
     if len(pout) == 0:
@@ -1892,7 +1905,7 @@ def flat_combine_one_filt(this_filter,
                         create_outdir=True,
                         overwrite=True,
                         pre_process_list=[full_frame],
-                        post_process_list=[flat_process, jd_meta, check_oscan],
+                        post_process_list=[flat_process, jd_meta],
                         **kwargs)
     pout, flat_fnames = ccdmp.prune_pout(pout, flat_fnames)
     if len(pout) < min_num_flats:
