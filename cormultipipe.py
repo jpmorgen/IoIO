@@ -1,6 +1,6 @@
 """
 The cormultipipe module implements the IoIO coronagraph data reduction
-pipeline using ccdmultipipe as its base
+pipeline using ccdmultipipe/bigmultipipe as its base
 """
 
 import inspect
@@ -36,8 +36,6 @@ import ccdproc as ccdp
 from bigmultipipe import num_can_process, WorkerWithKwargs, NoDaemonPool
 from bigmultipipe import multi_logging, prune_pout
 from ccdmultipipe import CCDMultiPipe, ccddata_read
-
-import ccdmultipipe as ccdmp
 
 from IoIO import CorObsData
 
@@ -202,7 +200,7 @@ class CorMultiPipe(CCDMultiPipe):
 
     def data_process(self, data,
                      calibration=None,
-                     auto=False,
+                     auto=None,
                      **kwargs):
         if calibration is None:
             calibration = self.calibration
@@ -429,20 +427,6 @@ def light_image(im, light_tolerance=3, **kwargs):
         log.debug('light, dark patch medians ({:.4f}, {:.4f})'.format(mdp, mlp))
         return (None, {})
     return (im, {})
-
-#def check_oscan(ccd, pipe_meta, **kwargs):
-#    hdr = ccd.meta
-#    osbias = hdr.get('osbias')
-#    biasfile = hdr.get('biasfile')
-#    if osbias is None or biasfile is None:
-#        return (ccd, {})
-#    if osbias != biasfile:
-#        multi_logging('warning', pipe_meta,
-#                      'OSBIAS and BIASFILE are not the same')
-#    else:
-#        del hdr['OSBIAS']
-#        hdr['OVERSCAN_MASTER_BIAS'] = 'BIASFILE'
-#    return (ccd, {})
 
 def mask_above(ccd_in, key, margin=0.1):
     ccd = ccd_in.copy()
@@ -1193,13 +1177,6 @@ def cor_process(ccd,
         of a multi-process run.  If True, assures input and output of
         CCDData are via files rather than CCDData objects
 
-    filter_func_list : list
-        List of functions to run on image just after it is read used to
-        reject image.  Functions must return True to result in
-        rejection.  Rejected images result in a ccd_process return
-        value of None.
-        Default is [:func:`not_full_frame`]
-
     calibration : `~Calibration`, bool, or None, optional
         Calibration object to be used to find best bias, dark, and
         flatfield files.  If True, a Calibration object is
@@ -1572,34 +1549,6 @@ def cor_process(ccd,
         nccd = ccdp.gain_correct(nccd, gain)
 
     return nccd
-
-def dark_process_one_file(fname,
-                          calibration_scratch=calibration_scratch,
-                          create_calibration_scratch=False,
-                          outname_append=outname_append,
-                          outname=None,
-                          **kwargs):
-
-    ccd = ccddata_read(fname)
-    if not full_frame(ccd):
-        log.debug('dark wrong shape: ' + fname)
-        return {'good': False}
-    if light_image(ccd):
-        log.debug('dark recorded during light conditions: ' +
-                  fname)
-        return {'good': False}
-    scratch_outname = create_outname(fname,
-                                     outdir=calibration_scratch,
-                                     create_outdir=create_calibration_scratch,
-                                     outname_append=outname_append,
-                                     outname=outname)
-    ccd = ccd_process(ccd, **kwargs)
-    ccd.write(scratch_outname, overwrite=True)
-    # Get ready to capture the mean DATE-OBS
-    tm = Time(ccd.meta['DATE-OBS'], format='fits')
-    return {'good': True,
-            'fname': scratch_outname,
-            'jd': tm.jd}
 
 def dark_combine_one_fdict(fdict,
                            outdir=calibration_root,

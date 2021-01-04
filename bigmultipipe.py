@@ -8,24 +8,29 @@ side-stepping the issues of interprocess communication discussed in
 the Background Section.  Stream (2) is control.  Using Python's
 flexible **kwarg feature, keyword arguments that control the
 underlying machinery of the pipeline can be adjusted on a per-file
-basis.  Stream (3) is metadata.  This could be anything, but is
+basis.  Alternately, the object can be subclassed and tailored as
+necessary.  Stream (3) is metadata.  This could be anything, but is
 generally a reasonably-sized reduction product from the pipeline run
 of each file.  Stream (3) is not written to disk, but, along with the
 output filename of the processed file, is returned to the caller for
 use in subsequent processing steps.
 
-Example code is found....
+Example code is found in bigmultipipe_test.py
+
+BigMultiPipe that allows the end user to specify their own file reader
+and writer.  For ease of workflow, processing of the data is divided
+into three stages: (1) pre-processing, (2) processing, and (3)
+post-processing.
 
 This module is best suited for the simple case of one input file to
 one output file.  For more complicated pipeline structures, the Mpipe
 module may be useful: https://vmlaker.github.io/mpipe/
 
-
 Background: The parallel pipeline processing of large data structures
 is best done in a multithreaded environment, which enables the data to
 be easily shared between threads executing in the same process.
 Unfortunately, Python's Global Interpreter Lock (GIL) prevents
-multiple threads from running at the same time, except in certain
+multiple threads from running at the same time, except in
 circumstances such as I/O wait and certain functions in cpython
 packages such as numpy.  Python's multiprocessing module provides a
 partial solution to the GIL dilema by providing tools that launch
@@ -34,19 +39,15 @@ also provides tools such as Queue and Pipe objects that enable
 communication between these processes.  Unfortunately, these
 interprocess communication solutions rely on pickle, which is usually
 not suitable for large data structures.  Thus, a multiprocessing
-solution for big data needs to generally include some sort of disk
-file write to return the data.  The bigmultipipe module acknowledges
-this state of affairs and provides an easy-to-subclass object,
-BigMultiPipe that allows the end user to specify their own file reader
-and writer
-
-
-O and cython
-
-the multithreaded approach to processing large data
-structures, which allows
+solution for big data needs to implement the disk read of raw data and
+write of processed data within each independent process.  This enables
+filenames to be passed between processes rather than the large data
+structures themselves.  The bigmultipipe module expands on this
+minimum of information exchange by providing additional control and
+metadata channels, as discussed above.
 
 """
+
 import os
 import psutil
 
@@ -350,7 +351,8 @@ def prune_pout(pout, in_names):
 
 
 def multi_logging(level, meta, message):
-    """Implements logging on a per-process basis in bmp_pipeline post-processing"""
+    """Implements logging on a per-process basis in BigMultiPipe
+    post-processing routines"""
     # Work directly with the meta dictionary, thus a return value
     # is not needed
     if level in meta:
