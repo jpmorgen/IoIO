@@ -201,30 +201,18 @@ class CorMultiPipe(CCDMultiPipe):
         return super().pre_process(data, **kwargs)
 
     def data_process(self, data,
+                     calibration=None,
+                     auto=False,
                      **kwargs):
+        if calibration is None:
+            calibration = self.calibration
+        if auto is None:
+            auto = self.auto
         data = cor_process(data,
-                           calibration=self.calibration,
-                           auto=self.auto,
+                           calibration=calibration,
+                           auto=auto,
                            **kwargs)
         return data
-
-#def cor_pipeline(fnames,
-#                 pre_process_list=None,
-#                 post_process_list=None,
-#                 ccd_processor=None,
-#                 **kwargs):
-#    if pre_process_list is None:
-#        pre_process_list = [full_frame]
-#    if post_process_list is None:
-#        post_process_list=[]
-#    if ccd_processor is None:
-#        ccd_processor = cor_process
-#    return ccdmp.ccd_pipeline(fnames,
-#                        pre_process_list=pre_process_list,
-#                        post_process_list=post_process_list,
-#                        ccd_processor=ccd_processor,
-#                        **kwargs)
-#
 
 def add_history(header, text='', caller=1):
     """Add a HISTORY card to a FITS header with the caller's name inserted 
@@ -415,7 +403,7 @@ def full_frame(im,
                naxis1=sx694_naxis1,
                naxis2=sx694_naxis2,
                **kwargs):
-    """cor_pipeline pre-processing routine to select full-frame images
+    """CorMultiPipe pre-processing routine to select full-frame images
     """
     s = im.shape
     # Note Pythonic C index ordering
@@ -424,7 +412,7 @@ def full_frame(im,
     return (im, {})
 
 def light_image(im, light_tolerance=3, **kwargs):
-    """cor_pipeline pre-processing routine to reject light-contaminated bias & dark images
+    """CorMultiPipe pre-processing routine to reject light-contaminated bias & dark images
     """
     s = im.shape
     m = np.asarray(s)/2 # Middle of CCD
@@ -591,7 +579,7 @@ def jd_meta(ccd, pipe_meta, **kwargs):
     return (ccd, {'jd': tm.jd})
 
 def bias_stats(ccd, pipe_meta, gain=sx694_gain, **kwargs):
-    """cor_pipeline post-processing routine for bias_combine
+    """CorMultiPipe post-processing routine for bias_combine
     Returns dictionary of bias statistics for pandas dataframe
     """
     im = ccd.data
@@ -669,18 +657,17 @@ def bias_combine_one_fdict(fdict,
     #num_can_process = min(num_processes, num_files_can_fit)
     #print('bias_combine_one_fdict: num_processes = {}, mem_frac = {}, num_files= {}, num_files_can_fit = {}, num_can_process = {}'.format(num_processes, mem_frac, num_files, num_files_can_fit, num_can_process))
 
-    # Use the cor_pipeline to subtract the median from each bias and
+    # Use CorMultiPipe to subtract the median from each bias and
     # create a dict of stats for a pandas dataframe
-    pout = cor_pipeline(fnames,
-                        num_processes=num_processes,
-                        mem_frac=mem_frac,
-                        process_size=ccddata_size,
-                        outdir=sdir,
-                        create_outdir=True,
-                        overwrite=True,
-                        pre_process_list=[full_frame, light_image],
-                        post_process_list=[bias_stats, jd_meta],
-                        oscan=True)
+    cmp = CorMultiPipe(num_processes=num_processes,
+                       mem_frac=mem_frac,
+                       process_size=ccddata_size,
+                       outdir=sdir,
+                       create_outdir=True,
+                       overwrite=True,
+                       pre_process_list=[light_image],
+                       post_process_list=[bias_stats, jd_meta])
+    pout = cmp.pipeline(fnames, oscan=True)
     pout, fnames = prune_pout(pout, fnames)
     if len(pout) < min_num_biases:
         log.debug(f"Not enough good biases {len(pout)} found at CCDT = {mean_ccdt} C in {directory}")
@@ -1176,8 +1163,6 @@ def cor_process(ccd,
                 exposure_unit=None,
                 dark_scale=True,
                 gain_corrected=True,
-                outdir=None,
-                create_outdir=False,
                 *args, **kwargs):
 
     """Perform basic CCD processing/reduction of IoIO ccd data
@@ -1341,73 +1326,10 @@ def cor_process(ccd,
         have already been gain corrected.
         Default is ``True``.
 
-    outname : str, optional
-        Name of output file.  If outdir is supplied, full outname will
-        be constructed by joining outdir and outname.
-        Default ``None``
-
-    outdir : str, optional
-        Directory into which to write outfile.  
-        Default is ``None``
-
-    create_outdir : bool, optional
-        Create outdir including any needed leaf directories if it does
-        not exist.  
-        Default is ``False``
-
-    outname_append : str, optional
-        String appended to input filename to create outname.  Only
-        used if outdir is specified and outname is not.  
-        Default is ``_p``
-
-    overwrite : bool, optional
-        If writing file, overwrite existing file.
-        Default is ``False``
-
-    return_outname : bool
-        If True, return outname rather than reduced CCDData.
-        Automatically set to True if multi is True.
-    	Default is ``False``
-
-    post_process_list : list
-        List of functions to run on ccd object just before it is
-        returned.  Each function must accept the current CCDData
-        object, and all input keywords of ccd_process.  Return value
-        of functions must be of type CCDData.  Subsequent functions
-        in the list will start with the return value of the previous.
-        Default is ``[]``
-
-    meta_process_list : list
-        List of functions to run just before ccd_process returns.
-        Each process must accept all keywords of ccd_process and
-        return a dictionary-like object, "meta".  Dictionaries are
-        combined using the dictionary update() method.  If this
-        keyword is not ``[]``, the return value of ccd_process will be
-        a tuple (ccd_or_outname, meta)
-        Default is ``[]``
-
-
     Returns
     -------
     ccd : `~astropy.nddata.CCDData`
-        Reduded ccd if `return_outname` is False and meta_process_list
-        is empty
-
-    - or -
-
-    outname : str
-    	Full filename of file into which ccd was saved if
-    	`return_outname` is True
-
-    - or -
-
-    (ccd_or_outname, meta) : `tuple`
-    	A tuple consisting of one of the above and a dict-like object
-    	that is the output of the function(s) in meta_process_list
-
-    - or -
-
-    None if one of the filters in filter_func_list fails
+	Processed image
 
     Examples --> fix these
     --------
@@ -1708,16 +1630,15 @@ def dark_combine_one_fdict(fdict,
     this_dateb1, _ = tm.split('T')
     sdir = os.path.join(calibration_scratch, this_dateb1)
 
-    pout = cor_pipeline(fnames,
-                        num_processes=num_processes,
-                        mem_frac=mem_frac,
-                        process_size=max_ccddata_size,
-                        outdir=sdir,
-                        create_outdir=True,
-                        overwrite=True,
-                        pre_process_list=[full_frame, light_image],
-                        post_process_list=[jd_meta],
-                        **kwargs)
+    cmp = CorMultiPipe(num_processes=num_processes,
+                       mem_frac=mem_frac,
+                       process_size=ccddata_size,
+                       outdir=sdir,
+                       create_outdir=True,
+                       overwrite=True,
+                       pre_process_list=[light_image],
+                       post_process_list=[jd_meta])
+    pout = cmp.pipeline(fnames, **kwargs)
     pout, fnames = prune_pout(pout, fnames)
     if len(pout) == 0:
         log.debug(f"No good darks found at CCDT = {mean_ccdt} C in {directory}")
@@ -1916,32 +1837,31 @@ def flat_combine_one_filt(this_filter,
                           flat_cut=0.75,
                           edge_mask=-40, # CorObsData parameter for ND filter coordinates    
                           **kwargs):
-    flat_fnames = collection.files_filtered(imagetyp='FLAT',
-                                            filter=this_filter,
-                                            include_path=True)
+    directory = collection.location
+    fnames = collection.files_filtered(imagetyp='FLAT',
+                                       filter=this_filter,
+                                       include_path=True)
 
-    if len(flat_fnames) < min_num_flats:
+    if len(fnames) < min_num_flats:
         log.debug(f"Not enough good flats found for filter {this_filter} in {directory}")
         return False
 
     # Make a scratch directory that is the date of the first file.
     # Not as fancy as the biases, but, hey, it is a scratch directory
-    tmp = ccddata_read(flat_fnames[0])
+    tmp = ccddata_read(fnames[0])
     tm = tmp.meta['DATE-OBS']
     this_dateb1, _ = tm.split('T')
     sdir = os.path.join(calibration_scratch, this_dateb1)
 
-    pout = cor_pipeline(flat_fnames,
-                        num_processes=num_processes,
-                        mem_frac=mem_frac,
-                        process_size=ccddata_size,
-                        outdir=sdir,
-                        create_outdir=True,
-                        overwrite=True,
-                        pre_process_list=[full_frame],
-                        post_process_list=[flat_process, jd_meta],
-                        **kwargs)
-    pout, flat_fnames = prune_pout(pout, flat_fnames)
+    cmp = CorMultiPipe(num_processes=num_processes,
+                       mem_frac=mem_frac,
+                       process_size=ccddata_size,
+                       outdir=sdir,
+                       create_outdir=True,
+                       overwrite=True,
+                       post_process_list=[flat_process, jd_meta])
+    pout = cmp.pipeline(fnames, **kwargs)
+    pout, fnames = prune_pout(pout, fnames)
     if len(pout) < min_num_flats:
         log.debug(f"Not enough good flats found for filter {this_filter} in {directory}")
         return False
@@ -1964,7 +1884,7 @@ def flat_combine_one_filt(this_filter,
                      mem_limit=mem.available*mem_frac)
     im.meta['NCOMBINE'] = (len(out_fnames), 'Number of flats combined')
     # Record each filename
-    for i, f in enumerate(flat_fnames):
+    for i, f in enumerate(fnames):
         im.meta['FILE{0:02}'.format(i)] = f
     add_history(im.meta,
                 'Combining NCOMBINE biases indicated in FILENN')
@@ -2653,6 +2573,5 @@ log.setLevel('DEBUG')
 
 c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
 fname = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0007_Na-on.fit'
-#pout = cor_pipeline([fname], auto=True, calibration=c, outdir='/tmp', overwrite=True)
 cmp = CorMultiPipe(auto=True, calibration=c)
 cmp.pipeline([fname], outdir='/tmp', overwrite=True)

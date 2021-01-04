@@ -63,10 +63,12 @@ class CCDMultiPipe(BigMultiPipe):
     def __init__(self,
                  raw_unit=None,
                  outname_append='_ccdmp',
+                 overwrite=False,
                  **kwargs):
         if raw_unit is None:
             raw_unit = u.adu
         self.raw_unit = raw_unit
+        self.overwrite = overwrite
         super().__init__(outname_append=outname_append,
                          **kwargs)
 
@@ -74,13 +76,41 @@ class CCDMultiPipe(BigMultiPipe):
         data = ccddata_read(in_name, raw_unit=self.raw_unit, **kwargs)
         return data
 
-    def file_writer(self, data, outname, header=None,
-                    output_verify='exception', overwrite=False,
-                    checksum=False, **kwargs):
-        data.write(outname, output_verify=output_verify,
-                   overwrite=overwrite, checksum=checksum)
+    def file_writer(self, data, outname, 
+                    overwrite=None,
+                    **kwargs):
+        if overwrite is None:
+            overwrite = self.overwrite
+        data.write(outname, overwrite=overwrite)
         return outname
     
     def data_process(self, data, **kwargs):
         data = ccdp.ccd_process(data, **kwargs)
         return data
+#class CCDMultiPipe(BigMultiPipe):
+#
+#    def __init__(self,
+#                 raw_unit=None,
+#                 outname_append='_ccdmp',
+#                 **kwargs):
+#        if raw_unit is None:
+#            raw_unit = u.adu
+#        self.raw_unit = raw_unit
+#        super().__init__(outname_append=outname_append,
+#                         **kwargs)
+#
+#    def file_reader(self, in_name, **kwargs):
+#        data = ccddata_read(in_name, raw_unit=self.raw_unit, **kwargs)
+#        return data
+#
+#    def file_writer(self, data, outname, header=None,
+#                    output_verify='exception', overwrite=False,
+#                    checksum=False, **kwargs):
+#        data.write(outname, output_verify=output_verify,
+#                   overwrite=overwrite, checksum=checksum)
+#        return outname
+#    
+#    def data_process(self, data, **kwargs):
+#        data = ccdp.ccd_process(data, **kwargs)
+#        return data
+#
