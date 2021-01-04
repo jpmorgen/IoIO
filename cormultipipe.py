@@ -1355,7 +1355,7 @@ def cor_process(ccd,
     elif imagetyp.lower() == 'flat':
         oscan=True; gain=True; master_bias=True; dark_frame=True
     elif imagetyp.lower() == 'light':
-        oscan=True; gain=True; error=True; master_bias=True; dark_frame=True; master_flat=True
+        oscan=True; gain=True; error=True; master_bias=True; dark_frame=True; master_flat=True; min_value=True
     else:
         raise ValueError(f'Unknown IMAGETYP keyword {imagetyp}')
 
@@ -1538,7 +1538,10 @@ def cor_process(ccd,
         pass
     else:
         if min_value is True:
-            min_value = min_value_key.value_from(nccd.meta)
+            min_value = min_value_key.value_from(master_flat.meta)
+            flat_correct_keyword['FLATCOR'] += f', min_value={min_value}'
+        print(f'min_value is {min_value}')
+        flat_correct_keyword['FLATCOR'] += f', norm_value={flat_norm_value}'
         nccd = ccdp.flat_correct(nccd, master_flat,
                                  min_value=min_value,
                                  norm_value=flat_norm_value,
