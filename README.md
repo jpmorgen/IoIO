@@ -18,40 +18,31 @@ https://zenodo.org/badge/latestdoi/157608102
 
 Brief description of files in this repository:
 
-ioio.py: version of code used to control telescope during 2018 Jovian
-opposition.  No new development is expected since precisionguide.py
-and IoIO.py combine to take on its functions
+IoIO.py: version of code used to control telescope during 2019-2020
+Jovian oppositions.  Imports precisionguide.py
+
+precisionguide.py: start of a general package which will solve the
+problem of differential flexure between boresite-mounted guide scopes
+and a main scope. Provides tools for precise positioning of a target
+in the FOV.
 
 ReduceCorObs.py: code used to reduce IoIO observations.  Imports
-precisionguide.py and define.py, a package maintained by Daniel
-R. Morgenthaler useful for debugging
+precisionguide.py and define.py.  define.py is maintained by Daniel
+R. Morgenthaler and useful for debugging
 
-read_ap.py: reads the CSV file created by ReduceCorObs.py which has
-the individual image aperture surface brightness values and reduction
-parameters.  NOTE: This code applies a correction of a factor of
-ADU2R_adjust = 1.15 to the aperture sum data output by ReduceCorObs to
-account for details of the calibration proceedure not yet coded into
-ReduceCorObs
+read_ap.py and read_off_Jup_ap.py: reads the CSV file created by
+ReduceCorObs.py which has the individual image aperture surface
+brightness values and reduction parameters.  NOTE: This code applies a
+correction of a factor of ADU2R_adjust = 1.15 to the aperture sum data
+output by ReduceCorObs to account for details of the calibration
+proceedure not yet coded into ReduceCorObs
 
-Na_im.py: read and display two images side-by-side for publication.
-Imports ADU2R_adjust from read_ap
+Na_im.py, SII_im.py, SII_Na_side-by-side.py: read and display images
+for publication.  Imports ADU2R_adjust from read_ap
 
 Na_support_table.py: generate a properly sorted CSV file containing
 the individual image aperture surface brightness values and reduction
 parameters.  Imports ADU2R_adjust from read_ap
-
-precisionguide.py: start of a general package which will solve the
-problem of differential flexure between boresite-mounted guide scopes
-and amain scope.  Based on ioio.py, imported by ReduceCorObs.py,
-imports ASCOM_namespace.py
-
-ASCOM_namespace.py: I have not figured out how to get Python to link
-into the same system that Visual Basic and related compilers use to
-make the ASCOM namespace available to client programs, so I just
-define them myself here.
-
-IoIO.py: new version of ioio.py which will eventually control the
-instrument during data acquisition.  Imports precisionguide.py.
 
 ioio.notebk: software developement notebook
 

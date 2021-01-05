@@ -10715,3 +10715,15 @@ Awesome!  That worked!  I committed to master on ioio1u1.  Then
 pushed to remote.  It automatically resolve the conflicts, which were
 not real conflicts, since they were independent.
 
+Mon Jan 04 18:51:57 2021 EST  jpmorgen@snipe
+
+Doing some cleanup work.  Moving old files to ~/py/IoIO_obsolete_stuff
+
+ioio.py and ASCOM_namespace.py can be moved there too, but that
+will be noted in revision contol.  I should coordinate that with
+an edit of README.md and possibly a rename of IoIO.py to ioio.py
+
+On that later point, IoIO.py currently does two things: CorObsData and
+the telescope control.  It may be useful to separate those, just like
+it might be useful to separate ObsData to a different file for clean
+import.  Think about this when I have a chance
