@@ -186,7 +186,8 @@ class BigMultiPipe():
                  PoolClass=None,
                  outdir=None,
                  create_outdir=False,
-                 outname_append='_bmp'):
+                 outname_append='_bmp',
+                 **kwargs):
         self.num_processes = num_processes
         self.mem_available = mem_available
         self.mem_frac = mem_frac
@@ -203,6 +204,7 @@ class BigMultiPipe():
         self.outdir = outdir
         self.create_outdir = create_outdir
         self.outname_append = outname_append
+        self.kwargs = kwargs
 
     def pipeline(self, in_names,
                  num_processes=None,
@@ -221,6 +223,10 @@ class BigMultiPipe():
             process_size = self.process_size
         if PoolClass is None:
             PoolClass = self.PoolClass
+        # Allow overriding of self.kwargs by **kwargs
+        skwargs = self.kwargs.copy()
+        skwargs.update(kwargs)
+        kwargs = skwargs
         ncp = num_can_process(len(in_names),
                               num_processes=num_processes,
                               mem_available=mem_available,
@@ -235,6 +241,10 @@ class BigMultiPipe():
         return retvals
         
     def file_process(self, in_name, **kwargs):
+        # Allow overriding of self.kwargs by **kwargs
+        skwargs = self.kwargs.copy()
+        skwargs.update(kwargs)
+        kwargs = skwargs
         data = self.file_reader(in_name, **kwargs)
         data, meta = \
             self.data_process_meta_create(data, in_name=in_name, **kwargs)
@@ -245,16 +255,28 @@ class BigMultiPipe():
         return (outname, meta)
 
     def file_reader(self, in_name, **kwargs):
+        # Allow overriding of self.kwargs by **kwargs
+        skwargs = self.kwargs.copy()
+        skwargs.update(kwargs)
+        kwargs = skwargs
         with open(in_name, 'rb') as f:
             data = f.read()
         return data
 
     def file_writer(self, data, outname, **kwargs):
+        # Allow overriding of self.kwargs by **kwargs
+        skwargs = self.kwargs.copy()
+        skwargs.update(kwargs)
+        kwargs = skwargs
         with open(outname, 'wb') as f:
             f.write(data)
         return outname
 
     def data_process_meta_create(self, data, **kwargs):
+        # Allow overriding of self.kwargs by **kwargs
+        skwargs = self.kwargs.copy()
+        skwargs.update(kwargs)
+        kwargs = skwargs
         (data, kwargs) = self.pre_process(data, **kwargs)
         if data is None:
             return(None, {})
@@ -265,6 +287,10 @@ class BigMultiPipe():
     def pre_process(self, data,
                     pre_process_list=None,
                     **kwargs):
+        # Allow overriding of self.kwargs by **kwargs
+        skwargs = self.kwargs.copy()
+        skwargs.update(kwargs)
+        kwargs = skwargs
         if pre_process_list is None:
             pre_process_list = []
         pre_process_list = self.pre_process_list + pre_process_list
@@ -277,11 +303,19 @@ class BigMultiPipe():
         return (data, kwargs)
 
     def data_process(self, data, **kwargs):
+        # Allow overriding of self.kwargs by **kwargs
+        skwargs = self.kwargs.copy()
+        skwargs.update(kwargs)
+        kwargs = skwargs
         return data
 
     def meta_create(self, data,
                     post_process_list=None,
                     **kwargs):
+        # Allow overriding of self.kwargs by **kwargs
+        skwargs = self.kwargs.copy()
+        skwargs.update(kwargs)
+        kwargs = skwargs
         if post_process_list is None:
             post_process_list = self.post_process_list
         meta = {}
@@ -297,6 +331,10 @@ class BigMultiPipe():
                        create_outdir=None,
                        outname_append=None,
                        **kwargs):
+        # Allow overriding of self.kwargs by **kwargs
+        skwargs = self.kwargs.copy()
+        skwargs.update(kwargs)
+        kwargs = skwargs
         if outdir is None:
             outdir = self.outdir
         if create_outdir is None:

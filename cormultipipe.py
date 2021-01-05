@@ -22,12 +22,10 @@ import pandas as pd
 from astropy import log
 from astropy import units as u
 from astropy.io import fits
-from astropy.nddata import CCDData, StdDevUncertainty
+from astropy.nddata import CCDData
 from astropy.table import QTable
 from astropy.time import Time, TimeDelta
 from astropy.stats import mad_std, biweight_location
-from astropy.visualization import SqrtStretch
-from astropy.visualization.mpl_normalize import ImageNormalize
 
 from photutils import Background2D, MedianBackground
 
@@ -176,6 +174,14 @@ min_num_flats = 3
 # Accept as match darks with this much more exposure time
 dark_exp_margin = 3
 
+# Number of pixels to expand the ND filter over what CorObsData finds.
+# This is the negative of the CorObsData edge_mask parameter, since
+# that is designed to mask pixels inside the ND filter to make
+# centering of object more reliable
+nd_edge_expand = 40
+
+######### CorMultiPipe object
+
 class CorMultiPipe(CCDMultiPipe):
     def __init__(self,
                  calibration=None,
@@ -192,6 +198,10 @@ class CorMultiPipe(CCDMultiPipe):
 
     def pre_process(self, data, **kwargs):
         """Add full-frame check permanently to pipeline"""
+        # Allow overriding of self.kwargs by **kwargs
+        skwargs = self.kwargs.copy()
+        skwargs.update(kwargs)
+        kwargs = skwargs
         s = data.shape
         # Note Pythonic C index ordering
         if s != (self.naxis2, self.naxis1):
@@ -202,6 +212,10 @@ class CorMultiPipe(CCDMultiPipe):
                      calibration=None,
                      auto=None,
                      **kwargs):
+        # Allow overriding of self.kwargs by **kwargs
+        skwargs = self.kwargs.copy()
+        skwargs.update(kwargs)
+        kwargs = skwargs
         if calibration is None:
             calibration = self.calibration
         if auto is None:
@@ -212,131 +226,132 @@ class CorMultiPipe(CCDMultiPipe):
                            **kwargs)
         return data
 
-def add_history(header, text='', caller=1):
-    """Add a HISTORY card to a FITS header with the caller's name inserted 
-
-    Parameters
-    ----------
-    header : astropy.fits.Header object
-        Header to write HISTORY into.  No default.
-
-    text : str
-        String to write.  Default '' indicates FITS-formatted current
-        time will be used 
-
-    caller : int or str
-        If int, number of levels to go up the call stack to get caller
-        name.  If str, string to use for caller name
-
-    Raises
-    ------
-        ValueError if header not astropy.io.fits.Header
-
-"""
-
-    # if not isinstance(header, fits.Header):
-    #     raise ValueError('Supply a valid FITS header object')
-
-    # If not supplied, get our caller name from the stack
-    # http://stackoverflow.com/questions/900392/getting-the-caller-function-name-inside-another-function-in-python
-    # https://docs.python.org/3.6/library/inspect.html
-    if type(caller) == int:
-        try:
-            caller = inspect.stack()[caller][3]
-        except IndexError:
-            caller = 'unknown'
-    elif type(caller) != str:
-        raise TypeError('Type of caller must be int or str')
-
-    # If no text is supplied, put in the date in FITS format
-    if text == '':
-        now = Time.now()
-        now.format = 'fits'
-        text = now.value
-
-    towrite = '(' + caller + ')' + ' ' + text
-    # astropy.io.fits automatically wraps long entries
-    #if len('HISTORY ') + len(towrite) > 80:
-    #    log.warning('Truncating long HISTORY card: ' + towrite)
-
-    header['HISTORY'] = towrite
-    return
-
-def get_dirs_dates(directory,
-                   filt_list=None,
-                   start=None,
-                   stop=None):
-    """Starting a root directory "directory," returns list of tuples
-    (subdir, date) sorted by date.  Handles two cases of directory
-    date formatting YYYYMMDD (ACP) and YYYY-MM-DD (MaxIm)
-
-    Parameters
-    ----------
-    directory : string
-        Directory in which to look for subdirectories
-    filt_list : list of strings 
-        Used to filter out bad directories (e.g. ["cloudy", "bad"]
-        will omit listing of, e.g., 2018-02-02_cloudy and
-        2018-02-03_bad_focus) 
-    start : string YYYY-MM-DD
-        Start date (inclusive).  Default = first date
-    stop : string YYYY-MM-DD
-        Stop date (inclusive).  Default = last date
-
+######### CorMultiPipe pre- and post-processing routines
+def full_frame(im,
+               naxis1=sx694_naxis1,
+               naxis2=sx694_naxis2,
+               **kwargs):
+    """CorMultiPipe pre-processing routine to select full-frame images (currently permanently installed into CorMultiPipe.pre_process) 
     """
-    assert os.path.isdir(directory)
-    fulldirs = [os.path.join(directory, d) for d in os.listdir(directory)]
-    # Filter out bad directories first
-    dirs = [os.path.basename(d) for d in fulldirs
-            if (not os.path.islink(d)
-                and os.path.isdir(d)
-                and (filt_list is None
-                     or not np.any([filt in d for filt in filt_list])))]
-    # Prepare to pythonically loop through date formats, trying each on 
-    date_formats = ["%Y-%m-%d", "%Y%m%d"]
-    ddlist = []
-    for thisdir in dirs:
-        d = thisdir
-        dirfail = True
-        for idf in date_formats:
-            # The date formats are two characters shorter than the
-            # length of the strings I am looking for (%Y is two
-            # shorter than YYYY, but %M is the same as MM, etc.)
-            d = d[0:min(len(d),len(idf)+2)]
-            try:
-                thisdate = datetime.datetime.strptime(d, idf)
-                ddlist.append((thisdir, thisdate))
-                dirfail = False
-            except:
-                pass
-        if dirfail:
-            pass
-            #log.debug('Skipping non-date formatted directory: ' + thisdir)
-    # Thanks to https://stackoverflow.com/questions/9376384/sort-a-list-of-tuples-depending-on-two-elements
-    if len(ddlist) == 0:
-        return []
-    ddsorted = sorted(ddlist, key=lambda e:e[1])
-    if start is None:
-        start = ddsorted[0][1]
-    elif isinstance(start, str):
-        start = datetime.datetime.strptime(start, "%Y-%m-%d")
-    elif isinstance(start, Time):
-        start = start.datetime
-    if stop is None:
-        stop = ddsorted[-1][1]
-    elif isinstance(stop, str):
-        stop = datetime.datetime.strptime(stop, "%Y-%m-%d")
-    elif isinstance(stop, Time):
-        stop = stop.datetime
-    if start > stop:
-        log.warning('start date {} > stop date {}, returning empty list'.format(start, stop))
-        return []
-    ddsorted = [dd for dd in ddsorted
-                if start <= dd[1] and dd[1] <= stop]
-    dirs, dates = zip(*ddsorted)
-    dirs = [os.path.join(directory, d) for d in dirs]
-    return list(zip(dirs, dates))
+    s = im.shape
+    # Note Pythonic C index ordering
+    if s != (naxis2, naxis1):
+        return (None, {})
+    return (im, {})
 
+def light_image(im, light_tolerance=3, **kwargs):
+    """CorMultiPipe pre-processing routine to reject light-contaminated bias & dark images
+    """
+    s = im.shape
+    m = np.asarray(s)/2 # Middle of CCD
+    q = np.asarray(s)/4 # 1/4 point
+    m = m.astype(int)
+    q = q.astype(int)
+    # --> check lowest y too, since large filters go all the
+    # --> way to the edge See 20200428 dawn biases
+    dark_patch = im[m[0]-50:m[0]+50, 0:100]
+    light_patch = im[m[0]-50:m[0]+50, q[1]:q[1]+100]
+    mdp = np.median(dark_patch)
+    mlp = np.median(light_patch)
+    if (np.median(light_patch) - np.median(dark_patch) > light_tolerance):
+        log.debug('light, dark patch medians ({:.4f}, {:.4f})'.format(mdp, mlp))
+        return (None, {})
+    return (im, {})
+
+def mask_above_key(ccd_in, pipe_meta, key=None, margin=0.1, **kwargs):
+    """CorMultiPipe post-processing routine to mask pixels > input key
+    """
+    if key is None:
+        raise ValueError('key must be specified')
+    masklevel = ccd_in.meta.get(key.lower())
+    if masklevel is None:
+        return ccd, {}
+    ccd = ccd_in.copy()
+    # Saturation level is subject to overscan subtraction and
+    # multiplication by gain, so don't do strict = testing, but give
+    # ourselves a little margin.
+    mask = ccd.data >= masklevel - margin
+    n_masked = np.count_nonzero(mask)
+    if n_masked > 0:
+        log.info(f'Masking {n_masked} pixels above {key}')
+    if len(key) > 6:
+        h = 'HIERARCH '
+    else:
+        h = ''
+    n_masked_key = h + 'N_' + key
+    ccd.meta[n_masked_key] = (n_masked, f'masked pixels > {key}')
+    # Avoid creating a mask of all Falses & supplement any existing mask
+    if n_masked > 0:
+        if ccd.mask is None:
+            ccd.mask = mask
+        else:
+            ccd.mask = ccd.mask + mask
+    return ccd, {n_masked_key: n_masked}
+
+def mask_nonlin_sat(ccd, pipe_meta, margin=0.1, **kwargs):
+    """CorMultiPipe post-processing routine to mask pixels > NONLIN and SATLEVEL
+    """
+    ccd, meta = mask_above_key(ccd, pipe_meta, key='SATLEVEL')
+    ccd, nonlin_meta = mask_above_key(ccd, pipe_meta, key='NONLIN')
+    meta.update(nonlin_meta)
+    return ccd, meta
+    #ccd, pipe_meta = mask_above_key(ccd, pipe_meta, key='SATLEVEL')
+    #ccd, pipe_meta = mask_above_key(ccd, pipe_meta, key='NONLIN')
+    #return ccd, pipe_meta
+
+def jd_meta(ccd, pipe_meta, **kwargs):
+    """CorMultiPipe post-processing routine to return JD
+    """
+    tm = Time(ccd.meta['DATE-OBS'], format='fits')
+    return (ccd, {'jd': tm.jd})
+
+def bias_stats(ccd, pipe_meta, gain=sx694_gain, **kwargs):
+    """CorMultiPipe post-processing routine for bias_combine
+    Returns dictionary of bias statistics for pandas dataframe
+    """
+    im = ccd.data
+    hdr = ccd.meta
+    # Calculate readnoise.  This is time-consuming
+    diffs2 = (im[1:] - im[0:-1])**2
+    rdnoise = np.sqrt(biweight_location(diffs2))
+    # Skip uncertainty creation, since it is not used in any
+    # subsequent calcs
+    #uncertainty = np.multiply(rdnoise, np.ones(im.shape))
+    #ccd.uncertainty = StdDevUncertainty(uncertainty)
+    # Prepare to create a pandas data frame to track relevant
+    # quantities
+    tm = Time(ccd.meta['DATE-OBS'], format='fits')
+    ccdt = ccd.meta['CCD-TEMP']
+    tt = tm.tt.datetime
+    # We have already subtracted overscan, so add it back in where
+    # appropriate
+    median = hdr['OVERSCAN_MEDIAN']
+    stats = {'time': tt,
+             'ccdt': ccdt,
+             'median': median,
+             'mean': np.mean(im) + median,
+             'std': np.std(im)*gain,
+             'rdnoise': rdnoise*gain,
+             'min': np.min(im) + median,  
+             'max': np.max(im) + median}
+    return (ccd, {'stats': stats})
+
+def nd_filter_mask(ccd, pipe_meta, nd_edge_expand=nd_edge_expand, **kwargs):
+    """CorMultiPipe post-processing routine to mask ND filter
+    """
+    hdul = ccd.to_hdu()
+    obs_data = CorObsData(hdul, edge_mask=-nd_edge_expand)
+    # Capture our ND filter metadata
+    ccd.meta = hdul[0].header
+    mask = np.zeros(ccd.shape, bool)
+    mask[obs_data.ND_coords] = True
+    if ccd.mask is None:
+        ccd.mask = mask
+    else:
+        ccd.mask = ccd.mask + mask
+    return (ccd, {})
+
+######### cor_process routines
 def ccd_metadata(hdr_in,
                  camera_description=sx694_camera_description,
                  gain=sx694_gain,
@@ -396,531 +411,6 @@ def ccd_exp_correct(hdr_in,
         #add_history(hdr,
         #            'Corrected exposure time for SX694 MaxIm driver bug')
     return hdr
-
-def full_frame(im,
-               naxis1=sx694_naxis1,
-               naxis2=sx694_naxis2,
-               **kwargs):
-    """CorMultiPipe pre-processing routine to select full-frame images
-    """
-    s = im.shape
-    # Note Pythonic C index ordering
-    if s != (naxis2, naxis1):
-        return (None, {})
-    return (im, {})
-
-def light_image(im, light_tolerance=3, **kwargs):
-    """CorMultiPipe pre-processing routine to reject light-contaminated bias & dark images
-    """
-    s = im.shape
-    m = np.asarray(s)/2 # Middle of CCD
-    q = np.asarray(s)/4 # 1/4 point
-    m = m.astype(int)
-    q = q.astype(int)
-    # --> check lowest y too, since large filters go all the
-    # --> way to the edge See 20200428 dawn biases
-    dark_patch = im[m[0]-50:m[0]+50, 0:100]
-    light_patch = im[m[0]-50:m[0]+50, q[1]:q[1]+100]
-    mdp = np.median(dark_patch)
-    mlp = np.median(light_patch)
-    if (np.median(light_patch) - np.median(dark_patch) > light_tolerance):
-        log.debug('light, dark patch medians ({:.4f}, {:.4f})'.format(mdp, mlp))
-        return (None, {})
-    return (im, {})
-
-def mask_above(ccd_in, key, margin=0.1):
-    ccd = ccd_in.copy()
-    masklevel = ccd.meta[key]
-    # Saturation level is subject to overscan subtraction and
-    # multiplication by gain, so don't do strict = testing, but give
-    # ourselves a little margin.
-    mask = ccd.data >= masklevel - margin
-    n_masked = np.count_nonzero(mask)
-    if n_masked > 0:
-        log.info('Masking {} pixels above {}'.format(n_masked, key))
-    if len(key) > 6:
-        h = 'HIERARCH '
-    else:
-        h = ''
-    ccd.meta[h + 'N_' + key] \
-        = (n_masked, 'number of pixels > {}'.format(key))
-    if n_masked > 0:
-        # Avoid creating a mask of all Falses
-        ccd.mask = ccd.mask or mask
-    return ccd, n_masked
-
-def fname_by_imagetyp_ccdt_exp(directory=None,
-                               collection=None,
-                               subdirs=None,
-                               glob_include=None,
-                               imagetyp=None,
-                               dccdt_tolerance=dccdt_tolerance,
-                               debug=False):
-    """For a given IMAGETYP, returns a list of dictionaries with keys T (CCD-TEMP), EXPTIME, and fnames"""
-    assert imagetyp is not None
-    if subdirs is None:
-        subdirs = []
-    if glob_include is None:
-        # Trick to make loop on glob_include, below, pass None to
-        # ccdp.ImageFileCollection
-        glob_include = [None]
-    fdict_list = []
-    if collection is None:
-        # Prepare to call ourselves recursively to build up a list of
-        # fnames in the provided directory and optional subdirectories
-        if not os.path.isdir(directory):
-            # This is the end of our recursive line
-            return fdict_list
-        for sd in subdirs:
-            subdir = os.path.join(directory, sd)
-            sub_fdict_list = fname_by_imagetyp_ccdt_exp \
-                (subdir,
-                 imagetyp=imagetyp,
-                 glob_include=glob_include,
-                 dccdt_tolerance=dccdt_tolerance,
-                 debug=debug)
-            for sl in sub_fdict_list:
-                fdict_list.append(sl)
-        # After processing our subdirs, process 'directory.'
-        for gi in glob_include:
-            # Speed things up considerably by allowing globbing.  As
-            # per comment above, if None passed to glob_include, this
-            # runs once with None passed to ccdp.ImageFileCollection's
-            # glob_include
-            # Avoid anoying warning abotu empty collection
-            flist = glob.glob(os.path.join(directory, gi))
-            if len(flist) == 0:
-                continue
-            collection = ccdp.ImageFileCollection(directory,
-                                                  filenames=flist)
-            #collection = ccdp.ImageFileCollection(directory,
-            #                                      glob_include=gi)
-            # Call ourselves recursively, but using the code below,
-            # since collection is now defined
-            gi_fdict_list = fname_by_imagetyp_ccdt_exp \
-                (collection=collection,
-                 imagetyp=imagetyp,
-                 dccdt_tolerance=dccdt_tolerance,
-                 debug=debug)
-            for gi in gi_fdict_list:
-                fdict_list.append(gi)
-        # Here is the end of our recursive line if directory and
-        # optional subdirs were specified
-        return fdict_list
-    if collection.summary is None:
-        # We were probably called on a glob_include that yielded no results
-        return fdict_list
-
-    # If we made it here, we have a collection, possibly from calling
-    # ourselves recursively
-    our_imagetyp = collection.summary['imagetyp'] == imagetyp
-    narrow_to_imagetyp = collection.summary[our_imagetyp]
-    ts = narrow_to_imagetyp['ccd-temp']
-    # ccd-temp is recorded as a string.  Convert it to a number so
-    # we can sort +/- values properly
-    ts = np.asarray(ts)
-    # Get the sort indices so we can extract fnames in proper order
-    tsort_idx = np.argsort(ts)
-    # For ease of use, re-order everything in terms of tsort
-    ts = ts[tsort_idx]
-    narrow_to_imagetyp = narrow_to_imagetyp[tsort_idx]    
-    # Spot jumps in t and translate them into slices into ts
-    dts = ts[1:] - ts[0:-1]
-    jump = np.flatnonzero(dts > dccdt_tolerance)
-    tslices = np.append(0, jump+1)
-    # Whew!  This was a tricky one!
-    # https://stackoverflow.com/questions/509211/understanding-slice-notation
-    # showed that I needed None and explicit call to slice(), below,
-    # to be able to generate an array element in tslices that referred
-    # to the last array element in ts.  :-1 is the next to the last
-    # element because of how slices work.
-    tslices = np.append(tslices, None)
-    if debug:
-        print(ts)
-        print(dts)
-        print(tslices)
-    fdict_list = []
-    for it in range(len(tslices)-1):
-        these_ts = ts[slice(tslices[it], tslices[it+1])]
-        mean_ccdt = np.mean(these_ts)
-        # Create a new summary Table that inlcudes just these Ts
-        narrow_to_t = narrow_to_imagetyp[tslices[it]:tslices[it+1]]
-        exps = narrow_to_t['exptime']
-        # These are sorted by increasing exposure time
-        ues = np.unique(exps)
-        for ue in ues:
-            exp_idx = np.flatnonzero(exps == ue)
-            files = narrow_to_t['file'][exp_idx]
-            full_files = [os.path.join(collection.location, f) for f in files]
-            fdict_list.append({'directory': collection.location,
-                               'CCDT': mean_ccdt,
-                               'EXPTIME': ue,
-                               'fnames': full_files})
-    return fdict_list
-
-def jd_meta(ccd, pipe_meta, **kwargs):
-    tm = Time(ccd.meta['DATE-OBS'], format='fits')
-    return (ccd, {'jd': tm.jd})
-
-def bias_stats(ccd, pipe_meta, gain=sx694_gain, **kwargs):
-    """CorMultiPipe post-processing routine for bias_combine
-    Returns dictionary of bias statistics for pandas dataframe
-    """
-    im = ccd.data
-    hdr = ccd.meta
-    # Calculate readnoise.  This is time-consuming
-    diffs2 = (im[1:] - im[0:-1])**2
-    rdnoise = np.sqrt(biweight_location(diffs2))
-    # Skip uncertainty creation, since it is not used in any
-    # subsequent calcs
-    #uncertainty = np.multiply(rdnoise, np.ones(im.shape))
-    #ccd.uncertainty = StdDevUncertainty(uncertainty)
-    # Prepare to create a pandas data frame to track relevant
-    # quantities
-    tm = Time(ccd.meta['DATE-OBS'], format='fits')
-    ccdt = ccd.meta['CCD-TEMP']
-    tt = tm.tt.datetime
-    # We have already subtracted overscan, so add it back in where
-    # appropriate
-    median = hdr['OVERSCAN_MEDIAN']
-    stats = {'time': tt,
-             'ccdt': ccdt,
-             'median': median,
-             'mean': np.mean(im) + median,
-             'std': np.std(im)*gain,
-             'rdnoise': rdnoise*gain,
-             'min': np.min(im) + median,  
-             'max': np.max(im) + median}
-    return (ccd, {'stats': stats})
-
-def bias_combine_one_fdict(fdict,
-                           outdir=calibration_root,
-                           calibration_scratch=calibration_scratch,
-                           keep_intermediate=False,
-                           show=False,
-                           min_num_biases=min_num_biases,
-                           dccdt_tolerance=dccdt_tolerance,
-                           camera_description=sx694_camera_description,
-                           gain=sx694_gain,
-                           satlevel=sx694_satlevel,
-                           readnoise=sx694_example_readnoise,
-                           readnoise_tolerance=sx694_readnoise_tolerance,
-                           gain_correct=False,
-                           num_processes=max_num_processes,
-                           mem_frac=max_mem_frac,
-                           ccddata_size=max_ccddata_size):
-
-    """Worker that allows the parallelization of calibrations taken at one
-    temperature, exposure time, filter, etc.
-
-
-    gain_correct : Boolean
-        Effects unit of stored images.  True: units of electron.
-        False: unit of ADU.  Default: False
-    """
-
-    fnames = fdict['fnames']
-    num_files = len(fnames)
-    mean_ccdt = fdict['CCDT']
-    directory = fdict['directory']
-    if num_files < min_num_biases:
-        log.debug(f"Not enough good biases found at CCDT = {mean_ccdt} C in {directory}")
-        return False
-
-    # Make a scratch directory that is the date of the first file.
-    # Not as fancy as the biases, but, hey, it is a scratch directory
-    tmp = ccddata_read(fnames[0])
-    tm = tmp.meta['DATE-OBS']
-    this_dateb1, _ = tm.split('T')
-    sdir = os.path.join(calibration_scratch, this_dateb1)
-
-    #mem = psutil.virtual_memory()
-    #num_files_can_fit = \
-    #    int(min(num_files,
-    #            mem.available*mem_frac/ccddata_size))
-    #num_can_process = min(num_processes, num_files_can_fit)
-    #print('bias_combine_one_fdict: num_processes = {}, mem_frac = {}, num_files= {}, num_files_can_fit = {}, num_can_process = {}'.format(num_processes, mem_frac, num_files, num_files_can_fit, num_can_process))
-
-    # Use CorMultiPipe to subtract the median from each bias and
-    # create a dict of stats for a pandas dataframe
-    cmp = CorMultiPipe(num_processes=num_processes,
-                       mem_frac=mem_frac,
-                       process_size=ccddata_size,
-                       outdir=sdir,
-                       create_outdir=True,
-                       overwrite=True,
-                       pre_process_list=[light_image],
-                       post_process_list=[bias_stats, jd_meta])
-    pout = cmp.pipeline(fnames, oscan=True)
-    pout, fnames = prune_pout(pout, fnames)
-    if len(pout) < min_num_biases:
-        log.debug(f"Not enough good biases {len(pout)} found at CCDT = {mean_ccdt} C in {directory}")
-        return False
-
-    out_fnames, pipe_meta = zip(*pout)
-    stats = [m['stats'] for m in pipe_meta]
-    jds = [m['jd'] for m in pipe_meta]
-
-    df = pd.DataFrame(stats)
-    tm = Time(np.mean(jds), format='jd')
-    this_date = tm.fits
-    this_dateb = this_date.split('T')[0]
-    if this_dateb != this_dateb1:
-        log.warning(f"first bias is on {this_dateb1} but average is {this_dateb}")
-
-    this_ccdt = '{:.1f}'.format(mean_ccdt)
-    f = plt.figure(figsize=[8.5, 11])
-
-    # In the absence of a formal overscan region, this is the best
-    # I can do
-    medians = df['median']
-    overscan = np.mean(medians)
-
-    ax = plt.subplot(6, 1, 1)
-    plt.title('CCDT = {} C on {}'.format(this_ccdt, this_dateb))
-    ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-    plt.plot(df['time'], df['ccdt'], 'k.')
-    plt.ylabel('CCDT (C)')
-
-    ax = plt.subplot(6, 1, 2)
-    ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-    plt.plot(df['time'], df['max'], 'k.')
-    plt.ylabel('max (ADU)')
-
-    ax = plt.subplot(6, 1, 3)
-    ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.tick_params(which='both', bottom=True, top=True, left=True, right=False)
-    plt.plot(df['time'], df['median'], 'k.')
-    plt.plot(df['time'], df['mean'], 'r.')
-    plt.ylabel('median & mean (ADU)')
-    plt.legend(['median', 'mean'])
-    secax = ax.secondary_yaxis \
-        ('right',
-         functions=(lambda adu: (adu - overscan)*gain,
-                    lambda e: e/gain + overscan))
-    secax.set_ylabel('Electrons')
-
-    ax=plt.subplot(6, 1, 4)
-    ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-    plt.plot(df['time'], df['min'], 'k.')
-    plt.ylabel('min (ADU)')
-
-    ax=plt.subplot(6, 1, 5)
-    ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-    plt.plot(df['time'], df['std'], 'k.')
-    plt.ylabel('std (electron)')
-
-    ax=plt.subplot(6, 1, 6)
-    ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-    plt.plot(df['time'], df['rdnoise'], 'k.')
-    plt.ylabel('rdnoise (electron)')
-
-    plt.gcf().autofmt_xdate()
-
-    # At the 0.5 deg level, there seems to be no correlation between T and bias level
-    #plt.plot(df['ccdt'], df['mean'], 'k.')
-    #plt.xlabel('ccdt')
-    #plt.ylabel('mean')
-    #plt.show()
-        
-    # Make sure outdir exists
-    os.makedirs(outdir, exist_ok=True)
-    outbase = os.path.join(outdir, this_dateb + '_ccdT_' + this_ccdt)
-    out_fname = outbase + '_combined_bias.fits'
-    plt.savefig((outbase + '_vs_time.png'), transparent=True)
-    if show:
-        plt.show()
-    plt.close()
-
-    # Do a sanity check of readnoise
-    av_rdnoise = np.mean(df['rdnoise'])            
-    if (np.abs(av_rdnoise/sx694_example_readnoise - 1)
-        > readnoise_tolerance):
-        log.warning('High readnoise {}, skipping {}'.format(av_rdnoise, out_fname))
-        return False
-
-    # Use ccdp.combine since it enables memory management by breaking
-    # up images to smaller chunks (better than throwing images away).
-    # --> eventually it would be great to parallelize this primitive,
-    # since it is very slow.  In the mean time I have parallelized all
-    # the higher steps!
-    mem = psutil.virtual_memory()
-    im = \
-        ccdp.combine(list(out_fnames),
-                     method='average',
-                     sigma_clip=True,
-                     sigma_clip_low_thresh=5,
-                     sigma_clip_high_thresh=5,
-                     sigma_clip_func=np.ma.median,
-                     sigma_clip_dev_func=mad_std,
-                     mem_limit=mem.available*mem_frac)
-    im.meta = ccd_metadata(im.meta)
-    if gain_correct:
-        im = ccdp.gain_correct(im, gain*u.electron/u.adu)
-        im_gain = 1
-    else:
-        im_gain = gain
-    im, _ = mask_above(im, 'SATLEVEL')
-    im, _ = mask_above(im, 'NONLIN')
-        
-    # Collect image metadata.  For some reason, masked pixels
-    # aren't ignored by std, etc. even though they output masked
-    # arrays (which is annoying in its own right -- see example
-    # commented mean).  So just create a new array, if needed, and
-    # only put into it the good pixels
-    if im.mask is None:
-        # This is not a copy!  But don't worry, we don't change tim,
-        # just collect info from it
-        tim = im
-    else:
-        # This is a new array with fewer elements.  We will collect
-        # stats and write the original im, below
-        tim = im.data[im.mask == 0]
-    std =  np.std(tim)*im_gain
-    med =  np.median(tim)*im_gain
-    #mean = np.asscalar(np.mean(tim).data  )
-    mean = np.mean(tim)*im_gain
-    tmin = np.min(tim)*im_gain
-    tmax = np.max(tim)*im_gain
-    print('std, mean, med, tmin, tmax (electron)')
-    print(std, mean, med, tmin, tmax)
-    im.meta['DATE-OBS'] = (this_date, 'Average of DATE-OBS from set of biases')
-    im.meta['CCD-TEMP'] = (mean_ccdt, 'Average CCD temperature for combined biases')
-    im.meta['RDNOISE'] = (av_rdnoise, 'Measured readnoise (electron)')
-    im.meta['STD'] = (std, 'Standard deviation of image (electron)')
-    im.meta['MEDIAN'] = (med, 'Median of image (electron)')
-    im.meta['MEAN'] = (mean, 'Mean of image (electron)')
-    im.meta['MIN'] = (tmin, 'Min of image (electron)')
-    im.meta['MAX'] = (tmax, 'Max of image (electron)')
-    im.meta['HIERARCH OVERSCAN_VALUE'] = (overscan, 'Average of raw bias medians (ADU)')
-    im.meta['HIERARCH SUBTRACT_OVERSCAN'] = (True, 'Overscan has been subtracted')
-    im.meta['NCOMBINE'] = (len(out_fnames), 'Number of biases combined')
-    # Record each filename
-    for i, f in enumerate(fnames):
-        im.meta['FILE{0:02}'.format(i)] = f
-    add_history(im.meta,
-                'Combining NCOMBINE biases indicated in FILENN')
-    add_history(im.meta,
-                'SATLEVEL and NONLIN apply to pre-overscan subtraction')
-    # Leave these large for fast calculations downstream and make
-    # final results that primarily sit on disk in bulk small
-    #im.data = im.data.astype('float32')
-    #im.uncertainty.array = im.uncertainty.array.astype('float32')
-    im.write(out_fname, overwrite=True)
-    # Always display image in electrons
-    impl = plt.imshow(im.multiply(im_gain), origin='lower',
-                      cmap=plt.cm.gray,
-                      filternorm=0, interpolation='none',
-                      vmin=med-std, vmax=med+std)
-    plt.title('CCDT = {} C on {} (electrons)'.format(this_ccdt, this_dateb))
-    plt.savefig((outbase + '_combined_bias.png'), transparent=True)
-    if show:
-        plt.show()
-    plt.close()
-    if not keep_intermediate:
-        for f in out_fnames:
-            try:
-                os.remove(f)
-            except Exception as e:
-                # We do not expect this, since we created these with
-                # our local process
-                log.debug(f'Unexpected!  Remove {f} failed: ' + str(e))
-        # These we expect to fail until all of our other parallel
-        # processes have finished
-        try:
-            os.rmdir(sdir)
-        except Exception as e:
-            pass
-        try:
-            os.rmdir(calibration_scratch)
-        except Exception as e:
-            pass
-                
-def bias_combine(directory=None,
-                 collection=None,
-                 subdirs=calibration_subdirs,
-                 glob_include=bias_glob,
-                 dccdt_tolerance=dccdt_tolerance,
-                 num_processes=max_num_processes,
-                 mem_frac=max_mem_frac,
-                 num_calibration_files=num_calibration_files,
-                 max_ccddata_size=max_ccddata_size,
-                 **kwargs):
-    """Combine biases in a directory
-
-    Parameters
-    ----------
-    directory : string
-        Directory in which to find biases.  Default: ``None``
-
-    collection : ccdp.Collection
-        Collection of directory in which to find calibration data.
-        Default: ``None``
-
-    subdirs : list
-        List of subdirectories in which to search for calibration
-        data.  Default: :value:`calibration_subdirs`
-
-    glob_include : list
-        List of `glob` expressions for calibration filenames
-
-    dccdt_tolerance : float
-        During the creation of master biases and darks files, are
-        grouped by CCD temperature (ccdt).  This is the change in
-        temperature seen as a function of time that is used to trigger
-        the creation of a new group
-
-    num_processes : int
-        Number of processes available to this task for
-        multiprocessing.  Default: :value:`max_num_processes`
-
-    mem_frac : float
-        Fraction of memory available to this task.  Default:
-        :value:`max_mem_frac`
-
-    **kwargs passed to bias_combine_one_fdict
-
-    """
-    fdict_list = \
-        fname_by_imagetyp_ccdt_exp(directory=directory,
-                                   collection=collection,
-                                   subdirs=subdirs,
-                                   imagetyp='BIAS',
-                                   glob_include=glob_include,
-                                   dccdt_tolerance=dccdt_tolerance)
-    if collection is not None:
-        # Make sure 'directory' is a valid variable
-        directory = collection.location
-    nfdicts = len(fdict_list)
-    if nfdicts == 0:
-        log.debug('No biases found in: ' + directory)
-        return False
-
-    one_fdict_size = num_calibration_files * max_ccddata_size
-    our_num_processes = num_can_process(nfdicts,
-                                        num_processes=num_processes,
-                                        mem_frac=mem_frac,
-                                        process_size=one_fdict_size)
-
-    num_subprocesses = int(num_processes / our_num_processes)
-    subprocess_mem_frac = mem_frac / our_num_processes
-    log.debug('bias_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
-
-    wwk = WorkerWithKwargs(bias_combine_one_fdict,
-                           num_processes=num_subprocesses,
-                           mem_frac=subprocess_mem_frac,
-                           **kwargs)
-    if nfdicts == 1:
-        for fdict in fdict_list:
-                wwk.worker(fdict)
-    else:
-        with NoDaemonPool(processes=our_num_processes) as p:
-            p.map(wwk.worker, fdict_list)
 
 def hist_of_im(im, binsize=1, show=False):
     """Returns a tuple of the histogram of image and index into *centers* of
@@ -1540,18 +1030,514 @@ def cor_process(ccd,
         if min_value is True:
             min_value = min_value_key.value_from(master_flat.meta)
             flat_correct_keyword['FLATCOR'] += f', min_value={min_value}'
-        print(f'min_value is {min_value}')
         flat_correct_keyword['FLATCOR'] += f', norm_value={flat_norm_value}'
         nccd = ccdp.flat_correct(nccd, master_flat,
                                  min_value=min_value,
                                  norm_value=flat_norm_value,
                                  add_keyword=flat_correct_keyword)
+        for i in range(2):
+            for j in range(2):
+                ndpar = master_flat.meta.get(f'ndpar{i}{j}')
+                if ndpar is None:
+                    break
+                ndpar_comment = master_flat.meta.comments[f'NDPAR{i}{j}']
+                ndpar_comment = 'FLAT ' + ndpar_comment
+                nccd.meta[f'FNDPAR{i}{j}'] = (ndpar, ndpar_comment)
 
     # apply the gain correction only at the end if gain_corrected is False
     if gain is not None and not gain_corrected:
         nccd = ccdp.gain_correct(nccd, gain)
 
     return nccd
+
+####### bias, dark, and flat generation routines
+def add_history(header, text='', caller=1):
+    """Add a HISTORY card to a FITS header with the caller's name inserted 
+
+    Parameters
+    ----------
+    header : astropy.fits.Header object
+        Header to write HISTORY into.  No default.
+
+    text : str
+        String to write.  Default '' indicates FITS-formatted current
+        time will be used 
+
+    caller : int or str
+        If int, number of levels to go up the call stack to get caller
+        name.  If str, string to use for caller name
+
+    Raises
+    ------
+        ValueError if header not astropy.io.fits.Header
+
+"""
+
+    # if not isinstance(header, fits.Header):
+    #     raise ValueError('Supply a valid FITS header object')
+
+    # If not supplied, get our caller name from the stack
+    # http://stackoverflow.com/questions/900392/getting-the-caller-function-name-inside-another-function-in-python
+    # https://docs.python.org/3.6/library/inspect.html
+    if type(caller) == int:
+        try:
+            caller = inspect.stack()[caller][3]
+        except IndexError:
+            caller = 'unknown'
+    elif type(caller) != str:
+        raise TypeError('Type of caller must be int or str')
+
+    # If no text is supplied, put in the date in FITS format
+    if text == '':
+        now = Time.now()
+        now.format = 'fits'
+        text = now.value
+
+    towrite = '(' + caller + ')' + ' ' + text
+    # astropy.io.fits automatically wraps long entries
+    #if len('HISTORY ') + len(towrite) > 80:
+    #    log.warning('Truncating long HISTORY card: ' + towrite)
+
+    header['HISTORY'] = towrite
+    return
+
+def fname_by_imagetyp_ccdt_exp(directory=None,
+                               collection=None,
+                               subdirs=None,
+                               glob_include=None,
+                               imagetyp=None,
+                               dccdt_tolerance=dccdt_tolerance,
+                               debug=False):
+    """For a given IMAGETYP, returns a list of dictionaries with keys T (CCD-TEMP), EXPTIME, and fnames"""
+    assert imagetyp is not None
+    if subdirs is None:
+        subdirs = []
+    if glob_include is None:
+        # Trick to make loop on glob_include, below, pass None to
+        # ccdp.ImageFileCollection
+        glob_include = [None]
+    fdict_list = []
+    if collection is None:
+        # Prepare to call ourselves recursively to build up a list of
+        # fnames in the provided directory and optional subdirectories
+        if not os.path.isdir(directory):
+            # This is the end of our recursive line
+            return fdict_list
+        for sd in subdirs:
+            subdir = os.path.join(directory, sd)
+            sub_fdict_list = fname_by_imagetyp_ccdt_exp \
+                (subdir,
+                 imagetyp=imagetyp,
+                 glob_include=glob_include,
+                 dccdt_tolerance=dccdt_tolerance,
+                 debug=debug)
+            for sl in sub_fdict_list:
+                fdict_list.append(sl)
+        # After processing our subdirs, process 'directory.'
+        for gi in glob_include:
+            # Speed things up considerably by allowing globbing.  As
+            # per comment above, if None passed to glob_include, this
+            # runs once with None passed to ccdp.ImageFileCollection's
+            # glob_include
+            # Avoid anoying warning abotu empty collection
+            flist = glob.glob(os.path.join(directory, gi))
+            if len(flist) == 0:
+                continue
+            collection = ccdp.ImageFileCollection(directory,
+                                                  filenames=flist)
+            #collection = ccdp.ImageFileCollection(directory,
+            #                                      glob_include=gi)
+            # Call ourselves recursively, but using the code below,
+            # since collection is now defined
+            gi_fdict_list = fname_by_imagetyp_ccdt_exp \
+                (collection=collection,
+                 imagetyp=imagetyp,
+                 dccdt_tolerance=dccdt_tolerance,
+                 debug=debug)
+            for gi in gi_fdict_list:
+                fdict_list.append(gi)
+        # Here is the end of our recursive line if directory and
+        # optional subdirs were specified
+        return fdict_list
+    if collection.summary is None:
+        # We were probably called on a glob_include that yielded no results
+        return fdict_list
+
+    # If we made it here, we have a collection, possibly from calling
+    # ourselves recursively
+    our_imagetyp = collection.summary['imagetyp'] == imagetyp
+    narrow_to_imagetyp = collection.summary[our_imagetyp]
+    ts = narrow_to_imagetyp['ccd-temp']
+    # ccd-temp is recorded as a string.  Convert it to a number so
+    # we can sort +/- values properly
+    ts = np.asarray(ts)
+    # Get the sort indices so we can extract fnames in proper order
+    tsort_idx = np.argsort(ts)
+    # For ease of use, re-order everything in terms of tsort
+    ts = ts[tsort_idx]
+    narrow_to_imagetyp = narrow_to_imagetyp[tsort_idx]    
+    # Spot jumps in t and translate them into slices into ts
+    dts = ts[1:] - ts[0:-1]
+    jump = np.flatnonzero(dts > dccdt_tolerance)
+    tslices = np.append(0, jump+1)
+    # Whew!  This was a tricky one!
+    # https://stackoverflow.com/questions/509211/understanding-slice-notation
+    # showed that I needed None and explicit call to slice(), below,
+    # to be able to generate an array element in tslices that referred
+    # to the last array element in ts.  :-1 is the next to the last
+    # element because of how slices work.
+    tslices = np.append(tslices, None)
+    if debug:
+        print(ts)
+        print(dts)
+        print(tslices)
+    fdict_list = []
+    for it in range(len(tslices)-1):
+        these_ts = ts[slice(tslices[it], tslices[it+1])]
+        mean_ccdt = np.mean(these_ts)
+        # Create a new summary Table that inlcudes just these Ts
+        narrow_to_t = narrow_to_imagetyp[tslices[it]:tslices[it+1]]
+        exps = narrow_to_t['exptime']
+        # These are sorted by increasing exposure time
+        ues = np.unique(exps)
+        for ue in ues:
+            exp_idx = np.flatnonzero(exps == ue)
+            files = narrow_to_t['file'][exp_idx]
+            full_files = [os.path.join(collection.location, f) for f in files]
+            fdict_list.append({'directory': collection.location,
+                               'CCDT': mean_ccdt,
+                               'EXPTIME': ue,
+                               'fnames': full_files})
+    return fdict_list
+
+def bias_combine_one_fdict(fdict,
+                           outdir=calibration_root,
+                           calibration_scratch=calibration_scratch,
+                           keep_intermediate=False,
+                           show=False,
+                           min_num_biases=min_num_biases,
+                           dccdt_tolerance=dccdt_tolerance,
+                           camera_description=sx694_camera_description,
+                           gain=sx694_gain,
+                           satlevel=sx694_satlevel,
+                           readnoise=sx694_example_readnoise,
+                           readnoise_tolerance=sx694_readnoise_tolerance,
+                           gain_correct=False,
+                           num_processes=max_num_processes,
+                           mem_frac=max_mem_frac,
+                           ccddata_size=max_ccddata_size):
+
+    """Worker that allows the parallelization of calibrations taken at one
+    temperature, exposure time, filter, etc.
+
+
+    gain_correct : Boolean
+        Effects unit of stored images.  True: units of electron.
+        False: unit of ADU.  Default: False
+    """
+
+    fnames = fdict['fnames']
+    num_files = len(fnames)
+    mean_ccdt = fdict['CCDT']
+    directory = fdict['directory']
+    if num_files < min_num_biases:
+        log.debug(f"Not enough good biases found at CCDT = {mean_ccdt} C in {directory}")
+        return False
+
+    # Make a scratch directory that is the date of the first file.
+    # Not as fancy as the biases, but, hey, it is a scratch directory
+    tmp = ccddata_read(fnames[0])
+    tm = tmp.meta['DATE-OBS']
+    this_dateb1, _ = tm.split('T')
+    sdir = os.path.join(calibration_scratch, this_dateb1)
+
+    #mem = psutil.virtual_memory()
+    #num_files_can_fit = \
+    #    int(min(num_files,
+    #            mem.available*mem_frac/ccddata_size))
+    #num_can_process = min(num_processes, num_files_can_fit)
+    #print('bias_combine_one_fdict: num_processes = {}, mem_frac = {}, num_files= {}, num_files_can_fit = {}, num_can_process = {}'.format(num_processes, mem_frac, num_files, num_files_can_fit, num_can_process))
+
+    # Use CorMultiPipe to subtract the median from each bias and
+    # create a dict of stats for a pandas dataframe
+    cmp = CorMultiPipe(num_processes=num_processes,
+                       mem_frac=mem_frac,
+                       process_size=ccddata_size,
+                       outdir=sdir,
+                       create_outdir=True,
+                       overwrite=True,
+                       pre_process_list=[light_image],
+                       post_process_list=[bias_stats, jd_meta])
+    pout = cmp.pipeline(fnames, oscan=True)
+    pout, fnames = prune_pout(pout, fnames)
+    if len(pout) < min_num_biases:
+        log.debug(f"Not enough good biases {len(pout)} found at CCDT = {mean_ccdt} C in {directory}")
+        return False
+
+    out_fnames, pipe_meta = zip(*pout)
+    stats = [m['stats'] for m in pipe_meta]
+    jds = [m['jd'] for m in pipe_meta]
+
+    df = pd.DataFrame(stats)
+    tm = Time(np.mean(jds), format='jd')
+    this_date = tm.fits
+    this_dateb = this_date.split('T')[0]
+    if this_dateb != this_dateb1:
+        log.warning(f"first bias is on {this_dateb1} but average is {this_dateb}")
+
+    this_ccdt = '{:.1f}'.format(mean_ccdt)
+    f = plt.figure(figsize=[8.5, 11])
+
+    # In the absence of a formal overscan region, this is the best
+    # I can do
+    medians = df['median']
+    overscan = np.mean(medians)
+
+    ax = plt.subplot(6, 1, 1)
+    plt.title('CCDT = {} C on {}'.format(this_ccdt, this_dateb))
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
+    plt.plot(df['time'], df['ccdt'], 'k.')
+    plt.ylabel('CCDT (C)')
+
+    ax = plt.subplot(6, 1, 2)
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
+    plt.plot(df['time'], df['max'], 'k.')
+    plt.ylabel('max (ADU)')
+
+    ax = plt.subplot(6, 1, 3)
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax.tick_params(which='both', bottom=True, top=True, left=True, right=False)
+    plt.plot(df['time'], df['median'], 'k.')
+    plt.plot(df['time'], df['mean'], 'r.')
+    plt.ylabel('median & mean (ADU)')
+    plt.legend(['median', 'mean'])
+    secax = ax.secondary_yaxis \
+        ('right',
+         functions=(lambda adu: (adu - overscan)*gain,
+                    lambda e: e/gain + overscan))
+    secax.set_ylabel('Electrons')
+
+    ax=plt.subplot(6, 1, 4)
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
+    plt.plot(df['time'], df['min'], 'k.')
+    plt.ylabel('min (ADU)')
+
+    ax=plt.subplot(6, 1, 5)
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
+    plt.plot(df['time'], df['std'], 'k.')
+    plt.ylabel('std (electron)')
+
+    ax=plt.subplot(6, 1, 6)
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
+    plt.plot(df['time'], df['rdnoise'], 'k.')
+    plt.ylabel('rdnoise (electron)')
+
+    plt.gcf().autofmt_xdate()
+
+    # At the 0.5 deg level, there seems to be no correlation between T and bias level
+    #plt.plot(df['ccdt'], df['mean'], 'k.')
+    #plt.xlabel('ccdt')
+    #plt.ylabel('mean')
+    #plt.show()
+        
+    # Make sure outdir exists
+    os.makedirs(outdir, exist_ok=True)
+    outbase = os.path.join(outdir, this_dateb + '_ccdT_' + this_ccdt)
+    out_fname = outbase + '_combined_bias.fits'
+    plt.savefig((outbase + '_vs_time.png'), transparent=True)
+    if show:
+        plt.show()
+    plt.close()
+
+    # Do a sanity check of readnoise
+    av_rdnoise = np.mean(df['rdnoise'])            
+    if (np.abs(av_rdnoise/sx694_example_readnoise - 1)
+        > readnoise_tolerance):
+        log.warning('High readnoise {}, skipping {}'.format(av_rdnoise, out_fname))
+        return False
+
+    # Use ccdp.combine since it enables memory management by breaking
+    # up images to smaller chunks (better than throwing images away).
+    # --> eventually it would be great to parallelize this primitive,
+    # since it is very slow.  In the mean time I have parallelized all
+    # the higher steps!
+    mem = psutil.virtual_memory()
+    im = \
+        ccdp.combine(list(out_fnames),
+                     method='average',
+                     sigma_clip=True,
+                     sigma_clip_low_thresh=5,
+                     sigma_clip_high_thresh=5,
+                     sigma_clip_func=np.ma.median,
+                     sigma_clip_dev_func=mad_std,
+                     mem_limit=mem.available*mem_frac)
+    im.meta = ccd_metadata(im.meta)
+    if gain_correct:
+        im = ccdp.gain_correct(im, gain*u.electron/u.adu)
+        im_gain = 1
+    else:
+        im_gain = gain
+    im, _ = mask_above_key(im, {}, key='SATLEVEL')
+    im, _ = mask_above_key(im, {}, key='NONLIN')
+        
+    # Collect image metadata.  For some reason, masked pixels
+    # aren't ignored by std, etc. even though they output masked
+    # arrays (which is annoying in its own right -- see example
+    # commented mean).  So just create a new array, if needed, and
+    # only put into it the good pixels
+    if im.mask is None:
+        # This is not a copy!  But don't worry, we don't change tim,
+        # just collect info from it
+        tim = im
+    else:
+        # This is a new array with fewer elements.  We will collect
+        # stats and write the original im, below
+        tim = im.data[im.mask == 0]
+    std =  np.std(tim)*im_gain
+    med =  np.median(tim)*im_gain
+    #mean = np.asscalar(np.mean(tim).data  )
+    mean = np.mean(tim)*im_gain
+    tmin = np.min(tim)*im_gain
+    tmax = np.max(tim)*im_gain
+    print('std, mean, med, tmin, tmax (electron)')
+    print(std, mean, med, tmin, tmax)
+    im.meta['DATE-OBS'] = (this_date, 'Average of DATE-OBS from set of biases')
+    im.meta['CCD-TEMP'] = (mean_ccdt, 'Average CCD temperature for combined biases')
+    im.meta['RDNOISE'] = (av_rdnoise, 'Measured readnoise (electron)')
+    im.meta['STD'] = (std, 'Standard deviation of image (electron)')
+    im.meta['MEDIAN'] = (med, 'Median of image (electron)')
+    im.meta['MEAN'] = (mean, 'Mean of image (electron)')
+    im.meta['MIN'] = (tmin, 'Min of image (electron)')
+    im.meta['MAX'] = (tmax, 'Max of image (electron)')
+    im.meta['HIERARCH OVERSCAN_VALUE'] = (overscan, 'Average of raw bias medians (ADU)')
+    im.meta['HIERARCH SUBTRACT_OVERSCAN'] = (True, 'Overscan has been subtracted')
+    im.meta['NCOMBINE'] = (len(out_fnames), 'Number of biases combined')
+    # Record each filename
+    for i, f in enumerate(fnames):
+        im.meta['FILE{0:02}'.format(i)] = f
+    add_history(im.meta,
+                'Combining NCOMBINE biases indicated in FILENN')
+    add_history(im.meta,
+                'SATLEVEL and NONLIN apply to pre-overscan subtraction')
+    # Leave these large for fast calculations downstream and make
+    # final results that primarily sit on disk in bulk small
+    #im.data = im.data.astype('float32')
+    #im.uncertainty.array = im.uncertainty.array.astype('float32')
+    im.write(out_fname, overwrite=True)
+    # Always display image in electrons
+    impl = plt.imshow(im.multiply(im_gain), origin='lower',
+                      cmap=plt.cm.gray,
+                      filternorm=0, interpolation='none',
+                      vmin=med-std, vmax=med+std)
+    plt.title('CCDT = {} C on {} (electrons)'.format(this_ccdt, this_dateb))
+    plt.savefig((outbase + '_combined_bias.png'), transparent=True)
+    if show:
+        plt.show()
+    plt.close()
+    if not keep_intermediate:
+        for f in out_fnames:
+            try:
+                os.remove(f)
+            except Exception as e:
+                # We do not expect this, since we created these with
+                # our local process
+                log.debug(f'Unexpected!  Remove {f} failed: ' + str(e))
+        # These we expect to fail until all of our other parallel
+        # processes have finished
+        try:
+            os.rmdir(sdir)
+        except Exception as e:
+            pass
+        try:
+            os.rmdir(calibration_scratch)
+        except Exception as e:
+            pass
+                
+def bias_combine(directory=None,
+                 collection=None,
+                 subdirs=calibration_subdirs,
+                 glob_include=bias_glob,
+                 dccdt_tolerance=dccdt_tolerance,
+                 num_processes=max_num_processes,
+                 mem_frac=max_mem_frac,
+                 num_calibration_files=num_calibration_files,
+                 max_ccddata_size=max_ccddata_size,
+                 **kwargs):
+    """Combine biases in a directory
+
+    Parameters
+    ----------
+    directory : string
+        Directory in which to find biases.  Default: ``None``
+
+    collection : ccdp.Collection
+        Collection of directory in which to find calibration data.
+        Default: ``None``
+
+    subdirs : list
+        List of subdirectories in which to search for calibration
+        data.  Default: :value:`calibration_subdirs`
+
+    glob_include : list
+        List of `glob` expressions for calibration filenames
+
+    dccdt_tolerance : float
+        During the creation of master biases and darks files, are
+        grouped by CCD temperature (ccdt).  This is the change in
+        temperature seen as a function of time that is used to trigger
+        the creation of a new group
+
+    num_processes : int
+        Number of processes available to this task for
+        multiprocessing.  Default: :value:`max_num_processes`
+
+    mem_frac : float
+        Fraction of memory available to this task.  Default:
+        :value:`max_mem_frac`
+
+    **kwargs passed to bias_combine_one_fdict
+
+    """
+    fdict_list = \
+        fname_by_imagetyp_ccdt_exp(directory=directory,
+                                   collection=collection,
+                                   subdirs=subdirs,
+                                   imagetyp='BIAS',
+                                   glob_include=glob_include,
+                                   dccdt_tolerance=dccdt_tolerance)
+    if collection is not None:
+        # Make sure 'directory' is a valid variable
+        directory = collection.location
+    nfdicts = len(fdict_list)
+    if nfdicts == 0:
+        log.debug('No biases found in: ' + directory)
+        return False
+
+    one_fdict_size = num_calibration_files * max_ccddata_size
+    our_num_processes = num_can_process(nfdicts,
+                                        num_processes=num_processes,
+                                        mem_frac=mem_frac,
+                                        process_size=one_fdict_size)
+
+    num_subprocesses = int(num_processes / our_num_processes)
+    subprocess_mem_frac = mem_frac / our_num_processes
+    log.debug('bias_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
+
+    wwk = WorkerWithKwargs(bias_combine_one_fdict,
+                           num_processes=num_subprocesses,
+                           mem_frac=subprocess_mem_frac,
+                           **kwargs)
+    if nfdicts == 1:
+        for fdict in fdict_list:
+                wwk.worker(fdict)
+    else:
+        with NoDaemonPool(processes=our_num_processes) as p:
+            p.map(wwk.worker, fdict_list)
 
 def dark_combine_one_fdict(fdict,
                            outdir=calibration_root,
@@ -1618,8 +1604,8 @@ def dark_combine_one_fdict(fdict,
                      sigma_clip_func=np.ma.median,
                      sigma_clip_dev_func=mad_std,
                      mem_limit=mem.available*mem_frac)
-    im, _ = mask_above(im, 'SATLEVEL')
-    im, _ = mask_above(im, 'NONLIN')
+    im, _ = mask_above_key(im, {}, key='SATLEVEL')
+    im, _ = mask_above_key(im, {}, key='NONLIN')
 
     # Create a mask that blanks out all our pixels that are just
     # readnoise.  Multiply this in as zeros, not a formal mask,
@@ -1749,7 +1735,7 @@ def dark_combine(directory=None,
 
 def flat_process(ccd, pipe_meta,
                  init_threshold=100, # units of readnoise
-                 edge_mask=-40, # CorObsData parameter for ND filter coordinate
+                 nd_edge_expand=nd_edge_expand,
                  **kwargs): 
     # Use photutils.Background2D to smooth each flat and get a
     # good maximum value.  Mask edges and ND filter so as to
@@ -1757,7 +1743,7 @@ def flat_process(ccd, pipe_meta,
     mask = np.zeros(ccd.shape, bool)
     # Use the CorObsData ND filter stuff with a negative
     # edge_mask to blank out all of the fuzz from the ND filter cut
-    obs_data = CorObsData(ccd.to_hdu(), edge_mask=edge_mask)
+    obs_data = CorObsData(ccd.to_hdu(), edge_mask=-nd_edge_expand)
     mask[obs_data.ND_coords] = True
     rdnoise = ccd.meta['RDNOISE']
     mask[ccd.data < rdnoise * init_threshold] = True
@@ -1787,7 +1773,7 @@ def flat_combine_one_filt(this_filter,
                           ccddata_size=max_ccddata_size,
                           show=False,
                           flat_cut=0.75,
-                          edge_mask=-40, # CorObsData parameter for ND filter coordinates    
+                          nd_edge_expand=nd_edge_expand,
                           **kwargs):
     directory = collection.location
     fnames = collection.files_filtered(imagetyp='FLAT',
@@ -1811,7 +1797,8 @@ def flat_combine_one_filt(this_filter,
                        outdir=sdir,
                        create_outdir=True,
                        overwrite=True,
-                       post_process_list=[flat_process, jd_meta])
+                       post_process_list=[flat_process, jd_meta],
+                       nd_edge_expand=nd_edge_expand)
     pout = cmp.pipeline(fnames, **kwargs)
     pout, fnames = prune_pout(pout, fnames)
     if len(pout) < min_num_flats:
@@ -1844,7 +1831,7 @@ def flat_combine_one_filt(this_filter,
     # Interpolate over our ND filter
     #print(f'flat_combine_one_filt pre CorObsData: mem available: {mem.available/2**20}')
     hdul = im.to_hdu()
-    obs_data = CorObsData(hdul, edge_mask=edge_mask)
+    obs_data = CorObsData(hdul, edge_mask=-nd_edge_expand)
     # Capture our ND filter metadata
     im.meta = hdul[0].header
     good_pix = np.ones(im.shape, bool)
@@ -1971,7 +1958,82 @@ def flat_combine(directory=None,
             p.map(wwk.worker, filters)
 
 
-## Calibration object
+######### Calibration object
+
+def get_dirs_dates(directory,
+                   filt_list=None,
+                   start=None,
+                   stop=None):
+    """Starting a root directory "directory," returns list of tuples
+    (subdir, date) sorted by date.  Handles two cases of directory
+    date formatting YYYYMMDD (ACP) and YYYY-MM-DD (MaxIm)
+
+    Parameters
+    ----------
+    directory : string
+        Directory in which to look for subdirectories
+    filt_list : list of strings 
+        Used to filter out bad directories (e.g. ["cloudy", "bad"]
+        will omit listing of, e.g., 2018-02-02_cloudy and
+        2018-02-03_bad_focus) 
+    start : string YYYY-MM-DD
+        Start date (inclusive).  Default = first date
+    stop : string YYYY-MM-DD
+        Stop date (inclusive).  Default = last date
+
+    """
+    assert os.path.isdir(directory)
+    fulldirs = [os.path.join(directory, d) for d in os.listdir(directory)]
+    # Filter out bad directories first
+    dirs = [os.path.basename(d) for d in fulldirs
+            if (not os.path.islink(d)
+                and os.path.isdir(d)
+                and (filt_list is None
+                     or not np.any([filt in d for filt in filt_list])))]
+    # Prepare to pythonically loop through date formats, trying each on 
+    date_formats = ["%Y-%m-%d", "%Y%m%d"]
+    ddlist = []
+    for thisdir in dirs:
+        d = thisdir
+        dirfail = True
+        for idf in date_formats:
+            # The date formats are two characters shorter than the
+            # length of the strings I am looking for (%Y is two
+            # shorter than YYYY, but %M is the same as MM, etc.)
+            d = d[0:min(len(d),len(idf)+2)]
+            try:
+                thisdate = datetime.datetime.strptime(d, idf)
+                ddlist.append((thisdir, thisdate))
+                dirfail = False
+            except:
+                pass
+        if dirfail:
+            pass
+            #log.debug('Skipping non-date formatted directory: ' + thisdir)
+    # Thanks to https://stackoverflow.com/questions/9376384/sort-a-list-of-tuples-depending-on-two-elements
+    if len(ddlist) == 0:
+        return []
+    ddsorted = sorted(ddlist, key=lambda e:e[1])
+    if start is None:
+        start = ddsorted[0][1]
+    elif isinstance(start, str):
+        start = datetime.datetime.strptime(start, "%Y-%m-%d")
+    elif isinstance(start, Time):
+        start = start.datetime
+    if stop is None:
+        stop = ddsorted[-1][1]
+    elif isinstance(stop, str):
+        stop = datetime.datetime.strptime(stop, "%Y-%m-%d")
+    elif isinstance(stop, Time):
+        stop = stop.datetime
+    if start > stop:
+        log.warning('start date {} > stop date {}, returning empty list'.format(start, stop))
+        return []
+    ddsorted = [dd for dd in ddsorted
+                if start <= dd[1] and dd[1] <= stop]
+    dirs, dates = zip(*ddsorted)
+    dirs = [os.path.join(directory, d) for d in dirs]
+    return list(zip(dirs, dates))
 
 def dir_has_calibration(directory, glob_include, subdirs=None):
     """Returns True if directory has calibration files matching pattern(s)
@@ -2523,7 +2585,23 @@ class Calibration():
 
 log.setLevel('DEBUG')
 
-c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
-fname = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0007_Na-on.fit'
-cmp = CorMultiPipe(auto=True, calibration=c)
-cmp.pipeline([fname], outdir='/tmp', overwrite=True)
+#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
+#fname = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0007_Na-on.fit'
+#cmp = CorMultiPipe(auto=True, calibration=c)
+#pout = cmp.pipeline([fname], outdir='/tmp', overwrite=True)
+#out_fnames, pipe_meta = zip(*pout)
+#cod = CorObsData(out_fnames[0])
+
+#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
+#fname = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0007_Na-on.fit'
+#cmp = CorMultiPipe(auto=True, calibration=c,
+#                   post_process_list=[nd_filter_mask, mask_nonlin_sat],
+#                   key='NONLIN')
+#pout = cmp.pipeline([fname], outdir='/tmp', overwrite=True)
+#out_fnames, pipe_meta = zip(*pout)
+#ccd = ccddata_read(out_fnames[0])
+#impl = plt.imshow(ccd, origin='lower',
+#                  cmap=plt.cm.gray,
+#                  filternorm=0, interpolation='none')
+#plt.show()
+#
