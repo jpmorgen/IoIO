@@ -201,7 +201,7 @@ class CorObsData(pg.ObsData):
             self.y_center = self.HDUList[0].data.shape[0]*self._binning[0]/2 + 70
 
         # See if our image has already been through the system.  This
-        # saves us the work of using self.get_ND_params, but allow
+        # saves us the work of using self.get_ND_params, but allows
         # recalculation if we want to
         if self.recalculate == False and self.header.get('NDPAR00') is not None:
             ND_params = np.zeros((2,2))
@@ -212,10 +212,25 @@ class CorObsData(pg.ObsData):
             ND_params[1,1] = self.header['NDPAR11']
             self._ND_params = ND_params
         else:
+            # We need to [re]calculate the ND_params.  We need to come
+            # up with some default_ND_params unless we are a flat or
+            # already have been handed default_ND_params at
+            # instantiation
             if not self.isflat and self.default_ND_params is None:
-                self.default_ND_params = np.asarray(run_level_default_ND_params)
-                #log.info('Setting default_ND_params from run_level_default_ND_params' + str(self.default_ND_params))
-                
+                if self.header.get('FNDPAR00') is None:
+                    # Old system of writing ND_params into program
+                    self.default_ND_params = np.asarray(run_level_default_ND_params)
+                    #log.info('Setting default_ND_params from run_level_default_ND_params' + str(self.default_ND_params))
+                else:
+                    # We have been through the cor_process system and
+                    # have the flat ND_params from there
+                    self.default_ND_params = np.zeros((2,2))
+                    # Note transpose, since we are working in C!
+                    self.default_ND_params[0,0] = self.header['FNDPAR00']
+                    self.default_ND_params[1,0] = self.header['FNDPAR01']
+                    self.default_ND_params[0,1] = self.header['FNDPAR10']
+                    self.default_ND_params[1,1] = self.header['FNDPAR11']
+
         # Get ready to generate the ND_params, which is our hardest work
         
         # The flats produce very narrow peaks in the ND_param
