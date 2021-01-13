@@ -265,7 +265,7 @@ def mask_above_key(ccd_in, pipe_meta, key=None, margin=0.1, **kwargs):
         raise ValueError('key must be specified')
     masklevel = ccd_in.meta.get(key.lower())
     if masklevel is None:
-        return ccd, {}
+        return ccd, pipe_meta
     ccd = ccd_in.copy()
     # Saturation level is subject to overscan subtraction and
     # multiplication by gain, so don't do strict = testing, but give
@@ -286,24 +286,22 @@ def mask_above_key(ccd_in, pipe_meta, key=None, margin=0.1, **kwargs):
             ccd.mask = mask
         else:
             ccd.mask = ccd.mask + mask
-    return ccd, {n_masked_key: n_masked}
+    pipe_meta[n_masked_key] = n_masked
+    return ccd, pipe_meta
 
 def mask_nonlin_sat(ccd, pipe_meta, margin=0.1, **kwargs):
     """CorMultiPipe post-processing routine to mask pixels > NONLIN and SATLEVEL
     """
-    ccd, meta = mask_above_key(ccd, pipe_meta, key='SATLEVEL')
-    ccd, nonlin_meta = mask_above_key(ccd, pipe_meta, key='NONLIN')
-    meta.update(nonlin_meta)
-    return ccd, meta
-    #ccd, pipe_meta = mask_above_key(ccd, pipe_meta, key='SATLEVEL')
-    #ccd, pipe_meta = mask_above_key(ccd, pipe_meta, key='NONLIN')
-    #return ccd, pipe_meta
+    ccd, pipe_meta = mask_above_key(ccd, pipe_meta, key='SATLEVEL')
+    ccd, pipe_meta = mask_above_key(ccd, pipe_meta, key='NONLIN')
+    return ccd, pipe_meta
 
 def jd_meta(ccd, pipe_meta, **kwargs):
     """CorMultiPipe post-processing routine to return JD
     """
     tm = Time(ccd.meta['DATE-OBS'], format='fits')
-    return (ccd, {'jd': tm.jd})
+    pipe_meta['jd'] = tm.jd
+    return (ccd, pipe_meta)
 
 def bias_stats(ccd, pipe_meta, gain=sx694_gain, **kwargs):
     """CorMultiPipe post-processing routine for bias_combine
@@ -334,7 +332,8 @@ def bias_stats(ccd, pipe_meta, gain=sx694_gain, **kwargs):
              'rdnoise': rdnoise*gain,
              'min': np.min(im) + median,  
              'max': np.max(im) + median}
-    return (ccd, {'stats': stats})
+    pipe_meta['stats'] = stats
+    return (ccd, pipe_meta)
 
 def nd_filter_mask(ccd, pipe_meta, nd_edge_expand=nd_edge_expand, **kwargs):
     """CorMultiPipe post-processing routine to mask ND filter
@@ -349,7 +348,7 @@ def nd_filter_mask(ccd, pipe_meta, nd_edge_expand=nd_edge_expand, **kwargs):
         ccd.mask = mask
     else:
         ccd.mask = ccd.mask + mask
-    return (ccd, {})
+    return (ccd, pipe_meta)
 
 ######### cor_process routines
 def ccd_metadata(hdr_in,
@@ -2585,23 +2584,3 @@ class Calibration():
 
 log.setLevel('DEBUG')
 
-#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
-#fname = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0007_Na-on.fit'
-#cmp = CorMultiPipe(auto=True, calibration=c)
-#pout = cmp.pipeline([fname], outdir='/tmp', overwrite=True)
-#out_fnames, pipe_meta = zip(*pout)
-#cod = CorObsData(out_fnames[0])
-
-#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
-#fname = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0007_Na-on.fit'
-#cmp = CorMultiPipe(auto=True, calibration=c,
-#                   post_process_list=[nd_filter_mask, mask_nonlin_sat],
-#                   key='NONLIN')
-#pout = cmp.pipeline([fname], outdir='/tmp', overwrite=True)
-#out_fnames, pipe_meta = zip(*pout)
-#ccd = ccddata_read(out_fnames[0])
-#impl = plt.imshow(ccd, origin='lower',
-#                  cmap=plt.cm.gray,
-#                  filternorm=0, interpolation='none')
-#plt.show()
-#

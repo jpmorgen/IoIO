@@ -75,7 +75,7 @@ class CCDMultiPipe(BigMultiPipe):
         super().__init__(outname_append=outname_append,
                          **kwargs)
 
-    def file_reader(self, in_name, **kwargs):
+    def file_read(self, in_name, **kwargs):
         # Allow overriding of self.kwargs by **kwargs
         skwargs = self.kwargs.copy()
         skwargs.update(kwargs)
@@ -83,7 +83,7 @@ class CCDMultiPipe(BigMultiPipe):
         data = ccddata_read(in_name, raw_unit=self.raw_unit, **kwargs)
         return data
 
-    def file_writer(self, data, outname, 
+    def file_write(self, data, outname, 
                     overwrite=None,
                     **kwargs):
         # Allow overriding of self.kwargs by **kwargs
