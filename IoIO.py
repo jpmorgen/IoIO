@@ -804,9 +804,9 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         h = self.HDUList[0].header
         # Note transpose, since we are working in C!
         self.header['NDPAR00'] = (ND_params[0,0], 'ND filt left side slope')
-        self.header['NDPAR01'] = (ND_params[1,0], 'ND filt left side offset at Y center of im')
+        self.header['NDPAR01'] = (ND_params[1,0], 'ND filt left side offset at Y cent. of im')
         self.header['NDPAR10'] = (ND_params[0,1], 'ND filt right side slope')
-        self.header['NDPAR11'] = (ND_params[1,1], 'ND filt right side offset at Y center of im')
+        self.header['NDPAR11'] = (ND_params[1,1], 'ND filt right side offset at Y cent. of im')
 
         return self._ND_params
 

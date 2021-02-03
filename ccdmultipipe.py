@@ -70,6 +70,29 @@ class CCDMultiPipe(BigMultiPipe):
 
     Parameters
     ----------
+    process_size : int
+        Maximum process size in bytes of an individual process.  If
+        ``None``, calculated from ``naxisN``, ``bitpix`` and
+        ``process_expand_factor`` parameters.
+        Default is ``None``
+
+    naxis1, naxis2 : int or None
+        CCD image size.  If ``None``, read from *first* image
+        processed in pipeline.
+        Default is ``None``
+
+    bitpix : int
+        Maximum bits per pixel during processing.
+        Default is 2*64 + 8 = 136, which includes primary and error
+        image as double-precision and mask image as byte
+
+    process_expand_factor : float
+        Factor to account for the fact that
+        :func:`ccdproc.ccd_process` and each of the routines it calls
+        make a copy of the data passed to them.  Thus, at any one time
+        their can be up to 3 copies of the `~astropy.nddata.CCDData`
+        Default is 3.5
+
     raw_unit : str or `astropy.units.core.UnitBase`
         For reading files: physical unit of pixel in case none is
         specified.
@@ -92,16 +115,80 @@ class CCDMultiPipe(BigMultiPipe):
     """
 
     def __init__(self,
+                 process_size=None,
+                 naxis1=None,
+                 naxis2=None,
+                 bitpix=None,
+                 process_expand_factor=3.5,
                  raw_unit=None,
                  outname_append='_ccdmp',
                  overwrite=False,
                  **kwargs):
+        self.naxis1 = naxis1
+        self.naxis2 = naxis2
+        if bitpix is None:
+            bitpix = 2*64 + 8
+        self.bitpix = bitpix
+        self.process_expand_factor = process_expand_factor
+        self.process_size = process_size
         if raw_unit is None:
             raw_unit = u.adu
         self.raw_unit = raw_unit
         self.overwrite = overwrite
         super().__init__(outname_append=outname_append,
                          **kwargs)
+
+    def pipeline(self, in_names,
+                 process_size=None,
+                 naxis1=None,
+                 naxis2=None,
+                 bitpix=None,
+                 process_expand_factor=None,
+                 **kwargs):
+        """Runs pipeline, maximizing processing and memory resources
+
+        Parameters
+        ----------
+        in_names : `list` of `str`
+            List of input filenames.  Each file is processed using
+            :func:`file_process`
+
+        All other parameters : see Parameters to :class:`CCDMultiPipe`
+        and :class:`bigmultipipe.BigMultiPipe` 
+
+        Returns
+        -------
+        pout : `list` of tuples ``(outname, meta)``, one `tuple` for each
+            ``in_name``.  ``Outname`` is `str` or ``None``.  If `str`,
+            it is the name of the file to which the processed data
+            were written.  If ``None``, the convenience function
+            :func:`prune_pout` can be used to remove this tuple from
+            ``pout`` and the corresponding in_name from the in_names list.
+            ``Meta`` is a `dict` containing output.
+
+        """
+        if process_size is None:
+            process_size = self.process_size
+        if naxis1 is None:
+            naxis1 = self.naxis1
+        if naxis2 is None:
+            naxis2 = self.naxis2
+        if bitpix is None:
+            bitpix = self.bitpix
+        if process_expand_factor is None:
+            process_expand_factor = self.process_expand_factor
+        if (process_size is None):
+            if naxis1 is None or naxis2 is None:
+                ccd = self.file_read(in_names[0], **kwargs)
+            if naxis1 is None:
+                naxis1 = ccd.meta['NAXIS1']
+            if naxis2 is None:
+                naxis2 = ccd.meta['NAXIS2']
+            process_size = (naxis1 * naxis2
+                            * bitpix/8
+                            * process_expand_factor)
+        return super().pipeline(in_names, process_size=process_size,
+                                **kwargs)
 
     def file_read(self, in_name, **kwargs):
         """Reads FITS file from disk into `~astropy.nddata.CCDData`

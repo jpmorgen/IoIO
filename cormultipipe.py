@@ -123,9 +123,10 @@ max_mem_frac = 0.8
 # Calculate the maximum CCDdata size based on 64bit primary & uncert +
 # 8 bit mask / 8 bits per byte.  It will be compared to
 # psutil.virtual_memory() at runtime to optimize computational tasks
-max_ccddata_size = (sx694_naxis1 * sx694_naxis2
-                    * (2 * 64 + 8)) / 8
-griddata_expansion_factor = 100
+# is my do-it-yourself multiprocessing routines
+max_ccddata_bitpix = 2*64 + 8
+cor_process_expand_factor = 3.5
+griddata_expand_factor = 20
 
 # These are use to optimize parallelization until such time as
 # ccdproc.combiner can be parallelized
@@ -189,12 +190,15 @@ class CorMultiPipe(CCDMultiPipe):
                  outname_append='_r',
                  naxis1=sx694_naxis1,
                  naxis2=sx694_naxis2,
+                 process_expand_factor=cor_process_expand_factor,
                  **kwargs):
         self.calibration = calibration
         self.auto = auto
-        self.naxis1 = naxis1
-        self.naxis2 = naxis2
-        super().__init__(outname_append=outname_append, **kwargs)
+        super().__init__(outname_append=outname_append,
+                         naxis1=naxis1,
+                         naxis2=naxis2,
+                         process_expand_factor=process_expand_factor,
+                         **kwargs)
 
     def pre_process(self, data, **kwargs):
         """Add full-frame check permanently to pipeline"""
@@ -393,23 +397,48 @@ def ccd_exp_correct(hdr_in,
     if hdr_in.get('OEXPTIME') is not None:
         # We have been here before, so exit quietly
         return hdr_in
+    exptime = hdr_in['EXPTIME']
+    if exptime <= max_accurate_exposure:
+        # Exposure time should be accurate
+        return hdr_in
     hdr = hdr_in.copy()
-    exptime = hdr['EXPTIME']
-    if exptime > max_accurate_exposure:
-        hdr.insert('EXPTIME', 
-                         ('OEXPTIME', exptime,
-                          'original exposure time (seconds)'),
-                         after=True)
-        exptime += exposure_correct
-        hdr['EXPTIME'] = (exptime,
-                                'corrected exposure time (seconds)')
-        hdr.insert('OEXPTIME', 
-                         ('HIERARCH EXPTIME_CORRECTION',
-                          exposure_correct, '(seconds)'),
-                         after=True)
-        #add_history(hdr,
-        #            'Corrected exposure time for SX694 MaxIm driver bug')
+    hdr.insert('EXPTIME', 
+               ('OEXPTIME', exptime,
+                'original exposure time (seconds)'),
+               after=True)
+    exptime += exposure_correct
+    hdr['EXPTIME'] = (exptime,
+                      'corrected exposure time (seconds)')
+    hdr.insert('OEXPTIME', 
+               ('HIERARCH EXPTIME_CORRECTION',
+                exposure_correct, '(seconds)'),
+               after=True)
+    #add_history(hdr,
+    #            'Corrected exposure time for SX694 MaxIm driver bug')
     return hdr
+
+def ccd_airmass_correct(hdr_in):
+    """Record airmass considering curvature of Earth
+
+Uses formula of F. Kasten and Young, A. T., “Revised optical air mass
+tables and approximation formula”, Applied Optics, vol. 28,
+pp. 4735–4738, 1989 found at
+https://www.pveducation.org/pvcdrom/properties-of-sunlight/air-mass
+
+    """
+    if hdr_in.get('OAIRMASS') is not None:
+        # We have been here before, so exit quietly
+        return hdr_in
+    hdr = hdr_in.copy()
+    alt = float(hdr['OBJCTALT'])
+    zd = 90 - alt
+    airmass = hdr['AIRMASS']
+    hdr.insert('AIRMASS',
+               ('OAIRMASS', airmass, 'Original airmass'),
+               after=True)
+    denom = np.cos(np.radians(zd)) + 0.50572 * (96.07995 - zd)**(-1.6364)
+    hdr['AIRMASS'] = (1/denom, 'Curvature-corrected (Kasten and Young 1989)')
+    return(hdr)
 
 def hist_of_im(im, binsize=1, show=False):
     """Returns a tuple of the histogram of image and index into *centers* of
@@ -614,6 +643,7 @@ def cor_process(ccd,
                 imagetyp=None,
                 ccd_meta=True,
                 exp_correct=True,
+                airmass_correct=True,
                 oscan=None,
                 trim=None,
                 error=False,
@@ -693,6 +723,11 @@ def cor_process(ccd,
 
     exp_correct : bool
         Correct for exposure time problems
+        Default is ``True``
+
+    airmass_correct : bool
+        Correct for curvature of earth airmass for very low elevation
+        observations
         Default is ``True``
 
     oscan : number, bool, or None, optional
@@ -872,6 +907,8 @@ def cor_process(ccd,
         # Correct exposure time for driver bug
         nccd.meta = ccd_exp_correct(nccd.meta, *args, **kwargs)
         
+    if airmass_correct:
+        nccd.meta = ccd_airmass_correct(nccd.meta)
     # Apply overscan correction unique to the IoIO SX694 CCD.  This
     # adds our CCD metadata as a necessary step and uses the string
     # version of master_bias, if available for metadata
@@ -1224,7 +1261,9 @@ def bias_combine_one_fdict(fdict,
                            gain_correct=False,
                            num_processes=max_num_processes,
                            mem_frac=max_mem_frac,
-                           ccddata_size=max_ccddata_size):
+                           naxis1=sx694_naxis1,
+                           naxis2=sx694_naxis2,
+                           bitpix=64+8):
 
     """Worker that allows the parallelization of calibrations taken at one
     temperature, exposure time, filter, etc.
@@ -1261,7 +1300,9 @@ def bias_combine_one_fdict(fdict,
     # create a dict of stats for a pandas dataframe
     cmp = CorMultiPipe(num_processes=num_processes,
                        mem_frac=mem_frac,
-                       process_size=ccddata_size,
+                       naxis1=naxis1,
+                       naxis2=naxis2,
+                       bitpix=bitpix,
                        outdir=sdir,
                        create_outdir=True,
                        overwrite=True,
@@ -1465,7 +1506,10 @@ def bias_combine(directory=None,
                  num_processes=max_num_processes,
                  mem_frac=max_mem_frac,
                  num_calibration_files=num_calibration_files,
-                 max_ccddata_size=max_ccddata_size,
+                 naxis1=sx694_naxis1,
+                 naxis2=sx694_naxis2,
+                 bitpix=64+8,
+                 process_expand_factor=cor_process_expand_factor,
                  **kwargs):
     """Combine biases in a directory
 
@@ -1517,7 +1561,11 @@ def bias_combine(directory=None,
         log.debug('No biases found in: ' + directory)
         return False
 
-    one_fdict_size = num_calibration_files * max_ccddata_size
+    one_fdict_size = (num_calibration_files
+                      * naxis1 * naxis2
+                      * bitpix/8
+                      * process_expand_factor)
+
     our_num_processes = num_can_process(nfdicts,
                                         num_processes=num_processes,
                                         mem_frac=mem_frac,
@@ -1548,7 +1596,9 @@ def dark_combine_one_fdict(fdict,
                            mask_threshold=sx694_dark_mask_threshold,
                            num_processes=max_num_processes,
                            mem_frac=max_mem_frac,
-                           ccddata_size=max_ccddata_size,
+                           naxis1=sx694_naxis1,
+                           naxis2=sx694_naxis2,
+                           bitpix=64+8,
                            **kwargs):
     """Worker that allows the parallelization of calibrations taken at one
     temperature, exposure time, filter, etc.
@@ -1569,7 +1619,9 @@ def dark_combine_one_fdict(fdict,
 
     cmp = CorMultiPipe(num_processes=num_processes,
                        mem_frac=mem_frac,
-                       process_size=ccddata_size,
+                       naxis1=naxis1,
+                       naxis2=naxis2,
+                       bitpix=bitpix,
                        outdir=sdir,
                        create_outdir=True,
                        overwrite=True,
@@ -1695,7 +1747,10 @@ def dark_combine(directory=None,
                  num_processes=max_num_processes,
                  mem_frac=max_mem_frac,
                  num_calibration_files=num_calibration_files,
-                 max_ccddata_size=max_ccddata_size,
+                 naxis1=sx694_naxis1,
+                 naxis2=sx694_naxis2,
+                 bitpix=64+8,
+                 process_expand_factor=cor_process_expand_factor,
                  **kwargs):
     fdict_list = \
         fname_by_imagetyp_ccdt_exp(directory=directory,
@@ -1712,7 +1767,11 @@ def dark_combine(directory=None,
         log.debug('No darks found in: ' + directory)
         return False
 
-    one_fdict_size = num_calibration_files * max_ccddata_size
+    one_fdict_size = (num_calibration_files
+                      * naxis1 * naxis2
+                      * bitpix/8
+                      * process_expand_factor)
+
     our_num_processes = num_can_process(nfdicts,
                                         num_processes=num_processes,
                                         mem_frac=mem_frac,
@@ -1769,11 +1828,14 @@ def flat_combine_one_filt(this_filter,
                           min_num_flats=min_num_flats,
                           num_processes=max_num_processes,
                           mem_frac=max_mem_frac,
-                          ccddata_size=max_ccddata_size,
+                          naxis1=sx694_naxis1,
+                          naxis2=sx694_naxis2,
+                          bitpix=64+8,
                           show=False,
                           flat_cut=0.75,
                           nd_edge_expand=nd_edge_expand,
                           **kwargs):
+    
     directory = collection.location
     fnames = collection.files_filtered(imagetyp='FLAT',
                                        filter=this_filter,
@@ -1792,7 +1854,9 @@ def flat_combine_one_filt(this_filter,
 
     cmp = CorMultiPipe(num_processes=num_processes,
                        mem_frac=mem_frac,
-                       process_size=ccddata_size,
+                       naxis1=naxis1,
+                       naxis2=naxis2,
+                       bitpix=bitpix,
                        outdir=sdir,
                        create_outdir=True,
                        overwrite=True,
@@ -1901,8 +1965,10 @@ def flat_combine(directory=None,
                  num_processes=max_num_processes,
                  mem_frac=max_mem_frac,
                  num_calibration_files=num_calibration_files,
-                 max_ccddata_size=max_ccddata_size,
-                 griddata_expansion_factor=griddata_expansion_factor,
+                 naxis1=sx694_naxis1,
+                 naxis2=sx694_naxis2,
+                 bitpix=64+8,
+                 griddata_expand_factor=griddata_expand_factor,
                  **kwargs):
     if subdirs is None:
         subdirs = []
@@ -1930,12 +1996,18 @@ def flat_combine(directory=None,
         log.debug('No flats found in: ' + directory)
         return False
 
-    one_filt_size = max(num_calibration_files * max_ccddata_size,
-                        max_ccddata_size * griddata_expansion_factor)
+    one_filt_size = (num_calibration_files
+                         * naxis1 * naxis2
+                         * bitpix/8
+                         * griddata_expand_factor)
+
     our_num_processes = num_can_process(nfilts,
                                         num_processes=num_processes,
                                         mem_frac=mem_frac,
-                                        process_size=one_filt_size)
+                                        process_size=one_filt_size,
+                                        error_if_zero=False)
+    our_num_processes = max(1, our_num_processes)
+    
     # Combining files is the slow part, so we want the maximum of
     # processes doing that in parallel
     log.debug(f'flat_combine: {directory}, nfilts = {nfilts}, our_num_processes = {our_num_processes}')
@@ -2100,8 +2172,11 @@ class Calibration():
                  num_dark_exptimes=num_dark_exptimes,
                  num_filts=num_filts,
                  num_calibration_files=num_calibration_files,
-                 max_ccddata_size=max_ccddata_size,
-                 griddata_expansion_factor=griddata_expansion_factor,
+                 naxis1=sx694_naxis1,
+                 naxis2=sx694_naxis2,
+                 bitpix=64+8,
+                 process_expand_factor=cor_process_expand_factor,
+                 griddata_expand_factor=griddata_expand_factor,
                  bias_glob=bias_glob, 
                  dark_glob=dark_glob,
                  flat_glob=flat_glob,
@@ -2128,8 +2203,11 @@ class Calibration():
         self.num_dark_exptimes = num_dark_exptimes
         self.num_filts = num_filts
         self.num_calibration_files = num_calibration_files
-        self.max_ccddata_size = max_ccddata_size
-        self.griddata_expansion_factor = griddata_expansion_factor
+        self.naxis1 = naxis1
+        self.naxis2 = naxis2
+        self.bitpix = bitpix
+        self.process_expand_factor = process_expand_factor
+        self.griddata_expand_factor = griddata_expand_factor
         if start_date is None:
             self._start_date = datetime.datetime(1,1,1)
         else:
@@ -2207,7 +2285,11 @@ class Calibration():
         lock = Lockfile(self._lockfile)
         lock.create()
 
-        one_fdict_size = self.num_calibration_files * self.max_ccddata_size
+        one_fdict_size = (self.num_calibration_files
+                          * self.naxis1 * self.naxis2
+                          * self.bitpix/8
+                          * self.process_expand_factor)
+
         ncp = num_can_process(self.num_ccdts,
                               num_processes=self.num_processes,
                               mem_frac=self.mem_frac,
@@ -2224,7 +2306,10 @@ class Calibration():
                                outdir=self._calibration_root,
                                gain_correct=self._gain_correct,
                                num_processes=self.num_processes,
-                               max_ccddata_size=self.max_ccddata_size,
+                               naxis1=self.naxis1,
+                               naxis2=self.naxis2,
+                               process_expand_factor=self.process_expand_factor,
+
                                num_calibration_files=self.num_calibration_files,
                                mem_frac=self.mem_frac,
                                keep_intermediate=self.keep_intermediate)
@@ -2261,7 +2346,11 @@ class Calibration():
         lock = Lockfile(self._lockfile)
         lock.create()
 
-        one_fdict_size = self.num_calibration_files * self.max_ccddata_size
+        one_fdict_size = (self.num_calibration_files
+                          * self.naxis1 * self.naxis2
+                          * self.bitpix/8
+                          * self.process_expand_factor)
+
         ncp = num_can_process(self.num_ccdts,
                               num_processes=self.num_processes,
                               mem_frac=self.mem_frac,
@@ -2279,7 +2368,10 @@ class Calibration():
                                calibration=self,
                                auto=True, # A little dangerous, but just one place for changes
                                num_processes=self.num_processes,
-                               max_ccddata_size=self.max_ccddata_size,
+                               naxis1=self.naxis1,
+                               naxis2=self.naxis2,
+                               process_expand_factor=self.process_expand_factor,
+
                                num_calibration_files=self.num_calibration_files,
                                mem_frac=self.mem_frac,
                                keep_intermediate=self.keep_intermediate)
@@ -2316,8 +2408,11 @@ class Calibration():
         lock = Lockfile(self._lockfile)
         lock.create()
 
-        one_filt_size = max(self.num_calibration_files * self.max_ccddata_size,
-                            max_ccddata_size * self.griddata_expansion_factor)
+        one_filt_size = (self.num_calibration_files
+                         * self.naxis1 * self.naxis2
+                         * self.bitpix/8
+                         * self.griddata_expand_factor)
+
         # Our sub-process can divide and conquer if necessary
         ncp = num_can_process(self.num_filts,
                               num_processes=self.num_processes,
@@ -2338,8 +2433,9 @@ class Calibration():
                                num_processes=self.num_processes,
                                mem_frac=self.mem_frac,
                                num_calibration_files=self.num_calibration_files,
-                               max_ccddata_size=self.max_ccddata_size,
-                               griddata_expansion_factor=self.griddata_expansion_factor,
+                               naxis1=self.naxis1,
+                               naxis2=self.naxis2,
+                               griddata_expand_factor=self.griddata_expand_factor,
                                keep_intermediate=self.keep_intermediate)
                                
         dirs = [dt[0] for dt in dirs_dates]
@@ -2582,5 +2678,14 @@ class Calibration():
         best_filt_date_idx = good_filt_idx[best_filt_date_idx]
         return self._flat_table['fnames'][best_filt_date_idx]
 
-log.setLevel('DEBUG')
-
+#log.setLevel('DEBUG')
+#
+#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
+##fname = '/data/io/IoIO/raw/20200708/HD 118648-S001-R001-C001-Na_on.fts'
+#fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
+#cmp = CorMultiPipe(auto=True, calibration=c,
+#                   post_process_list=[nd_filter_mask])
+#pout = cmp.pipeline([fname], outdir='/tmp', overwrite=True)
+#out_fnames, pipe_meta = zip(*pout)
+#
+#print(pipe_meta)
