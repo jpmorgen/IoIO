@@ -35,72 +35,8 @@ from bigmultipipe import num_can_process, WorkerWithKwargs, NoDaemonPool
 from bigmultipipe import multi_logging, prune_pout
 from ccdmultipipe import CCDMultiPipe, ccddata_read
 
+import sx694
 from IoIO import CorObsData
-
-# Record in global variables Starlight Xpress Trius SX694 CCD
-# characteristics.  Note that CCD was purchased in 2017 and is NOT the
-# "Pro" version, which has a different gain but otherwise similar
-# characteristics
-
-sx694_camera_description = 'Starlight Xpress Trius SX694 mono, 2017 model version'
-
-# naxis1 = fastest changing axis in FITS primary image = X in
-# Cartesian thought
-# naxis1 = next to fastest changing axis in FITS primary image = Y in
-# Cartesian thought
-sx694_naxis1 = 2750
-sx694_naxis2 = 2200
-
-# 16-bit A/D converter, stored in SATLEVEL keyword
-sx694_satlevel = 2**16-1
-sx694_satlevel_comment = 'Saturation level (ADU)'
-
-# Gain measured in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx.
-# Value agrees well with Trius SX-694 advertised value (note, newer
-# "PRO" model has a different gain value).  Stored in GAIN keyword
-sx694_gain = 0.3
-sx694_gain_comment = 'Measured gain (electron/ADU)'
-
-# Sample readnoise measured as per ioio.notebk
-# Tue Jul 10 12:13:33 2018 MCT jpmorgen@byted 
-
-# Readnoies is measured regularly as part of master bias creation and
-# stored in the RDNOISE keyword.  This is used as a sanity check.
-sx694_example_readnoise = 15.475665 * sx694_gain
-sx694_example_readnoise_comment = '2018-07-10 readnoise (electron)'
-sx694_readnoise_tolerance = 0.5 # Units of electrons
-
-# Measurement in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx of
-# when camera becomes non-linear.  Stored in NONLIN keyword.  Raw
-# value of 42k was recorded with a typical overscan value.  Helps to
-# remember ~40k is absolute max raw ADU to shoot for.  This is
-# suspiciously close to the full-well depth in electrons of 17,000
-# (web) - 18,000 (user's manual) provided by the manufacturer
-# --> could do a better job of measuring the precise high end of this,
-# since it could be as high as 50k
-sx694_nonlin = 42000 - 1811
-sx694_nonlin_comment = 'Measured nonlinearity point (ADU)'
-
-# Exposure times at or below this value are counted on the camera and
-# not in MaxIm.  There is a bug in the SX694 MaxIm driver seems to
-# consistently add about sx694_exposure_correct seconds to the
-# exposure time before asking the camera to read the CCD out.
-# Measured in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx
-# --> NEEDS TO BE VERIFIED WITH PHOTOMETRY FROM 2019 and 2020
-# Corrected as part of local version of ccd_process
-sx694_max_accurate_exposure = 0.7 # s
-sx694_exposure_correct = 1.7 # s
-
-# The SX694 and similar interline transfer CCDs have such low dark
-# current that it is not really practical to map out the dark current
-# in every pixel (a huge number of darks would be needed to beat down
-# the readnoise).  Rather, cut everything below this threshold, which
-# reads in units of readnoise (e.g., value in electrons is
-# 3 * sx694_example_readnoise).  The remaining few pixels generate
-# more dark current, so include only them in the dark images
-sx694_dark_mask_threshold = 3
-
-
 
 # Processing global variables.  Since I avoid use of the global
 # statement and don't reassign these at global scope, they stick to
@@ -188,8 +124,8 @@ class CorMultiPipe(CCDMultiPipe):
                  calibration=None,
                  auto=False,
                  outname_append='_r',
-                 naxis1=sx694_naxis1,
-                 naxis2=sx694_naxis2,
+                 naxis1=sx694.naxis1,
+                 naxis2=sx694.naxis2,
                  process_expand_factor=cor_process_expand_factor,
                  **kwargs):
         self.calibration = calibration
@@ -232,8 +168,8 @@ class CorMultiPipe(CCDMultiPipe):
 
 ######### CorMultiPipe pre- and post-processing routines
 def full_frame(im,
-               naxis1=sx694_naxis1,
-               naxis2=sx694_naxis2,
+               naxis1=sx694.naxis1,
+               naxis2=sx694.naxis2,
                **kwargs):
     """CorMultiPipe pre-processing routine to select full-frame images (currently permanently installed into CorMultiPipe.pre_process) 
     """
@@ -307,7 +243,7 @@ def jd_meta(ccd, pipe_meta, **kwargs):
     pipe_meta['jd'] = tm.jd
     return (ccd, pipe_meta)
 
-def bias_stats(ccd, pipe_meta, gain=sx694_gain, **kwargs):
+def bias_stats(ccd, pipe_meta, gain=sx694.gain, **kwargs):
     """CorMultiPipe post-processing routine for bias_combine
     Returns dictionary of bias statistics for pandas dataframe
     """
@@ -355,69 +291,7 @@ def nd_filter_mask(ccd, pipe_meta, nd_edge_expand=nd_edge_expand, **kwargs):
     return (ccd, pipe_meta)
 
 ######### cor_process routines
-def ccd_metadata(hdr_in,
-                 camera_description=sx694_camera_description,
-                 gain=sx694_gain,
-                 gain_comment=sx694_gain_comment,
-                 satlevel=sx694_satlevel,
-                 satlevel_comment=sx694_satlevel_comment,
-                 nonlin=sx694_nonlin,
-                 nonlin_comment=sx694_nonlin_comment,
-                 readnoise=sx694_example_readnoise,
-                 readnoise_comment=sx694_example_readnoise_comment,
-                 *args, **kwargs):
-    """Record [SX694] CCD metadata in FITS header object"""
-    if hdr_in.get('camera') is not None:
-        # We have been here before, so exit quietly
-        return hdr_in
-    hdr = hdr_in.copy()
-    # Clean up double exposure time reference to avoid confusion
-    if hdr.get('exposure') is not None:
-        del hdr['EXPOSURE']
-    hdr.insert('INSTRUME',
-                    ('CAMERA', camera_description),
-                    after=True)
-    hdr['GAIN'] = (gain, gain_comment)
-    # This gets used in ccdp.cosmicray_lacosmic
-    hdr['SATLEVEL'] = (satlevel, satlevel_comment)
-    # This is where the CCD starts to become non-linear and is
-    # used for things like rejecting flats recorded when
-    # conditions were too bright
-    hdr['NONLIN'] = (nonlin, nonlin_comment)
-    hdr['RDNOISE'] = (readnoise, readnoise_comment)
-    return hdr
-
-def ccd_exp_correct(hdr_in,
-                    max_accurate_exposure=sx694_max_accurate_exposure,
-                    exposure_correct=sx694_exposure_correct,
-                    *args, **kwargs):
-    """Correct exposure time for [SX694] CCD driver problem
-     --> REFINE THIS ESTIMATE BASED ON MORE MEASUREMENTS
-    """
-    if hdr_in.get('OEXPTIME') is not None:
-        # We have been here before, so exit quietly
-        return hdr_in
-    exptime = hdr_in['EXPTIME']
-    if exptime <= max_accurate_exposure:
-        # Exposure time should be accurate
-        return hdr_in
-    hdr = hdr_in.copy()
-    hdr.insert('EXPTIME', 
-               ('OEXPTIME', exptime,
-                'original exposure time (seconds)'),
-               after=True)
-    exptime += exposure_correct
-    hdr['EXPTIME'] = (exptime,
-                      'corrected exposure time (seconds)')
-    hdr.insert('OEXPTIME', 
-               ('HIERARCH EXPTIME_CORRECTION',
-                exposure_correct, '(seconds)'),
-               after=True)
-    #add_history(hdr,
-    #            'Corrected exposure time for SX694 MaxIm driver bug')
-    return hdr
-
-def ccd_airmass_correct(hdr_in):
+def kasten_young_airmass(hdr_in):
     """Record airmass considering curvature of Earth
 
 Uses formula of F. Kasten and Young, A. T., “Revised optical air mass
@@ -440,180 +314,6 @@ https://www.pveducation.org/pvcdrom/properties-of-sunlight/air-mass
     hdr['AIRMASS'] = (1/denom, 'Curvature-corrected (Kasten and Young 1989)')
     return(hdr)
 
-def hist_of_im(im, binsize=1, show=False):
-    """Returns a tuple of the histogram of image and index into *centers* of
-bins."""
-    # Code from west_aux.py, maskgen.
-    # Histogram bin size should be related to readnoise
-    hrange = (im.data.min(), im.data.max())
-    nbins = int((hrange[1] - hrange[0]) / binsize)
-    hist, edges = np.histogram(im, bins=nbins,
-                               range=hrange, density=False)
-    # Convert edges of histogram bins to centers
-    centers = (edges[0:-1] + edges[1:])/2
-    if show:
-        plt.plot(centers, hist)
-        plt.show()
-        plt.close()
-    return (hist, centers)
-
-def overscan_estimate(ccd_in, meta=None, master_bias=None,
-                      binsize=None, min_width=1, max_width=8, box_size=100,
-                      min_hist_val=10,
-                      show=False, *args, **kwargs):
-    """Estimate overscan in ADU in the absense of a formal overscan region
-
-    For biases, returns in the median of the image.  For all others,
-    uses the minimum of: (1) the first peak in the histogram of the
-    image or (2) the minimum of the median of four boxes at the
-    corners of the image.
-
-    Works best if bias shape (particularly bias ramp) is subtracted
-    first.  Will subtract bias if bias is supplied and has not been
-    subtracted.
-
-    Parameters
-    ----------
-    ccd_in : `~astropy.nddata.CCDData` or filename
-        Image from which to extract overscan estimate
-
-    meta : `astropy.io.fits.header` or None
-        referece to metadata of ccd into which to write OVERSCAN_* cards.
-        If None, no metadata will be returned
-
-    master_bias : `~astropy.nddata.CCDData`, filename, or None
-        Bias to subtract from ccd before estimate is calculated.
-        Improves accruacy by removing bias ramp.  Bias can be in units
-        of ADU or electrons and is converted using the specified gain.
-        If bias has already been subtracted, this step will be skipped
-        but the bias header will be used to extract readnoise and gain
-        using the *_key keywords.  Default is ``None``.
-
-    binsize: float or None, optional
-        The binsize to use for the histogram.  If None, binsize is 
-        (readnoise in ADU)/4.  Default = None
-
-    min_width : int, optional
-        Minimum width peak to search for in histogram.  Keep in mind
-        histogram bins are binsize ADU wide.  Default = 1
-
-    max_width : int, optional
-        See min_width.  Default = 8
-
-    box_size : int
-        Edge size of square box used to extract biweight median location
-        from the corners of the image for this method of  overscan
-        estimation.  Default = 100
-
-    show : boolean
-       Show image with min/max set to highlight overscan pixels and
-       histogram with overscan chopped  histogram.  Default is False [consider making this boolean or name of plot file]
-
-    """
-    # This returns a copy of ccd_in if it is not a filename.  This is
-    # important, since we mess with both the ccd.data and .metadata
-    ccd = ccddata_read(ccd_in)
-    ccd.meta = ccd_metadata(ccd.meta)
-    if meta is None:
-        meta = ccd.meta
-    if ccd.unit != u.adu:
-        # For now don't get fancy with unit conversion
-        raise ValueError('CCD units must be in ADU for overscan estimation')
-    if ccd.meta['IMAGETYP'] == "BIAS":
-        overscan = np.median(ccd)
-        meta['HIERARCH OVERSCAN_MEDIAN'] = (overscan, 'ADU')
-        meta['HIERARCH OVERSCAN_METHOD'] = ('median',
-                                            'Method used for overscan estimation')
-        return overscan
-
-    # Prepare for histogram method of overscan estimation.  These
-    # keywords are guaranteed to be in meta because we put there there
-    # in ccd_metadata
-    readnoise = ccd.meta['RDNOISE']
-    gain = ccd.meta['GAIN']
-    if ccd.meta.get('subtract_bias') is None and master_bias is not None:
-        # Bias has not been subtracted and we have a bias around to be
-        # able to do that subtraction
-        bias = ccddata_read(master_bias)
-        # Improve our readnoise (measured) and gain (probably not
-        # re-measured) values
-        readnoise = bias.meta['RDNOISE']
-        gain = bias.meta['GAIN']
-        if bias.unit is u.electron:
-            # Convert bias back to ADU for subtraction
-            bias = bias.divide(gain*u.electron/u.adu)
-        ccd = ccdp.subtract_bias(ccd, bias)
-        if isinstance(master_bias, str):
-            meta['HIERARCH OVERSCAN_MASTER_BIAS'] = 'OSBIAS'
-            meta['OSBIAS'] = master_bias
-        else:
-            meta['HIERARCH OVERSCAN_MASTER_BIAS'] = 'CCDData object provided'
-    if ccd.meta.get('subtract_bias') is None:
-        log.warning('overscan_estimate: bias has not been subtracted, which can lead to inaccuracy of overscan estimate')
-    # The coronagraph creates a margin of un-illuminated pixels on the
-    # CCD.  These are great for estimating the bias and scattered
-    # light for spontanous subtraction.
-    # Corners method
-    s = ccd.shape
-    bs = box_size
-    c00 = biweight_location(ccd[0:bs,0:bs])
-    c10 = biweight_location(ccd[s[0]-bs:s[0],0:bs])
-    c01 = biweight_location(ccd[0:bs,s[1]-bs:s[1]])
-    c11 = biweight_location(ccd[s[0]-bs:s[0],s[1]-bs:s[1]])
-    corners_method = min(c00, c10, c01, c11)
-    # Histogram method.  The first peak is the bias, the second is the
-    # ND filter.  Note that the 1.25" filters do a better job at this
-    # than the 2" filters but with carefully chosen parameters, the
-    # first small peak can be spotted.
-    if binsize is None:
-        # Calculate binsize based on readnoise in ADU, but oversample
-        # by 4.  Note need to convert from Quantity to float
-        binsize = readnoise/gain/4.
-    im_hist, im_hist_centers = hist_of_im(ccd, binsize)
-    # Note that after bias subtraction, there is sometimes some noise
-    # at low counts.  We expect a lot of pixels in the histogram, so filter
-    good_idx = np.flatnonzero(im_hist > min_hist_val)
-    im_hist = im_hist[good_idx]
-    im_hist_centers = im_hist_centers[good_idx]
-    # The arguments to linspace are the critical parameters I played
-    # with together with binsize to get the first small peak to be recognized
-    im_peak_idx = signal.find_peaks_cwt(im_hist,
-                                        np.linspace(min_width, max_width))
-    hist_method = im_hist_centers[im_peak_idx[0]]
-    overscan_methods = ['corners', 'histogram']
-    overscan_values = np.asarray((corners_method, hist_method))
-    meta['HIERARCH OVERSCAN_CORNERS'] = (corners_method, 'ADU')
-    meta['HIERARCH OVERSCAN_HISTOGRAM'] = (hist_method, 'ADU')
-    o_idx = np.argmin(overscan_values)
-    overscan = overscan_values[o_idx]
-    meta['HIERARCH OVERSCAN_METHOD'] = (overscan_methods[o_idx],
-                                       'Method used for overscan estimation')
-    if show:
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8.5, 9))
-        ccds = ccd.subtract(1000*u.adu)
-        range = 5*readnoise/gain
-        vmin = overscan - range - 1000
-        vmax = overscan + range - 1000
-        ax1.imshow(ccds, origin='lower', cmap=plt.cm.gray, filternorm=0,
-                   interpolation='none', vmin=vmin, vmax=vmax)
-        ax1.set_title('Image minus 1000 ADU')
-        ax2.plot(im_hist_centers, im_hist)
-        ax2.set_yscale("log")
-        ax2.set_xscale("log")
-        ax2.axvline(overscan, color='r')
-        # https://stackoverflow.com/questions/13413112/creating-labels-where-line-appears-in-matplotlib-figure
-        # the x coords of this transformation are data, and the
-        # y coord are axes
-        trans = transforms.blended_transform_factory(
-            ax2.transData, ax2.transAxes)
-        ax2.set_title('Histogram')
-        ax2.text(overscan+20, 0.05, overscan_methods[o_idx]
-                 + ' overscan = {:.2f}'.format(overscan),
-                 rotation=90, transform=trans,
-                 verticalalignment='bottom')
-        plt.show()
-    return overscan
-
 def subtract_overscan(fname_or_ccd, oscan=None, *args, **kwargs):
     """Subtract overscan, estimating it, if necesesary, from image.
     Also subtracts overscan from SATLEVEL keyword
@@ -625,7 +325,15 @@ def subtract_overscan(fname_or_ccd, oscan=None, *args, **kwargs):
     """
     nccd = ccddata_read(fname_or_ccd)
     if oscan is None:
-        oscan = overscan_estimate(nccd, meta=nccd.meta, *args, **kwargs)
+        # Interface with sx694.overscan_estimate, which doesn't take
+        # CCDData for the primary input data
+        im = nccd.data
+        hdr = nccd.meta
+        # Fix problem where BUNIT is not recorded until file is
+        # written
+        hdr['BUNIT'] = nccd.unit.to_string()
+        oscan = sx694.overscan_estimate(im, hdr, hdr_out=nccd.meta,
+                                        *args, **kwargs)
     nccd = nccd.subtract(oscan*u.adu, handle_meta='first_found')
     nccd.meta['HIERARCH OVERSCAN_VALUE'] = (oscan, 'overscan value subtracted (ADU)')
     nccd.meta['HIERARCH SUBTRACT_OVERSCAN'] \
@@ -672,8 +380,8 @@ def cor_process(ccd,
 
     The following steps can be included:
 
-    * add CCD metadata (:func:`ccd_metadata`)
-    * correct CCD exposure time (:func:`ccd_exp_correct`)
+    * add CCD metadata (:func:`sx694.metadata`)
+    * correct CCD exposure time (:func:`sx694.exp_correct`)
     * overscan correction (:func:`subtract_overscan`)
     * trimming of the image (:func:`trim_image`)
     * create deviation frame (:func:`create_deviation`)
@@ -732,7 +440,7 @@ def cor_process(ccd,
 
     oscan : number, bool, or None, optional
         Single pedistal value to subtract from image.  If True, oscan
-        is estimated using :func:`overscan_estimate` and subtracted
+        is estimated using :func:`sx694.overscan_estimate` and subtracted
         Default is ``None``.
 
     error : bool, optional
@@ -901,20 +609,20 @@ def cor_process(ccd,
 
     if ccd_meta:
         # Put in our SX694 camera metadata
-        nccd.meta = ccd_metadata(nccd.meta, *args, **kwargs)
+        nccd.meta = sx694.metadata(nccd.meta, *args, **kwargs)
 
     if exp_correct:
         # Correct exposure time for driver bug
-        nccd.meta = ccd_exp_correct(nccd.meta, *args, **kwargs)
+        nccd.meta = sx694.exp_correct(nccd.meta, *args, **kwargs)
         
     if airmass_correct:
-        nccd.meta = ccd_airmass_correct(nccd.meta)
+        nccd.meta = kasten_young_airmass(nccd.meta)
     # Apply overscan correction unique to the IoIO SX694 CCD.  This
     # adds our CCD metadata as a necessary step and uses the string
     # version of master_bias, if available for metadata
     if oscan is True:
         nccd = subtract_overscan(nccd, master_bias=master_bias,
-                                 *args, **kwargs)
+                                       *args, **kwargs)
     elif oscan is None or oscan is False:
         pass
     else:
@@ -1253,16 +961,16 @@ def bias_combine_one_fdict(fdict,
                            show=False,
                            min_num_biases=min_num_biases,
                            dccdt_tolerance=dccdt_tolerance,
-                           camera_description=sx694_camera_description,
-                           gain=sx694_gain,
-                           satlevel=sx694_satlevel,
-                           readnoise=sx694_example_readnoise,
-                           readnoise_tolerance=sx694_readnoise_tolerance,
+                           camera_description=sx694.camera_description,
+                           gain=sx694.gain,
+                           satlevel=sx694.satlevel,
+                           readnoise=sx694.example_readnoise,
+                           readnoise_tolerance=sx694.readnoise_tolerance,
                            gain_correct=False,
                            num_processes=max_num_processes,
                            mem_frac=max_mem_frac,
-                           naxis1=sx694_naxis1,
-                           naxis2=sx694_naxis2,
+                           naxis1=sx694.naxis1,
+                           naxis2=sx694.naxis2,
                            bitpix=64+8):
 
     """Worker that allows the parallelization of calibrations taken at one
@@ -1396,7 +1104,7 @@ def bias_combine_one_fdict(fdict,
 
     # Do a sanity check of readnoise
     av_rdnoise = np.mean(df['rdnoise'])            
-    if (np.abs(av_rdnoise/sx694_example_readnoise - 1)
+    if (np.abs(av_rdnoise/sx694.example_readnoise - 1)
         > readnoise_tolerance):
         log.warning('High readnoise {}, skipping {}'.format(av_rdnoise, out_fname))
         return False
@@ -1416,7 +1124,7 @@ def bias_combine_one_fdict(fdict,
                      sigma_clip_func=np.ma.median,
                      sigma_clip_dev_func=mad_std,
                      mem_limit=mem.available*mem_frac)
-    im.meta = ccd_metadata(im.meta)
+    im.meta = sx694.metadata(im.meta)
     if gain_correct:
         im = ccdp.gain_correct(im, gain*u.electron/u.adu)
         im_gain = 1
@@ -1506,8 +1214,8 @@ def bias_combine(directory=None,
                  num_processes=max_num_processes,
                  mem_frac=max_mem_frac,
                  num_calibration_files=num_calibration_files,
-                 naxis1=sx694_naxis1,
-                 naxis2=sx694_naxis2,
+                 naxis1=sx694.naxis1,
+                 naxis2=sx694.naxis2,
                  bitpix=64+8,
                  process_expand_factor=cor_process_expand_factor,
                  **kwargs):
@@ -1593,11 +1301,11 @@ def dark_combine_one_fdict(fdict,
                            keep_intermediate=False,
                            show=False,
                            dccdt_tolerance=dccdt_tolerance,
-                           mask_threshold=sx694_dark_mask_threshold,
+                           mask_threshold=sx694.dark_mask_threshold,
                            num_processes=max_num_processes,
                            mem_frac=max_mem_frac,
-                           naxis1=sx694_naxis1,
-                           naxis2=sx694_naxis2,
+                           naxis1=sx694.naxis1,
+                           naxis2=sx694.naxis2,
                            bitpix=64+8,
                            **kwargs):
     """Worker that allows the parallelization of calibrations taken at one
@@ -1747,8 +1455,8 @@ def dark_combine(directory=None,
                  num_processes=max_num_processes,
                  mem_frac=max_mem_frac,
                  num_calibration_files=num_calibration_files,
-                 naxis1=sx694_naxis1,
-                 naxis2=sx694_naxis2,
+                 naxis1=sx694.naxis1,
+                 naxis2=sx694.naxis2,
                  bitpix=64+8,
                  process_expand_factor=cor_process_expand_factor,
                  **kwargs):
@@ -1828,8 +1536,8 @@ def flat_combine_one_filt(this_filter,
                           min_num_flats=min_num_flats,
                           num_processes=max_num_processes,
                           mem_frac=max_mem_frac,
-                          naxis1=sx694_naxis1,
-                          naxis2=sx694_naxis2,
+                          naxis1=sx694.naxis1,
+                          naxis2=sx694.naxis2,
                           bitpix=64+8,
                           show=False,
                           flat_cut=0.75,
@@ -1965,8 +1673,8 @@ def flat_combine(directory=None,
                  num_processes=max_num_processes,
                  mem_frac=max_mem_frac,
                  num_calibration_files=num_calibration_files,
-                 naxis1=sx694_naxis1,
-                 naxis2=sx694_naxis2,
+                 naxis1=sx694.naxis1,
+                 naxis2=sx694.naxis2,
                  bitpix=64+8,
                  griddata_expand_factor=griddata_expand_factor,
                  **kwargs):
@@ -2172,8 +1880,8 @@ class Calibration():
                  num_dark_exptimes=num_dark_exptimes,
                  num_filts=num_filts,
                  num_calibration_files=num_calibration_files,
-                 naxis1=sx694_naxis1,
-                 naxis2=sx694_naxis2,
+                 naxis1=sx694.naxis1,
+                 naxis2=sx694.naxis2,
                  bitpix=64+8,
                  process_expand_factor=cor_process_expand_factor,
                  griddata_expand_factor=griddata_expand_factor,
@@ -2678,14 +2386,14 @@ class Calibration():
         best_filt_date_idx = good_filt_idx[best_filt_date_idx]
         return self._flat_table['fnames'][best_filt_date_idx]
 
-#log.setLevel('DEBUG')
-#
-#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
-##fname = '/data/io/IoIO/raw/20200708/HD 118648-S001-R001-C001-Na_on.fts'
-#fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
-#cmp = CorMultiPipe(auto=True, calibration=c,
-#                   post_process_list=[nd_filter_mask])
-#pout = cmp.pipeline([fname], outdir='/tmp', overwrite=True)
-#out_fnames, pipe_meta = zip(*pout)
-#
-#print(pipe_meta)
+log.setLevel('DEBUG')
+
+c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
+#fname = '/data/io/IoIO/raw/20200708/HD 118648-S001-R001-C001-Na_on.fts'
+fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
+cmp = CorMultiPipe(auto=True, calibration=c,
+                   post_process_list=[nd_filter_mask])
+pout = cmp.pipeline([fname], outdir='/tmp', overwrite=True)
+out_fnames, pipe_meta = zip(*pout)
+
+print(pipe_meta)
