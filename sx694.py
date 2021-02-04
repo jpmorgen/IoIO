@@ -173,6 +173,8 @@ def exp_correct(hdr_in,
     #            'Corrected exposure time for SX694 MaxIm driver bug')
     return hdr
 
+
+# --> this is really more of a generic utility
 def hist_of_im(im, binsize=1, show=False):
     """Returns a tuple of the histogram of image and index into *centers* of
 bins."""
