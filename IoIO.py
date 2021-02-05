@@ -20,15 +20,9 @@ from astropy.time import Time, TimeDelta
 from scipy import signal, ndimage
 import matplotlib.pyplot as plt
 
+import sx694
 import precisionguide as pg
 
-# Constants for use in code
-# Measured in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx
-# Agrees well well standard (non-PRO) Trius SX-694 advertised value
-global_gain = 0.3 
-# Measured as per ioio.notebk Tue Jul 10 12:13:33 2018 MCT  jpmorgen@byted
-# To be measured regularly as part of new bias subtraction
-global_readnoise = 15.475665 * global_gain
 SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 
 # 2018 end of run
@@ -54,7 +48,7 @@ def hist_of_im(im, readnoise=None):
 bins."""
     # Code from west_aux.py, maskgen.
     if readnoise is None:
-        readnoise = global_readnoise
+        readnoise = sx694.example_readnoise
     # Histogram bin size should be related to readnoise
     hrange = (im.min(), im.max())
     nbins = int((hrange[1] - hrange[0]) / readnoise)
@@ -109,7 +103,7 @@ class CorObsData(pg.ObsData):
         self.y_center = y_center
         self.readnoise = readnoise
         if self.readnoise is None:
-            self.readnoise = global_readnoise
+            self.readnoise = sx694.example_readnoise
 
         # Define defaults for ND mask finding algorithm.  It is easy
         # to find the ND mask in flats, but not Jupiter images.  We
@@ -277,9 +271,14 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         # Returns stored center for object, None for flats
         if self._obj_center is not None or self.isflat:
             return self._obj_center
-        
+
         # Work with unbinned image
         im = self.HDU_unbinned()
+        back_level = self.back_level / (np.prod(self._binning))
+
+        satlevel = self.header.get('SATLEVEL')
+        if satlevel is None:
+            satlevel = sx694.satlevel
 
         # Establish some metrics to see if Jupiter is on or off the ND
         # filter.  Easiest one is number of saturated pixels
@@ -289,13 +288,13 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         # additional scattered light).  A star off the ND filter
         # /data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit
         # gives 124 num_sat
-        satc = np.where(im > 60000)
+        satc = np.where(im >= satlevel)
         num_sat = len(satc[0])
         #log.debug('Number of saturated pixels in image: ' + str(num_sat))
 
         # Work another way to see if the ND filter has a low flux
         # Note, this assignment dereferences im from HDUList[0].data
-        im  = im - self.back_level
+        im  = im - back_level
         
         # Get the coordinates of the ND filter
         NDc = self.ND_coords
@@ -328,6 +327,10 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         # array([ 3119112.76311733,  1103540.18436529])
         
         sum_on_ND_filter = np.sum(im[boost_NDc0, boost_NDc1])
+        # Adjust for the case where ND filter may have a fairly
+        # high sky background.  We just want Jupiter
+        sum_on_ND_filter -= NDmed * len(boost_NDc0)
+        
         #log.debug('sum of significant pixels on ND filter = ' + str(sum_on_ND_filter))
         print('sum_on_ND_filter = ', sum_on_ND_filter)
         #if num_sat > 1000 or sum_on_ND_filter < 1E6:
@@ -338,14 +341,14 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
             # make the center of mass calc more accurate, just set
             # everything that is not getting toward saturation to 0
             # --> Might want to fine-tune or remove this so bright
-            im[np.where(im < 40000)] = 0
+            im[np.where(im < satlevel*0.7)] = 0
             
             #log.debug('Approx number of saturating pixels ' + str(np.sum(im)/65000))
 
             # 25 worked for a star, 250 should be conservative for
             # Jupiter (see above calcs)
-            # if np.sum(im) < 65000 * 25:
-            if np.sum(im) < 65000 * 250:
+            # if np.sum(im) < satlevel * 25:
+            if np.sum(im) < satlevel * 250:
                 self.quality = 4
                 log.warning('Jupiter (or suitably bright object) not found in image.  This object is unlikely to show up on the ND filter.  Seeting quality to ' + str(self.quality) + ', center to [-99, -99]')
                 self._obj_center = np.asarray([-99, -99])
@@ -375,7 +378,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
             im[boost_NDc0, boost_NDc1] *= 1000
             # Clean up any signal from clouds off the ND filter, which can
             # mess up the center of mass calculation
-            im[np.where(im < 65000)] = 0
+            im[np.where(im < satlevel)] = 0
             y_x = ndimage.measurements.center_of_mass(im)
     
             #print(y_x[::-1])

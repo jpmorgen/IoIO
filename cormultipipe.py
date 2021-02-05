@@ -1605,6 +1605,7 @@ def flat_combine_one_filt(this_filter,
     obs_data = CorObsData(hdul, edge_mask=-nd_edge_expand)
     # Capture our ND filter metadata
     im.meta = hdul[0].header
+    # --> working on RedCorObsData
     good_pix = np.ones(im.shape, bool)
     good_pix[obs_data.ND_coords] = False
     points = np.where(good_pix)

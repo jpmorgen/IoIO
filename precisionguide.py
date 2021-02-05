@@ -376,6 +376,9 @@ class ObsData():
         coords = np.asarray(coords)
         return np.asarray((coords - self._subframe_origin) / self._binning)
         
+    # --> This should probably be some sort of property instead with
+    # something like do_unbin_on_im for the case we want to unbin a
+    # modified version of our image
     def HDU_unbinned(self, a=None):
         """Returns an unbinned version of the primary HDU image or the primary HDU image if it is not binned.  If a is provided, pretend that is the primary HDU (e.g., it may be a modified version) and unbin that
         """

@@ -5676,7 +5676,7 @@ I want an rsync process to be able to copy things over properly
 There are a bunch of things in the Scripts directory.  I might want a
 specific one for python.  Or just copy over the couple I need 
 
---> rsync
+rsync
 eval `ssh-agent` 
 ssh-add
 rsync -auv jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/home/jpmorgen/py/IoIO/IoIO.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
@@ -10727,3 +10727,35 @@ On that later point, IoIO.py currently does two things: CorObsData and
 the telescope control.  It may be useful to separate those, just like
 it might be useful to separate ObsData to a different file for clean
 import.  Think about this when I have a chance
+
+Fri Feb 05 09:36:07 2021 EST  jpmorgen@snipe
+
+Adding sx694 to system
+
+--> rsync
+sa
+rsync -auv jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/home/jpmorgen/py/IoIO/sx694.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
+rsync -auv jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/home/jpmorgen/py/IoIO/IoIO.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
+rsync -auv jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/home/jpmorgen/py/IoIO/precisionguide.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
+
+As per ~/IoIO_reduction.notebk Wed Feb 03 11:03:24 2021 EST  jpmorgen@snipe
+I am realzing that I really didn't understand the HDUList stuff when I
+first started using it.  I can just read the file with a "with"
+statement, assigning local references to the header and data.  The
+file stays open while the local references are being used and closes
+when they are garbage collected.
+
+HEY!  I could make a very simple object, like a CCDData that would
+have the same naming convention but not all the fancy machinery.  But
+does this really save me time except on first import?  I guess that is
+what I am testing right now with redcorobsdata.py.  Nevertheless, in
+principle, I could change all of the hdr, header stuff to meta and
+just pass the ObsData to things like sx694.overscan_estimate, since it
+is just property and the reference is not heavy to pass (stop thinking
+in IDL).
+
+Along the same lines, if I can demonstrate that CCDData are pretty
+much just as fast as ObsData, I can just subclass CCDData to something
+like PGData, adding the property and methods necessary to keep track
+of the centers, etc.  But that is a refinement down the line.  The
+current task is to improve redcorobsdata

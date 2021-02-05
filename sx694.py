@@ -81,6 +81,12 @@ exposure_correct = 1.7 # s
 # more dark current, so include only them in the dark images
 dark_mask_threshold = 3
 
+# --> this is really more of a generic utility.  Also, this could be
+# incorporated with ObsData if the ObsData image + header property
+# were changed from an HDUList to a CCDData.data and .meta.  Or better
+# yet, if there is not significant speed impact, PrecisionGuide could
+# itself be a subclass of CCDData, simply adding property and methods
+# for the precisionguide stuff.
 def read_hdu0(fname):
     """Read primary FITS header and image
 
@@ -110,6 +116,24 @@ def read_hdu0(fname):
     # written
     hdr['BUNIT'] = ccd.unit.to_string()
     return (hdr, im)
+
+# --> this is really more of a generic utility
+def hist_of_im(im, binsize=1, show=False):
+    """Returns a tuple of the histogram of image and index into *centers* of
+bins."""
+    # Code from west_aux.py, maskgen.
+    # Histogram bin size should be related to readnoise
+    hrange = (im.min(), im.max())
+    nbins = int((hrange[1] - hrange[0]) / binsize)
+    hist, edges = np.histogram(im, bins=nbins,
+                               range=hrange, density=False)
+    # Convert edges of histogram bins to centers
+    centers = (edges[0:-1] + edges[1:])/2
+    if show:
+        plt.plot(centers, hist)
+        plt.show()
+        plt.close()
+    return (hist, centers)
 
 def metadata(hdr_in,
                  camera_description=camera_description,
@@ -172,25 +196,6 @@ def exp_correct(hdr_in,
     #add_history(hdr,
     #            'Corrected exposure time for SX694 MaxIm driver bug')
     return hdr
-
-
-# --> this is really more of a generic utility
-def hist_of_im(im, binsize=1, show=False):
-    """Returns a tuple of the histogram of image and index into *centers* of
-bins."""
-    # Code from west_aux.py, maskgen.
-    # Histogram bin size should be related to readnoise
-    hrange = (im.min(), im.max())
-    nbins = int((hrange[1] - hrange[0]) / binsize)
-    hist, edges = np.histogram(im, bins=nbins,
-                               range=hrange, density=False)
-    # Convert edges of histogram bins to centers
-    centers = (edges[0:-1] + edges[1:])/2
-    if show:
-        plt.plot(centers, hist)
-        plt.show()
-        plt.close()
-    return (hist, centers)
 
 def overscan_estimate(im_in, hdr_in, hdr_out=None, master_bias=None,
                       binsize=None, min_width=1, max_width=8, box_size=100,

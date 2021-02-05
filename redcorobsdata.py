@@ -2,6 +2,14 @@ from scipy import signal, ndimage
 import numpy as np
 
 from astropy import log
+from astropy.convolution import Gaussian2DKernel, convolve
+from astropy.stats import gaussian_fwhm_to_sigma, sigma_clipped_stats
+
+from photutils import make_source_mask
+from photutils import detect_sources
+from photutils import deblend_sources
+from photutils import source_properties
+from photutils.background import Background2D
 
 import sx694
 from IoIO import CorObsData
@@ -18,6 +26,13 @@ class RedCorObsData(CorObsData):
             sx694.overscan_estimate(self.HDUList[0].data,
                                     self.header)
         return self._back_level
+
+    @property
+    def ND_mask(self):
+        im = self.HDUList[0].data
+        mask = np.zeros(im.shape, bool)
+        mask[self.ND_coords] = True
+        return mask
 
     @property
     def obj_center(self):
@@ -82,7 +97,7 @@ class RedCorObsData(CorObsData):
         # array([ 3119112.76311733,  1103540.18436529])
         
         sum_on_ND_filter = np.sum(im[boost_NDc0, boost_NDc1])
-        # --> adjust for the case where ND filter may have a fairly
+        # Adjust for the case where ND filter may have a fairly
         # high sky background.  We just want Jupiter
         sum_on_ND_filter -= NDmed * len(boost_NDc0)
         
@@ -160,15 +175,25 @@ class RedCorObsData(CorObsData):
 jup = '/data/io/IoIO/raw/20200507/Jupiter-S004-R001-C001-Na_on_dupe-1.fts'
 o = CorObsData(jup)
 o = RedCorObsData(jup)
+# Pre-improvement
 #sum_on_ND_filter =  227854.2544777951
+# Post-improvement
+#sum_on_ND_filter =  253682.00000000003
+# RedCorObs should be the same
+#sum_on_ND_filter =  253681.9999999999
 #sum_on_ND_filter =  253681.9999999999
 
 # Jupiter found
 jup = '/data/io/IoIO/raw/20200507/Na_on-band_002.fits'
 o = CorObsData(jup)
 o = RedCorObsData(jup)
+# Pre-improvement
 #sum_on_ND_filter =  10136130.15718806
+# Post-improvement
+#sum_on_ND_filter =  11169575.000000002
+# RedCorObs should be the same
 #sum_on_ND_filter =  10922457.999999998
+#sum_on_ND_filter =  11169575.0
 
 
 #fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
