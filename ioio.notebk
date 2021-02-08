@@ -10759,3 +10759,190 @@ much just as fast as ObsData, I can just subclass CCDData to something
 like PGData, adding the property and methods necessary to keep track
 of the centers, etc.  But that is a refinement down the line.  The
 current task is to improve redcorobsdata
+
+Hmm.  I am seeing that I was so concerned about speed and size that I
+deleted the HDUList as part of the ObsData initialization process.
+This was, in part, because I wanted to have a bunch of ObsDatas around
+to store past centers for calculation of rates and did not want to
+have a lot of huge files around.
+
+This changes the idea I had about how to structure things, though
+maybe I just need a no_cleanup option or just have the RedCorObs
+subclass overwrite the cleanup method.
+
+I can also have RedCorObs multiply inherit CCDData and CorObsData,
+since reduction is the point at which I want to transition over to
+using CCDData and more sophisticated tools.
+
+OTOH, it looks relatively easy to have ObsData.read_im just dump
+things into self.data and self.meta instead of self.HDUList and
+self.header.
+
+OTOOH, it does make a little sense to have the HDUList around just in
+case other subclasses want to make use of it (e.g. read more of the
+FITS file if desired).  And ultimately I think that is the situation I
+am in with RedCorObs, since it is going to have a full CCDData to
+read.
+
+So how do I initialize a CCDData from an already open HDUL?  Doesn't
+look like that is allowed.  Can only read from disk.  Well, not
+exactly.  I can just stuff the HDUList[0].data in as data and
+subsequently just assign the meta as property (header is equivalent to
+meta still).
+
+So I do have the option to inherit cleverly.  If ObsData has method
+names similar to CCDData, like .read, and property like .data, and
+.meta (.header is still allowed), that is about all I need.  I can
+then create RedCorObsData(CCDData, CorObsData).  
+
+Re-reading my notes before about PGData.  That might be the best
+thing.  PGData would be a very light object that just had the centers
+and any other rate calculation stuff I want to store (or maybe I need
+another level for that -- a PGRateData that would have a list of
+PGData).  The point is that PGData would never have the whole image in
+it.  So who would instantiate it?  There are a varietry of containers
+for storing FITS files.  Whatever instantiates PGData has to also hold
+the FITS information at least for a while.  Right now it is confusing
+that I have it and kill it.  What I really expect is to instantiate
+something that reads the FITS data and then that something always has
+the FITS data.  That would argue for an object, like ObsData, that
+holds the object, but then has as property the PGData.  In that case,
+the internal workings of the PGData creating object will create the
+memory locations holding the calculated center, etc.  They will then
+be referenced by the PGData and if the creator is subsequently
+dereferenced, all the other things in the creator like the large
+arrays are garbage-collected.  SO I think that works to have two
+independent classes.
+
+Ahh!  And the way it could work is the ObsData could inherit a simple
+FITS container or whatever, and all of the machinery that calculates
+the center, etc., would not be done until the PGData property is
+queried.
+
+Whew!  That saves a lot of the spaghetti code I came up with in the
+early running.
+
+OK, lets see if we can transtion easily from what we have.  Currrently
+some sample code in PrecisionGuide in the very important
+PrecisionGuide.center method  that looks like:
+
+O = self.create_ObsData(HDUList, **ObsClassArgs)
+if O.quality < 5:
+
+That would become
+
+obsdata = self.create_ObsData(HDUList, **ObsClassArgs)
+pgcenter = obsdata.pgcenter
+
+And for some reason I was not thinking I could pass a class name as a
+variable name, but clearly I can:
+
+class test():
+...     pass
+... 
+>>> t1= test()
+>>> t1
+<__main__.test object at 0x7fc68d540940>
+>>> t2 = test
+>>> t2
+<class '__main__.test'>
+>>> t3 = t2()
+>>> t3
+<__main__.test object at 0x7fc68d53b5c0>
+
+
+So that would further be refined:
+
+obsdata = self.obsdataclass(HDUList, **ObsClassArgs)
+pgc = obsdata.pgcenter
+
+And the base class for ObsData could just have **kwargs in the
+__init__ to take care of extra args passed to it.
+
+So is ObsData really the best class name, or should it be PGData?
+
+And whatever I call it, it will basically look a lot like the ObsData
+things, just have an extra @property to spit out the PGCenter.
+
+PGData
+PGCenter
+PGSequence os something like that for an array of PGCenters to do rate
+calculations 
+
+In MaxImControl we use astropy.io to open our astrometry files.  We
+also use astropy.wcs in precisionguide for fancy calculations.  So we
+could possibly import ccdproc, but there is just a lot of stuff there
+we don't need.
+
+Right now I handle the FITS stuff in MaxImControl with the basic
+astropy.fits library, which is as primitive as I want to go and as
+advanced as I absolutely need.  It produces and HDUList which can be
+immediately taken apart to .data and .meta/.header in whatever code
+asked for it. 
+
+
+OK, so I am seeing my code in PrecisionGuide at acquire_image as
+potentially octopus stomach.  Ah, that was the failed rate stuff.  OK,
+so I can develop starting there when I get the chance.  What I really
+call to get images from IoIO is acquire_im, which just returns an
+HDUList after saving the file.
+
+I do use the ObsData in the center algorithm.  I have a ridiculous
+number of choices, but basically just need obj_center and
+desired_center, which can come from a PGCenter.  I am also seeing the
+when nothing is passed for the center, PrecisionGuide automatically
+takes an image using stored parameters.  I may want to avoid that and
+require the end-user to subclass PrecisionGuide for their own rig.  In
+any case, I think I have a lot of work to do if I want to clean things
+up to be Pythonic.
+
+Hey, I think I am seeing how I can finally avoid the import win32
+issues.  The way astropy works, when I import astropy, it doesn't
+really do much except make the top-level astropy. namespace available.
+I can potentially do the same with precisionguide.  It provides
+MaxImControl and PrecisionGuide, where MaxImControl is the only thing
+that uses the win stuff, I think.  ObsData potentially nee PGData can
+potentially be imported separately
+
+--> I could have a precisionguide/win32.py which had all the
+MaxImControl and PrecisionGuide stuff in it.  Then the main
+precisionguide could have PGData, PGCenter, and PGSequence.  Hey,
+since I can querey sys.platform, I could have the __init__
+automatically go down the route of the platform I am on in the same
+way, with currently unsupported platforms just passing potentially
+with a message that only the data structure/centering stuff will be
+loaded
+
+Actually, I could make a sample MaxImControl for PrecisionGuide that
+just delivers very simple stuff and maybe prints messages when moving
+the scope.  That could be simulator.py.
+
+Ultimately, I would want to design an API that provides standard
+commands that PrecisionGuide issues to the underlying telescope and
+camera control system.  Currently, these are a big mixed up, with
+MaxImCommander just concentrating on direct interface with MaxIm and
+PrecisionGuide driving _that_ interface.  It would be better to
+conceive of a generic API that would enable different systems to be
+controlled.  I think I might need to do that before or as I develop
+simulator.py.  Because PrecisionGuide takes as an argument an
+instantiated MaxImControl, I am part way there.
+
+Hmm.  Part of the MaxImControl system uses the astrometry.  This is to
+determine pier side and stuff like that.  It is sort of nice to have
+that done at that level so PrecisionGuide doesn't have to worry about
+it.  So my initial thinking that having WCS in the telescope control
+system was bad is changing.  It actually makes PrecisionGuide simpler
+
+In the short term, the simulator.py would have a PrecisionGuide that
+could return the basics of what I need for testing.
+
+Going back to PGData and my aversion to using CCDData as the base
+class.  There are some features like read that is a classmethod, which
+is very fancy and would hard to implement for me in parallel.
+
+Mon Feb 08 10:40:07 2021 EST  jpmorgen@snipe
+
+OK, a little research on the binning and subframe origin.  This is
+unique to MaxIm, so I should porbably plan to have a subclass to deal
+with that.  The alternative is to have the [XY]BINNING and [XY]ORGSUBF
+keywords be things that are passed in with init

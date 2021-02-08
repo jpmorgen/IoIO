@@ -52,7 +52,7 @@ if sys.platform == 'win32':
             except:
                 log.info('MaxIm not found.  MaxIm/telescope control will not work.')
 else:
-        log.info('You are not on a Windows system.  The MaxIm/telescope control features of this package will not work unless you are on a Windows system.')
+    log.info('You are not on a Windows system.  The MaxIm/telescope control features of this package will not work unless you are on a Windows system.')
 
 import define as D
 
@@ -222,9 +222,9 @@ def pier_flip_astrometry(header_in):
     header['HISTORY'] = 'Artificially flipped pier side, modified CD* and PIERSIDE'
     return header
 
-
 # --> Really what I think I want is a PGData for all of the center and
-# --> rate stuff.  That will clean up the ObsData property and __init__
+# --> rate stuff.  That will clean up the ObsData property and
+# --> __init__
 class ObsData():
     """Base class for observations, enabling object centering, etc.
 
@@ -248,6 +248,7 @@ class ObsData():
         self.header = None
         self._binning = None
         self._subframe_origin = None
+        self._HDU_unbinned = None
         self._we_opened_file = None
         # Keep property for later use/speedy access
         self._hist_of_im = None
@@ -299,11 +300,11 @@ class ObsData():
 
 
     def cleanup(self):
-        """Close open file, deference large array"""
+        """Close open file, deference large arrays"""
         if self._we_opened_file:
             self.close_fits()
         del self.HDUList
-
+        del self._HDU_unbinned
 
     def read_im(self, HDUList_im_or_fname=None):
         """Populate ObsData with HDUList and associated info"""
@@ -376,14 +377,11 @@ class ObsData():
         coords = np.asarray(coords)
         return np.asarray((coords - self._subframe_origin) / self._binning)
         
-    # --> This should probably be some sort of property instead with
-    # something like do_unbin_on_im for the case we want to unbin a
-    # modified version of our image
-    def HDU_unbinned(self, a=None):
-        """Returns an unbinned version of the primary HDU image or the primary HDU image if it is not binned.  If a is provided, pretend that is the primary HDU (e.g., it may be a modified version) and unbin that
+    def im_unbinned(self, a):
+        """Returns an unbinned version of a.  a must be same shape
+        as the primary HDU image
         """
-        if a is None:
-            a = self.HDUList[0].data
+        assert a.shape == self.HDUList[0].data.shape
         # Don't bother if we are already unbinned
         if np.sum(self._binning) == 2:
             return a
@@ -405,6 +403,15 @@ class ObsData():
             full_unbinned[origin[0]:, origin[1]:] = unbinned
             unbinned = full_unbinned
         return unbinned
+        
+    @property
+    def HDU_unbinned(self):
+        """Returns an unbinned version of the primary HDU image or the primary HDU image if it is not binned.
+        """
+        if self._HDU_unbinned is not None:
+            return self._HDU_unbinned
+        self._HDU_unbinned = self.im_unbinned(self.HDUList[0].data)
+        return self._HDU_unbinned
 
     def close_fits(self):
         if self.HDUList.fileinfo is not None:
@@ -2319,20 +2326,20 @@ guide_box_log_file : str
             if desired_center is None:
                 # (Allows user to override desired center)
                 desired_center = input.desired_center
-            if current_astrometry is not None:
-                astrometry_from = current_astrometry
-                absolute = True
-            elif (input.header.get('CTYPE1')
-                  and not ignore_ObsData_astrometry):
-                astrometry_from = input.header
-                absolute = True
-            elif scaling_astrometry is not None:
-                astrometry_from = scaling_astrometry
-                absolute = False
-            else:
-                # Default will be determined in scope_wcs
-                astrometry_from = None
-                absolute = False
+        if current_astrometry is not None:
+            astrometry_from = current_astrometry
+            absolute = True
+        elif (input.header.get('CTYPE1')
+              and not ignore_ObsData_astrometry):
+            astrometry_from = input.header
+            absolute = True
+        elif scaling_astrometry is not None:
+            astrometry_from = scaling_astrometry
+            absolute = False
+        else:
+            # Default will be determined in scope_wcs
+            astrometry_from = None
+            absolute = False
 
         if obj_center is None or desired_center is None:
             raise ValueError('Invalid HDUList_im_fname_ObsData_or_obj_center or a problem establishing desired_center from current CCD image (or something else...)')

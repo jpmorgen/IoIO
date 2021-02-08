@@ -34,11 +34,11 @@ cmp = CorMultiPipe(auto=True, calibration=c,
                    post_process_list=[detflux])
 fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
 fname2 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na_off.fit'
-pout = cmp.pipeline([fname1, fname2], outdir='/tmp', overwrite=True)
+pout = cmp.pipeline([fname1, fname2], outdir='/data/Mercury/analysis/2020-05-27/', overwrite=True)
 
 ####
-on = ccddata_read('/tmp/Mercury-0005_Na-on_r.fit')
-off = ccddata_read('/tmp/Mercury-0005_Na_off_r.fit')
+on = ccddata_read('/data/Mercury/analysis/2020-05-27/Mercury-0005_Na-on_r.fit')
+off = ccddata_read('/data/Mercury/analysis/2020-05-27/Mercury-0005_Na_off_r.fit')
 
 #nd_edge_expand = 40
 #obs_data = CorObsData(off.to_hdu(), edge_mask=-nd_edge_expand)
@@ -104,7 +104,7 @@ eps_to_R = I / S
 
 bsub_no_rot = bsub_no_rot.multiply(eps_to_R, handle_meta='first_found')
 
-bsub_no_rot.write('/tmp/Mercury-0005_Na-bsub.fit', overwrite=True)
+bsub_no_rot.write('/data/Mercury/analysis/2020-05-27/Mercury-0005_Na-bsub.fit', overwrite=True)
 
 bsub = bsub_no_rot.copy()
 
@@ -161,7 +161,7 @@ plt.axis('scaled')
 #cbar = plt.colorbar(orientation='horizontal', fraction=0.08)
 cbar = plt.colorbar(shrink=0.6)
 cbar.ax.set_xlabel(bsub.unit.to_string())
-plt.savefig(f'IoIO_{just_date}.png', transparent=True)
+plt.savefig(f'/data/Mercury/analysis/2020-05-27/IoIO_{just_date}.png', transparent=True)
 plt.show()
 
 yaxis = (np.arange(nr) - 20*Rmpix) / Rmpix
@@ -180,7 +180,7 @@ p3 = np.sum(bsub[:, round((110+20)*Rmpix):round((150+20)*Rmpix)], 1)
 ax3.plot(p3/((150-110)*Rmpix), yaxis)
 ax3.set_ylim(-17, 17)
 ax3.set_xlim(100, 250)
-
+plt.savefig(f'/data/Mercury/analysis/2020-05-27/IoIO_{just_date}_cross-tail_profiles.png', transparent=True)
 plt.show()
 
 subim_corners = np.asarray(((round(center[0]-2*Rmpix), round(center[1]-20*Rmpix)),
@@ -208,7 +208,7 @@ plt.xlabel('Rm')
 plt.ylabel('R')
 plt.xscale("log")
 plt.yscale("log")
-plt.savefig(f'IoIO_{just_date}_profile.png', transparent=True)
+plt.savefig(f'/data/Mercury/analysis/2020-05-27/IoIO_{just_date}_profile.png', transparent=True)
 plt.show()
 
 

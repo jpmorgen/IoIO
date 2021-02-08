@@ -253,6 +253,9 @@ def overscan_estimate(im_in, hdr_in, hdr_out=None, master_bias=None,
        histogram with overscan chopped  histogram.  Default is False [consider making this boolean or name of plot file]
 
     """
+    if hdr_in.get('subtract_overscan') is not None:
+        # We have been here before
+        return 0
     # We mess with both the input image and hdr, so save local copies
     im = im_in.copy()
     hdr = metadata(hdr_in)
@@ -261,7 +264,7 @@ def overscan_estimate(im_in, hdr_in, hdr_out=None, master_bias=None,
     bunit = hdr.get('bunit')
     if bunit is not None and bunit != 'adu':
         # For now don't get fancy with unit conversion
-        raise ValueError(f'CCD units are {bunit} bur must be in ADU for overscan estimation')
+        raise ValueError(f'CCD units are {bunit} but must be in ADU for overscan estimation')
     if hdr['IMAGETYP'] == "BIAS":
         overscan = np.median(ccd)
         hdr_out['HIERARCH OVERSCAN_MEDIAN'] = (overscan, 'ADU')

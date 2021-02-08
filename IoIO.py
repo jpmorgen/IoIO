@@ -60,19 +60,20 @@ bins."""
     #plt.show()
     return (hist, centers)
 
-def back_level(im, readnoise=None):
-    # Use the histogram technique to spot the bias level of the image.
-    # The coronagraph creates a margin of un-illuminated pixels on the
-    # CCD.  These are great for estimating the bias and scattered
-    # light for spontanous subtraction.  The ND filter provides a
-    # similar peak after bias subutraction (or, rather, it is the
-    # second such peak)
-    # --> This is very specific to the coronagraph.  Consider porting first peak find from IDL
-    # --> histogram is wrong because readnoise units are in electrons, not ADU
-    # --> consider making find_peaks_cwt args relative to readnoise
-    im_hist, im_hist_centers = hist_of_im(im, readnoise)
-    im_peak_idx = signal.find_peaks_cwt(im_hist, np.arange(10, 50))
-    return im_hist_centers[im_peak_idx[0]]
+# This is improved with sx694.overscan_estimate
+#def back_level(im, readnoise=None):
+#    # Use the histogram technique to spot the bias level of the image.
+#    # The coronagraph creates a margin of un-illuminated pixels on the
+#    # CCD.  These are great for estimating the bias and scattered
+#    # light for spontanous subtraction.  The ND filter provides a
+#    # similar peak after bias subutraction (or, rather, it is the
+#    # second such peak)
+#    # --> This is very specific to the coronagraph.  Consider porting first peak find from IDL
+#    # --> histogram is wrong because readnoise units are in electrons, not ADU
+#    # --> consider making find_peaks_cwt args relative to readnoise
+#    im_hist, im_hist_centers = hist_of_im(im, readnoise)
+#    im_peak_idx = signal.find_peaks_cwt(im_hist, np.arange(10, 50))
+#    return im_hist_centers[im_peak_idx[0]]
 
 class CorObsData(pg.ObsData):
     """Object for containing coronagraph image data used for centering Jupiter
@@ -259,9 +260,13 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
 
     @property
     def back_level(self):
+        # --> NOTE: this is binned back level
+        # Might want to rename this overscan
         if self._back_level is not None:
             return self._back_level
-        self._back_level = back_level(self.HDUList[0].data, self.readnoise)
+        self._back_level = \
+            sx694.overscan_estimate(self.HDUList[0].data,
+                                    self.header)
         return self._back_level
 
     @property
@@ -273,7 +278,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
             return self._obj_center
 
         # Work with unbinned image
-        im = self.HDU_unbinned()
+        im = self.HDU_unbinned
         back_level = self.back_level / (np.prod(self._binning))
 
         satlevel = self.header.get('SATLEVEL')
@@ -295,6 +300,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         # Work another way to see if the ND filter has a low flux
         # Note, this assignment dereferences im from HDUList[0].data
         im  = im - back_level
+        satlevel -= back_level
         
         # Get the coordinates of the ND filter
         NDc = self.ND_coords
@@ -539,7 +545,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         # don't get blown up by unbinning
         if self.isflat:
             # Don't bother for flats, just unbin the image
-            im = self.HDU_unbinned()
+            im = self.HDU_unbinned
         else:
             # Make a copy so we don't mess up the primary HDU (see below)
             im = self.HDUList[0].data.copy()
@@ -559,7 +565,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
                                  kernel_size=3)
             # Unbin now that we have removed cosmic rays from the section we
             # care about in native binning
-            im = self.HDU_unbinned(im)
+            im = self.im_unbinned(im)
             
         # We needed to remove cosmic rays from the unbinned version, but
         # now we may have a copy

@@ -29,9 +29,10 @@ from ccdmultipipe import ccddata_read
 from cormultipipe import (CorMultiPipe, Calibration, 
                           nd_filter_mask, mask_nonlin_sat)
 
-def photometry_process(ccd, pipe_meta, in_name='', **kwargs):
+def photometry_process(ccd, pipe_meta, seeing=5, **kwargs):
+    """Seeing is in FWHM pixels"""
     # This is going to expand by a factor of 15
-    sigma = 10.0 * gaussian_fwhm_to_sigma # FWHM = 10
+    sigma = seeing * gaussian_fwhm_to_sigma
     kernel = Gaussian2DKernel(sigma)
     kernel.normalize()
     # Make a source mask to enable optimal background estimation

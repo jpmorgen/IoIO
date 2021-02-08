@@ -2006,8 +2006,8 @@ class Calibration():
         our_num_processes = max(1, ncp)
         num_subprocesses = int(self.num_processes / our_num_processes)
         subprocess_mem_frac = self.mem_frac / our_num_processes
-        log.debug(f'Calibration.reduce_dark: ndirs_dates = {ndirs_dates}')
-        log.debug('Calibration.reduce_dark: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
+        log.debug(f'Calibration.reduce_bias: ndirs_dates = {ndirs_dates}')
+        log.debug('Calibration.reduce_bias: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
         #return
         wwk = WorkerWithKwargs(bias_combine,
                                subdirs=self._subdirs,
@@ -2387,14 +2387,14 @@ class Calibration():
         best_filt_date_idx = good_filt_idx[best_filt_date_idx]
         return self._flat_table['fnames'][best_filt_date_idx]
 
-log.setLevel('DEBUG')
-
-c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
-#fname = '/data/io/IoIO/raw/20200708/HD 118648-S001-R001-C001-Na_on.fts'
-fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
-cmp = CorMultiPipe(auto=True, calibration=c,
-                   post_process_list=[nd_filter_mask])
-pout = cmp.pipeline([fname], outdir='/tmp', overwrite=True)
-out_fnames, pipe_meta = zip(*pout)
-
-print(pipe_meta)
+#log.setLevel('DEBUG')
+#
+#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
+##fname = '/data/io/IoIO/raw/20200708/HD 118648-S001-R001-C001-Na_on.fts'
+#fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
+#cmp = CorMultiPipe(auto=True, calibration=c,
+#                   post_process_list=[nd_filter_mask])
+#pout = cmp.pipeline([fname], outdir='/tmp', overwrite=True)
+#out_fnames, pipe_meta = zip(*pout)
+#
+#print(pipe_meta)
