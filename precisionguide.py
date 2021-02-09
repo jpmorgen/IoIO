@@ -331,11 +331,11 @@ class ObsData():
             exptime = self.header.get('DARKTIME') 
             if exptime is None:
                 exptime = self.header['EXPTIME']
-                # Use units to help with astropy.time calculations
-                exptime *= u.s
-                self.Tmidpoint = (Time(self.header['DATE-OBS'],
-                                       format='fits')
-                                  + exptime/2)
+            # Use units to help with astropy.time calculations
+            exptime *= u.s
+            self.Tmidpoint = (Time(self.header['DATE-OBS'],
+                                   format='fits')
+                              + exptime/2)
         except:
             log.warning('Cannot read DARKTIME and/or EXPTIME keywords from FITS header')
         try:

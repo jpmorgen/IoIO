@@ -1,7 +1,13 @@
 """Define lightweight data containers for precisionguide system"""
 
 import numpy as np
+
 from astropy.io import fits
+
+from astropy.time import Time
+
+from astropy import units as u
+from astropy.nddata import CCDData
 
 class PGCenter():
     """Base class for containing object center and desired center
@@ -13,9 +19,13 @@ class PGCenter():
     """
     def __init__(self,
                  obj_center=None,
-                 desired_center=None):
+                 desired_center=None,
+                 quality=None,
+                 tmid=None):
         self.obj_center = obj_center
         self.desired_center = desired_center
+        self.quality = quality
+        self.tmid = tmid
 
     @property
     def obj_center(self):
@@ -32,14 +42,41 @@ class PGCenter():
     def desired_center(self):
         if self._desired_center is not None:
             return self._desired_center
-        
-        
+    
     @desired_center.setter
     def desired_center(self, value):
         if value is None:
             self._desired_center = None
         else:
             self._desired_center = np.asarray(value)
+
+    @property
+    def quality(self):
+        if self._quality is not None:
+            return self._quality
+        
+    @quality.setter
+    def quality(self, value):
+        if value is None:
+            self._quality = None
+            return self._quality
+        if not isinstance(value, int) or value < 0 or value > 10:
+            raise ValueError('quality must be an integer value from 0 to 10')
+        else:
+            self._quality = value
+        
+    @property
+    def tmid(self):
+        if self._tmid is not None:
+            return self._tmid
+        
+    @tmid.setter
+    def tmid(self, value):
+        if value is None:
+            self._tmid = None
+        else:
+            self._tmid = np.asarray(value)
+
 
 class PGData():
     """Base class for image data in the `precisionguide` system
@@ -58,39 +95,50 @@ class PGData():
     """
 
     def __init__(self,
-                 input_im=None,
+                 input_im,
                  desired_center=None,
-                 center_offset=(0, 0)):
+                 center_offset=(0, 0),
+                 date_obs_key='DATE-OBS',
+                 exptime_key='EXPTIME',
+                 darktime_key='DARKTIME'):
         if input_im is None:
             raise ValueError('input_im must be specified')
         self._data = None
         self._data_unbinned = None
         self._meta = None
-        self._obj_center = None
-        self._desired_center = None
         self._center_offset = None
+        self._desired_center = None
+        self._obj_center = None
         self._read(input_im)
         self.center_offset = center_offset
         self.desired_center = desired_center
+        self.date_obs_key = date_obs_key
+        self.exptime_key = exptime_key
+        self.darktime_key = darktime_key
 
     def _read(self, input_im):
-        # Reading invalidates all of our calculations.  Make this
-        # private so it only gets done once
-        if isinstance(input_im, str):
+        # Use the setters to ensure object is properly reset
+        if isinstance(input_im, np.ndarray):
+            self.data = input_im
+        elif isinstance(input_im, str):
             with fits.open(input_im) as HDUList:
-                self._data = HDUList[0].data
-                self._meta = HDUList[0].header
+                self.data = HDUList[0].data
+                self.meta = HDUList[0].header
         elif isinstance(input_im, fits.HDUList):
-            self._data = input_im[0].data
-            self._meta = input_im[0].header
+            self.data = input_im[0].data
+            self.meta = input_im[0].header
         else:
             # Assume input_im is CCDData-like
             try:
-                self._data = input_im.data
-                self._meta = input_im.meta
+                self.data = input_im.data
+                self.meta = input_im.meta
             except:
                 raise ValueError('Not a valid input, input_im')
         return self
+
+    @classmethod
+    def read(cls, input_im, **kwargs):
+        return cls(input_im, **kwargs)
 
     @property
     def data(self):
@@ -98,7 +146,11 @@ class PGData():
         
     @data.setter
     def data(self, value):
-        if value.shape != self._data.shape:
+        # A little angst about allowing user to reset the data without
+        # checking the center.  Generally, the object should not be
+        # used as a container that gets reused for different images,
+        # but it does seem convenient to be able to overwrite the 
+        if self._data is not None and value.shape != self._data.shape:
             # Unfortunately, we can't check for subframe origin shift
             raise ValueError('New data array must be same shape as old array')
         self._data = value
@@ -111,7 +163,6 @@ class PGData():
     @meta.setter
     def meta(self, value):
         self._meta = value
-        self._obj_center = None
         
     @property
     def header(self):
@@ -123,19 +174,23 @@ class PGData():
 
     @property
     def binning(self):
-        return np.asarray((1,1))
+        """Image binning in Y,X order"""
         # Note, this needs to be overwritten with the actual FITS
-        # binning keywords used (which are unufortunately not in any
-        # FITS standard)
-        #return = np.asarray((self.meta['YBINNING'],
-        #                     self.meta['XBINNING']))
+        # binning keywords used (which are unfortunately not in any
+        # FITS standard).  E.g.:
+        #binning = np.asarray((self.meta['YBINNING'],
+        #                      self.meta['XBINNING']))
+        binning = (1,1)
+        return np.asarray(binning)
         
     @property
     def subframe_origin(self):
-        # Overwrite like binning.  Note, ZERO reference.  Make sure to
-        # adjust values read from subframe origin keywords if
-        # necessary
-        return np.asarray((0,0))
+        """Subframe origin in *unbinned* pixels with full CCD origin = (0,0).  Y,X order"""
+        #subframe_origin = np.asarray((self.meta['YORGSUBF'],
+        #                              self.meta['XORGSUBF']))
+        #subframe_origin *= self.binning
+        subframe_origin = (0,0)
+        return np.asarray(subframe_origin)
 
     def unbinned(self, coords):
         """Returns coords referenced to full CCD given internally stored binning/subim info"""
@@ -190,17 +245,27 @@ class PGData():
         self._obj_center = self.desired_center + self.center_offset
         return self._obj_center
 
+    @obj_center.setter
+    def obj_center(self, value):
+        if value is None:
+            self._obj_center = None
+        else:
+            self._obj_center = np.asarray(value)
+
     @property
     def center_offset(self):
         return self._center_offset
 
     @center_offset.setter
     def center_offset(self, value):
-        self._obj_center = None
+        old_center_offset = self.center_offset
         if value is None:
             self.center_offset = (0,0)
         else:
             self._center_offset = np.asarray(value)
+        if np.any(self._center_offset != old_center_offset):
+            # Prepare to recalculate self._obj_center if we change the offset
+            self._obj_center = None
 
     @property
     def desired_center(self):
@@ -209,26 +274,141 @@ class PGData():
 
         # Here is where the complicated desired_center calculation is
         # done:
-        desired_center = np.asarray(self.data.shape)/2
-
-        # After the calculation is done, use the setter to set the
-        # keywords in the FITS header
-        self.desired_center = desired_center
+        self._desired_center = np.asarray(self.data.shape)/2
         return self._desired_center
 
     @desired_center.setter
     def desired_center(self, value=None):
         if value is None:
-            value = self.desired_center
-        self._desired_center = value
+            # Recalculate
+            self._desired_center = None
+            self.desired_center
+        else:
+            self._desired_center = np.asarray(value)
+
+    def _card_write(self):
         # Note pythonic y, x coordinate ordering
-        self.header['DES_CR0'] = (self._desired_center[1], 'Desired center X')
-        self.header['DES_CR1'] = (self._desired_center[0], 'Desired center Y')
-        return self._desired_center
+        self.meta['DES_CR0'] = (self._desired_center[1], 'Desired center X')
+        self.meta['DES_CR1'] = (self._desired_center[0], 'Desired center Y')
+        self.meta['OBJ_CR0'] = (self._obj_center[1], 'Object center X')
+        self.meta['OBJ_CR1'] = (self._obj_center[0], 'Object center Y')
+        self.meta['QUALITY'] = (self.quality, 'Quality on 0-10 scale of center determination')
+        self.meta['QUALITY'] = (self.quality, 'Quality on 0-10 scale of center determination')
+
+    def write(self, *args, **kwargs):
+        self._card_write()
+        hdu = fits.PrimaryHDU(self.data, self.meta)
+        hdu.writeto(*args, **kwargs)
+
+    @property
+    def tmid(self):
+        try:
+            exptime = self.header.get(self.darktime_key.lower()) 
+            if exptime is None:
+                exptime = self.header[self.exptime_key.lower()]
+            exptime *= u.s
+            tmid = (Time(self.header[self.date_obs_key.lower()],
+                         format='fits')
+                    + exptime/2)
+        except:
+            log.warning(f'Cannot read {self.darktime_key} and/or self.exptime_key keywords from FITS header')
+            tmid = None
+        return tmid
+
+    @property
+    def pgcenter(self):
+        return PGCenter(self.obj_center, self.desired_center, self.quality)
+
+class MaxImPGData(PGData):
+    """MaxIM DL adjustments to the PGData class"""
+
+    @property
+    def binning(self):
+        """Image binning in Y,X order"""
+        binning = np.asarray((self.meta['YBINNING'],
+                              self.meta['XBINNING']))
+        return np.asarray(binning)
         
+    @property
+    def subframe_origin(self):
+        """Subframe origin in *unbinned* pixels with full CCD origin = (0,0).  Y,X order"""
+        subframe_origin = np.asarray((self.meta['YORGSUBF'],
+                                      self.meta['XORGSUBF']))
+        subframe_origin *= self.binning
+        return subframe_origin
+
+class PGCentered(PGData):
+
+    @property
+    def obj_center(self):
+        self._obj_center = self.desired_center
+        return self._obj_center
+
+class PGOffset(PGCentered):
+
+    def __init__(self,
+                 *args,
+                 center_offset=None,
+                 **kwargs):
+
+        self._center_offset = None
+        self.center_offset = center_offset
+        super().__init__(*args, **kwargs)        
+
+    @property
+    def center_offset(self):
+        return self._center_offset
+
+    @center_offset.setter
+    def center_offset(self, value):
+        old_center_offset = self.center_offset
+        if value is None:
+            self.center_offset = (0,0)
+        else:
+            self._center_offset = np.asarray(value)
+        if np.any(self._center_offset != old_center_offset):
+            # Prepare to recalculate self._obj_center if we change the offset
+            self._obj_center = None
+
+    @property
+    def obj_center(self):
+        if self._obj_center is not None:
+            return self._obj_center
+        self._obj_center = super().obj_center + self.center_offset
+        return self._obj_center
+
+
+class PGCCDData(PGData, CCDData):
+    def __init__(self, *args,
+                 raw_unit=u.adu,
+                 **kwargs):
+        PGData.__init__(self, *args, **kwargs)
+        bunit = self.meta.get('bunit')
+        if bunit is None:
+            bunit = raw_unit
+        CCDData.__init__(self, self.data, meta=self.meta, unit=bunit, **kwargs)
+
+class MPGCCDData(MaxImPGData, CCDData):
+    pass
     
 #pgc = PGCenter()
 #pgc = PGCenter((1,2), (3,4))
 #pgd = PGData()
 fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
-pgd = PGData(fname)
+#pgd = PGData(fname)
+
+#ccd = CCDData.read(fname, unit='adu')
+
+pgd = PGData.read(fname)
+cpgd = PGCCDData.read(fname)
+
+rname = '/data/io/IoIO/reduced/Calibration/2020-07-07_B_flat.fits'
+pgccd = PGCCDData.read(rname)
+
+with fits.open(rname) as HDUList:
+    pgccd = PGCCDData(HDUList)
+
+
+test = MPGCCDData.read(fname)
+
+print('done')

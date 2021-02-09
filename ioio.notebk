@@ -10945,4 +10945,28 @@ Mon Feb 08 10:40:07 2021 EST  jpmorgen@snipe
 OK, a little research on the binning and subframe origin.  This is
 unique to MaxIm, so I should porbably plan to have a subclass to deal
 with that.  The alternative is to have the [XY]BINNING and [XY]ORGSUBF
-keywords be things that are passed in with init
+keywords be things that are passed in with init.
+
+Thinking about how to handle data being overwritten.  I am deciding
+that it is probably best not to let the primary array be overwritten.
+If users want to tweak with something, they can use the unbinned
+array...
+
+No.  Going back to how CCDData works.  Rather than having the header
+around to tell users about fundamental things of the array, those
+header cards don't get written until the file is written.  The user is
+expected to query the object property directly for those quantities
+that could change.
+
+Wow!  I really like how multiple inheritance is working!  It really
+lets me build up objects from simple chunks.
+
+OK, I want to have things organized so I don't have to import huge
+things unless I really need to.
+
+Ahh, here is where I want to learn how to use timeit to benchmark the
+huge code vs small code.  Yes, the import time is long, but if the
+runtime is indistinguishable, is it worth the complexity?  Well, quick
+load time is also a good thing when at the telescope.
+
+Base PGData doesn't even need astropy.time
