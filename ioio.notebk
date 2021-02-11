@@ -10970,3 +10970,16 @@ runtime is indistinguishable, is it worth the complexity?  Well, quick
 load time is also a good thing when at the telescope.
 
 Base PGData doesn't even need astropy.time
+
+Tue Feb 09 09:20:23 2021 EST  jpmorgen@snipe
+
+A little more thinking.  PGData needs some granularity for obj_center
+that makes it easy to get what you want.  This ultimately means that
+the object names have to read well.
+
+PGData
+PGDCNo (alias for PGData)
+PGDCDesired
+etc.
+
+

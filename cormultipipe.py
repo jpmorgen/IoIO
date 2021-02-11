@@ -16,13 +16,12 @@ from scipy import signal, stats, interpolate
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
-import matplotlib.transforms as transforms
 import pandas as pd
 
 from astropy import log
 from astropy import units as u
 from astropy.io import fits
-from astropy.nddata import CCDData
+from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.table import QTable
 from astropy.time import Time, TimeDelta
 from astropy.stats import mad_std, biweight_location
@@ -236,7 +235,7 @@ def mask_nonlin_sat(ccd, pipe_meta, margin=0.1, **kwargs):
     ccd, pipe_meta = mask_above_key(ccd, pipe_meta, key='NONLIN')
     return ccd, pipe_meta
 
-def jd_meta(ccd, pipe_meta, **kwargs):
+def jd_meta(ccd, pipe_meta, kwargs):
     """CorMultiPipe post-processing routine to return JD
     """
     tm = Time(ccd.meta['DATE-OBS'], format='fits')
@@ -290,6 +289,17 @@ def nd_filter_mask(ccd, pipe_meta, nd_edge_expand=nd_edge_expand, **kwargs):
         ccd.mask = ccd.mask + mask
     return (ccd, pipe_meta)
 
+def detflux(ccd, pipe_meta, exptime_units=None, **kwargs):
+    if exptime_units is None:
+        exptime_units = u.s
+    # --> really what I want here is my own CCDData that handles these!
+    exptime = ccd.meta['EXPTIME'] * exptime_units
+    ccd = ccd.divide(exptime, handle_meta='first_found')
+    satlevel = ccd.meta.get('satlevel')
+    if satlevel is not None:
+        satlevel /= exptime
+    return (ccd, {})
+
 ######### cor_process routines
 def kasten_young_airmass(hdr_in):
     """Record airmass considering curvature of Earth
@@ -300,8 +310,12 @@ pp. 4735–4738, 1989 found at
 https://www.pveducation.org/pvcdrom/properties-of-sunlight/air-mass
 
     """
-    if hdr_in.get('OAIRMASS') is not None:
+    if hdr_in.get('oairmass') is not None:
         # We have been here before, so exit quietly
+        return hdr_in
+    if hdr_in.get('objctalt') is None:
+        # We have no alt to work with
+        # --> double-check this
         return hdr_in
     hdr = hdr_in.copy()
     alt = float(hdr['OBJCTALT'])
@@ -416,7 +430,7 @@ def cor_process(ccd,
         keyword.  See imagetyp documentation.
         Default is ``False``
 
-    imagetyp : bool or str
+    imagetyp : bool, str, or None
         If True, do reduction based on IMAGETYP keyword.  If string,
         use that as IMAGETYP.  Requires calibration object
         bias -> oscan=True
@@ -424,6 +438,7 @@ def cor_process(ccd,
         flat -> oscan=True, master_bias=True, dark_frame=True
         light-> oscan=True, error=True, master_bias=True,
                 dark_frame=True, master_flat=True
+        Default is ``None``
 
     ccd_meta : bool
         Add CCD metadata
@@ -484,7 +499,7 @@ def cor_process(ccd,
 
     gain_key :  `~ccdproc.Keyword`
     	Name of key in metadata that contains gain value.  
-        Default is "GAIN" with units `astropy.units.electron/astropy.units.adu`
+        Default is "GAIN" with units `~astropy.units.electron`/`~astropy.units.adu`
 
     readnoise : `~astropy.units.Quantity`, bool or None, optional
         Read noise for the observations. The read noise should be in
@@ -581,11 +596,11 @@ def cor_process(ccd,
     if imagetyp is None:
         pass
     elif imagetyp.lower() == 'bias':
-        oscan=True
+        oscan=True; error=True
     elif imagetyp.lower() == 'dark':
-        oscan=True; gain=True; master_bias=True
+        oscan=True; gain=True; error=True; master_bias=True
     elif imagetyp.lower() == 'flat':
-        oscan=True; gain=True; master_bias=True; dark_frame=True
+        oscan=True; gain=True; error=True; master_bias=True; dark_frame=True
     elif imagetyp.lower() == 'light':
         oscan=True; gain=True; error=True; master_bias=True; dark_frame=True; master_flat=True; min_value=True
     else:
@@ -698,19 +713,35 @@ def cor_process(ccd,
         # specified readnoise.  See if we can read from metadata
         readnoise = readnoise_key.value_from(nccd.meta)
 
-    # Create the error frame.  I can't trim my overscan, so there are
-    # lots of pixels at the overscan level.  After overscan and bias
-    # subtraction, many of them that are probably normal statitical
-    # outliers are negative enough to overwhelm the readnoise in the
-    # deviation calculation.  But I don't want the error estimate on
-    # them to be NaN, since the error is really the readnoise.
-    if error and gain is not None and readnoise is not None:
-        nccd = ccdp.create_deviation(nccd, gain=gain,
-                                     readnoise=readnoise,
-                                     disregard_nan=True)
-    elif error and (gain is None or readnoise is None):
-        raise ValueError(
-            'gain and readnoise must be specified to create error frame.')
+    # Create the error frame.  Do this differently than ccdproc for
+    # two reasons: (1) bias error should read the readnoise (2) I
+    # can't trim my overscan, so there are lots of pixels at the
+    # overscan level.  After overscan and bias subtraction, many of
+    # them that are probably normal statitical outliers are negative
+    # enough to overwhelm the readnoise in the deviation calculation.
+    # But I don't want the error estimate on them to be NaN, since the
+    # error is really the readnoise.
+    if error and imagetyp is not None and imagetyp.lower() == 'bias':
+        if gain is None:
+            # We don't want to gain-correct, so we need to prepare to
+            # convert readnoise (which is in electron) to ADU
+            gain_for_bias = gain_key.value_from(nccd.meta)
+        else:
+            # Bias will be gain-corrected to read in electrons
+            gain_for_bias = 1*u.electron
+        readnoise_array = np.full_like(nccd,
+                                       readnoise.value/gain_for_bias.value)
+        nccd.uncertainty = StdDevUncertainty(readnoise_array,
+                                             unit=nccd.unit,
+                                             copy=False)
+    else:
+        if error and gain is not None and readnoise is not None:
+            nccd = ccdp.create_deviation(nccd, gain=gain,
+                                         readnoise=readnoise,
+                                         disregard_nan=True)
+        elif error and (gain is None or readnoise is None):
+            raise ValueError(
+                'gain and readnoise must be specified to create error frame.')
 
     # apply the bad pixel mask
     if isinstance(bad_pixel_mask, np.ndarray):
@@ -954,6 +985,28 @@ def fname_by_imagetyp_ccdt_exp(directory=None,
                                'fnames': full_files})
     return fdict_list
 
+def discard_intermediate(out_fnames, sdir,
+                         calibration_scratch, keep_intermediate):
+    if not keep_intermediate:
+        for f in out_fnames:
+            try:
+                os.remove(f)
+            except Exception as e:
+                # We do not expect this, since we created these with
+                # our local process
+                log.error(f'Unexpected!  Remove {f} failed: ' + str(e))
+        # These we expect to fail until all of our other parallel
+        # processes have finished
+        try:
+            os.rmdir(sdir)
+        except Exception as e:
+            pass
+        try:
+            os.rmdir(calibration_scratch)
+        except Exception as e:
+            pass
+
+
 def bias_combine_one_fdict(fdict,
                            outdir=calibration_root,
                            calibration_scratch=calibration_scratch,
@@ -971,7 +1024,8 @@ def bias_combine_one_fdict(fdict,
                            mem_frac=max_mem_frac,
                            naxis1=sx694.naxis1,
                            naxis2=sx694.naxis2,
-                           bitpix=64+8):
+                           bitpix=max_ccddata_bitpix,
+                           **kwargs):
 
     """Worker that allows the parallelization of calibrations taken at one
     temperature, exposure time, filter, etc.
@@ -987,7 +1041,7 @@ def bias_combine_one_fdict(fdict,
     mean_ccdt = fdict['CCDT']
     directory = fdict['directory']
     if num_files < min_num_biases:
-        log.debug(f"Not enough good biases found at CCDT = {mean_ccdt} C in {directory}")
+        log.warning(f"Not enough good biases found at CCDT = {mean_ccdt} C in {directory}")
         return False
 
     # Make a scratch directory that is the date of the first file.
@@ -1016,13 +1070,18 @@ def bias_combine_one_fdict(fdict,
                        overwrite=True,
                        pre_process_list=[light_image],
                        post_process_list=[bias_stats, jd_meta])
-    pout = cmp.pipeline(fnames, oscan=True)
+    pout = cmp.pipeline(fnames, **kwargs)
     pout, fnames = prune_pout(pout, fnames)
-    if len(pout) < min_num_biases:
-        log.debug(f"Not enough good biases {len(pout)} found at CCDT = {mean_ccdt} C in {directory}")
+    if len(pout) == 0:
+        log.warning(f"Not enough good biases {len(pout)} found at CCDT = {mean_ccdt} C in {directory}")
+        return False
+    out_fnames, pipe_meta = zip(*pout)
+    if len(out_fnames) < min_num_biases:
+        log.warning(f"Not enough good biases {len(pout)} found at CCDT = {mean_ccdt} C in {directory}")
+        discard_intermediate(out_fnames, sdir,
+                             calibration_scratch, keep_intermediate)
         return False
 
-    out_fnames, pipe_meta = zip(*pout)
     stats = [m['stats'] for m in pipe_meta]
     jds = [m['jd'] for m in pipe_meta]
 
@@ -1187,24 +1246,8 @@ def bias_combine_one_fdict(fdict,
     if show:
         plt.show()
     plt.close()
-    if not keep_intermediate:
-        for f in out_fnames:
-            try:
-                os.remove(f)
-            except Exception as e:
-                # We do not expect this, since we created these with
-                # our local process
-                log.debug(f'Unexpected!  Remove {f} failed: ' + str(e))
-        # These we expect to fail until all of our other parallel
-        # processes have finished
-        try:
-            os.rmdir(sdir)
-        except Exception as e:
-            pass
-        try:
-            os.rmdir(calibration_scratch)
-        except Exception as e:
-            pass
+    discard_intermediate(out_fnames, sdir,
+                         calibration_scratch, keep_intermediate)
                 
 def bias_combine(directory=None,
                  collection=None,
@@ -1216,7 +1259,7 @@ def bias_combine(directory=None,
                  num_calibration_files=num_calibration_files,
                  naxis1=sx694.naxis1,
                  naxis2=sx694.naxis2,
-                 bitpix=64+8,
+                 bitpix=max_ccddata_bitpix,
                  process_expand_factor=cor_process_expand_factor,
                  **kwargs):
     """Combine biases in a directory
@@ -1306,7 +1349,7 @@ def dark_combine_one_fdict(fdict,
                            mem_frac=max_mem_frac,
                            naxis1=sx694.naxis1,
                            naxis2=sx694.naxis2,
-                           bitpix=64+8,
+                           bitpix=max_ccddata_bitpix,
                            **kwargs):
     """Worker that allows the parallelization of calibrations taken at one
     temperature, exposure time, filter, etc.
@@ -1338,7 +1381,7 @@ def dark_combine_one_fdict(fdict,
     pout = cmp.pipeline(fnames, **kwargs)
     pout, fnames = prune_pout(pout, fnames)
     if len(pout) == 0:
-        log.debug(f"No good darks found at CCDT = {mean_ccdt} C in {directory}")
+        log.warning(f"No good darks found at CCDT = {mean_ccdt} C in {directory}")
         return False
 
     out_fnames, pipe_meta = zip(*pout)
@@ -1354,15 +1397,19 @@ def dark_combine_one_fdict(fdict,
         this_dateb, this_ccdt, exptime)
     
     mem = psutil.virtual_memory()
-    im = \
-        ccdp.combine(list(out_fnames),
-                     method='average',
-                     sigma_clip=True,
-                     sigma_clip_low_thresh=5,
-                     sigma_clip_high_thresh=5,
-                     sigma_clip_func=np.ma.median,
-                     sigma_clip_dev_func=mad_std,
-                     mem_limit=mem.available*mem_frac)
+    out_fnames = list(out_fnames)
+    if len(out_fnames) == 1:
+        im = ccddata_read(out_fnames[0])
+    else:
+        im = \
+            ccdp.combine(out_fnames,
+                         method='average',
+                         sigma_clip=True,
+                         sigma_clip_low_thresh=5,
+                         sigma_clip_high_thresh=5,
+                         sigma_clip_func=np.ma.median,
+                         sigma_clip_dev_func=mad_std,
+                         mem_limit=mem.available*mem_frac)
     im, _ = mask_above_key(im, {}, key='SATLEVEL')
     im, _ = mask_above_key(im, {}, key='NONLIN')
 
@@ -1375,7 +1422,10 @@ def dark_combine_one_fdict(fdict,
     n_dark_pix = np.count_nonzero(is_dark_mask)
     im.meta['NDARKPIX'] \
         = (n_dark_pix, 'number of pixels with dark current')
-    im = im.multiply(is_dark_mask, handle_meta='first_found')
+    if n_dark_pix > 0:
+        im.data = im.data * is_dark_mask
+        if im.uncertainty is not None:
+            im.uncertainty.array = im.uncertainty.array*is_dark_mask
 
     # Collect image metadata.  For some reason, masked pixels
     # aren't ignored by std, etc. even though they output masked
@@ -1432,20 +1482,8 @@ def dark_combine_one_fdict(fdict,
                           vmin=med-std, vmax=med+std)
         plt.show()
         plt.close()
-    if not keep_intermediate:
-        for f in out_fnames:
-            try:
-                os.remove(f)
-            except Exception as e:
-                log.debug(f'Unexpected!  Remove {f} failed: ' + str(e))
-        try:
-            os.rmdir(sdir)
-        except Exception as e:
-            pass
-        try:
-            os.rmdir(calibration_scratch)
-        except Exception as e:
-            pass
+    discard_intermediate(out_fnames, sdir,
+                         calibration_scratch, keep_intermediate)
 
 def dark_combine(directory=None,
                  collection=None,
@@ -1457,7 +1495,7 @@ def dark_combine(directory=None,
                  num_calibration_files=num_calibration_files,
                  naxis1=sx694.naxis1,
                  naxis2=sx694.naxis2,
-                 bitpix=64+8,
+                 bitpix=max_ccddata_bitpix,
                  process_expand_factor=cor_process_expand_factor,
                  **kwargs):
     fdict_list = \
@@ -1502,7 +1540,9 @@ def dark_combine(directory=None,
 def flat_process(ccd, pipe_meta,
                  init_threshold=100, # units of readnoise
                  nd_edge_expand=nd_edge_expand,
-                 **kwargs): 
+                 in_name=None,
+                 **kwargs):
+    print(in_name)
     # Use photutils.Background2D to smooth each flat and get a
     # good maximum value.  Mask edges and ND filter so as to
     # increase quality of background map
@@ -1519,7 +1559,7 @@ def flat_process(ccd, pipe_meta,
                      bkg_estimator=bkg_estimator)
     max_flat = np.max(b.background)
     if max_flat > ccd.meta['NONLIN']:
-        log.warning(f'flat max value of {max_flat} too bright: {fname}')
+        log.debug(f'flat max value of {max_flat} too bright: {in_name}')
         return (None, {})
     ccd.mask = None
     ccd = ccd.divide(max_flat, handle_meta='first_found')
@@ -1538,19 +1578,18 @@ def flat_combine_one_filt(this_filter,
                           mem_frac=max_mem_frac,
                           naxis1=sx694.naxis1,
                           naxis2=sx694.naxis2,
-                          bitpix=64+8,
+                          bitpix=max_ccddata_bitpix,
                           show=False,
                           flat_cut=0.75,
                           nd_edge_expand=nd_edge_expand,
                           **kwargs):
-    
     directory = collection.location
     fnames = collection.files_filtered(imagetyp='FLAT',
                                        filter=this_filter,
                                        include_path=True)
 
     if len(fnames) < min_num_flats:
-        log.debug(f"Not enough good flats found for filter {this_filter} in {directory}")
+        log.warning(f"Not enough good flats found for filter {this_filter} in {directory}")
         return False
 
     # Make a scratch directory that is the date of the first file.
@@ -1572,11 +1611,16 @@ def flat_combine_one_filt(this_filter,
                        nd_edge_expand=nd_edge_expand)
     pout = cmp.pipeline(fnames, **kwargs)
     pout, fnames = prune_pout(pout, fnames)
-    if len(pout) < min_num_flats:
-        log.debug(f"Not enough good flats found for filter {this_filter} in {directory}")
+    if len(pout) == 0:
+        log.warning(f"Not enough good flats found for filter {this_filter} in {directory}")
+        return False
+    out_fnames, pipe_meta = zip(*pout)
+    if len(out_fnames) < min_num_biases:
+        log.warning(f"Not enough good flats found for filter {this_filter} in {directory}")
+        discard_intermediate(out_fnames, sdir,
+                             calibration_scratch, keep_intermediate)
         return False
 
-    out_fnames, pipe_meta = zip(*pout)
     jds = [m['jd'] for m in pipe_meta]
 
     # Combine our flats
@@ -1611,7 +1655,7 @@ def flat_combine_one_filt(this_filter,
     points = np.where(good_pix)
     values = im[points]
     xi = obs_data.ND_coords
-    print(f'flat_combine_one_filt post CorObsData: mem available: {mem.available/2**20}')
+    log.debug(f'flat_combine_one_filt post CorObsData: mem available: {mem.available/2**20}')
 
     # Linear behaved much better
     nd_replacement = interpolate.griddata(points,
@@ -1648,24 +1692,8 @@ def flat_combine_one_filt(this_filter,
         impl = plt.imshow(im, origin='upper', cmap=plt.cm.gray)
         plt.show()
     plt.close()
-    if not keep_intermediate:
-        for f in out_fnames:
-            try:
-                os.remove(f)
-            except Exception as e:
-                # We do not expect this, since we created these with
-                # our local process
-                log.debug(f'Unexpected!  Remove {f} failed: ' + str(e))
-        # These we expect to fail until all of our other parallel
-        # processes have finished
-        try:
-            os.rmdir(sdir)
-        except Exception as e:
-            pass
-        try:
-            os.rmdir(calibration_scratch)
-        except Exception as e:
-            pass
+    discard_intermediate(out_fnames, sdir,
+                         calibration_scratch, keep_intermediate)
     
 def flat_combine(directory=None,
                  collection=None,
@@ -1676,7 +1704,7 @@ def flat_combine(directory=None,
                  num_calibration_files=num_calibration_files,
                  naxis1=sx694.naxis1,
                  naxis2=sx694.naxis2,
-                 bitpix=64+8,
+                 bitpix=max_ccddata_bitpix,
                  griddata_expand_factor=griddata_expand_factor,
                  **kwargs):
     if subdirs is None:
@@ -1684,8 +1712,11 @@ def flat_combine(directory=None,
     if collection is None:
         if not os.path.isdir(directory):
             return False
+        flist = glob.glob(os.path.join(directory, glob_include))
+        if len(flist) == 0:
+            return False
         collection = ccdp.ImageFileCollection(directory,
-                                              glob_include=glob_include)
+                                              filenames=flist)
     directory = collection.location
     if collection.summary is None:
         for sd in subdirs:
@@ -1851,7 +1882,7 @@ class Lockfile():
     def wait(self):
         while self.is_set:
             with open(self._fname, "r") as f:
-                log.debug(f'lockfile {self._fname} detected for {f.read()}')
+                log.error(f'lockfile {self._fname} detected for {f.read()}')
             time.sleep(self.check_every)
 
     def create(self):
@@ -1883,7 +1914,7 @@ class Calibration():
                  num_calibration_files=num_calibration_files,
                  naxis1=sx694.naxis1,
                  naxis2=sx694.naxis2,
-                 bitpix=64+8,
+                 bitpix=max_ccddata_bitpix,
                  process_expand_factor=cor_process_expand_factor,
                  griddata_expand_factor=griddata_expand_factor,
                  bias_glob=bias_glob, 
@@ -2013,6 +2044,7 @@ class Calibration():
                                subdirs=self._subdirs,
                                glob_include=self._bias_glob,
                                outdir=self._calibration_root,
+                               auto=True, # A little dangerous, but just one place for changes
                                gain_correct=self._gain_correct,
                                num_processes=self.num_processes,
                                naxis1=self.naxis1,
@@ -2398,3 +2430,25 @@ class Calibration():
 #out_fnames, pipe_meta = zip(*pout)
 #
 #print(pipe_meta)
+
+#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True,
+#                keep_intermediate=False)
+##fname = '/data/io/IoIO/raw/20200711/Bias-S005-R002-C001-B1.fts'
+#fname = '/data/io/IoIO/raw/20200711/Dark-S005-R003-C010-B1.fts'
+#ccd = ccddata_read(fname)
+#ccd = cor_process(ccd, calibration=c, auto=True)
+#ccd.write('/tmp/test.fits', overwrite=True)
+
+#c = Calibration(start_date='2020-05-15', stop_date='2020-05-16', reduce=True,
+#                keep_intermediate=False)
+##fname = '/data/io/IoIO/raw/20200711/Bias-S005-R002-C001-B1.fts'
+#fname = '/data/io/IoIO/raw/20200711/Dark-S005-R003-C010-B1.fts'
+#ccd = ccddata_read(fname)
+#ccd = cor_process(ccd, calibration=c, auto=True)
+#ccd.write('/tmp/test.fits', overwrite=True)
+
+#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True,
+#                keep_intermediate=False)
+#flat_dir = '/data/io/IoIO/raw/2020-05-15'
+#collection = ccdp.ImageFileCollection(flat_dir)
+#flat_combine_one_filt('R', collection=collection, outdir='/tmp', keep_intermediate=True, calibration=c, auto=True)

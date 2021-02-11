@@ -266,7 +266,7 @@ def overscan_estimate(im_in, hdr_in, hdr_out=None, master_bias=None,
         # For now don't get fancy with unit conversion
         raise ValueError(f'CCD units are {bunit} but must be in ADU for overscan estimation')
     if hdr['IMAGETYP'] == "BIAS":
-        overscan = np.median(ccd)
+        overscan = np.median(im)
         hdr_out['HIERARCH OVERSCAN_MEDIAN'] = (overscan, 'ADU')
         hdr_out['HIERARCH OVERSCAN_METHOD'] \
             = ('median', 'Method used for overscan estimation')

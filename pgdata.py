@@ -82,41 +82,52 @@ class PGData():
     """Base class for image data in the `precisionguide` system
 
     This class contains an individual image data and calculates and/or
-    stores two quantities: :prop:`desired_center` and
-    :prop:`obj_center`.  The center quantities are intended to be
-    returned in a :class:`PGCenter` object for subsequent lightweight
-    storage and use in the precisionguide system.  Because
-    precisionguide controls the absolute position of an object (or FOV
-    center) on the CCD, :prop:`desired_center` and :prop:`obj_center`
-    always read in *unbinned* pixel values referenced to the origin of
-    the CCD itself.  Thus, the image input to :class:`PGData` must
-    include both the image FITS header and image array(s)
+    stores four quantities: :prop:`obj_center`,
+    :prop:`desired_center`, :prop:`quality`, and :prop:`tmid`.  These
+    four quantities are intended to be returned in a :class:`PGCenter`
+    object for subsequent lightweight storage and use in the
+    precisionguide system.  Because precisionguide controls the
+    absolute position of an object (or FOV center) on the CCD,
+    :prop:`desired_center` and :prop:`obj_center` always read in
+    *unbinned* pixel values referenced to the origin of the CCD
+    itself.  Thus, the image input to :class:`PGData` must include
+    both the image FITS header and image array(s)
 
     """
 
     def __init__(self,
                  input_im,
+                 meta=None,
                  desired_center=None,
-                 center_offset=(0, 0),
                  date_obs_key='DATE-OBS',
                  exptime_key='EXPTIME',
                  darktime_key='DARKTIME'):
-        if input_im is None:
-            raise ValueError('input_im must be specified')
         self._data = None
+        self._meta = meta
         self._data_unbinned = None
-        self._meta = None
-        self._center_offset = None
         self._desired_center = None
         self._obj_center = None
-        self._read(input_im)
-        self.center_offset = center_offset
+        self._read(input_im, meta)
         self.desired_center = desired_center
         self.date_obs_key = date_obs_key
         self.exptime_key = exptime_key
         self.darktime_key = darktime_key
 
-    def _read(self, input_im):
+    def _read(self, input_im, meta=None):
+        """Read data
+
+        Parameters
+        ----------
+        input_im : `str`, `~astropy.io.fits.HDUList`, `~astropy.nddata.CCDData`, or `numpy.ndarray`
+
+            Input FITS filename or object
+
+        meta : `~astropy.io.fits.Header`
+            FITS header.  Will replace any header read from file or
+            object
+            Default is ``None``
+
+"""
         # Use the setters to ensure object is properly reset
         if isinstance(input_im, np.ndarray):
             self.data = input_im
@@ -134,11 +145,13 @@ class PGData():
                 self.meta = input_im.meta
             except:
                 raise ValueError('Not a valid input, input_im')
+        if meta is not None:
+            self.meta = meta
         return self
 
     @classmethod
-    def read(cls, input_im, **kwargs):
-        return cls(input_im, **kwargs)
+    def read(cls, input_im, *args, **kwargs):
+        return cls(input_im, *args, **kwargs)
 
     @property
     def data(self):
@@ -241,8 +254,8 @@ class PGData():
     def obj_center(self):
         if self._obj_center is not None:
             return self._obj_center
-        # This obviously would be overwritten
-        self._obj_center = self.desired_center + self.center_offset
+        self._obj_center = (-99, -99)
+        self.quality = 0
         return self._obj_center
 
     @obj_center.setter
@@ -253,25 +266,9 @@ class PGData():
             self._obj_center = np.asarray(value)
 
     @property
-    def center_offset(self):
-        return self._center_offset
-
-    @center_offset.setter
-    def center_offset(self, value):
-        old_center_offset = self.center_offset
-        if value is None:
-            self.center_offset = (0,0)
-        else:
-            self._center_offset = np.asarray(value)
-        if np.any(self._center_offset != old_center_offset):
-            # Prepare to recalculate self._obj_center if we change the offset
-            self._obj_center = None
-
-    @property
     def desired_center(self):
         if self._desired_center is not None:
             return self._desired_center
-
         # Here is where the complicated desired_center calculation is
         # done:
         self._desired_center = np.asarray(self.data.shape)/2
@@ -303,15 +300,15 @@ class PGData():
     @property
     def tmid(self):
         try:
-            exptime = self.header.get(self.darktime_key.lower()) 
+            exptime = self.meta.get(self.darktime_key.lower()) 
             if exptime is None:
-                exptime = self.header[self.exptime_key.lower()]
+                exptime = self.meta[self.exptime_key.lower()]
             exptime *= u.s
-            tmid = (Time(self.header[self.date_obs_key.lower()],
+            tmid = (Time(self.meta[self.date_obs_key.lower()],
                          format='fits')
                     + exptime/2)
         except:
-            log.warning(f'Cannot read {self.darktime_key} and/or self.exptime_key keywords from FITS header')
+            log.warning(f'Cannot read {self.darktime_key} and/or {self.exptime_key} keywords from FITS header')
             tmid = None
         return tmid
 
@@ -319,32 +316,20 @@ class PGData():
     def pgcenter(self):
         return PGCenter(self.obj_center, self.desired_center, self.quality)
 
-class MaxImPGData(PGData):
-    """MaxIM DL adjustments to the PGData class"""
+class PGDNoCenter(PGData):
+    """Sets :prop:`obj_center` to invalid value"""
+    pass
 
-    @property
-    def binning(self):
-        """Image binning in Y,X order"""
-        binning = np.asarray((self.meta['YBINNING'],
-                              self.meta['XBINNING']))
-        return np.asarray(binning)
-        
-    @property
-    def subframe_origin(self):
-        """Subframe origin in *unbinned* pixels with full CCD origin = (0,0).  Y,X order"""
-        subframe_origin = np.asarray((self.meta['YORGSUBF'],
-                                      self.meta['XORGSUBF']))
-        subframe_origin *= self.binning
-        return subframe_origin
-
-class PGCentered(PGData):
-
+class PGDCentered(PGData):
+    """Sets :prop:`obj_center` to :prop:`desired_center`"""
     @property
     def obj_center(self):
         self._obj_center = self.desired_center
+        self.quality = 10
         return self._obj_center
 
-class PGOffset(PGCentered):
+class PGDOffsetCenter(PGCentered):
+    """Offsets :prop:`obj_center` by :prop:`center_offset`"""
 
     def __init__(self,
                  *args,
@@ -378,7 +363,26 @@ class PGOffset(PGCentered):
         return self._obj_center
 
 
+class MaxImPGData(PGData):
+    """MaxIM DL adjustments to the PGData class"""
+
+    @property
+    def binning(self):
+        """Image binning in Y,X order"""
+        binning = np.asarray((self.meta['YBINNING'],
+                              self.meta['XBINNING']))
+        return np.asarray(binning)
+        
+    @property
+    def subframe_origin(self):
+        """Subframe origin in *unbinned* pixels with full CCD origin = (0,0).  Y,X order"""
+        subframe_origin = np.asarray((self.meta['YORGSUBF'],
+                                      self.meta['XORGSUBF']))
+        subframe_origin *= self.binning
+        return subframe_origin
+
 class PGCCDData(PGData, CCDData):
+    """Merges :class:`PGData and :class:`~astropy.nddata.CCDData`"""
     def __init__(self, *args,
                  raw_unit=u.adu,
                  **kwargs):
@@ -388,8 +392,6 @@ class PGCCDData(PGData, CCDData):
             bunit = raw_unit
         CCDData.__init__(self, self.data, meta=self.meta, unit=bunit, **kwargs)
 
-class MPGCCDData(MaxImPGData, CCDData):
-    pass
     
 #pgc = PGCenter()
 #pgc = PGCenter((1,2), (3,4))

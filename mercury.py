@@ -17,17 +17,10 @@ from photutils.background import Background2D
 
 from ccdmultipipe import ccddata_read
 from cormultipipe import (CorMultiPipe, Calibration, 
-                          nd_filter_mask, mask_nonlin_sat)
+                          nd_filter_mask, mask_nonlin_sat, detflux)
 
 from IoIO import CorObsData
 from ReduceCorObs import plate_scale
-
-def detflux(ccd, pipe_meta, exptime_units=None, **kwargs):
-    if exptime_units is None:
-        exptime_units = u.s
-    exptime = ccd.meta['EXPTIME'] * exptime_units
-    ccd = ccd.divide(exptime, handle_meta='first_found')
-    return (ccd, {})
 
 c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
 cmp = CorMultiPipe(auto=True, calibration=c,

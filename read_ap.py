@@ -11,10 +11,9 @@ from scipy.signal import medfilt
 from astropy.time import Time
 
 
-# plt changed its plotting epoch, but astropy has not caught up 
-pdconvert = 2440587.50000 - 1721424.5
-
-
+# plt changed its plotting epoch, but astropy has not caught up
+# [Thu Feb 11 11:15:38 2021 EST  jpmorgen@snipe fixed]
+#pdconvert = 2440587.50000 - 1721424.5
 
 # More careful calculation detailed in Morgenthaler et al. 2019 ApJL
 # suggests that ND filter is ~30% low and in MR, 15% light lost to
@@ -28,8 +27,8 @@ ADU2R_adjust = 1.15
 telluric_Na = 55
 N_med = 11
 
-#line = 'Na'
-line = '[SII]'
+line = 'Na'
+#line = '[SII]'
 #onoff = 'AP'	# on-band minus off-band, fully reduced images
 onoff = 'On'	# on-band images after bias and dark subtraction and rayleigh calibration
 #onoff = 'Off'	# off-band images after bias and dark subtraction and rayleigh calibration
@@ -203,42 +202,42 @@ mpds = np.asarray(mpds)
 
 ######## UNCOMMENT APPROPRIATE BLOCK TO CREATE DESIRED FIGURE
 
-######## Time series of primary apertures.
-# CHANGE onoff ABOVE TO PLOT FOR ON-BAND and OFF-BAND images 
-plt.plot_date(mpds - pdconvert, 
-              [row[onoff + 'Rjp15'] for row in median_ap_list], '^')
-plt.plot_date(mpds - pdconvert, 
-              [row[onoff + 'Rjp30'] for row in median_ap_list], 's')
-plt.plot_date(pds - pdconvert, 
-              [row[onoff + 'Rjp30'] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
-back = [row[onoff + 'back'] for row in median_ap_list]
-plt.plot_date(mpds - pdconvert, back, 'x')
-#back_mav = np.convolve(back, np.ones((N_med,))/N_med, mode='same')
-#back_med = medfilt(back, N_med)
-#plt.plot_date(mpds, back_med, ',', linestyle='-')
-axes = plt.gca()
-if onoff == 'AP':
-#    axes.set_ylim([0, 1700])
-#    axes.set_ylim([0, 2300])
-    axes.set_ylim([0, 5000])
-    ylabel = ''
-else:
-    if onoff == 'On':
-        axes.set_ylim([0, 15000])
-    else:
-        axes.set_ylim([0, 2000])
-    ylabel = onoff + '-band'
-plt.legend(['Rj < 7.5 nightly median', 'Rj < 15 nightly median', 'Rj < 15 surface brightness', '20 < Rj < 25 nightly median'], ncol=2)
-plt.xlabel('UT Date')
-plt.ylabel(line + ' ' + ylabel + ' Surface Brightness (R)')
-plt.gcf().autofmt_xdate()  # orient date labels at a slant
-plt.show()
+##-## ######## Time series of primary apertures.
+##-## # CHANGE onoff ABOVE TO PLOT FOR ON-BAND and OFF-BAND images 
+##-## plt.plot_date(mpds, 
+##-##               [row[onoff + 'Rjp15'] for row in median_ap_list], '^')
+##-## plt.plot_date(mpds, 
+##-##               [row[onoff + 'Rjp30'] for row in median_ap_list], 's')
+##-## plt.plot_date(pds, 
+##-##               [row[onoff + 'Rjp30'] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
+##-## back = [row[onoff + 'back'] for row in median_ap_list]
+##-## plt.plot_date(mpds, back, 'x')
+##-## #back_mav = np.convolve(back, np.ones((N_med,))/N_med, mode='same')
+##-## #back_med = medfilt(back, N_med)
+##-## #plt.plot_date(mpds, back_med, ',', linestyle='-')
+##-## axes = plt.gca()
+##-## if onoff == 'AP':
+##-## #    axes.set_ylim([0, 1700])
+##-## #    axes.set_ylim([0, 2300])
+##-##     axes.set_ylim([0, 5000])
+##-##     ylabel = ''
+##-## else:
+##-##     if onoff == 'On':
+##-##         axes.set_ylim([0, 15000])
+##-##     else:
+##-##         axes.set_ylim([0, 2000])
+##-##     ylabel = onoff + '-band'
+##-## plt.legend(['Rj < 7.5 nightly median', 'Rj < 15 nightly median', 'Rj < 15 surface brightness', '20 < Rj < 25 nightly median'], ncol=2)
+##-## plt.xlabel('UT Date')
+##-## plt.ylabel(line + ' ' + ylabel + ' Surface Brightness (R)')
+##-## plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-## plt.show()
 
 ##-## ######## Time series of your key of choice
 ##-## #key = 'ONBSUB'
 ##-## #key = 'OFFSCALE'
 ##-## key = 'ADU2R'
-##-## plt.plot_date(pds - pdconvert, 
+##-## plt.plot_date(pds, 
 ##-##               [row[key] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
 ##-## plt.xlabel('UT Date')
 ##-## plt.ylabel(f'{line} {key}')
@@ -432,11 +431,11 @@ plt.show()
 ##-## ######### Check offsets and scaling for final reduced images
 ##-## ### Morgenthaler et al 2019 value for 2018
 ##-## if onoff == 'AP':
-##-##     plt.plot_date(mpds - pdconvert, 
+##-##     plt.plot_date(mpds, 
 ##-##                   [row[onoff + 'Rjp15'] - 900*ADU2R_adjust for row in median_ap_list], '^')
-##-##     plt.plot_date(mpds - pdconvert, 
+##-##     plt.plot_date(mpds, 
 ##-##                   [(row[onoff + 'Rjp30'] - 320*ADU2R_adjust) * 1.5 for row in median_ap_list], 's')
-##-##     plt.plot_date(mpds - pdconvert, 
+##-##     plt.plot_date(mpds, 
 ##-##                   [(row[onoff + 'back'] - 70*ADU2R_adjust) * 2.2 for row in median_ap_list], 'x')
 ##-##     axes = plt.gca()
 ##-##     #axes.set_ylim([-50, 700])
@@ -450,11 +449,11 @@ plt.show()
 ##-## ######### Check offsets and scaling for final reduced images
 ##-## ### 2018
 ##-## if onoff == 'AP':
-##-##     plt.plot_date(mpds - pdconvert, 
+##-##     plt.plot_date(mpds, 
 ##-##                   [row[onoff + 'Rjp15'] - 950*ADU2R_adjust for row in median_ap_list], '^')
-##-##     plt.plot_date(mpds - pdconvert, 
+##-##     plt.plot_date(mpds, 
 ##-##                   [(row[onoff + 'Rjp30'] - 330*ADU2R_adjust) * 1.5 for row in median_ap_list], 's')
-##-##     plt.plot_date(mpds - pdconvert, 
+##-##     plt.plot_date(mpds, 
 ##-##                   [(row[onoff + 'back'] - 70*ADU2R_adjust) * 2.2 for row in median_ap_list], 'x')
 ##-##     axes = plt.gca()
 ##-##     #axes.set_ylim([-50, 700])
@@ -468,11 +467,11 @@ plt.show()
 ##-## ######### Check offsets and scaling for final reduced images
 ##-## ### 2019
 ##-## if onoff == 'AP':
-##-##     plt.plot_date(mpds - pdconvert, 
+##-##     plt.plot_date(mpds, 
 ##-##                   [row[onoff + 'Rjp15'] - (730)*ADU2R_adjust for row in median_ap_list], '^')
-##-##     plt.plot_date(mpds - pdconvert, 
+##-##     plt.plot_date(mpds, 
 ##-##                   [(row[onoff + 'Rjp30'] - (280)*ADU2R_adjust) * 1 for row in median_ap_list], 's')
-##-##     plt.plot_date(mpds - pdconvert, 
+##-##     plt.plot_date(mpds, 
 ##-##                   [(row[onoff + 'back'] - (70)*ADU2R_adjust) * 1 for row in median_ap_list], 'x')
 ##-##     axes = plt.gca()
 ##-##     #axes.set_ylim([-50, 700])
@@ -486,11 +485,11 @@ plt.show()
 ##-## ######### Check offsets and scaling for final reduced images
 ##-## ### 2020
 ##-## if onoff == 'AP':
-##-##     plt.plot_date(mpds - pdconvert, 
+##-##     plt.plot_date(mpds, 
 ##-##                   [row[onoff + 'Rjp15'] - (670)*ADU2R_adjust for row in median_ap_list], '^')
-##-##     plt.plot_date(mpds - pdconvert, 
+##-##     plt.plot_date(mpds, 
 ##-##                   [(row[onoff + 'Rjp30'] - (260)*ADU2R_adjust) * 1.5 for row in median_ap_list], 's')
-##-##     plt.plot_date(mpds - pdconvert, 
+##-##     plt.plot_date(mpds, 
 ##-##                   [(row[onoff + 'back'] - (60)*ADU2R_adjust) * 2.5 for row in median_ap_list], 'x')
 ##-##     axes = plt.gca()
 ##-##     #axes.set_ylim([-50, 700])
@@ -512,17 +511,17 @@ plt.show()
 ##-## plt.gcf().autofmt_xdate()  # orient date labels at a slant
 ##-## plt.show()
 
-##-## ###### Plot OFFSCALE
-##-## 
-##-## plt.plot_date(pds,
-##-##               #[(2.1 - row['OFFSCALE'])*500 for row in rlist], 'g,')
-##-##               [row['OFFSCALE'] for row in rlist])
-##-## axes = plt.gca()
-##-## #axes.set_ylim([0.75, 1.75])
-##-## plt.xlabel('UT Date')
-##-## plt.ylabel(line + ' OFFSCALE')
-##-## plt.gcf().autofmt_xdate()  # orient date labels at a slant
-##-## plt.show()
+###### Plot OFFSCALE
+
+plt.plot_date(pds,
+              #[(2.1 - row['OFFSCALE'])*500 for row in rlist], 'g,')
+              [row['OFFSCALE'] for row in rlist])
+axes = plt.gca()
+#axes.set_ylim([0.75, 1.75])
+plt.xlabel('UT Date')
+plt.ylabel(line + ' OFFSCALE')
+plt.gcf().autofmt_xdate()  # orient date labels at a slant
+plt.show()
 
 ## ######### Plot results of scatter plot linear regression
 ## plt.plot_date(mpds, 
@@ -563,11 +562,11 @@ plt.show()
 #plt.show()
 
 
-## plt.plot_date(pds - pdconvert,
+## plt.plot_date(pds,
 ##               [row[onoff + 'fore']
 ##                - row[onoff + 'back']
 ##                for row in rlist], 'k.', ms=1)
-## plt.plot_date(mpds - pdconvert,
+## plt.plot_date(mpds,
 ##               [row[onoff + 'fore']
 ##                - row[onoff + 'back']
 ##                   for row in median_ap_list], '.')
