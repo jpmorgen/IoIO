@@ -209,10 +209,7 @@ class CCDMultiPipe(BigMultiPipe):
             :class:`~astropy.nddata.CCDData` to be processed
 
         """
-        # Allow overriding of self.kwargs by **kwargs
-        skwargs = self.kwargs.copy()
-        skwargs.update(kwargs)
-        kwargs = skwargs
+        kwargs = self.kwargs_merge(**kwargs)
         data = ccddata_read(in_name, raw_unit=self.raw_unit, **kwargs)
         return data
 
@@ -240,10 +237,7 @@ class CCDMultiPipe(BigMultiPipe):
             Name of file written
 
         """
-        # Allow overriding of self.kwargs by **kwargs
-        skwargs = self.kwargs.copy()
-        skwargs.update(kwargs)
-        kwargs = skwargs
+        kwargs = self.kwargs_merge(**kwargs)
         if overwrite is None:
             overwrite = self.overwrite
         data.write(outname, overwrite=overwrite)
@@ -263,9 +257,6 @@ class CCDMultiPipe(BigMultiPipe):
             Parameter section 
 
         """
-        # Allow overriding of self.kwargs by **kwargs
-        skwargs = self.kwargs.copy()
-        skwargs.update(kwargs)
-        kwargs = skwargs
+        kwargs = self.kwargs_merge(**kwargs)
         data = ccdp.ccd_process(data, **kwargs)
         return data

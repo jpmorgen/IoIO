@@ -9,15 +9,32 @@ from ReduceCorObs import plate_scale
 from cormultipipe import (CorMultiPipe, Calibration, 
                           nd_filter_mask, mask_nonlin_sat, detflux)
 
-#directory = 
-
+directory = '/data/io/IoIO/raw/2020-07-08'
 
 c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
 cmp = CorMultiPipe(auto=True, calibration=c,
                    post_process_list=[nd_filter_mask, mask_nonlin_sat, detflux])
-fname1 = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0007_Na-on.fit'
-fname2 = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0008_Na_off.fit'
-pout = cmp.pipeline([fname1, fname2], outdir='/data/NEOWISE_2020F3/analysis/2020-07-08/', create_outdir=True, overwrite=True)
+flist = glob.glob(os.path.join(directory, 'NEOWISE-*_Na*'))
+pout = cmp.pipeline(flist, outdir='/data/NEOWISE_2020F3/analysis/2020-07-08/', create_outdir=True, overwrite=True)
+
+# image e/s	SNR
+# 1	39	6
+# 2	38 	5
+# 3	65	26
+# 4	76	27
+# 5	131	42
+# 6	178	55
+# 7	209	57
+# 8	221	38
+# 10	273	42 Starting to drift off image
+# 12	267	23
+# 13	gone
+
+# So for the 11 images that Carl is using, 208.6 is an OK number to use
+
+#fname1 = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0007_Na-on.fit'
+#fname2 = '/data/io/IoIO/raw/2020-07-08/NEOWISE-0008_Na_off.fit'
+#pout = cmp.pipeline([fname1, fname2], outdir='/data/NEOWISE_2020F3/analysis/2020-07-08/', create_outdir=True, overwrite=True)
 
 # Star at bottom of MaxIm image is intensity 208.6, SNR 57.  So what
 # star is that?  NEOWISE ephemeris:

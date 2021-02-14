@@ -137,10 +137,7 @@ class CorMultiPipe(CCDMultiPipe):
 
     def pre_process(self, data, **kwargs):
         """Add full-frame check permanently to pipeline"""
-        # Allow overriding of self.kwargs by **kwargs
-        skwargs = self.kwargs.copy()
-        skwargs.update(kwargs)
-        kwargs = skwargs
+        kwargs = self.kwargs_merge(**kwargs)
         s = data.shape
         # Note Pythonic C index ordering
         if s != (self.naxis2, self.naxis1):
@@ -151,10 +148,7 @@ class CorMultiPipe(CCDMultiPipe):
                      calibration=None,
                      auto=None,
                      **kwargs):
-        # Allow overriding of self.kwargs by **kwargs
-        skwargs = self.kwargs.copy()
-        skwargs.update(kwargs)
-        kwargs = skwargs
+        kwargs = self.kwargs_merge(**kwargs)
         if calibration is None:
             calibration = self.calibration
         if auto is None:
@@ -235,7 +229,7 @@ def mask_nonlin_sat(ccd, pipe_meta, margin=0.1, **kwargs):
     ccd, pipe_meta = mask_above_key(ccd, pipe_meta, key='NONLIN')
     return ccd, pipe_meta
 
-def jd_meta(ccd, pipe_meta, kwargs):
+def jd_meta(ccd, pipe_meta, **kwargs):
     """CorMultiPipe post-processing routine to return JD
     """
     tm = Time(ccd.meta['DATE-OBS'], format='fits')
@@ -1542,7 +1536,6 @@ def flat_process(ccd, pipe_meta,
                  nd_edge_expand=nd_edge_expand,
                  in_name=None,
                  **kwargs):
-    print(in_name)
     # Use photutils.Background2D to smooth each flat and get a
     # good maximum value.  Mask edges and ND filter so as to
     # increase quality of background map
@@ -2426,7 +2419,8 @@ class Calibration():
 #fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
 #cmp = CorMultiPipe(auto=True, calibration=c,
 #                   post_process_list=[nd_filter_mask])
-#pout = cmp.pipeline([fname], outdir='/tmp', overwrite=True)
+#pout = cmp.pipeline([fname], 
+#                    outdir='/tmp', overwrite=True)
 #out_fnames, pipe_meta = zip(*pout)
 #
 #print(pipe_meta)
@@ -2452,3 +2446,14 @@ class Calibration():
 #flat_dir = '/data/io/IoIO/raw/2020-05-15'
 #collection = ccdp.ImageFileCollection(flat_dir)
 #flat_combine_one_filt('R', collection=collection, outdir='/tmp', keep_intermediate=True, calibration=c, auto=True)
+
+c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
+#fname = '/data/io/IoIO/raw/20200708/HD 118648-S001-R001-C001-Na_on.fts'
+fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
+cmp = CorMultiPipe(auto=True,
+                   post_process_list=[nd_filter_mask])
+pout = cmp.pipeline([fname], calibration=c,
+                    outdir='/tmp', overwrite=True)
+out_fnames, pipe_meta = zip(*pout)
+
+print(pipe_meta)
