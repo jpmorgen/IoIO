@@ -159,7 +159,7 @@ class CorMultiPipe(CCDMultiPipe):
                            **kwargs)
         return data
 
-######### CorMultiPipe pre- and post-processing routines
+######### CorMultiPipe prepossessing routines
 def full_frame(im,
                naxis1=sx694.naxis1,
                naxis2=sx694.naxis2,
@@ -169,8 +169,8 @@ def full_frame(im,
     s = im.shape
     # Note Pythonic C index ordering
     if s != (naxis2, naxis1):
-        return (None, {})
-    return (im, {})
+        return None
+    return im
 
 def light_image(im, light_tolerance=3, **kwargs):
     """CorMultiPipe pre-processing routine to reject light-contaminated bias & dark images
@@ -188,17 +188,18 @@ def light_image(im, light_tolerance=3, **kwargs):
     mlp = np.median(light_patch)
     if (np.median(light_patch) - np.median(dark_patch) > light_tolerance):
         log.debug('light, dark patch medians ({:.4f}, {:.4f})'.format(mdp, mlp))
-        return (None, {})
-    return (im, {})
+        return None
+    return im
 
-def mask_above_key(ccd_in, pipe_meta, key=None, margin=0.1, **kwargs):
+######### CorMultiPipe postpossessing routines
+def mask_above_key(ccd_in, bmp_meta=None, key=None, margin=0.1, **kwargs):
     """CorMultiPipe post-processing routine to mask pixels > input key
     """
     if key is None:
         raise ValueError('key must be specified')
     masklevel = ccd_in.meta.get(key.lower())
     if masklevel is None:
-        return ccd, pipe_meta
+        return ccd
     ccd = ccd_in.copy()
     # Saturation level is subject to overscan subtraction and
     # multiplication by gain, so don't do strict = testing, but give
@@ -219,24 +220,26 @@ def mask_above_key(ccd_in, pipe_meta, key=None, margin=0.1, **kwargs):
             ccd.mask = mask
         else:
             ccd.mask = ccd.mask + mask
-    pipe_meta[n_masked_key] = n_masked
-    return ccd, pipe_meta
+    if bmp_meta is not None:
+        bmp_meta[n_masked_key] = n_masked
+    return ccd
 
-def mask_nonlin_sat(ccd, pipe_meta, margin=0.1, **kwargs):
+def mask_nonlin_sat(ccd, bmp_meta=None, margin=0.1, **kwargs):
     """CorMultiPipe post-processing routine to mask pixels > NONLIN and SATLEVEL
     """
-    ccd, pipe_meta = mask_above_key(ccd, pipe_meta, key='SATLEVEL')
-    ccd, pipe_meta = mask_above_key(ccd, pipe_meta, key='NONLIN')
-    return ccd, pipe_meta
+    ccd = mask_above_key(ccd, bmp_meta=bmp_meta, key='SATLEVEL')
+    ccd = mask_above_key(ccd, bmp_meta=bmp_meta, key='NONLIN')
+    return ccd
 
-def jd_meta(ccd, pipe_meta, **kwargs):
+def jd_meta(ccd, bmp_meta=None, **kwargs):
     """CorMultiPipe post-processing routine to return JD
     """
     tm = Time(ccd.meta['DATE-OBS'], format='fits')
-    pipe_meta['jd'] = tm.jd
-    return (ccd, pipe_meta)
+    if bmp_meta is not None:
+        bmp_meta['jd'] = tm.jd
+    return ccd
 
-def bias_stats(ccd, pipe_meta, gain=sx694.gain, **kwargs):
+def bias_stats(ccd, bmp_meta=None, gain=sx694.gain, **kwargs):
     """CorMultiPipe post-processing routine for bias_combine
     Returns dictionary of bias statistics for pandas dataframe
     """
@@ -265,12 +268,15 @@ def bias_stats(ccd, pipe_meta, gain=sx694.gain, **kwargs):
              'rdnoise': rdnoise*gain,
              'min': np.min(im) + median,  
              'max': np.max(im) + median}
-    pipe_meta['stats'] = stats
-    return (ccd, pipe_meta)
+    if bmp_meta is not None:
+        bmp_meta['bias_stats'] = stats
+    return ccd
 
-def nd_filter_mask(ccd, pipe_meta, nd_edge_expand=nd_edge_expand, **kwargs):
+def nd_filter_mask(ccd_in, nd_edge_expand=nd_edge_expand, **kwargs):
     """CorMultiPipe post-processing routine to mask ND filter
     """
+    # --> this will eventually get included in CorData or whatever I call it
+    ccd = ccd_in.copy()
     hdul = ccd.to_hdu()
     obs_data = CorObsData(hdul, edge_mask=-nd_edge_expand)
     # Capture our ND filter metadata
@@ -281,18 +287,19 @@ def nd_filter_mask(ccd, pipe_meta, nd_edge_expand=nd_edge_expand, **kwargs):
         ccd.mask = mask
     else:
         ccd.mask = ccd.mask + mask
-    return (ccd, pipe_meta)
+    return ccd
 
-def detflux(ccd, pipe_meta, exptime_units=None, **kwargs):
+def detflux(ccd_in, exptime_units=None, **kwargs):
+    ccd = ccd_in.copy()
     if exptime_units is None:
         exptime_units = u.s
-    # --> really what I want here is my own CCDData that handles these!
     exptime = ccd.meta['EXPTIME'] * exptime_units
     ccd = ccd.divide(exptime, handle_meta='first_found')
     satlevel = ccd.meta.get('satlevel')
+    # --> really what I want here is my own CCDData that handles these!
     if satlevel is not None:
         satlevel /= exptime
-    return (ccd, {})
+    return ccd
 
 ######### cor_process routines
 def kasten_young_airmass(hdr_in):
@@ -332,6 +339,9 @@ def subtract_overscan(fname_or_ccd, oscan=None, *args, **kwargs):
 
     """
     nccd = ccddata_read(fname_or_ccd)
+    if nccd.meta.get('overscan_value') is not None:
+        # We have been here before, so exit quietly
+        return nccd
     if oscan is None:
         # Interface with sx694.overscan_estimate, which doesn't take
         # CCDData for the primary input data
@@ -670,7 +680,7 @@ def cor_process(ccd,
 
     # apply the trim correction
     if isinstance(trim, str):
-        nccd = trim_image(nccd, fits_section=trim)
+        nccd = ccdp.trim_image(nccd, fits_section=trim)
     elif trim is None:
         pass
     else:
@@ -1076,7 +1086,7 @@ def bias_combine_one_fdict(fdict,
                              calibration_scratch, keep_intermediate)
         return False
 
-    stats = [m['stats'] for m in pipe_meta]
+    stats = [m['bias_stats'] for m in pipe_meta]
     jds = [m['jd'] for m in pipe_meta]
 
     df = pd.DataFrame(stats)
@@ -1183,8 +1193,8 @@ def bias_combine_one_fdict(fdict,
         im_gain = 1
     else:
         im_gain = gain
-    im, _ = mask_above_key(im, {}, key='SATLEVEL')
-    im, _ = mask_above_key(im, {}, key='NONLIN')
+    im = mask_above_key(im, key='SATLEVEL')
+    im = mask_above_key(im, key='NONLIN')
         
     # Collect image metadata.  For some reason, masked pixels
     # aren't ignored by std, etc. even though they output masked
@@ -1404,8 +1414,8 @@ def dark_combine_one_fdict(fdict,
                          sigma_clip_func=np.ma.median,
                          sigma_clip_dev_func=mad_std,
                          mem_limit=mem.available*mem_frac)
-    im, _ = mask_above_key(im, {}, key='SATLEVEL')
-    im, _ = mask_above_key(im, {}, key='NONLIN')
+    im = mask_above_key(im, key='SATLEVEL')
+    im = mask_above_key(im, key='NONLIN')
 
     # Create a mask that blanks out all our pixels that are just
     # readnoise.  Multiply this in as zeros, not a formal mask,
@@ -1531,7 +1541,7 @@ def dark_combine(directory=None,
         with NoDaemonPool(processes=our_num_processes) as p:
             p.map(wwk.worker, fdict_list)
 
-def flat_process(ccd, pipe_meta,
+def flat_process(ccd, bmp_meta=None,
                  init_threshold=100, # units of readnoise
                  nd_edge_expand=nd_edge_expand,
                  in_name=None,
@@ -1559,7 +1569,9 @@ def flat_process(ccd, pipe_meta,
     ccd.meta['FLATDIV'] = (max_flat, 'Value used to normalize (smoothed max)')
     # Get ready to capture the mean DATE-OBS
     tm = Time(ccd.meta['DATE-OBS'], format='fits')
-    return (ccd, {'jd': tm.jd})
+    if bmp_meta is not None:
+        bmp_meta['jd'] = tm.jd 
+    return ccd
 
 def flat_combine_one_filt(this_filter,
                           collection=None,
@@ -1656,14 +1668,14 @@ def flat_combine_one_filt(this_filter,
                                           xi,
                                           method='linear')
                                           #method='cubic')
-    print(f'flat_combine_one_filt post interpolate.griddata mem available: {mem.available/2**20}')
+    log.debug(f'flat_combine_one_filt post interpolate.griddata mem available: {mem.available/2**20}')
     im.data[xi] = nd_replacement
     # Do one last smoothing and renormalization
     bkg_estimator = MedianBackground()
     b = Background2D(im, 20, mask=(im.data<flat_cut), filter_size=5,
                      bkg_estimator=bkg_estimator)
     max_flat = np.max(b.background)
-    print(f'flat_combine_one_filt post Background2D mem available: {mem.available/2**20}')
+    log.debug(f'flat_combine_one_filt post Background2D mem available: {mem.available/2**20}')
     im = im.divide(max_flat, handle_meta='first_found')
     im.mask = im.data < flat_cut
     im.meta['FLAT_CUT'] = (flat_cut, 'Value below which flat is masked')
@@ -2414,16 +2426,16 @@ class Calibration():
 
 #log.setLevel('DEBUG')
 #
-#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
-##fname = '/data/io/IoIO/raw/20200708/HD 118648-S001-R001-C001-Na_on.fts'
-#fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
-#cmp = CorMultiPipe(auto=True, calibration=c,
-#                   post_process_list=[nd_filter_mask])
-#pout = cmp.pipeline([fname], 
-#                    outdir='/tmp', overwrite=True)
-#out_fnames, pipe_meta = zip(*pout)
-#
-#print(pipe_meta)
+c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
+#fname = '/data/io/IoIO/raw/20200708/HD 118648-S001-R001-C001-Na_on.fts'
+fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
+cmp = CorMultiPipe(auto=True, calibration=c,
+                   post_process_list=[nd_filter_mask])
+pout = cmp.pipeline([fname], 
+                    outdir='/tmp', overwrite=True)
+out_fnames, pipe_meta = zip(*pout)
+
+print(pipe_meta)
 
 #c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True,
 #                keep_intermediate=False)
@@ -2447,13 +2459,20 @@ class Calibration():
 #collection = ccdp.ImageFileCollection(flat_dir)
 #flat_combine_one_filt('R', collection=collection, outdir='/tmp', keep_intermediate=True, calibration=c, auto=True)
 
-c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
-#fname = '/data/io/IoIO/raw/20200708/HD 118648-S001-R001-C001-Na_on.fts'
-fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
-cmp = CorMultiPipe(auto=True,
-                   post_process_list=[nd_filter_mask])
-pout = cmp.pipeline([fname], calibration=c,
-                    outdir='/tmp', overwrite=True)
-out_fnames, pipe_meta = zip(*pout)
+#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
+##fname = '/data/io/IoIO/raw/20200708/HD 118648-S001-R001-C001-Na_on.fts'
+#fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
+#cmp = CorMultiPipe(auto=True,
+#                   post_process_list=[nd_filter_mask])
+#pout = cmp.pipeline([fname], calibration=c,
+#                    outdir='/tmp', overwrite=True)
+#out_fnames, pipe_meta = zip(*pout)
+#
+#print(pipe_meta)
 
-print(pipe_meta)
+#c = Calibration(start_date='2020-05-02', stop_date='2020-05-15', reduce=True)
+#cmp = CorMultiPipe(auto=True, calibration=c,
+#                   post_process_list=[detflux])
+#fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
+#fname2 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na_off.fit'
+#pout = cmp.pipeline([fname1, fname2], outdir='/data/Mercury/analysis/2020-05-27/', overwrite=True)
