@@ -882,7 +882,7 @@ def add_history(header, text='', caller=1):
     return
 
 
-def fdict_list_collector(fdict_list_generator,
+def fdict_list_collector(fdict_list_creator,
                          directory=None,
                          collection=None,
                          subdirs=None,
@@ -896,6 +896,8 @@ def fdict_list_collector(fdict_list_generator,
         # Trick to make loop on glob_include, below, pass None to
         # ccdp.ImageFileCollection
         glob_include = [None]
+    if not isinstance(glob_include, list):
+        glob_include = [glob_include]
     fdict_list = []
     if collection is None:
         # Prepare to call ourselves recursively to build up a list of
@@ -906,7 +908,7 @@ def fdict_list_collector(fdict_list_generator,
         for sd in subdirs:
             subdir = os.path.join(directory, sd)
             sub_fdict_list = fdict_list_collector \
-                (fdict_list_generator,
+                (fdict_list_creator,
                  subdir,
                  imagetyp=imagetyp,
                  glob_include=glob_include,
@@ -930,7 +932,7 @@ def fdict_list_collector(fdict_list_generator,
             # Call ourselves recursively, but using the code below,
             # since collection is now defined
             gi_fdict_list = fdict_list_collector \
-                (fdict_list_generator,
+                (fdict_list_creator,
                  collection=collection,
                  imagetyp=imagetyp,
                  **kwargs)
@@ -944,14 +946,14 @@ def fdict_list_collector(fdict_list_generator,
         return fdict_list
 
     # If we made it here, we have a collection, possibly from calling
-    # ourselves recursively.  Hand off to our generator to do all the
-    # work
-    return fdict_list_generator(collection, imagetyp=imagetyp, **kwargs)
+    # ourselves recursively.  Hand off to our fdict_list_creator to do
+    # all the work
+    return fdict_list_creator(collection, imagetyp=imagetyp, **kwargs)
 
-def bias_dark_fdict_generator(collection,
-                              imagetyp=None,
-                              dccdt_tolerance=dccdt_tolerance,
-                              debug=False):
+def bias_dark_fdict_creator(collection,
+                            imagetyp=None,
+                            dccdt_tolerance=dccdt_tolerance,
+                            debug=False):
     # Create a summary table narrowed to our imagetyp
     our_imagetyp = collection.summary['imagetyp'] == imagetyp
     narrow_to_imagetyp = collection.summary[our_imagetyp]
@@ -1318,7 +1320,7 @@ def bias_combine(directory=None,
 
     """
     fdict_list = \
-        fdict_list_collector(bias_dark_fdict_generator,
+        fdict_list_collector(bias_dark_fdict_creator,
                              directory=directory,
                              collection=collection,
                              subdirs=subdirs,
@@ -1523,7 +1525,7 @@ def dark_combine(directory=None,
                  process_expand_factor=cor_process_expand_factor,
                  **kwargs):
     fdict_list = \
-        fdict_list_collector(bias_dark_fdict_generator,
+        fdict_list_collector(bias_dark_fdict_creator,
                              directory=directory,
                              collection=collection,
                              subdirs=subdirs,
@@ -1562,6 +1564,21 @@ def dark_combine(directory=None,
         with NoDaemonPool(processes=our_num_processes) as p:
             p.map(wwk.worker, fdict_list)
 
+def flat_fdict_creator(collection,
+                       imagetyp=None):
+    # Create a new collection narrowed to our imagetyp
+    #print(collection.location) # gave expected directory
+    collection = collection.filter(imagetyp=imagetyp)
+    filters = collection.values('filter', unique=True)
+    fdict_list = []
+    for filt in filters:
+        fnames = collection.files_filtered(filter=filt,
+                                           include_path=True)
+        fdict_list.append({'directory': collection.location,
+                           'filter': filt,
+                           'fnames': fnames})
+    return fdict_list
+
 def flat_process(ccd, bmp_meta=None,
                  init_threshold=100, # units of readnoise
                  nd_edge_expand=nd_edge_expand,
@@ -1594,8 +1611,7 @@ def flat_process(ccd, bmp_meta=None,
         bmp_meta['jd'] = tm.jd 
     return ccd
 
-def flat_combine_one_filt(this_filter,
-                          collection=None,
+def flat_combine_one_fdict(fdict,
                           outdir=calibration_root,
                           calibration_scratch=calibration_scratch,
                           keep_intermediate=False,
@@ -1609,13 +1625,19 @@ def flat_combine_one_filt(this_filter,
                           flat_cut=0.75,
                           nd_edge_expand=nd_edge_expand,
                           **kwargs):
-    directory = collection.location
-    fnames = collection.files_filtered(imagetyp='FLAT',
-                                       filter=this_filter,
-                                       include_path=True)
+    fnames = fdict['fnames']
+    num_files = len(fnames)
+    this_filter = fdict['filter']
+    directory = fdict['directory']
+    tmp = ccddata_read(fnames[0])
+    tm = tmp.meta['DATE-OBS']
+    this_dateb1, _ = tm.split('T')
+    outbase = os.path.join(outdir, this_dateb1)
+    bad_fname = outbase + 'X' + '_flat_bad.fits'
 
     if len(fnames) < min_num_flats:
         log.warning(f"Not enough good flats found for filter {this_filter} in {directory}")
+        Path(bad_fname).touch()
         return False
 
     # Make a scratch directory that is the date of the first file.
@@ -1639,12 +1661,14 @@ def flat_combine_one_filt(this_filter,
     pout, fnames = prune_pout(pout, fnames)
     if len(pout) == 0:
         log.warning(f"Not enough good flats found for filter {this_filter} in {directory}")
+        Path(bad_fname).touch()
         return False
     out_fnames, pipe_meta = zip(*pout)
     if len(out_fnames) < min_num_biases:
         log.warning(f"Not enough good flats found for filter {this_filter} in {directory}")
         discard_intermediate(out_fnames, sdir,
                              calibration_scratch, keep_intermediate)
+        Path(bad_fname).touch()
         return False
 
     jds = [m['jd'] for m in pipe_meta]
@@ -1733,67 +1757,61 @@ def flat_combine(directory=None,
                  bitpix=max_ccddata_bitpix,
                  griddata_expand_factor=griddata_expand_factor,
                  **kwargs):
-    if subdirs is None:
-        subdirs = []
-    if collection is None:
-        if not os.path.isdir(directory):
-            return False
-        flist = glob.glob(os.path.join(directory, glob_include))
-        if len(flist) == 0:
-            return False
-        collection = ccdp.ImageFileCollection(directory,
-                                              filenames=flist)
-    directory = collection.location
-    if collection.summary is None:
-        for sd in subdirs:
-            newdir = os.path.join(directory, sd)
-            return flat_combine(newdir,
-                                subdirs=None,
-                                glob_include=glob_include,
-                                num_processes=max_num_processes,
-                                mem_frac=mem_frac,
-                                **kwargs)
-        log.debug('No [matching] FITS files found in  ' + directory)
-        return False
-    # If we made it here, we have a collection with files in it
-    filters = np.unique(collection.summary['filter'])
-    nfilts = len(filters)
-    if nfilts == 0:
+    fdict_list = \
+        fdict_list_collector(flat_fdict_creator,
+                             directory=directory,
+                             collection=collection,
+                             subdirs=subdirs,
+                             imagetyp='FLAT',
+                             glob_include=glob_include)
+    if collection is not None:
+        # Make sure 'directory' is a valid variable
+        directory = collection.location
+    nfdicts = len(fdict_list)
+    if nfdicts == 0:
         log.debug('No flats found in: ' + directory)
         return False
-
+    
     one_filt_size = (num_calibration_files
                          * naxis1 * naxis2
                          * bitpix/8
                          * griddata_expand_factor)
 
-    our_num_processes = num_can_process(nfilts,
+    our_num_processes = num_can_process(nfdicts,
                                         num_processes=num_processes,
                                         mem_frac=mem_frac,
                                         process_size=one_filt_size,
                                         error_if_zero=False)
     our_num_processes = max(1, our_num_processes)
-    
+
     # Combining files is the slow part, so we want the maximum of
     # processes doing that in parallel
-    log.debug(f'flat_combine: {directory}, nfilts = {nfilts}, our_num_processes = {our_num_processes}')
+    log.debug(f'flat_combine: {directory}, nfdicts = {nfdicts}, our_num_processes = {our_num_processes}')
     # Number of sub-processes in each process we will spawn
     num_subprocesses = int(num_processes / our_num_processes)
     # Similarly, the memory fraction for each process we will spawn
     subprocess_mem_frac = mem_frac / our_num_processes
     log.debug('flat_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
+    
+    # Combining files is the slow part, so we want the maximum of
+    # processes doing that in parallel
+    log.debug(f'flat_combine: {directory}, nfdicts = {nfdicts}, our_num_processes = {our_num_processes}')
+    # Number of sub-processes in each process we will spawn
+    num_subprocesses = int(num_processes / our_num_processes)
+    # Similarly, the memory fraction for each process we will spawn
+    subprocess_mem_frac = mem_frac / our_num_processes
+    log.debug('flat_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
+
     wwk = WorkerWithKwargs(flat_combine_one_filt,
-                           collection=collection,
                            num_processes=num_subprocesses,
                            mem_frac=subprocess_mem_frac,
                            **kwargs)
-    if nfilts == 1 or our_num_processes == 1:
-        for filt in filters:
-                wwk.worker(filt)
+    if nfdicts == 1:
+        for fdict in fdict_list:
+                wwk.worker(fdict)
     else:
         with NoDaemonPool(processes=our_num_processes) as p:
-            p.map(wwk.worker, filters)
-
+            p.map(wwk.worker, fdict_list)
 
 ######### Calibration object
 
@@ -1906,18 +1924,21 @@ class Lockfile():
 
     # --> could add a timeout and a user-specified optional message
     def wait(self):
+        if not self.is_set:
+            return
         while self.is_set:
             with open(self._fname, "r") as f:
                 log.error(f'lockfile {self._fname} detected for {f.read()}')
             time.sleep(self.check_every)
+        log.error(f'(error cleared) lockfile {self._fname} removed')
 
     def create(self):
         self.wait()
-        with open(lockfile, "w") as f:
+        with open(self._fname, "w") as f:
             f.write('PID: ' + str(os.getpid()))
 
     def clear(self):
-        os.remove(lockfile)
+        os.remove(self._fname)
 
 class Calibration():
     """Class for conducting CCD calibrations"""
@@ -2542,4 +2563,6 @@ class Calibration():
 #print(bias)
 #
 
-c = Calibration(start_date='2020-07-08', stop_date='2020-07-11', reduce=True)
+#c = Calibration(start_date='2020-07-08', stop_date='2020-07-11', reduce=True)
+
+c = Calibration(start_date='2020-07-08', stop_date='2020-08-07', reduce=True)
