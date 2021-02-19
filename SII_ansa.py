@@ -179,15 +179,15 @@ eyav = [np.average(eim[ebot_pix:etop_pix, i]) for i in eansa_xidx-eansa_xidx[0]]
 # --> Eventually I want to change the im Y idx to follow the ansa
 # based on the xav profile
 #wyav = [np.average(im[0:-1, i]) for i in wansa_xidx-wansa_xidx[0]]
-plt.scatter(x[wansa_xidx], wyav, 100, 'B')
-plt.scatter(-x[eansa_xidx], eyav, 100, 'R')
+plt.scatter(x[wansa_xidx], wyav, 100, 'b')
+plt.scatter(-x[eansa_xidx], eyav, 100, 'r')
 axes.tick_params(axis='both', which='major', labelsize=24)
 axes.tick_params(axis='both', which='minor', labelsize=24)
 plt.xlabel('Rj', fontsize=24)
 plt.ylabel('Approx surface brightness (R)', fontsize=24)
 plt.legend(['West ansa', 'East ansa'], loc='upper right', fontsize=24)
-plt.axvline(x=5.52, ymin=0, ymax=1, linewidth=5, color='B')
-plt.axvline(x=5.93, ymin=0, ymax=1, linewidth=5, color='R')
+plt.axvline(x=5.52, ymin=0, ymax=1, linewidth=5, color='b')
+plt.axvline(x=5.93, ymin=0, ymax=1, linewidth=5, color='r')
 plt.show()
 
 # 
