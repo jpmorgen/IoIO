@@ -2565,4 +2565,4 @@ class Calibration():
 
 #c = Calibration(start_date='2020-07-08', stop_date='2020-07-11', reduce=True)
 
-c = Calibration(start_date='2020-07-08', stop_date='2020-08-07', reduce=True)
+#c = Calibration(start_date='2020-07-08', stop_date='2020-08-07', reduce=True)
