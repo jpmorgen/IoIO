@@ -42,7 +42,8 @@ from IoIO import CorObsData
 # statement and don't reassign these at global scope, they stick to
 # these values and provide handy defaults for routines and object
 # inits.  It is also a way to be lazy about documenting all of the
-# code :-o
+# code :-o  --> This is causing some problems with the way I refer to
+# the same names in the code.  Consider all caps for these constants
 
 
 # Tests with first iteration of pipeline showed that the real gain in
@@ -54,7 +55,7 @@ from IoIO import CorObsData
 # speed, just max out on physical processors to get the steepest gains
 # and leave the asymptote for other jobs
 max_num_processes = psutil.cpu_count(logical=False)
-max_mem_frac = 0.8
+max_mem_frac = 0.85
 
 # Calculate the maximum CCDdata size based on 64bit primary & uncert +
 # 8 bit mask / 8 bits per byte.  It will be compared to
@@ -1387,7 +1388,7 @@ def dark_combine_one_fdict(fdict,
     tm = tmp.meta['DATE-OBS']
     this_dateb1, _ = tm.split('T')
     outbase = os.path.join(outdir, this_dateb1)
-    bad_fname = outbase + '_ccdT_XXX' + '_bias_combined_bad.fits'
+    bad_fname = outbase + '_ccdT_XXX' + '_dark_combined_bad.fits'
 
     # Make a scratch directory that is the date of the first file.
     # Not as fancy as the biases, but, hey, it is a scratch directory
@@ -1568,13 +1569,14 @@ def flat_fdict_creator(collection,
                        imagetyp=None):
     # Create a new collection narrowed to our imagetyp
     #print(collection.location) # gave expected directory
+    directory = collection.location
     collection = collection.filter(imagetyp=imagetyp)
     filters = collection.values('filter', unique=True)
     fdict_list = []
     for filt in filters:
         fnames = collection.files_filtered(filter=filt,
                                            include_path=True)
-        fdict_list.append({'directory': collection.location,
+        fdict_list.append({'directory': directory,
                            'filter': filt,
                            'fnames': fnames})
     return fdict_list
@@ -1601,10 +1603,11 @@ def flat_process(ccd, bmp_meta=None,
     max_flat = np.max(b.background)
     if max_flat > ccd.meta['NONLIN']:
         log.debug(f'flat max value of {max_flat} too bright: {in_name}')
-        return (None, {})
+        return None
     ccd.mask = None
+    max_flat *= ccd.unit
     ccd = ccd.divide(max_flat, handle_meta='first_found')
-    ccd.meta['FLATDIV'] = (max_flat, 'Value used to normalize (smoothed max)')
+    ccd.meta['FLATDIV'] = (max_flat.value, 'Value used to normalize (smoothed max)')
     # Get ready to capture the mean DATE-OBS
     tm = Time(ccd.meta['DATE-OBS'], format='fits')
     if bmp_meta is not None:
@@ -1633,7 +1636,7 @@ def flat_combine_one_fdict(fdict,
     tm = tmp.meta['DATE-OBS']
     this_dateb1, _ = tm.split('T')
     outbase = os.path.join(outdir, this_dateb1)
-    bad_fname = outbase + 'X' + '_flat_bad.fits'
+    bad_fname = outbase + '_' + this_filter + '_flat_bad.fits'
 
     if len(fnames) < min_num_flats:
         log.warning(f"Not enough good flats found for filter {this_filter} in {directory}")
@@ -1644,7 +1647,6 @@ def flat_combine_one_fdict(fdict,
     # Not as fancy as the biases, but, hey, it is a scratch directory
     tmp = ccddata_read(fnames[0])
     tm = tmp.meta['DATE-OBS']
-    this_dateb1, _ = tm.split('T')
     sdir = os.path.join(calibration_scratch, this_dateb1)
 
     cmp = CorMultiPipe(num_processes=num_processes,
@@ -1664,7 +1666,7 @@ def flat_combine_one_fdict(fdict,
         Path(bad_fname).touch()
         return False
     out_fnames, pipe_meta = zip(*pout)
-    if len(out_fnames) < min_num_biases:
+    if len(out_fnames) < min_num_flats:
         log.warning(f"Not enough good flats found for filter {this_filter} in {directory}")
         discard_intermediate(out_fnames, sdir,
                              calibration_scratch, keep_intermediate)
@@ -1754,7 +1756,7 @@ def flat_combine(directory=None,
                  num_calibration_files=num_calibration_files,
                  naxis1=sx694.naxis1,
                  naxis2=sx694.naxis2,
-                 bitpix=max_ccddata_bitpix,
+                 bitpix=64, # uncertainty and mask not used in griddata
                  griddata_expand_factor=griddata_expand_factor,
                  **kwargs):
     fdict_list = \
@@ -1773,9 +1775,9 @@ def flat_combine(directory=None,
         return False
     
     one_filt_size = (num_calibration_files
-                         * naxis1 * naxis2
-                         * bitpix/8
-                         * griddata_expand_factor)
+                     * naxis1 * naxis2
+                     * bitpix/8
+                     * griddata_expand_factor)
 
     our_num_processes = num_can_process(nfdicts,
                                         num_processes=num_processes,
@@ -1802,7 +1804,7 @@ def flat_combine(directory=None,
     subprocess_mem_frac = mem_frac / our_num_processes
     log.debug('flat_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
 
-    wwk = WorkerWithKwargs(flat_combine_one_filt,
+    wwk = WorkerWithKwargs(flat_combine_one_fdict,
                            num_processes=num_subprocesses,
                            mem_frac=subprocess_mem_frac,
                            **kwargs)
@@ -1980,9 +1982,9 @@ class Calibration():
         # gain_correct is set only in the biases and propagated
         # through the rest of the pipeline in cor_process
         self._gain_correct = gain_correct
-        self._bias_glob = bias_glob
-        self._dark_glob = dark_glob
-        self._flat_glob = flat_glob
+        self._bias_glob = self.assure_list(bias_glob)
+        self._dark_glob = self.assure_list(dark_glob)
+        self._flat_glob = self.assure_list(flat_glob)
         self._lockfile = lockfile
         self.num_processes = num_processes
         self.mem_frac = mem_frac
@@ -2017,6 +2019,14 @@ class Calibration():
         self._flat_dirs_dates_checked = None
         if reduce:
             self.reduce()
+
+    def assure_list(self, x):
+        """Assures x is type `list`"""
+        if x is None:
+            x = []
+        if not isinstance(x, list):
+            x = [x]
+        return x
 
     @property
     def gain_correct(self):
@@ -2080,7 +2090,8 @@ class Calibration():
         ncp = num_can_process(self.num_ccdts,
                               num_processes=self.num_processes,
                               mem_frac=self.mem_frac,
-                              process_size=self.num_ccdts * one_fdict_size)
+                              process_size=self.num_ccdts * one_fdict_size,
+                              error_if_zero=False)
         our_num_processes = max(1, ncp)
         num_subprocesses = int(self.num_processes / our_num_processes)
         subprocess_mem_frac = self.mem_frac / our_num_processes
@@ -2142,7 +2153,8 @@ class Calibration():
         ncp = num_can_process(self.num_ccdts,
                               num_processes=self.num_processes,
                               mem_frac=self.mem_frac,
-                              process_size=self.num_ccdts * one_fdict_size)
+                              process_size=self.num_ccdts * one_fdict_size,
+                              error_if_zero=False)
         our_num_processes = max(1, ncp)
         num_subprocesses = int(self.num_processes / our_num_processes)
         subprocess_mem_frac = self.mem_frac / our_num_processes
@@ -2361,7 +2373,9 @@ class Calibration():
             # We haven't reduced any calibration images yet and we
             # don't want to automatically do so (just yet)
             return None
-        fnames = glob.glob(os.path.join(self._calibration_root, '*_flat.fits'))
+        fnames = glob.glob(os.path.join(self._calibration_root,
+                          '*_flat*'))
+        fnames = [f for f in fnames if '.fits' in f]
         if len(fnames) == 0:
             # Catch the not autoreduce case when we still have no files
             return None
@@ -2566,3 +2580,15 @@ class Calibration():
 #c = Calibration(start_date='2020-07-08', stop_date='2020-07-11', reduce=True)
 
 #c = Calibration(start_date='2020-07-08', stop_date='2020-08-07', reduce=True)
+
+#c = Calibration(start_date='2020-04-24', stop_date='2020-04-26', reduce=True)
+
+#log.setLevel('DEBUG')
+#c = Calibration(start_date='2020-01-01', stop_date='2020-12-31', reduce=True)
+
+#c = Calibration(start_date='2020-01-01', stop_date='2020-12-31', reduce=True)    
+#t = c.flat_table_create(autoreduce=False, rescan=True)
+
+if __name__ == "__main__":
+    log.setLevel('DEBUG')
+    c = Calibration(start_date='2020-01-01', stop_date='2020-12-31', reduce=True)    
