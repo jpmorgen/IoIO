@@ -54,80 +54,80 @@ from IoIO import CorObsData
 # wait times are minimized.  Rather than try to milk the asymptote for
 # speed, just max out on physical processors to get the steepest gains
 # and leave the asymptote for other jobs
-max_num_processes = psutil.cpu_count(logical=False)
-max_mem_frac = 0.85
+MAX_NUM_PROCESSES = psutil.cpu_count(logical=False)
+MAX_MEM_FRAC = 0.85
 
 # Calculate the maximum CCDdata size based on 64bit primary & uncert +
 # 8 bit mask / 8 bits per byte.  It will be compared to
 # psutil.virtual_memory() at runtime to optimize computational tasks
 # is my do-it-yourself multiprocessing routines
-max_ccddata_bitpix = 2*64 + 8
-cor_process_expand_factor = 3.5
-griddata_expand_factor = 20
+MAX_CCDDATA_BITPIX = 2*64 + 8
+COR_PROCESS_EXPAND_FACTOR = 3.5
+GRIDDATA_EXPAND_FACTOR = 20
 
 # These are use to optimize parallelization until such time as
 # ccdproc.combiner can be parallelized
-num_ccdts = int((35 - (-10)) / 5)
-num_dark_exptimes = 8
-num_filts = 9
-num_calibration_files = 11
+NUM_CCDTS = int((35 - (-10)) / 5)
+NUM_DARK_EXPTIMES = 8
+NUM_FILTS = 9
+NUM_CALIBRATION_FILES = 11
 
-data_root = '/data/io/IoIO'
-raw_data_root = os.path.join(data_root, 'raw')
-reduced_root = os.path.join(data_root, 'reduced')
-calibration_root = os.path.join(reduced_root, 'Calibration')
-calibration_scratch = os.path.join(calibration_root, 'scratch')
+DATA_ROOT = '/data/io/IoIO'
+RAW_DATA_ROOT = os.path.join(DATA_ROOT, 'raw')
+REDUCED_ROOT = os.path.join(DATA_ROOT, 'reduced')
+CALIBRATION_ROOT = os.path.join(REDUCED_ROOT, 'Calibration')
+CALIBRATION_SCRATCH = os.path.join(CALIBRATION_ROOT, 'scratch')
 # string to append to processed files to avoid overwrite of raw data
-outname_append = "_p"
+OUTNAME_APPEND = "_p"
 
 # Lockfiles to prevent multiple upstream parallel processes from
 # simultanously autoreducing calibration data
-lockfile = '/tmp/calibration_reduce.lock'
+LOCKFILE = '/tmp/calibration_reduce.lock'
 
 # Raw (and reduced) data are stored in directories by UT date, but
 # some have subdirectories that contain calibration files.
-calibration_subdirs = ['Calibration', 'AutoFlat']
+CALIBRATION_SUBDIRS = ['Calibration', 'AutoFlat']
 
 # Put the regular expressions for the biases, darks, and flats here so
 # that they can be found quickly without having to do a ccd.Collection
 # on a whold directory.  The later is the rock solid most reliable,
 # but slow in big directories, since ccdproc.Collection has to read
 # each file
-bias_glob = ['Bias*', '*_bias.fit']
-dark_glob = ['Dark*', '*_dark.fit']
-flat_glob = '*Flat*'
+BIAS_GLOB = ['Bias*', '*_bias.fit']
+DARK_GLOB = ['Dark*', '*_dark.fit']
+FLAT_GLOB = '*Flat*'
 
 # During the creation of master biases and darks files are grouped by
 # CCD temperature.  This is the change in temperature seen as a
 # function of time that is used to trigger the creation of a new group
-dccdt_tolerance = 0.5
+DCCDT_TOLERANCE = 0.5
 # During reduction of files, biases and darks need to be matched to
 # each file by temperature.  This is the tolerance for that matching
-ccdt_tolerance = 2
+CCDT_TOLERANCE = 2
 # When I was experimenting with bias collection on a per-night basis,
 # I got lots of nights with a smattering of biases.  Discard these
-min_num_biases = 7
-min_num_flats = 3
+MIN_NUM_BIASES = 7
+MIN_NUM_FLATS = 3
 
 # Accept as match darks with this much more exposure time
-dark_exp_margin = 3
+DARK_EXP_MARGIN = 3
 
 # Number of pixels to expand the ND filter over what CorObsData finds.
 # This is the negative of the CorObsData edge_mask parameter, since
 # that is designed to mask pixels inside the ND filter to make
 # centering of object more reliable
-nd_edge_expand = 40
-
+ND_EDGE_EXPAND = 40
+FLAT_CUT = 0.75
 ######### CorMultiPipe object
 
 class CorMultiPipe(CCDMultiPipe):
     def __init__(self,
                  calibration=None,
                  auto=False,
-                 outname_append='_r',
+                 outname_append=OUTNAME_APPEND,
                  naxis1=sx694.naxis1,
                  naxis2=sx694.naxis2,
-                 process_expand_factor=cor_process_expand_factor,
+                 process_expand_factor=COR_PROCESS_EXPAND_FACTOR,
                  **kwargs):
         self.calibration = calibration
         self.auto = auto
@@ -274,7 +274,7 @@ def bias_stats(ccd, bmp_meta=None, gain=sx694.gain, **kwargs):
         bmp_meta['bias_stats'] = stats
     return ccd
 
-def nd_filter_mask(ccd_in, nd_edge_expand=nd_edge_expand, **kwargs):
+def nd_filter_mask(ccd_in, nd_edge_expand=ND_EDGE_EXPAND, **kwargs):
     """CorMultiPipe post-processing routine to mask ND filter
     """
     # --> this will eventually get included in CorData or whatever I call it
@@ -953,7 +953,7 @@ def fdict_list_collector(fdict_list_creator,
 
 def bias_dark_fdict_creator(collection,
                             imagetyp=None,
-                            dccdt_tolerance=dccdt_tolerance,
+                            dccdt_tolerance=DCCDT_TOLERANCE,
                             debug=False):
     # Create a summary table narrowed to our imagetyp
     our_imagetyp = collection.summary['imagetyp'] == imagetyp
@@ -1024,23 +1024,22 @@ def discard_intermediate(out_fnames, sdir,
 
 
 def bias_combine_one_fdict(fdict,
-                           outdir=calibration_root,
-                           calibration_scratch=calibration_scratch,
+                           outdir=CALIBRATION_ROOT,
+                           calibration_scratch=CALIBRATION_SCRATCH,
                            keep_intermediate=False,
                            show=False,
-                           min_num_biases=min_num_biases,
-                           dccdt_tolerance=dccdt_tolerance,
+                           min_num_biases=MIN_NUM_BIASES,
                            camera_description=sx694.camera_description,
                            gain=sx694.gain,
                            satlevel=sx694.satlevel,
                            readnoise=sx694.example_readnoise,
                            readnoise_tolerance=sx694.readnoise_tolerance,
                            gain_correct=False,
-                           num_processes=max_num_processes,
-                           mem_frac=max_mem_frac,
+                           num_processes=MAX_NUM_PROCESSES,
+                           mem_frac=MAX_MEM_FRAC,
                            naxis1=sx694.naxis1,
                            naxis2=sx694.naxis2,
-                           bitpix=max_ccddata_bitpix,
+                           bitpix=MAX_CCDDATA_BITPIX,
                            **kwargs):
 
     """Worker that allows the parallelization of calibrations taken at one
@@ -1274,16 +1273,16 @@ def bias_combine_one_fdict(fdict,
                 
 def bias_combine(directory=None,
                  collection=None,
-                 subdirs=calibration_subdirs,
-                 glob_include=bias_glob,
-                 dccdt_tolerance=dccdt_tolerance,
-                 num_processes=max_num_processes,
-                 mem_frac=max_mem_frac,
-                 num_calibration_files=num_calibration_files,
+                 subdirs=CALIBRATION_SUBDIRS,
+                 glob_include=BIAS_GLOB,
+                 dccdt_tolerance=DCCDT_TOLERANCE,
+                 num_processes=MAX_NUM_PROCESSES,
+                 mem_frac=MAX_MEM_FRAC,
+                 num_calibration_files=NUM_CALIBRATION_FILES,
                  naxis1=sx694.naxis1,
                  naxis2=sx694.naxis2,
-                 bitpix=max_ccddata_bitpix,
-                 process_expand_factor=cor_process_expand_factor,
+                 bitpix=MAX_CCDDATA_BITPIX,
+                 process_expand_factor=COR_PROCESS_EXPAND_FACTOR,
                  **kwargs):
     """Combine biases in a directory
 
@@ -1298,7 +1297,7 @@ def bias_combine(directory=None,
 
     subdirs : list
         List of subdirectories in which to search for calibration
-        data.  Default: :value:`calibration_subdirs`
+        data.  Default: :value:`CALIBRATION_SUBDIRS`
 
     glob_include : list
         List of `glob` expressions for calibration filenames
@@ -1311,11 +1310,11 @@ def bias_combine(directory=None,
 
     num_processes : int
         Number of processes available to this task for
-        multiprocessing.  Default: :value:`max_num_processes`
+        multiprocessing.  Default: :value:`MAX_NUM_PROCESSES`
 
     mem_frac : float
         Fraction of memory available to this task.  Default:
-        :value:`max_mem_frac`
+        :value:`MAX_MEM_FRAC`
 
     **kwargs passed to bias_combine_one_fdict
 
@@ -1327,7 +1326,7 @@ def bias_combine(directory=None,
                              subdirs=subdirs,
                              imagetyp='BIAS',
                              glob_include=glob_include,
-                             dccdt_tolerance=dccdt_tolerance)
+                             dccdt_tolerance=DCCDT_TOLERANCE)
     if collection is not None:
         # Make sure 'directory' is a valid variable
         directory = collection.location
@@ -1362,18 +1361,16 @@ def bias_combine(directory=None,
             p.map(wwk.worker, fdict_list)
 
 def dark_combine_one_fdict(fdict,
-                           outdir=calibration_root,
-                           calibration_scratch=calibration_scratch,
-                           outname_append=outname_append,
+                           outdir=CALIBRATION_ROOT,
+                           calibration_scratch=CALIBRATION_SCRATCH,
                            keep_intermediate=False,
                            show=False,
-                           dccdt_tolerance=dccdt_tolerance,
                            mask_threshold=sx694.dark_mask_threshold,
-                           num_processes=max_num_processes,
-                           mem_frac=max_mem_frac,
+                           num_processes=MAX_NUM_PROCESSES,
+                           mem_frac=MAX_MEM_FRAC,
                            naxis1=sx694.naxis1,
                            naxis2=sx694.naxis2,
-                           bitpix=max_ccddata_bitpix,
+                           bitpix=MAX_CCDDATA_BITPIX,
                            **kwargs):
     """Worker that allows the parallelization of calibrations taken at one
     temperature, exposure time, filter, etc.
@@ -1514,16 +1511,16 @@ def dark_combine_one_fdict(fdict,
 
 def dark_combine(directory=None,
                  collection=None,
-                 subdirs=calibration_subdirs,
-                 glob_include=dark_glob,
-                 dccdt_tolerance=dccdt_tolerance,
-                 num_processes=max_num_processes,
-                 mem_frac=max_mem_frac,
-                 num_calibration_files=num_calibration_files,
+                 subdirs=CALIBRATION_SUBDIRS,
+                 glob_include=DARK_GLOB,
+                 dccdt_tolerance=DCCDT_TOLERANCE,
+                 num_processes=MAX_NUM_PROCESSES,
+                 mem_frac=MAX_MEM_FRAC,
+                 num_calibration_files=NUM_CALIBRATION_FILES,
                  naxis1=sx694.naxis1,
                  naxis2=sx694.naxis2,
-                 bitpix=max_ccddata_bitpix,
-                 process_expand_factor=cor_process_expand_factor,
+                 bitpix=MAX_CCDDATA_BITPIX,
+                 process_expand_factor=COR_PROCESS_EXPAND_FACTOR,
                  **kwargs):
     fdict_list = \
         fdict_list_collector(bias_dark_fdict_creator,
@@ -1583,7 +1580,7 @@ def flat_fdict_creator(collection,
 
 def flat_process(ccd, bmp_meta=None,
                  init_threshold=100, # units of readnoise
-                 nd_edge_expand=nd_edge_expand,
+                 nd_edge_expand=ND_EDGE_EXPAND,
                  in_name=None,
                  **kwargs):
     # Use photutils.Background2D to smooth each flat and get a
@@ -1607,7 +1604,7 @@ def flat_process(ccd, bmp_meta=None,
     ccd.mask = None
     max_flat *= ccd.unit
     ccd = ccd.divide(max_flat, handle_meta='first_found')
-    ccd.meta['FLATDIV'] = (max_flat.value, 'Value used to normalize (smoothed max)')
+    ccd.meta['FLATDIV'] = (max_flat.value, 'Normalization value (smoothed max), electron')
     # Get ready to capture the mean DATE-OBS
     tm = Time(ccd.meta['DATE-OBS'], format='fits')
     if bmp_meta is not None:
@@ -1615,19 +1612,19 @@ def flat_process(ccd, bmp_meta=None,
     return ccd
 
 def flat_combine_one_fdict(fdict,
-                          outdir=calibration_root,
-                          calibration_scratch=calibration_scratch,
-                          keep_intermediate=False,
-                          min_num_flats=min_num_flats,
-                          num_processes=max_num_processes,
-                          mem_frac=max_mem_frac,
-                          naxis1=sx694.naxis1,
-                          naxis2=sx694.naxis2,
-                          bitpix=max_ccddata_bitpix,
-                          show=False,
-                          flat_cut=0.75,
-                          nd_edge_expand=nd_edge_expand,
-                          **kwargs):
+                           outdir=CALIBRATION_ROOT,
+                           calibration_scratch=CALIBRATION_SCRATCH,
+                           keep_intermediate=False,
+                           min_num_flats=MIN_NUM_FLATS,
+                           num_processes=MAX_NUM_PROCESSES,
+                           mem_frac=MAX_MEM_FRAC,
+                           naxis1=sx694.naxis1,
+                           naxis2=sx694.naxis2,
+                           bitpix=MAX_CCDDATA_BITPIX,
+                           show=False,
+                           nd_edge_expand=ND_EDGE_EXPAND,
+                           flat_cut=FLAT_CUT,
+                           **kwargs):
     fnames = fdict['fnames']
     num_files = len(fnames)
     this_filter = fdict['filter']
@@ -1658,7 +1655,7 @@ def flat_combine_one_fdict(fdict,
                        create_outdir=True,
                        overwrite=True,
                        post_process_list=[flat_process, jd_meta],
-                       nd_edge_expand=nd_edge_expand)
+                       **kwargs)
     pout = cmp.pipeline(fnames, **kwargs)
     pout, fnames = prune_pout(pout, fnames)
     if len(pout) == 0:
@@ -1749,15 +1746,15 @@ def flat_combine_one_fdict(fdict,
     
 def flat_combine(directory=None,
                  collection=None,
-                 subdirs=calibration_subdirs,
-                 glob_include=flat_glob,
-                 num_processes=max_num_processes,
-                 mem_frac=max_mem_frac,
-                 num_calibration_files=num_calibration_files,
+                 subdirs=CALIBRATION_SUBDIRS,
+                 glob_include=FLAT_GLOB,
+                 num_processes=MAX_NUM_PROCESSES,
+                 mem_frac=MAX_MEM_FRAC,
+                 num_calibration_files=NUM_CALIBRATION_FILES,
                  naxis1=sx694.naxis1,
                  naxis2=sx694.naxis2,
                  bitpix=64, # uncertainty and mask not used in griddata
-                 griddata_expand_factor=griddata_expand_factor,
+                 griddata_expand_factor=GRIDDATA_EXPAND_FACTOR,
                  **kwargs):
     fdict_list = \
         fdict_list_collector(flat_fdict_creator,
@@ -1946,30 +1943,32 @@ class Calibration():
     """Class for conducting CCD calibrations"""
     def __init__(self,
                  reduce=False,
-                 raw_data_root=raw_data_root,
-                 calibration_root=calibration_root,
-                 subdirs=calibration_subdirs,
+                 raw_data_root=RAW_DATA_ROOT,
+                 calibration_root=CALIBRATION_ROOT,
+                 subdirs=CALIBRATION_SUBDIRS,
                  keep_intermediate=False,
-                 ccdt_tolerance=ccdt_tolerance,
-                 dark_exp_margin=dark_exp_margin,
+                 ccdt_tolerance=CCDT_TOLERANCE,
+                 dark_exp_margin=DARK_EXP_MARGIN,
                  start_date=None,
                  stop_date=None,
                  gain_correct=True, # This is gain correcting the bias and dark
-                 num_processes=max_num_processes,
-                 mem_frac=max_mem_frac,
-                 num_ccdts=num_ccdts,
-                 num_dark_exptimes=num_dark_exptimes,
-                 num_filts=num_filts,
-                 num_calibration_files=num_calibration_files,
+                 num_processes=MAX_NUM_PROCESSES,
+                 mem_frac=MAX_MEM_FRAC,
+                 num_ccdts=NUM_CCDTS,
+                 num_dark_exptimes=NUM_DARK_EXPTIMES,
+                 num_filts=NUM_FILTS,
+                 num_calibration_files=NUM_CALIBRATION_FILES,
                  naxis1=sx694.naxis1,
                  naxis2=sx694.naxis2,
-                 bitpix=max_ccddata_bitpix,
-                 process_expand_factor=cor_process_expand_factor,
-                 griddata_expand_factor=griddata_expand_factor,
-                 bias_glob=bias_glob, 
-                 dark_glob=dark_glob,
-                 flat_glob=flat_glob,
-                 lockfile=lockfile):
+                 bitpix=MAX_CCDDATA_BITPIX,
+                 process_expand_factor=COR_PROCESS_EXPAND_FACTOR,
+                 griddata_expand_factor=GRIDDATA_EXPAND_FACTOR,
+                 bias_glob=BIAS_GLOB, 
+                 dark_glob=DARK_GLOB,
+                 flat_glob=FLAT_GLOB,
+                 flat_cut=FLAT_CUT,
+                 nd_edge_expand=ND_EDGE_EXPAND,
+                 lockfile=LOCKFILE):
         self._raw_data_root = raw_data_root
         self._calibration_root = calibration_root
         self._subdirs = subdirs
@@ -1986,6 +1985,8 @@ class Calibration():
         self._dark_glob = self.assure_list(dark_glob)
         self._flat_glob = self.assure_list(flat_glob)
         self._lockfile = lockfile
+        self.flat_cut = flat_cut
+        self.nd_edge_expand = nd_edge_expand
         self.num_processes = num_processes
         self.mem_frac = mem_frac
         self.num_ccdts = num_ccdts
@@ -2236,7 +2237,9 @@ class Calibration():
                                naxis1=self.naxis1,
                                naxis2=self.naxis2,
                                griddata_expand_factor=self.griddata_expand_factor,
-                               keep_intermediate=self.keep_intermediate)
+                               keep_intermediate=self.keep_intermediate,
+                               flat_cut=self.flat_cut,
+                               nd_edge_expand=self.nd_edge_expand)
                                
         dirs = [dt[0] for dt in dirs_dates]
         if our_num_processes == 1:
