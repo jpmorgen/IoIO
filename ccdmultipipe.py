@@ -2,11 +2,57 @@
 
 """
 
+from astropy import log
 from astropy import units as u
+from astropy.io import fits
 from astropy.nddata import CCDData
 import ccdproc as ccdp
 
 from bigmultipipe import BigMultiPipe
+
+class FallBackUnitCCDData(CCDData):
+    @classmethod
+    def read(cls, input_im, *args, 
+             unit=None,
+             fallback_unit=None,
+             **kwargs):
+        if unit is not None:
+            return super(FallBackUnitCCDData, cls).read(input_im, *args,
+                                                        unit=unit,
+                                                        **kwargs)
+        # Open the file and read the primary hdr to see if there is a
+        # BUNIT there.  Do the open as a memmap to minimize overhead
+        # on the second file read in CCDData
+        with fits.open(input_im, memmap=True) as hdul:
+            hdr = hdul[0].header
+            bunit = hdr.get('BUNIT')
+            use_unit = bunit or fallback_unit
+            return \
+                super(FallBackUnitCCDData, cls).read(input_im, *args,
+                                                     unit=use_unit, **kwargs)
+
+#        if unit is not None:
+#            return cls._read(input_im, *args, unit=unit, **kwargs)
+#        # Open the file and read the primary hdr to see if there is a
+#        # BUNIT there.  Do the open as a memmap to minimize overhead
+#        # on the second file read in CCDData
+#        with fits.open(input_im, memmap=True) as hdul:
+#            hdr = hdul[0].header
+#            bunit = hdr.get('BUNIT')
+#            use_unit = bunit or fallback_unit
+#            return cls._read(input_im, *args, unit=use_unit, **kwargs)
+#
+#        if unit is not None:
+#            return CCDData.read(input_im, *args, unit=unit, **kwargs)
+#        # Open the file and read the primary hdr to see if there is a
+#        # BUNIT there.  Do the open as a memmap to minimize overhead
+#        # on the second file read in CCDData
+#        with fits.open(input_im, memmap=True) as hdul:
+#            hdr = hdul[0].header
+#            bunit = hdr.get('BUNIT')
+#            use_unit = bunit or fallback_unit
+#            return CCDData.read(input_im, *args, unit=use_unit, **kwargs)
+#
 
 def ccddata_read(fname_or_ccd,
                  raw_unit=u.adu,
@@ -260,3 +306,12 @@ class CCDMultiPipe(BigMultiPipe):
         kwargs = self.kwargs_merge(**kwargs)
         data = ccdp.ccd_process(data, **kwargs)
         return data
+
+#bname = '/data/io/IoIO/reduced/Calibration/2020-07-07_ccdT_-10.3_bias_combined.fits'
+#ccd = CCDData.read(bname)
+#
+#fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
+##ccd = CCDData.read(fname1)
+#ccd = FallBackUnitCCDData.read(fname1, fallback_unit='adu')
+#
+#ccd = FallBackUnitCCDData.read(fname1, unit='electron')
