@@ -5,54 +5,99 @@
 from astropy import log
 from astropy import units as u
 from astropy.io import fits
-from astropy.nddata import CCDData
+from astropy.nddata import CCDData, fits_ccddata_reader
 import ccdproc as ccdp
 
 from bigmultipipe import BigMultiPipe
 
-class FallBackUnitCCDData(CCDData):
+
+def fallback_unit_ccddata_reader(filename, *args, 
+                                 unit=None,
+                                 fallback_unit=None,
+                                 **kwargs):
+    if unit is not None:
+        return fits_ccddata_reader(filename, *args,
+                                   unit=unit, **kwargs)
+    # Open the file and read the primary hdr to see if there is a
+    # BUNIT there.  Do the open as an memmap to minimize overhead
+    # on the second file read in fits_ccddata_reader.  Having the
+    # underlying astropy code implement something like
+    # hdul_ccddata_reader would save the second file open entirely
+    with fits.open(filename, memmap=True) as hdul:
+        hdr = hdul[0].header
+        bunit = hdr.get('BUNIT')
+        if bunit is not None:
+            try:
+                # fits_ccddata_reader will find BUNIT again.
+                # We have to do it without unit=bunit to avoid
+                # annoying message
+                return fits_ccddata_reader(filename, *args, **kwargs)
+            except ValueError:
+                # BUNIT may not be valid
+                log.warning(f'Potentially invalid BUNIT '
+                            'value {bunit} detected in FITS '
+                            'header.  Falling back to {fallback_unit}')
+        # If we made it here, there is no BUNIT in the header or it is invalid
+        return fits_ccddata_reader(filename, *args,
+                                   unit=fallback_unit, **kwargs)
+
+class FBUCCDData(CCDData):
+    """
+    Add ``fallback_unit`` capability to :meth:`CCDData.read() <~astropy.nddata.CCDData.read>`
+
+    Paramters
+    ---------
+    filename : str
+        Name of FITS file
+
+    unit : `~astropy.units.Unit`, optional
+        Units of the image data.   If ``None,`` the FITS header
+        ``BUNIT`` keyword will be queried to set the unit.  If that
+        is not found or an error is raised, `fallback_unit` will be
+        used.
+        Default is ``None``.
+
+    fallback_unit : `~astropy.units.Unit`, optional
+        Units to be used for the image data if `unit` is not provided
+        and no valid ``BUNIT`` value is found in the FITS header.
+        Default is ``None``.
+
+    kwargs :
+        Keywords to pass to :meth:`CCDData.read() <~astropy.nddata.CCDData.read>`
+
+    """
     @classmethod
-    def read(cls, input_im, *args, 
-             unit=None,
+    def read(cls, filename, *args, 
              fallback_unit=None,
              **kwargs):
-        if unit is not None:
-            return super(FallBackUnitCCDData, cls).read(input_im, *args,
-                                                        unit=unit,
-                                                        **kwargs)
-        # Open the file and read the primary hdr to see if there is a
-        # BUNIT there.  Do the open as a memmap to minimize overhead
-        # on the second file read in CCDData
-        with fits.open(input_im, memmap=True) as hdul:
-            hdr = hdul[0].header
-            bunit = hdr.get('BUNIT')
-            use_unit = bunit or fallback_unit
-            return \
-                super(FallBackUnitCCDData, cls).read(input_im, *args,
-                                                     unit=use_unit, **kwargs)
-
-#        if unit is not None:
-#            return cls._read(input_im, *args, unit=unit, **kwargs)
-#        # Open the file and read the primary hdr to see if there is a
-#        # BUNIT there.  Do the open as a memmap to minimize overhead
-#        # on the second file read in CCDData
-#        with fits.open(input_im, memmap=True) as hdul:
-#            hdr = hdul[0].header
-#            bunit = hdr.get('BUNIT')
-#            use_unit = bunit or fallback_unit
-#            return cls._read(input_im, *args, unit=use_unit, **kwargs)
-#
-#        if unit is not None:
-#            return CCDData.read(input_im, *args, unit=unit, **kwargs)
-#        # Open the file and read the primary hdr to see if there is a
-#        # BUNIT there.  Do the open as a memmap to minimize overhead
-#        # on the second file read in CCDData
-#        with fits.open(input_im, memmap=True) as hdul:
-#            hdr = hdul[0].header
-#            bunit = hdr.get('BUNIT')
-#            use_unit = bunit or fallback_unit
-#            return CCDData.read(input_im, *args, unit=use_unit, **kwargs)
-#
+        ccd = fallback_unit_ccddata_reader(filename, *args, 
+                                           fallback_unit=fallback_unit,
+                                           **kwargs)
+        return ccd
+        # NOTE: to make this work with a more complex object, accept
+        # the keyword arguments of that object explicitly into the
+        # read method and do something like the code below.  Trying to
+        # do a simple return of cls(*args, in_read=filename, **args) This is
+        # necessary because of the structure of the underlying astropy
+        # code and the way Python handles instantiation of objects in
+        # classmethods: an empty object is instantiated with no
+        # arguments
+        # classmethods does not allow this to be subclassed in a
+        # general way.  Therefore, for another object, all of that
+        # class's __init__ keywords would need to be accepted to this
+        # read method and handled in the following way
+        ## Make a vestigial pgd
+        #pgd = cls(ccd.data,
+        #          unit=ccd.unit,
+        #          obj_center=obj_center,
+        #          desired_center=desired_center,
+        #          quality=quality,
+        #          date_obs_key=date_obs_key,
+        #          exptime_key=exptime_key,
+        #          darktime_key=darktime_key)
+        ## Merge in ccd property
+        #pgd.__dict__.update(ccd.__dict__)
+        #return pgd
 
 def ccddata_read(fname_or_ccd,
                  raw_unit=u.adu,
@@ -161,12 +206,12 @@ class CCDMultiPipe(BigMultiPipe):
     """
 
     def __init__(self,
+                 ccddata_cls=None,
                  process_size=None,
                  naxis1=None,
                  naxis2=None,
                  bitpix=None,
                  process_expand_factor=3.5,
-                 raw_unit=None,
                  outname_append='_ccdmp',
                  overwrite=False,
                  **kwargs):
@@ -177,9 +222,7 @@ class CCDMultiPipe(BigMultiPipe):
         self.bitpix = bitpix
         self.process_expand_factor = process_expand_factor
         self.process_size = process_size
-        if raw_unit is None:
-            raw_unit = u.adu
-        self.raw_unit = raw_unit
+        self.ccddata_cls = CCDData if ccddata_cls is None else ccddata_cls
         self.overwrite = overwrite
         super().__init__(outname_append=outname_append,
                          **kwargs)
@@ -256,7 +299,7 @@ class CCDMultiPipe(BigMultiPipe):
 
         """
         kwargs = self.kwargs_merge(**kwargs)
-        data = ccddata_read(in_name, raw_unit=self.raw_unit, **kwargs)
+        data = ccddata_cls.read(in_name, **kwargs)
         return data
 
     def file_write(self, data, outname, 
@@ -309,9 +352,10 @@ class CCDMultiPipe(BigMultiPipe):
 
 #bname = '/data/io/IoIO/reduced/Calibration/2020-07-07_ccdT_-10.3_bias_combined.fits'
 #ccd = CCDData.read(bname)
-#
+
 #fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
-##ccd = CCDData.read(fname1)
-#ccd = FallBackUnitCCDData.read(fname1, fallback_unit='adu')
-#
-#ccd = FallBackUnitCCDData.read(fname1, unit='electron')
+#ccd = CCDData.read(fname1)
+#ccd = FBUCCDData.read(fname1, fallback_unit='adu')
+#ccd = FBUCCDData.read(fname1, fallback_unit='aduu')
+
+#ccd = FBUCCDData.read(fname1, unit='electron')
