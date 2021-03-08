@@ -10982,4 +10982,92 @@ PGDCNo (alias for PGData)
 PGDCDesired
 etc.
 
+Fri Feb 19 19:55:51 2021 EST  jpmorgen@snipe
 
+Thinking more about PGCCCDData.  Based on the thinking I had on the
+pull request, it might be good to read the file in with bogus units
+and then change.  That engages all the machinery of the CCDData.  THe
+only way to do this is to write the file to disk and then re-read it
+
+Fundamentally, the system seems to be based on the io registry, so
+sneaking in with and HDUList might be frowned upon.  I do see
+temporary files showing up in /tmp that look sagaciously FITS-sized,
+so maybe they just do it that way with memory-mapped files.
+
+But for the fundamental pgdata type, I can just assume the header and
+primary data array, since that is what comes from MaxIm and probably
+any other CCD camera software (or can be massaged into FITS by an
+intermediate layer).  So leave that there.
+
+The question is, how to implement PGCCDData?  I guess I could have the
+read classmethod write the hdul and then just pass it to the __super().__init__
+
+--> make CCDMultiPipe accept a CCDData-like object as an argument?
+
+Mon Feb 22 15:13:22 2021 EST  jpmorgen@snipe
+
+So it looks like I am talking myself into having CCDData be the base
+class for PGdata.  One of the reasons I like this is the units 'adu'
+can be specified at a basic level rather than later.  OTOH, I just
+implemented  a "Franken-object," PGCCDData that effectively merges the
+two and allows for specification of the raw unit at a high level.
+precisionguide can be passed whatever object the user wants to dump
+their data into, as long as PGData is one of its base classes.  Like
+that better at the moment.
+
+Thinking about how to structure the precisionguide package.  First of
+all, I should put it in its own directory.  I could have the __init__
+import things from different places and make them available thorugh
+__all__, or whatever.  That would be PrecisionGuide, PGData,
+MaxImControl
+
+Hmm.  Back to the design decision about PGData.  It is being a real
+pain to zip together all the overlapping methods, like read and
+write.  It is just easier to subclass PGData to CCDData, since CCDData
+really has all the storage stuff I want and I just want to add some
+extra stuff for the center, etc.  Yes, importing will take a little
+longer because of the ccdcdata module, but I am already bringing in
+wcs, which is a big part, so just go ahead and bite the bullet.  I can
+also incorporate the raw_unit at the PGData level rather than some
+user-defined Franken-object.  I like it.
+
+So do I start a new precisionguide directory at this point to check
+things in?  Maybe so, since that is what I would move to the local
+machine for testing.  Copy current versions of pgdata, precisionguide
+and IoIO.py over to start with and work from there
+
+Thu Mar 04 20:50:36 2021 EST  jpmorgen@snipe
+
+pgdata module is coming together nicely.  Now I need to put that into
+something like CorData and RedCorData.
+
+RedCorData will probably be in cormultipipe
+
+Maybe CorData should be in something like corobs or maybe corobsdata
+and the actual stuff that drives precisionguide would be in corobs.
+That starts to make IoIO a collection of git submodules
+These are lean and mean machines for quick calculation of obj_center
+and desired_center in real time.  Basically what I had before.  Maybe
+corobsdata
+
+Fri Mar 05 09:59:47 2021 EST  jpmorgen@snipe
+
+Hmm.  ND_params stuff was all referenced to unbinned image.  This
+makes some sense, since it is an invariant property of the focal
+plane.
+
+self.oshape in ObsData was the original unbinned shape.  Try to just
+work with self.shape instead, since that should be invariant in the
+new system
+
+--> consider making a custom unit to keep track of binned and unbinned 
+
+Mon Mar 08 16:22:03 2021 EST  jpmorgen@snipe
+
+In transition between old and new precisionguide
+
+--> rsync
+sa
+rsync -auv jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/home/jpmorgen/py/IoIO/sx694.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
+rsync -auv jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/home/jpmorgen/py/IoIO/IoIO.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
+rsync -auv jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/home/jpmorgen/py/IoIO/precisionguide_old.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"

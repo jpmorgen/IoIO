@@ -21,7 +21,7 @@ from scipy import signal, ndimage
 import matplotlib.pyplot as plt
 
 import sx694
-import precisionguide as pg
+import precisionguide_old as pg
 
 SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 

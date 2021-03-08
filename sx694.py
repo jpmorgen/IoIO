@@ -15,6 +15,7 @@ and the variables and functions referred to as sx694.naxis1, etc.
 import numpy as np
 from scipy import signal
 
+# --> These will go away
 from astropy.io import fits
 from astropy.stats import biweight_location
 
@@ -34,13 +35,13 @@ naxis2 = 2200
 
 # 16-bit A/D converter, stored in SATLEVEL keyword
 satlevel = 2**16-1
-satlevel_comment = 'Saturation level (ADU)'
+satlevel_comment = 'Saturation level (adu)'
 
 # Gain measured in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx.
 # Value agrees well with Trius SX-694 advertised value (note, newer
 # "PRO" model has a different gain value).  Stored in GAIN keyword
 gain = 0.3
-gain_comment = 'Measured gain (electron/ADU)'
+gain_comment = 'Measured gain (electron/adu)'
 
 # Sample readnoise measured as per ioio.notebk
 # Tue Jul 10 12:13:33 2018 MCT jpmorgen@byted 
@@ -54,13 +55,13 @@ readnoise_tolerance = 0.5 # Units of electrons
 # Measurement in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx of
 # when camera becomes non-linear.  Stored in NONLIN keyword.  Raw
 # value of 42k was recorded with a typical overscan value.  Helps to
-# remember ~40k is absolute max raw ADU to shoot for.  This is
+# remember ~40k is absolute max raw adu to shoot for.  This is
 # suspiciously close to the full-well depth in electrons of 17,000
 # (web) - 18,000 (user's manual) provided by the manufacturer
 # --> could do a better job of measuring the precise high end of this,
 # since it could be as high as 50k
 nonlin = 42000 - 1811
-nonlin_comment = 'Measured nonlinearity point (ADU)'
+nonlin_comment = 'Measured nonlinearity point (adu)'
 
 # Exposure times at or below this value are counted on the camera and
 # not in MaxIm.  There is a bug in the SX694 MaxIm driver seems to
@@ -80,6 +81,72 @@ exposure_correct = 1.7 # s
 # 3 * example_readnoise).  The remaining few pixels generate
 # more dark current, so include only them in the dark images
 dark_mask_threshold = 3
+
+def metadata(hdr_in,
+                 camera_description=camera_description,
+                 gain=gain,
+                 gain_comment=gain_comment,
+                 satlevel=satlevel,
+                 satlevel_comment=satlevel_comment,
+                 nonlin=nonlin,
+                 nonlin_comment=nonlin_comment,
+                 readnoise=example_readnoise,
+                 readnoise_comment=example_readnoise_comment,
+                 *args, **kwargs):
+    """Record SX694 CCD metadata in FITS header object"""
+    if hdr_in.get('camera') is not None:
+        # We have been here before, so exit quietly
+        return hdr_in
+    hdr = hdr_in.copy()
+    # Clean up double exposure time reference to avoid confusion
+    if hdr.get('exposure') is not None:
+        del hdr['EXPOSURE']
+    hdr.insert('INSTRUME',
+                    ('CAMERA', camera_description),
+                    after=True)
+    hdr['GAIN'] = (gain, gain_comment)
+    # This gets used in ccdp.cosmicray_lacosmic
+    hdr['SATLEVEL'] = (satlevel, satlevel_comment)
+    # This is where the CCD starts to become non-linear and is
+    # used for things like rejecting flats recorded when
+    # conditions were too bright
+    hdr['NONLIN'] = (nonlin, nonlin_comment)
+    hdr['RDNOISE'] = (readnoise, readnoise_comment)
+    return hdr
+
+def exp_correct(hdr_in,
+                max_accurate_exposure=max_accurate_exposure,
+                exposure_correct=exposure_correct,
+                *args, **kwargs):
+    """Correct exposure time for [SX694] CCD driver problem
+     --> REFINE THIS ESTIMATE BASED ON MORE MEASUREMENTS
+    """
+    if hdr_in.get('OEXPTIME') is not None:
+        # We have been here before, so exit quietly
+        return hdr_in
+    exptime = hdr_in['EXPTIME']
+    if exptime <= max_accurate_exposure:
+        # Exposure time should be accurate
+        return hdr_in
+    hdr = hdr_in.copy()
+    hdr.insert('EXPTIME', 
+               ('OEXPTIME', exptime,
+                'original exposure time (seconds)'),
+               after=True)
+    exptime += exposure_correct
+    hdr['EXPTIME'] = (exptime,
+                      'corrected exposure time (seconds)')
+    hdr.insert('OEXPTIME', 
+               ('HIERARCH EXPTIME_CORRECTION',
+                exposure_correct, '(seconds)'),
+               after=True)
+    #add_history(hdr,
+    #            'Corrected exposure time for SX694 MaxIm driver bug')
+    return hdr
+
+#####################################################################
+# --> These will all go away when corobsdata system is commissioned #
+#####################################################################
 
 # --> this is really more of a generic utility.  Also, this could be
 # incorporated with ObsData if the ObsData image + header property
@@ -135,73 +202,11 @@ bins."""
         plt.close()
     return (hist, centers)
 
-def metadata(hdr_in,
-                 camera_description=camera_description,
-                 gain=gain,
-                 gain_comment=gain_comment,
-                 satlevel=satlevel,
-                 satlevel_comment=satlevel_comment,
-                 nonlin=nonlin,
-                 nonlin_comment=nonlin_comment,
-                 readnoise=example_readnoise,
-                 readnoise_comment=example_readnoise_comment,
-                 *args, **kwargs):
-    """Record SX694 CCD metadata in FITS header object"""
-    if hdr_in.get('camera') is not None:
-        # We have been here before, so exit quietly
-        return hdr_in
-    hdr = hdr_in.copy()
-    # Clean up double exposure time reference to avoid confusion
-    if hdr.get('exposure') is not None:
-        del hdr['EXPOSURE']
-    hdr.insert('INSTRUME',
-                    ('CAMERA', camera_description),
-                    after=True)
-    hdr['GAIN'] = (gain, gain_comment)
-    # This gets used in ccdp.cosmicray_lacosmic
-    hdr['SATLEVEL'] = (satlevel, satlevel_comment)
-    # This is where the CCD starts to become non-linear and is
-    # used for things like rejecting flats recorded when
-    # conditions were too bright
-    hdr['NONLIN'] = (nonlin, nonlin_comment)
-    hdr['RDNOISE'] = (readnoise, readnoise_comment)
-    return hdr
-
-def exp_correct(hdr_in,
-                    max_accurate_exposure=max_accurate_exposure,
-                    exposure_correct=exposure_correct,
-                    *args, **kwargs):
-    """Correct exposure time for [SX694] CCD driver problem
-     --> REFINE THIS ESTIMATE BASED ON MORE MEASUREMENTS
-    """
-    if hdr_in.get('OEXPTIME') is not None:
-        # We have been here before, so exit quietly
-        return hdr_in
-    exptime = hdr_in['EXPTIME']
-    if exptime <= max_accurate_exposure:
-        # Exposure time should be accurate
-        return hdr_in
-    hdr = hdr_in.copy()
-    hdr.insert('EXPTIME', 
-               ('OEXPTIME', exptime,
-                'original exposure time (seconds)'),
-               after=True)
-    exptime += exposure_correct
-    hdr['EXPTIME'] = (exptime,
-                      'corrected exposure time (seconds)')
-    hdr.insert('OEXPTIME', 
-               ('HIERARCH EXPTIME_CORRECTION',
-                exposure_correct, '(seconds)'),
-               after=True)
-    #add_history(hdr,
-    #            'Corrected exposure time for SX694 MaxIm driver bug')
-    return hdr
-
 def overscan_estimate(im_in, hdr_in, hdr_out=None, master_bias=None,
                       binsize=None, min_width=1, max_width=8, box_size=100,
                       min_hist_val=10,
                       show=False, *args, **kwargs):
-    """Estimate overscan in ADU in the absense of a formal overscan region
+    """Estimate overscan in adu in the absense of a formal overscan region
 
     For biases, returns in the median of the image.  For all others,
     uses the minimum of: (1) the first peak in the histogram of the
@@ -227,18 +232,18 @@ def overscan_estimate(im_in, hdr_in, hdr_out=None, master_bias=None,
     master_bias : `~astropy.nddata.CCDData`, filename, or None
         Bias to subtract from ccd before estimate is calculated.
         Improves accruacy by removing bias ramp.  Bias can be in units
-        of ADU or electrons and is converted using the specified gain.
+        of adu or electrons and is converted using the specified gain.
         If bias has already been subtracted, this step will be skipped
         but the bias header will be used to extract readnoise and gain
         using the *_key keywords.  Default is ``None``.
 
     binsize: float or None, optional
         The binsize to use for the histogram.  If None, binsize is 
-        (readnoise in ADU)/4.  Default = None
+        (readnoise in adu)/4.  Default = None
 
     min_width : int, optional
         Minimum width peak to search for in histogram.  Keep in mind
-        histogram bins are binsize ADU wide.  Default = 1
+        histogram bins are binsize adu wide.  Default = 1
 
     max_width : int, optional
         See min_width.  Default = 8
@@ -264,10 +269,10 @@ def overscan_estimate(im_in, hdr_in, hdr_out=None, master_bias=None,
     bunit = hdr.get('bunit')
     if bunit is not None and bunit != 'adu':
         # For now don't get fancy with unit conversion
-        raise ValueError(f'CCD units are {bunit} but must be in ADU for overscan estimation')
+        raise ValueError(f'CCD units are {bunit} but must be in adu for overscan estimation')
     if hdr['IMAGETYP'] == "BIAS":
         overscan = np.median(im)
-        hdr_out['HIERARCH OVERSCAN_MEDIAN'] = (overscan, 'ADU')
+        hdr_out['HIERARCH OVERSCAN_MEDIAN'] = (overscan, 'adu')
         hdr_out['HIERARCH OVERSCAN_METHOD'] \
             = ('median', 'Method used for overscan estimation')
         return overscan
@@ -287,7 +292,7 @@ def overscan_estimate(im_in, hdr_in, hdr_out=None, master_bias=None,
         gain = bhdr['GAIN']
         bbunit = bhdr['BUNIT']
         if bbunit == "electron":
-            # Convert bias back to ADU for subtraction
+            # Convert bias back to adu for subtraction
             bias = bias / gain
         im = im - bias
         if isinstance(master_bias, str):
@@ -317,7 +322,7 @@ def overscan_estimate(im_in, hdr_in, hdr_out=None, master_bias=None,
     # than the 2" filters but with carefully chosen parameters, the
     # first small peak can be spotted.
     if binsize is None:
-        # Calculate binsize based on readnoise in ADU, but oversample
+        # Calculate binsize based on readnoise in adu, but oversample
         # by 4.  Note need to convert from Quantity to float
         binsize = readnoise/gain/4.
     im_hist, im_hist_centers = hist_of_im(im, binsize)
@@ -333,8 +338,8 @@ def overscan_estimate(im_in, hdr_in, hdr_out=None, master_bias=None,
     hist_method = im_hist_centers[im_peak_idx[0]]
     overscan_methods = ['corners', 'histogram']
     overscan_values = np.asarray((corners_method, hist_method))
-    hdr_out['HIERARCH OVERSCAN_CORNERS'] = (corners_method, 'ADU')
-    hdr_out['HIERARCH OVERSCAN_HISTOGRAM'] = (hist_method, 'ADU')
+    hdr_out['HIERARCH OVERSCAN_CORNERS'] = (corners_method, 'adu')
+    hdr_out['HIERARCH OVERSCAN_HISTOGRAM'] = (hist_method, 'adu')
     o_idx = np.argmin(overscan_values)
     overscan = overscan_values[o_idx]
     hdr_out['HIERARCH OVERSCAN_METHOD'] = (overscan_methods[o_idx],
@@ -347,7 +352,7 @@ def overscan_estimate(im_in, hdr_in, hdr_out=None, master_bias=None,
         vmax = overscan + range - 1000
         ax1.imshow(ccds, origin='lower', cmap=plt.cm.gray, filternorm=0,
                    interpolation='none', vmin=vmin, vmax=vmax)
-        ax1.set_title('Image minus 1000 ADU')
+        ax1.set_title('Image minus 1000 adu')
         ax2.plot(im_hist_centers, im_hist)
         ax2.set_yscale("log")
         ax2.set_xscale("log")
