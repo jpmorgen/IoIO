@@ -33,10 +33,11 @@ import ccdproc as ccdp
 
 from bigmultipipe import num_can_process, WorkerWithKwargs, NoDaemonPool
 from bigmultipipe import multi_logging, prune_pout
-from ccdmultipipe import CCDMultiPipe, ccddata_read
+
+from ccdmultipipe import CCDMultiPipe
 
 import sx694
-from IoIO import CorObsData
+from corobsdata import CorData
 
 # Processing global variables.  Since I avoid use of the global
 # statement and don't reassign these at global scope, they stick to
@@ -112,12 +113,17 @@ MIN_NUM_FLATS = 3
 # Accept as match darks with this much more exposure time
 DARK_EXP_MARGIN = 3
 
-# Number of pixels to expand the ND filter over what CorObsData finds.
-# This is the negative of the CorObsData edge_mask parameter, since
+# Number of pixels to expand the ND filter over what CorData finds.
+# This is the negative of the CorData edge_mask parameter, since
 # that is designed to mask pixels inside the ND filter to make
 # centering of object more reliable
 ND_EDGE_EXPAND = 40
 FLAT_CUT = 0.75
+
+class RedCorData(CorData):
+    pass
+            
+
 ######### CorMultiPipe object
 
 class CorMultiPipe(CCDMultiPipe):
@@ -136,6 +142,21 @@ class CorMultiPipe(CCDMultiPipe):
                          naxis2=naxis2,
                          process_expand_factor=process_expand_factor,
                          **kwargs)
+
+    # Hmm.  **kwargs is starting to cause trouble here because they
+    # are being passed on to RedCorData.read and the underlying
+    # NDData, FITS, etc. stuff isn't set up to just flush them.
+    # Rather than trying to guess at what we need to intercept as we
+    # pass on **kwargs, maybe the thing to do is only pass on to
+    # RedCorData.read() the things we know it needs, which is
+    # currently nothing
+    def file_read(self, in_name,
+                  overwrite=None,
+                  outdir=None,
+                  **kwargs):
+        kwargs = self.kwargs_merge(**kwargs)
+        data = RedCorData.read(in_name)
+        return data
 
     def pre_process(self, data, **kwargs):
         """Add full-frame check permanently to pipeline"""
@@ -277,14 +298,12 @@ def bias_stats(ccd, bmp_meta=None, gain=sx694.gain, **kwargs):
 def nd_filter_mask(ccd_in, nd_edge_expand=ND_EDGE_EXPAND, **kwargs):
     """CorMultiPipe post-processing routine to mask ND filter
     """
-    # --> this will eventually get included in CorData or whatever I call it
     ccd = ccd_in.copy()
-    hdul = ccd.to_hdu()
-    obs_data = CorObsData(hdul, edge_mask=-nd_edge_expand)
-    # Capture our ND filter metadata
-    ccd.meta = hdul[0].header
     mask = np.zeros(ccd.shape, bool)
-    mask[obs_data.ND_coords] = True
+    # Return a copy of ccd with the edge_mask property adjusted.  Do
+    # it this way to keep ccd's ND filt parameters intact
+    emccd = RedCorData(ccd, edge_mask=-nd_edge_expand)
+    mask[emccd.ND_coords] = True
     if ccd.mask is None:
         ccd.mask = mask
     else:
@@ -297,10 +316,6 @@ def detflux(ccd_in, exptime_units=None, **kwargs):
         exptime_units = u.s
     exptime = ccd.meta['EXPTIME'] * exptime_units
     ccd = ccd.divide(exptime, handle_meta='first_found')
-    satlevel = ccd.meta.get('satlevel')
-    # --> really what I want here is my own CCDData that handles these!
-    if satlevel is not None:
-        satlevel /= exptime
     return ccd
 
 ######### cor_process routines
@@ -331,7 +346,7 @@ https://www.pveducation.org/pvcdrom/properties-of-sunlight/air-mass
     hdr['AIRMASS'] = (1/denom, 'Curvature-corrected (Kasten and Young 1989)')
     return(hdr)
 
-def subtract_overscan(fname_or_ccd, oscan=None, *args, **kwargs):
+def subtract_overscan(ccd, oscan=None, *args, **kwargs):
     """Subtract overscan, estimating it, if necesesary, from image.
     Also subtracts overscan from SATLEVEL keyword
 
@@ -340,10 +355,10 @@ def subtract_overscan(fname_or_ccd, oscan=None, *args, **kwargs):
     rectangle.
 
     """
-    nccd = ccddata_read(fname_or_ccd)
-    if nccd.meta.get('overscan_value') is not None:
+    if ccd.meta.get('overscan_value') is not None:
         # We have been here before, so exit quietly
-        return nccd
+        return ccd
+    nccd = ccd.copy()
     if oscan is None:
         # Interface with sx694.overscan_estimate, which doesn't take
         # CCDData for the primary input data
@@ -355,14 +370,14 @@ def subtract_overscan(fname_or_ccd, oscan=None, *args, **kwargs):
         oscan = sx694.overscan_estimate(im, hdr, hdr_out=nccd.meta,
                                         *args, **kwargs)
     nccd = nccd.subtract(oscan*u.adu, handle_meta='first_found')
-    nccd.meta['HIERARCH OVERSCAN_VALUE'] = (oscan, 'overscan value subtracted (ADU)')
+    nccd.meta['HIERARCH OVERSCAN_VALUE'] = (oscan, 'overscan value subtracted (adu)')
     nccd.meta['HIERARCH SUBTRACT_OVERSCAN'] \
         = (True, 'Overscan has been subtracted')
     # Keep track of our precise saturation level
     satlevel = nccd.meta.get('satlevel')
     if satlevel is not None:
         satlevel -= oscan
-        nccd.meta['SATLEVEL'] = satlevel # still in ADU
+        nccd.meta['SATLEVEL'] = satlevel # still in adu
     return nccd
 
 def cor_process(ccd,
@@ -659,7 +674,7 @@ def cor_process(ccd,
             {'HIERARCH SUBTRACT_BIAS': 'subbias',
              'SUBBIAS': 'ccdproc.subtract_bias ccd=<CCDData>, master=BIASFILE',
              'BIASFILE': master_bias}
-        master_bias = ccddata_read(master_bias)
+        master_bias = RedCorData.read(master_bias)
     else:
         subtract_bias_keyword = None
     if isinstance(dark_frame, str):
@@ -667,7 +682,7 @@ def cor_process(ccd,
             {'HIERARCH SUBTRACT_DARK': 'subdark',
              'SUBDARK': 'ccdproc.subtract_dark ccd=<CCDData>, master=DARKFILE',
              'DARKFILE': dark_frame}
-        dark_frame = ccddata_read(dark_frame)
+        dark_frame = RedCorData.read(dark_frame)
     else:
         subtract_dark_keyword = None
     if isinstance(master_flat, str):
@@ -675,10 +690,9 @@ def cor_process(ccd,
             {'HIERARCH FLAT_CORRECT': 'flatcor',
              'FLATCOR': 'ccdproc.flat_correct ccd=<CCDData>, master=FLATFILE',
              'FLATFILE': master_flat}
-        master_flat = ccddata_read(master_flat)
+        master_flat = RedCorData.read(master_flat)
     else:
         flat_correct_keyword = None
-
 
     # apply the trim correction
     if isinstance(trim, str):
@@ -730,7 +744,7 @@ def cor_process(ccd,
     if error and imagetyp is not None and imagetyp.lower() == 'bias':
         if gain is None:
             # We don't want to gain-correct, so we need to prepare to
-            # convert readnoise (which is in electron) to ADU
+            # convert readnoise (which is in electron) to adu
             gain_for_bias = gain_key.value_from(nccd.meta)
         else:
             # Bias will be gain-corrected to read in electrons
@@ -1048,14 +1062,14 @@ def bias_combine_one_fdict(fdict,
 
     gain_correct : Boolean
         Effects unit of stored images.  True: units of electron.
-        False: unit of ADU.  Default: False
+        False: unit of adu.  Default: False
     """
 
     fnames = fdict['fnames']
     num_files = len(fnames)
     mean_ccdt = fdict['CCDT']
     directory = fdict['directory']
-    tmp = ccddata_read(fnames[0])
+    tmp = RedCorData.read(fnames[0])
     tm = tmp.meta['DATE-OBS']
     this_dateb1, _ = tm.split('T')
     outbase = os.path.join(outdir, this_dateb1)
@@ -1132,14 +1146,14 @@ def bias_combine_one_fdict(fdict,
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
     plt.plot(df['time'], df['max'], 'k.')
-    plt.ylabel('max (ADU)')
+    plt.ylabel('max (adu)')
 
     ax = plt.subplot(6, 1, 3)
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.tick_params(which='both', bottom=True, top=True, left=True, right=False)
     plt.plot(df['time'], df['median'], 'k.')
     plt.plot(df['time'], df['mean'], 'r.')
-    plt.ylabel('median & mean (ADU)')
+    plt.ylabel('median & mean (adu)')
     plt.legend(['median', 'mean'])
     secax = ax.secondary_yaxis \
         ('right',
@@ -1151,7 +1165,7 @@ def bias_combine_one_fdict(fdict,
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
     plt.plot(df['time'], df['min'], 'k.')
-    plt.ylabel('min (ADU)')
+    plt.ylabel('min (adu)')
 
     ax=plt.subplot(6, 1, 5)
     ax.yaxis.set_minor_locator(AutoMinorLocator())
@@ -1243,7 +1257,7 @@ def bias_combine_one_fdict(fdict,
     im.meta['MEAN'] = (mean, 'Mean of image (electron)')
     im.meta['MIN'] = (tmin, 'Min of image (electron)')
     im.meta['MAX'] = (tmax, 'Max of image (electron)')
-    im.meta['HIERARCH OVERSCAN_VALUE'] = (overscan, 'Average of raw bias medians (ADU)')
+    im.meta['HIERARCH OVERSCAN_VALUE'] = (overscan, 'Average of raw bias medians (adu)')
     im.meta['HIERARCH SUBTRACT_OVERSCAN'] = (True, 'Overscan has been subtracted')
     im.meta['NCOMBINE'] = (len(out_fnames), 'Number of biases combined')
     # Record each filename
@@ -1381,11 +1395,13 @@ def dark_combine_one_fdict(fdict,
     mean_ccdt = fdict['CCDT']
     exptime = fdict['EXPTIME']
     directory = fdict['directory']
-    tmp = ccddata_read(fnames[0])
+    tmp = RedCorData.read(fnames[0])
     tm = tmp.meta['DATE-OBS']
     this_dateb1, _ = tm.split('T')
-    outbase = os.path.join(outdir, this_dateb1)
-    bad_fname = outbase + '_ccdT_XXX' + '_dark_combined_bad.fits'
+    badbase = '{}_ccdT_{:.1f}_exptime_{}s'.format(
+        this_dateb1, mean_ccdt, exptime)
+    badbase = os.path.join(outdir, outbase)
+    bad_fname = badbase + '_dark_combined_bad.fits'
 
     # Make a scratch directory that is the date of the first file.
     # Not as fancy as the biases, but, hey, it is a scratch directory
@@ -1423,7 +1439,8 @@ def dark_combine_one_fdict(fdict,
     mem = psutil.virtual_memory()
     out_fnames = list(out_fnames)
     if len(out_fnames) == 1:
-        im = ccddata_read(out_fnames[0])
+        print('single out_fname = ', out_fnames)
+        im = RedCorData.read(out_fnames[0])
     else:
         im = \
             ccdp.combine(out_fnames,
@@ -1587,10 +1604,11 @@ def flat_process(ccd, bmp_meta=None,
     # good maximum value.  Mask edges and ND filter so as to
     # increase quality of background map
     mask = np.zeros(ccd.shape, bool)
-    # Use the CorObsData ND filter stuff with a negative
-    # edge_mask to blank out all of the fuzz from the ND filter cut
-    obs_data = CorObsData(ccd.to_hdu(), edge_mask=-nd_edge_expand)
-    mask[obs_data.ND_coords] = True
+    # Return a copy of ccd with the edge_mask property adjusted.  Do
+    # it this way to keep ccd's ND filt parameters intact
+    emccd = RedCorData(ccd, edge_mask=-nd_edge_expand)
+    mask[emccd.ND_coords] = True
+    del emccd
     rdnoise = ccd.meta['RDNOISE']
     mask[ccd.data < rdnoise * init_threshold] = True
     ccd.mask = mask
@@ -1604,7 +1622,7 @@ def flat_process(ccd, bmp_meta=None,
     ccd.mask = None
     max_flat *= ccd.unit
     ccd = ccd.divide(max_flat, handle_meta='first_found')
-    ccd.meta['FLATDIV'] = (max_flat.value, 'Normalization value (smoothed max), electron')
+    ccd.meta['FLATDIV'] = (max_flat.value, 'Normalization value (smoothed max) (electron)')
     # Get ready to capture the mean DATE-OBS
     tm = Time(ccd.meta['DATE-OBS'], format='fits')
     if bmp_meta is not None:
@@ -1629,7 +1647,7 @@ def flat_combine_one_fdict(fdict,
     num_files = len(fnames)
     this_filter = fdict['filter']
     directory = fdict['directory']
-    tmp = ccddata_read(fnames[0])
+    tmp = RedCorData.read(fnames[0])
     tm = tmp.meta['DATE-OBS']
     this_dateb1, _ = tm.split('T')
     outbase = os.path.join(outdir, this_dateb1)
@@ -1642,7 +1660,7 @@ def flat_combine_one_fdict(fdict,
 
     # Make a scratch directory that is the date of the first file.
     # Not as fancy as the biases, but, hey, it is a scratch directory
-    tmp = ccddata_read(fnames[0])
+    tmp = RedCorData.read(fnames[0])
     tm = tmp.meta['DATE-OBS']
     sdir = os.path.join(calibration_scratch, this_dateb1)
 
@@ -1694,16 +1712,13 @@ def flat_combine_one_fdict(fdict,
 
     # Interpolate over our ND filter
     #print(f'flat_combine_one_filt pre CorObsData: mem available: {mem.available/2**20}')
-    hdul = im.to_hdu()
-    obs_data = CorObsData(hdul, edge_mask=-nd_edge_expand)
-    # Capture our ND filter metadata
-    im.meta = hdul[0].header
-    # --> working on RedCorObsData
-    good_pix = np.ones(im.shape, bool)
-    good_pix[obs_data.ND_coords] = False
-    points = np.where(good_pix)
+    emccd = RedCorData(im, edge_mask=-nd_edge_expand)
+    good_mask = np.ones(im.shape, bool)
+    good_mask[emccd.ND_coords] = False
+    points = np.nonzero(good_mask)
     values = im[points]
-    xi = obs_data.ND_coords
+    xi = emccd.ND_coords
+
     log.debug(f'flat_combine_one_filt post CorObsData: mem available: {mem.available/2**20}')
 
     # Linear behaved much better
@@ -2344,10 +2359,11 @@ class Calibration():
             bad = 'bad' in bfname
             if bad:
                 ccdt = np.NAN
+                exptime = np.NAN
             else:
                 ccdt = float(sfname[2])
-            exptime = sfname[4]
-            exptime = float(exptime[:-1])
+                exptime = sfname[4]
+                exptime = float(exptime[:-1])
             dates.append(date)
             ccdts.append(ccdt)
             exptimes.append(exptime)
@@ -2421,8 +2437,10 @@ class Calibration():
             ccdt_tolerance = self._ccdt_tolerance
         if isinstance(fname_ccd_or_hdr, fits.Header):
             hdr = fname_ccd_or_hdr
-        else:
-            ccd = ccddata_read(fname_ccd_or_hdr)
+        elif isinstance(fname_ccd_or_hdr, CCDData):
+            hdr = fname_ccd_or_hdr.meta
+        elif isinstance(fname_ccd_or_hdr, str):
+            ccd = RedCorData.read(fname_ccd_or_hdr)
             hdr = ccd.meta
         tm = Time(hdr['DATE-OBS'], format='fits')
         ccdt = hdr['CCD-TEMP']
@@ -2450,11 +2468,12 @@ class Calibration():
             ccdt_tolerance = self._ccdt_tolerance
         if dark_exp_margin is None:
             dark_exp_margin = self._dark_exp_margin
-        
         if isinstance(fname_ccd_or_hdr, fits.Header):
             hdr = fname_ccd_or_hdr
-        else:
-            ccd = ccddata_read(fname_ccd_or_hdr)
+        elif isinstance(fname_ccd_or_hdr, CCDData):
+            hdr = fname_ccd_or_hdr.meta
+        elif isinstance(fname_ccd_or_hdr, str):
+            ccd = RedCorData.read(fname_ccd_or_hdr)
             hdr = ccd.meta
         tm = Time(hdr['DATE-OBS'], format='fits')
         ccdt = hdr['CCD-TEMP']
@@ -2493,8 +2512,10 @@ class Calibration():
         """Returns filename of best-matched flat for a file"""
         if isinstance(fname_ccd_or_hdr, fits.Header):
             hdr = fname_ccd_or_hdr
-        else:
-            ccd = ccddata_read(fname_ccd_or_hdr)
+        elif isinstance(fname_ccd_or_hdr, CCDData):
+            hdr = fname_ccd_or_hdr.meta
+        elif isinstance(fname_ccd_or_hdr, str):
+            ccd = RedCorData.read(fname_ccd_or_hdr)
             hdr = ccd.meta
         tm = Time(hdr['DATE-OBS'], format='fits')
         filt = hdr['FILTER']
@@ -2592,6 +2613,32 @@ class Calibration():
 #c = Calibration(start_date='2020-01-01', stop_date='2020-12-31', reduce=True)    
 #t = c.flat_table_create(autoreduce=False, rescan=True)
 
+#c = Calibration(start_date='2020-01-01', stop_date='2021-12-31', reduce=True)    
+#t = c.dark_table_create(autoreduce=False, rescan=True)
+
+#flat = '/data/io/IoIO/raw/2020-06-06/Sky_Flat-0002_B.fit'
+#f = RedCorData.read(flat)
+#
+#fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
+#ccd = RedCorData.read(fname1)
+
 if __name__ == "__main__":
     log.setLevel('DEBUG')
-    c = Calibration(start_date='2020-01-01', stop_date='2020-12-31', reduce=True)    
+    c = Calibration(start_date='2020-01-01', stop_date='2021-12-31', reduce=True)    
+    ##t = c.dark_table_create(autoreduce=False, rescan=True)
+    #fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
+    #fname2 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na_off.fit'
+    #cmp = CorMultiPipe(auto=True, calibration=c,
+    #                   post_process_list=[detflux, nd_filter_mask])
+    #pout = cmp.pipeline([fname1, fname2], outdir='/tmp', overwrite=True)
+    #pout = cmp.pipeline([fname1], outdir='/tmp', overwrite=True)
+    
+    #ccd = RedCorData.read(fname1)
+    #ccd = cor_process(ccd, calibration=c, auto=True)
+    #ccd.write('/tmp/test.fits', overwrite=True)
+
+    flat = '/data/io/IoIO/raw/2020-06-06/Sky_Flat-0002_B.fit'
+    cmp = CorMultiPipe(auto=True, calibration=c,
+                       post_process_list=[flat_process])
+    pout = cmp.pipeline([flat], outdir='/tmp', overwrite=True)
+

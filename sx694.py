@@ -12,10 +12,10 @@ and the variables and functions referred to as sx694.naxis1, etc.
 
 """
 
+# --> These imports will all go away
 import numpy as np
 from scipy import signal
 
-# --> These will go away
 from astropy.io import fits
 from astropy.stats import biweight_location
 
@@ -53,12 +53,12 @@ example_readnoise_comment = '2018-07-10 readnoise (electron)'
 readnoise_tolerance = 0.5 # Units of electrons
 
 # Measurement in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx of
-# when camera becomes non-linear.  Stored in NONLIN keyword.  Raw
-# value of 42k was recorded with a typical overscan value.  Helps to
-# remember ~40k is absolute max raw adu to shoot for.  This is
+# when camera becomes non-linear (in adu).  Stored in NONLIN keyword.
+# Raw value of 42k was recorded with a typical overscan value.  Helps
+# to remember ~40k is absolute max raw adu to shoot for.  This is
 # suspiciously close to the full-well depth in electrons of 17,000
-# (web) - 18,000 (user's manual) provided by the manufacturer
-# --> could do a better job of measuring the precise high end of this,
+# (web) - 18,000 (user's manual) provided by the manufacturer -->
+# could do a better job of measuring the precise high end of this,
 # since it could be as high as 50k
 nonlin = 42000 - 1811
 nonlin_comment = 'Measured nonlinearity point (adu)'

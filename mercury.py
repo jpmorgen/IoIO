@@ -15,7 +15,7 @@ from photutils import deblend_sources
 from photutils import source_properties
 from photutils.background import Background2D
 
-from ccdmultipipe import ccddata_read
+from ccdmultipipe import FbuCCDData
 from cormultipipe import (CorMultiPipe, Calibration, 
                           nd_filter_mask, mask_nonlin_sat, detflux)
 
@@ -27,11 +27,11 @@ cmp = CorMultiPipe(auto=True, calibration=c,
                    post_process_list=[detflux])
 fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
 fname2 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na_off.fit'
-pout = cmp.pipeline([fname1, fname2], outdir='/data/Mercury/analysis/2020-05-27/', overwrite=True)
+pout = cmp.pipeline([fname1, fname2], outdir='/data/Mercury/analysis/2020-05-27/', overwrite=True, create_outdir=True)
 
 ####
-on = ccddata_read('/data/Mercury/analysis/2020-05-27/Mercury-0005_Na-on_r.fit')
-off = ccddata_read('/data/Mercury/analysis/2020-05-27/Mercury-0005_Na_off_r.fit')
+on = FbuCCDData.read('/data/Mercury/analysis/2020-05-27/Mercury-0005_Na-on_p.fit')
+off = FbuCCDData.read('/data/Mercury/analysis/2020-05-27/Mercury-0005_Na_off_p.fit')
 
 #nd_edge_expand = 40
 #obs_data = CorObsData(off.to_hdu(), edge_mask=-nd_edge_expand)
@@ -43,17 +43,45 @@ off.data[obs_data.ND_coords] = 0
 # Not working automatically. 
 mcenter = np.asarray((1100, 1294))
 
-# from IoIO_reduction.notebk Mon Jan 04 08:49:42 2021 EST  jpmorgen@snipe
-off_on_ratio = 4.941459261792191
+# from IoIO_reduction.notebk XMon Jan 04 08:49:42 2021 EST  jpmorgen@snipeX
+# Wed Mar 03 09:59:08 2021 EST  jpmorgen@snipe
+off_on_ratio = 4.74
+#off_on_ratio = 4.941459261792191
 #pff_on_ratio = 4.16666
 #off_on_ratio = 3
 #off_on_ratio = 6
 off_scaled = off.divide(off_on_ratio, handle_meta='first_found')
-off_sub = on.subtract(off_scaled, handle_meta='first_found')
 
+# Use a smoothed version of off_scaled for subtraction
 sigma = 10.0 * gaussian_fwhm_to_sigma # FWHM = 10
 kernel = Gaussian2DKernel(sigma)
 kernel.normalize()
+# Make a source mask to enable optimal background estimation
+mask = make_source_mask(off_scaled.data, nsigma=2, npixels=5,
+                        filter_kernel=kernel, mask=off_scaled.mask,
+                        dilate_size=11)
+#impl = plt.imshow(mask, origin='lower',
+#                  cmap=plt.cm.gray,
+#                  filternorm=0, interpolation='none')
+#plt.show()
+
+box_size = int(np.mean(on.shape) / 10)
+back = Background2D(off_scaled, box_size, mask=mask,
+                    coverage_mask=off_scaled.mask)
+threshold = back.background + (2.0* back.background_rms)
+print(f'off_scaled background_median = {back.background_median}, background_rms_median = {back.background_rms_median}')
+
+impl = plt.imshow(back.background, origin='lower',
+                  cmap=plt.cm.gray,
+                  filternorm=0, interpolation='none')
+back.plot_meshes()
+plt.show()
+
+smooth_off_scaled = back.background * u.electron/u.s
+
+#off_sub = on.subtract(off_scaled, handle_meta='first_found')
+off_sub = on.subtract(smooth_off_scaled, handle_meta='first_found')
+
 # Make a source mask to enable optimal background estimation
 mask = make_source_mask(off_sub.data, nsigma=2, npixels=5,
                         filter_kernel=kernel, mask=off_sub.mask,
@@ -66,7 +94,6 @@ mask = make_source_mask(off_sub.data, nsigma=2, npixels=5,
 ##mean, median, std = sigma_clipped_stats(data, sigma=3.0, mask=mask)
 #
 
-box_size = int(np.mean(off_sub.shape) / 10)
 back = Background2D(off_sub, box_size, mask=mask, coverage_mask=off_sub.mask)
 threshold = back.background + (2.0* back.background_rms)
 

@@ -9,14 +9,11 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 import pandas as pd
 
-from astropy.nddata import CCDData
 from astropy.stats import mad_std, biweight_location
 from astropy.time import Time
 
-import ccdproc
-
-from ccdmultipipe import ccddata_read
-from cormultipipe import CorMultiPipe, Calibration, calibration_root
+from cormultipipe import (CALIBRATION_ROOT, RedCorData,
+                          CorMultiPipe, Calibration)
 
 def flist_to_dict(flist):
     dlist = []
@@ -28,7 +25,7 @@ def flist_to_dict(flist):
     return dlist
     
 def flat_flux(fname_or_ccd):
-    ccd = ccddata_read(fname_or_ccd)
+    ccd = RedCorData.read(fname_or_ccd)
     maxval = ccd.meta['FLATDIV']
     exptime = ccd.meta['EXPTIME']
     flux = maxval/exptime
@@ -39,8 +36,8 @@ c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
 #c = Calibration(start_date='2020-01-01', stop_date='2020-04-24', reduce=True)
 #c = Calibration(start_date='2020-01-01', stop_date='2020-12-31', reduce=True)
 
-on_list = glob.glob(os.path.join(calibration_root, '*on_flat*'))
-off_list = glob.glob(os.path.join(calibration_root, '*off_flat*'))
+on_list = glob.glob(os.path.join(CALIBRATION_ROOT, '*on_flat*'))
+off_list = glob.glob(os.path.join(CALIBRATION_ROOT, '*off_flat*'))
 
 on_dlist = flist_to_dict(on_list)
 off_dlist = flist_to_dict(off_list)
@@ -76,8 +73,8 @@ for ib, band in enumerate(['Na', 'SII']):
     std_ratio = np.std(this_band['ratio'])
     biweight_ratio = biweight_location(this_band['ratio'])
     mad_std_ratio = mad_std(this_band['ratio'])
-    print(f'{band} plane {med_ratio} +/- {std_ratio}')
-    print(f'{band} fancy {biweight_ratio} +/- {mad_std_ratio}')
+    print(f'{band} med {med_ratio:.2f} +/- {std_ratio:.2f}')
+    print(f'{band} biweight {biweight_ratio:.2f} +/- {mad_std_ratio:.2f}')
     ax = plt.subplot(2, 1, ib+1)
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
@@ -94,7 +91,7 @@ for ib, band in enumerate(['Na', 'SII']):
                 linestyle='--', color='k', linewidth=1)
 plt.gcf().autofmt_xdate()
 
-#plt.savefig(ps.path.join(calibration_root, 'off_on_ratio_vs_time.png'), transparent=True)
+#plt.savefig(ps.path.join(CALIBRATION_ROOT, 'off_on_ratio_vs_time.png'), transparent=True)
 show= True
 if show:
     plt.show()
