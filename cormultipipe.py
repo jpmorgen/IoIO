@@ -164,7 +164,7 @@ class CorMultiPipe(CCDMultiPipe):
         s = data.shape
         # Note Pythonic C index ordering
         if s != (self.naxis2, self.naxis1):
-            return (None, kwargs)
+            return None
         return super().pre_process(data, **kwargs)
 
     def data_process(self, data,
@@ -984,13 +984,16 @@ def bias_dark_fdict_creator(collection,
     # Spot jumps in t and translate them into slices into ts
     dts = ts[1:] - ts[0:-1]
     jump = np.flatnonzero(dts > dccdt_tolerance)
+    # Note, when jump if an empty array, this just returns [0]
     tslices = np.append(0, jump+1)
     # Whew!  This was a tricky one!
     # https://stackoverflow.com/questions/509211/understanding-slice-notation
     # showed that I needed None and explicit call to slice(), below,
     # to be able to generate an array element in tslices that referred
     # to the last array element in ts.  :-1 is the next to the last
-    # element because of how slices work.
+    # element because of how slices work.  Appending just None to an
+    # array avoids depreciation complaint from numpy if you try to do
+    # np.append(0, [jump+1, None])
     tslices = np.append(tslices, None)
     if debug:
         print(ts)
