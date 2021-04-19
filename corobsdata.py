@@ -925,7 +925,7 @@ class CorData(KeywordArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         if self.obj_to_ND is not None:
             self.meta['HIERARCH OBJ_TO_ND_CENTER'] \
                 = (self.obj_to_ND,
-                   'Obj perp. dist. to ND filt. (pix)')
+                   'Obj perp dist to ND filt (pix)')
 
 
 #class TestObs(CorData):

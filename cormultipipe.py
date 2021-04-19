@@ -127,6 +127,7 @@ class RedCorData(CorData):
 ######### CorMultiPipe object
 
 class CorMultiPipe(CCDMultiPipe):
+    ccddata_cls = RedCorData
     def __init__(self,
                  calibration=None,
                  auto=False,
@@ -142,21 +143,6 @@ class CorMultiPipe(CCDMultiPipe):
                          naxis2=naxis2,
                          process_expand_factor=process_expand_factor,
                          **kwargs)
-
-    # Hmm.  **kwargs is starting to cause trouble here because they
-    # are being passed on to RedCorData.read and the underlying
-    # NDData, FITS, etc. stuff isn't set up to just flush them.
-    # Rather than trying to guess at what we need to intercept as we
-    # pass on **kwargs, maybe the thing to do is only pass on to
-    # RedCorData.read() the things we know it needs, which is
-    # currently nothing
-    def file_read(self, in_name,
-                  overwrite=None,
-                  outdir=None,
-                  **kwargs):
-        kwargs = self.kwargs_merge(**kwargs)
-        data = RedCorData.read(in_name)
-        return data
 
     def pre_process(self, data, **kwargs):
         """Add full-frame check permanently to pipeline"""
