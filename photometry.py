@@ -1,6 +1,8 @@
 """Play with photometry for calibration sources"""
 
+import os
 import glob
+import csv
 
 import numpy as np
 from numpy.polynomial import Polynomial
@@ -214,11 +216,17 @@ glob_include = ['HD*']
 #glob_include = ['HD*SII_on*']
 #glob_include = ['HD*-R.fts', 'HD*-R_*.fts']
 
+reduced_dir = directory.replace('/raw/', '/reduced/')
+extinction_outname = os.path.join(reduced_dir,
+                                  f"{df['date'].iloc[0]}_extinction.csv")
+exposure_correct_outname = os.path.join(reduced_dir,
+                                        f"{df['date'].iloc[0]}_exposure_correction.csv")
+
 # Pythonic way of checking for a non-assigned variable
 try:
     pout
 except NameError:
-    # Avoid confusing exception
+    # Avoid confusing double-exception if code to generate pout fails
     pout = None
     
 if pout is None:
@@ -234,12 +242,13 @@ if pout is None:
                                           photometry_process,
                                           no_outfile],
                        process_expand_factor=15)
-
+    # Pipeline is set with no_outfile to not produce any output
     pout = cmp.pipeline(flist, outdir='/tmp', overwrite=True)
     pout, flist = prune_pout(pout, flist)
     out_fnames, pipe_meta = zip(*pout)
 
 df = pd.DataFrame(pipe_meta)
+just_date = df['date'].iloc[0]
 
 #ax = plt.subplot(1, 1, 1)
 #plt.title(directory)
@@ -249,8 +258,8 @@ df = pd.DataFrame(pipe_meta)
 #plt.ylabel('detflux')
 #plt.show()
 
-show = True
-#show = False
+#show = True
+show = False
 # Reasonable maximum length of time between individual exposures in a
 # photometry measurement
 photometry_time_window = 1*u.min
@@ -277,7 +286,7 @@ for object in objects:
     min_airmass = np.amin(objdf['airmass'])
     max_airmass = np.amax(objdf['airmass'])
     f = plt.figure(figsize=[8.5, 11])
-    plt.suptitle(f'{directory}      {object}')
+    plt.suptitle(f"{object} {just_date} instrument mags")
     for ifilt, filt in enumerate(filters):
         # Collect fluxes and airmasses measured throughout the night
         # for this object and filter
@@ -317,11 +326,11 @@ for object in objects:
             # Collect oexptimes to monitor exposure_correct
             oexptimes = tdf['oexptime'].to_numpy()
             exptimes = tdf['exptime'].to_numpy()
+            # pands.dataframe.to_numpy() outputs NAN for None when
+            # some of the elements are None and some aren't
             if np.all(oexptimes == None):
                 oexptimes = exptimes
             else:
-                # pands.dataframe.to_numpy() outputs NAN for None when
-                # some of the elements are None and some aren't
                 oexptimes = np.where(np.isnan(oexptimes), exptimes, oexptimes)
             uoes = np.unique(oexptimes)
         
@@ -337,9 +346,9 @@ for object in objects:
                 if n_meas < 3:
                     log.warning(f"Not enough measurements ({n_meas}) in filter {filt} for object {object} in {directory} for exposure time {uoe} from {tdf['date_obs'].iloc[0]} to {tdf['date_obs'].iloc[-1]}")
                     continue
+                #print(f"{tdf[['date_obs','detflux', 'background_median', 'obj_to_ND']].iloc[exp_idx]}")# {tdf['detflux'].iloc[exp_idx]}")
                 # Thow out the first exposure
                 exp_idx = exp_idx[1:]
-                #print(f"{tdf[['date_obs','detflux', 'background_median', 'obj_to_ND']].iloc[exp_idx]}")# {tdf['detflux'].iloc[exp_idx]}")
                 mdetflux_err = np.mean(tdf['detflux_err'].iloc[exp_idx])
                 detflux_std = np.std(tdf['detflux'].iloc[exp_idx])
                 mdetflux = np.mean(tdf['detflux'].iloc[exp_idx])
@@ -348,8 +357,9 @@ for object in objects:
                 #detflux_std = np.std(tdf['detflux'].iloc[exp_idx])
                 #mdetflux = np.mean(tdf['detflux'].iloc[exp_idx])
 
-                count = mdetflux * uoe
-
+                # Multiply by the exposure time we divided by when
+                # calculating detflux
+                count = mdetflux * exptimes[exp_idx[0]]
 
                 if detflux_std > stability_factor*mdetflux_err:
                     log.warning(f"Unstable atmosphere detflux_std = {detflux_std} > {stability_factor} * {mdetflux_err} for filter {filt} object {object} in {directory} from {tdf['date_obs'].iloc[0]} to {tdf['date_obs'].iloc[-1]}")
@@ -417,9 +427,9 @@ for object in objects:
 
         num_airmass_points = len(airmasses)
         if num_airmass_points < min_airmass_points:
-            log.warning(f"not enough points ({num_airmass_points}) for extinction measurement {filtdf['date'].iloc[0]} filter {filt}")
+            log.warning(f"not enough points ({num_airmass_points}) for object {object} for extinction measurement {just_date} filter {filt}")
             continue
-        am_range = [min(airmasses), max(airmasses)]
+
         # Fit a line to airmass vs. instr_mags
         poly = Polynomial.fit(airmasses, instr_mags, deg=1)
         xfit, yfit = poly.linspace()
@@ -441,47 +451,74 @@ for object in objects:
                  f'Red. Chisq = {red_chisq:.4f}',
                      ha='center', va='bottom', transform=ax.transAxes)
 
-        extinction_dict = {'date': filtdf['date'].iloc[0],
+        extinction_dict = {'date': just_date,
                            'object': object,
                            'filter': filt,
                            'instr_mag_am0': instr_mag_am0,
-                           'extinction': extinction,
-                           'am_range': am_range,
+                           'extinction_coef': extinction,
+                           'min_am': min(airmasses),
+                           'max_am': max(airmasses),
                            'num_airmass_points ': num_airmass_points,
                            'red_chisq': red_chisq}
 
         extinction_data.append(extinction_dict)
 
-    # Finish our strip-chart plot for this object
-    # --> We will want to store the data to a CSV or something
+    # Finish our strip-chart plot for this object and write the PNG file
     ax.tick_params(reset = True, which='both', direction='inout',
                    bottom=True, top=True, left=True, right=True)
     plt.xlabel('airmass')
-    #plt.savefig((outbase + '_.png'), transparent=True)
+    fname = f"{just_date}_{object}_extinction.png"
+    outname = os.path.join(reduced_dir, fname)
+    os.makedirs(reduced_dir, exist_ok=True)
+    plt.savefig(outname, transparent=True)
     if show:
         plt.show()
     plt.close()
 
-# Plot our 
-# --> figure out a way to store these data
-biweight_exposure_correct = biweight_location(exposure_corrects,
-                                              ignore_nan=True)
-mad_std_exposure_correct = mad_std(exposure_corrects,
-                                   ignore_nan=True)
-print(biweight_exposure_correct, mad_std_exposure_correct)
-ax = plt.subplot()
-plt.plot_date(exposure_correct_plot_dates, exposure_corrects, 'k.')
-plt.axhline(biweight_exposure_correct, color='red')
-plt.axhline(biweight_exposure_correct-mad_std_exposure_correct,
-            linestyle='--', color='k', linewidth=1)
-plt.axhline(biweight_exposure_correct+mad_std_exposure_correct,
-            linestyle='--', color='k', linewidth=1)
-plt.text(0.5, biweight_exposure_correct + 0.1*mad_std_exposure_correct, 
-         f'{biweight_exposure_correct:.2f} +/- {mad_std_exposure_correct:.2f}',
-         ha='center', transform=ax.get_yaxis_transform())
+if len(extinction_data) == 0:
+    log.warning(f'No good extinction measurements in {directory}')
+else:
+    # Write our extinction CSV
+    fieldnames = list(extinction_dict.keys())
+    with open(extinction_outname, 'w', newline='') as csvfile:
+        csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
+                               quoting=csv.QUOTE_NONNUMERIC)
+        csvdw.writeheader()
+        for ed in extinction_data:
+            csvdw.writerow(ed)
 
-plt.ylabel('Exposure correction (s)')
-plt.gcf().autofmt_xdate()  # orient date labels at a slant
-if show:
-    plt.show()
-plt.close()
+if len(exposure_corrects) == 0:
+    log.warning(f'No exposure correction measurements in {directory}')
+else:
+    # Plot our exposure correction data
+    f = plt.figure()
+    biweight_exposure_correct = biweight_location(exposure_corrects,
+                                                  ignore_nan=True)
+    mad_std_exposure_correct = mad_std(exposure_corrects,
+                                       ignore_nan=True)
+    ax = plt.subplot()
+    plt.plot_date(exposure_correct_plot_dates, exposure_corrects, 'k.')
+    plt.axhline(biweight_exposure_correct, color='red')
+    plt.axhline(biweight_exposure_correct-mad_std_exposure_correct,
+                linestyle='--', color='k', linewidth=1)
+    plt.axhline(biweight_exposure_correct+mad_std_exposure_correct,
+                linestyle='--', color='k', linewidth=1)
+    plt.text(0.5, biweight_exposure_correct + 0.1*mad_std_exposure_correct, 
+             f'{biweight_exposure_correct:.2f} +/- {mad_std_exposure_correct:.2f}',
+             ha='center', transform=ax.get_yaxis_transform())
+
+    plt.ylabel('Exposure correction (s)')
+    plt.gcf().autofmt_xdate()  # orient date labels at a slant
+    fname = f"{just_date}_exposure_correction.png"
+    outname = os.path.join(reduced_dir, fname)
+    plt.savefig(outname, transparent=True)
+    if show:
+        plt.show()
+    plt.close()
+
+    # Write our exposure correction CSV file
+    with open(exposure_correct_outname, 'w', newline='') as csvfile:
+        csvw = csv.writer(csvfile, quoting=csv.QUOTE_NONNUMERIC)
+        csvw.writerow(['plot_date', 'exposure_correction'])
+        for pdec in zip(exposure_correct_plot_dates, exposure_corrects):
+            csvw.writerow(pdec)
