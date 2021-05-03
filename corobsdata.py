@@ -12,9 +12,10 @@ from astropy import log
 from astropy import units as u
 from astropy.stats import biweight_location
 
+from astropy_fits_key import FitsKeyArithmeticMixin
+
 from precisionguide import pgproperty, pgcoordproperty
-from precisionguide import (KeywordArithmeticMixin,
-                            MaxImPGD, NoCenterPGD, CenterOfMassPGD)
+from precisionguide import MaxImPGD, NoCenterPGD, CenterOfMassPGD
 from precisionguide.utils import hist_of_im, iter_linfit
 
 import sx694
@@ -37,10 +38,15 @@ import sx694
 #    = [[  4.65269008e-03,   8.76050569e-03],
 #       [  1.27189987e+03,   1.37717911e+03]]
 
-# Fri Apr 12 15:42:30 2019 EDT  jpmorgen@snipe
+## Fri Apr 12 15:42:30 2019 EDT  jpmorgen@snipe
+#RUN_LEVEL_DEFAULT_ND_PARAMS \
+#    = [[1.40749551e-02, 2.36320869e-02],
+#       [1.24240593e+03, 1.33789081e+03]]
+
+# Mon May 03 11:19:33 2021 EDT  jpmorgen@snipe
 RUN_LEVEL_DEFAULT_ND_PARAMS \
-    = [[1.40749551e-02, 2.36320869e-02],
-       [1.24240593e+03, 1.33789081e+03]]
+    = [[-3.32901729e-01, -3.21280155e-01],
+       [ 1.26037690e+03,  1.38195602e+03]]
 
 
 # Unbinned coords --> Note, what with the poor filter wheel centering
@@ -269,13 +275,13 @@ def keyword_arithmetic_image_handler(meta, operand1, operation, operand2,
 
     return o2
 
-class CorData(KeywordArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
+class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
     def __init__(self, *args,
                  default_ND_params=True, # Use RUN_LEVEL_DEFAULT_ND_PARAMS
-                 y_center_offset=70, # *Unbinned* Was 0.  See desired_center
-                 n_y_steps=8, # was 15
+                 y_center_offset=0, # *Unbinned* Was 70 for a while See desired_center
+                 n_y_steps=8, # was 15 (see adjustment in flat code)
                  x_filt_width=25,
-                 edge_mask=5,
+                 edge_mask=(5, -15), # Absolute coords, ragged on right edge.  If one value, assumed equal from *each* edge (e.g., (5, -5)
                  cwt_width_arange_flat=None, # flat ND_params edge find
                  cwt_width_arange=None, # normal ND_params edge find
                  cwt_min_snr=1, # Their default seems to work well
@@ -314,8 +320,8 @@ class CorData(KeywordArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             cwt_width_arange        = np.arange(8, 80)
         self.cwt_width_arange       = cwt_width_arange       
         self.n_y_steps              = n_y_steps              
-        self.x_filt_width           = x_filt_width           
-        self.edge_mask              = edge_mask              
+        self.x_filt_width           = x_filt_width
+        self.edge_mask              = edge_mask
         self.cwt_min_snr            = cwt_min_snr            
         self.search_margin          = search_margin           
         self.max_fit_delta_pix      = max_fit_delta_pix      
@@ -333,10 +339,21 @@ class CorData(KeywordArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
 
     @pgproperty
     def imagetyp(self):
-        imagetyp = self.meta.get('imagtyp')
+        imagetyp = self.meta.get('imagetyp')
         if imagetyp is None:
             return None
         return imagetyp.lower()
+
+    @pgcoordproperty
+    def edge_mask(self):
+        pass
+
+    @edge_mask.setter
+    def edge_mask(self, edge_mask):
+        edge_mask = np.asarray(edge_mask)
+        if edge_mask.size == 1:
+            edge_mask = np.append(edge_mask, -edge_mask)
+        return edge_mask        
 
     @pgproperty
     def ND_params(self):
@@ -376,6 +393,7 @@ class CorData(KeywordArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             im = self.self_unbinned.data
             default_ND_params = None
             cwt_width_arange = self.cwt_width_arange_flat
+            self.n_y_steps = 25
         else:
             # Non-flat case
             default_ND_params = self.default_ND_params
@@ -462,6 +480,8 @@ class CorData(KeywordArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                 profile = np.sum(im[ypt_top:ypt_top+y_bin,
                                     bounds[0]:bounds[1]],
                                  0)
+                #plt.plot(bounds[0]+np.arange(bounds[1]-bounds[0]), profile)
+                #plt.show()
                 # Just doing d2 gets two peaks, so multiply
                 # by the original profile to kill the inner peaks
                 smoothed_profile \
@@ -487,7 +507,7 @@ class CorData(KeywordArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                     # determine how many columns we will shift each row by
                     # using the default_ND_params
                     this_ND_center \
-                        = np.int(
+                        = int(
                             np.round(
                                 np.mean(
                                     self.ND_edges(
@@ -688,7 +708,7 @@ class CorData(KeywordArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         for iy in np.arange(0, us[0]):
             bounds = (self.ND_params[1,:]
                       + self.ND_params[0,:]*(iy - us[0]/2)
-                      + np.asarray((self.edge_mask, -self.edge_mask)))
+                      + self.edge_mask)
             bounds = bounds.astype(int)
             for ix in np.arange(bounds[0], bounds[1]):
                 xs.append(ix)
@@ -837,12 +857,13 @@ class CorData(KeywordArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             im[boost_NDc0, boost_NDc1] *= 1000
             # Clean up any signal from clouds off the ND filter, which can
             # mess up the center of mass calculation
-            im[np.where(im < satlevel)] = 0
+            #im[np.where(im < satlevel)] = 0
+            im[np.where(im < sx694.satlevel)] = 0
             y_x = ndimage.measurements.center_of_mass(im)
     
             #print(y_x[::-1])
-            #plt.imshow(im)
-            #plt.show()
+            plt.imshow(im)
+            plt.show()
             #return (y_x[::-1], ND_center)
     
             # Stay in Pythonic y, x coords
@@ -944,67 +965,133 @@ class CorData(KeywordArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
 #o = overscan_estimate(dark, meta=dark.meta)
 #print(dark.meta)
 
+##from IoIO_working_corobsdata.IoIO import CorObsData
+#log.setLevel('DEBUG')
+#old_default_ND_params \
+#    = [[  3.63686271e-01,   3.68675375e-01],
+#       [  1.28303305e+03,   1.39479846e+03]]
+fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
+flat_fname = '/data/io/IoIO/raw/2021-04-25/Sky_Flat-0001_R.fit'
+f = CorData.read(flat_fname)
+print(f.ND_params)
+c = CorData.read(fname)#, plot_ND_edges=True)
+print(c.ND_params)
+print(c.ND_angle)
+print("print(c.obj_center, c.desired_center)")
+print(c.obj_center, c.desired_center)
+
+
+#c = CorData.read(flat_fname, plot_ND_edges=True)
+#print(c.ND_params[1,1] - c.ND_params[1,0])
+#
+#
+#
+#print(c.ND_params)
+##[[-3.32707525e-01, -3.22880506e-01],
+## [ 1.23915169e+03,  1.40603931e+03]]
+#
+##cwt_width_arange_flat = np.arange(2, 60)
+##cwt_width_arange        = np.arange(8, 80)
+#
+#c.cwt_width_arange_flat = np.arange(2, 80)
+#c.ND_params = None
+#print(c.ND_params)
+##[[-3.32707525e-01 -3.14641399e-01]
+## [ 1.23915169e+03  1.40151592e+03]]
+#c.cwt_width_arange_flat = np.arange(8, 80)
+#c.ND_params = None
+#print(c.ND_params)
+##[[-3.32707525e-01 -3.17529953e-01]
+## [ 1.23915169e+03  1.40014752e+03]]
+#
+
+#oc = CorObsData(fname, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)
+#print(c.ND_params - oc.ND_params)
+#print(c.ND_angle - oc.ND_angle)
+#print(c.desired_center - oc.desired_center)
+#print(c.obj_center - oc.obj_center)
+#print(c.obj_center, c.desired_center)
+c.write('/tmp/test.fits', overwrite=True)
+
 if __name__ == '__main__':
+    from IoIO_working_corobsdata.IoIO import CorObsData
     log.setLevel('DEBUG')
-    default_ND_params \
+    old_default_ND_params \
         = [[  3.63686271e-01,   3.68675375e-01],
            [  1.28303305e+03,   1.39479846e+03]]
-
-    default_ND_params = True
-    from IoIO import CorObsData
-    fname = '/data/io/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit'
-    c = CorData.read(fname, default_ND_params=default_ND_params)#,
-                     #plot_ND_edges=True)
-    oc = CorObsData(fname, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)#,
-                    #plot_ND_edges=True)
+    fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
+    #fname = '/data/io/IoIO/raw/2021-04-25/Sky_Flat-0001_R.fit'
+    c = CorData.read(fname)#, plot_ND_edges=True)
+    oc = CorObsData(fname, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)
     print(c.ND_params - oc.ND_params)
     print(c.ND_angle - oc.ND_angle)
     print(c.desired_center - oc.desired_center)
     print(c.obj_center - oc.obj_center)
     print(c.obj_center, c.desired_center)
     c.write('/tmp/test.fits', overwrite=True)
-
-    #t = c.self_unbinned
-    #print(t)
-    #s = t.divide(t, handle_meta='first_found')
-    #print(s)
-    #print(s.meta)
-    #s = t.divide(3, handle_meta='first_found')
-    #print(s)
-    #print(s.meta)
-    #print(s.arithmetic_keylist)
-
-    off_filt_fname = '/data/io/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit'
-    bias_fname = '/data/io/IoIO/reduced/Calibration/2020-03-26_ccdT_-20.2_bias_combined.fits'
-    dark_fname = '/data/io/IoIO/reduced/Calibration/2020-03-25_ccdT_-0.3_exptime_3.0s_dark_combined.fits'
-    flat_fname = '/data/io/IoIO/reduced/Calibration/2020-03-30_Na_off_flat.fits'
-    off = CorData.read(off_filt_fname)
-    bias = CorData.read(bias_fname)
-    dark = CorData.read(dark_fname)
-    flat = CorData.read(flat_fname)
-
-    lumpy = off.copy()
-    lumpy.unit = u.electron
-
-    t = lumpy.subtract(bias, handle_meta='first_found')
-    print(f'substract SATLEVEL = {t.meta["satlevel"]} NONLIN = {t.meta["nonlin"]}, med = {np.median(t)}')
-
-    t = lumpy.divide(flat, handle_meta='first_found')
-    print(f'flat SATLEVEL = {t.meta["satlevel"]} NONLIN = {t.meta["nonlin"]}, med = {np.median(t)}')
-
     
-    t = lumpy.subtract(t, handle_meta='first_found')
-    #print(f'self-substract SATLEVEL = {t.meta["satlevel"]} NONLIN = {t.meta["nonlin"]}, med = {np.median(t)}')
 
+    #log.setLevel('DEBUG')
+    #default_ND_params \
+    #    = [[  3.63686271e-01,   3.68675375e-01],
+    #       [  1.28303305e+03,   1.39479846e+03]]
+    #
+    #default_ND_params = True
+    #from IoIO import CorObsData
+    #fname = '/data/io/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit'
+    #c = CorData.read(fname, default_ND_params=default_ND_params)#,
+    #                 #plot_ND_edges=True)
+    #oc = CorObsData(fname, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)#,
+    #                #plot_ND_edges=True)
+    #print(c.ND_params - oc.ND_params)
+    #print(c.ND_angle - oc.ND_angle)
+    #print(c.desired_center - oc.desired_center)
+    #print(c.obj_center - oc.obj_center)
+    #print(c.obj_center, c.desired_center)
+    #c.write('/tmp/test.fits', overwrite=True)
+    #
+    ##t = c.self_unbinned
+    ##print(t)
+    ##s = t.divide(t, handle_meta='first_found')
+    ##print(s)
+    ##print(s.meta)
+    ##s = t.divide(3, handle_meta='first_found')
+    ##print(s)
+    ##print(s.meta)
+    ##print(s.arithmetic_keylist)
+    #
+    #off_filt_fname = '/data/io/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit'
+    #bias_fname = '/data/io/IoIO/reduced/Calibration/2020-03-26_ccdT_-20.2_bias_combined.fits'
+    #dark_fname = '/data/io/IoIO/reduced/Calibration/2020-03-25_ccdT_-0.3_exptime_3.0s_dark_combined.fits'
+    #flat_fname = '/data/io/IoIO/reduced/Calibration/2020-03-30_Na_off_flat.fits'
+    #off = CorData.read(off_filt_fname)
+    #bias = CorData.read(bias_fname)
+    #dark = CorData.read(dark_fname)
+    #flat = CorData.read(flat_fname)
+    #
+    #lumpy = off.copy()
+    #lumpy.unit = u.electron
+    #
+    #t = lumpy.subtract(bias, handle_meta='first_found')
+    #print(f'substract SATLEVEL = {t.meta["satlevel"]} NONLIN = {t.meta["nonlin"]}, med = {np.median(t)}')
+    #
+    #t = lumpy.divide(flat, handle_meta='first_found')
+    #print(f'flat SATLEVEL = {t.meta["satlevel"]} NONLIN = {t.meta["nonlin"]}, med = {np.median(t)}')
+    #
+    #
+    #t = lumpy.subtract(t, handle_meta='first_found')
+    ##print(f'self-substract SATLEVEL = {t.meta["satlevel"]} NONLIN = {t.meta["nonlin"]}, med = {np.median(t)}')
+    #
+    #
+    #fname = '/data/io/IoIO/raw/20200522/SII_on-band_005.fits'
+    #c = CorData.read(fname)
+    #
+    #oc = CorObsData(fname)#, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)#,
+    #                #plot_ND_edges=True)
+    #print(c.ND_params - oc.ND_params)
+    #print(c.ND_angle - oc.ND_angle)
+    #print(c.desired_center - oc.desired_center)
+    #print(c.obj_center - oc.obj_center)
+    #print(c.obj_center, c.desired_center)
+    #c.write('/tmp/test.fits', overwrite=True)
 
-    fname = '/data/io/IoIO/raw/20200522/SII_on-band_005.fits'
-    c = CorData.read(fname)
-
-    oc = CorObsData(fname)#, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)#,
-                    #plot_ND_edges=True)
-    print(c.ND_params - oc.ND_params)
-    print(c.ND_angle - oc.ND_angle)
-    print(c.desired_center - oc.desired_center)
-    print(c.obj_center - oc.obj_center)
-    print(c.obj_center, c.desired_center)
-    c.write('/tmp/test.fits', overwrite=True)
