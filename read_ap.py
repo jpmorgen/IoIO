@@ -27,8 +27,8 @@ ADU2R_adjust = 1.15
 telluric_Na = 55
 N_med = 11
 
-#line = 'Na'
-line = '[SII]'
+line = 'Na'
+#line = '[SII]'
 onoff = 'AP'	# on-band minus off-band, fully reduced images
 #onoff = 'On'	# on-band images after bias and dark subtraction and rayleigh calibration
 #onoff = 'Off'	# off-band images after bias and dark subtraction and rayleigh calibration

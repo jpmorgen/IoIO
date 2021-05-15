@@ -59,8 +59,9 @@ readnoise_tolerance = 0.5 # Units of electrons
 # suspiciously close to the full-well depth in electrons of 17,000
 # (web) - 18,000 (user's manual) provided by the manufacturer -->
 # could do a better job of measuring the precise high end of this,
-# since it could be as high as 50k
-nonlin = 42000 - 1811
+# since it could be as high as 50k.  Include bias, since that is how
+# we will be working with it.
+nonlin = 42000 #- 1811
 nonlin_comment = 'Measured nonlinearity point (adu)'
 
 # Exposure times at or below this value are counted on the camera and
@@ -71,7 +72,10 @@ nonlin_comment = 'Measured nonlinearity point (adu)'
 # --> NEEDS TO BE VERIFIED WITH PHOTOMETRY FROM 2019 and 2020
 # Corrected as part of local version of ccd_process
 max_accurate_exposure = 0.7 # s
-exposure_correct = 1.7 # s
+#exposure_correct = 1.7 # s
+# Fri Apr 16 13:53:34 2021 EDT  jpmorgen@snipe
+# Experiments using photometry.py
+exposure_correct = 2.3 # s
 
 # The SX694 and similar interline transfer CCDs have such low dark
 # current that it is not really practical to map out the dark current
@@ -101,9 +105,17 @@ def metadata(hdr_in,
     # Clean up double exposure time reference to avoid confusion
     if hdr.get('exposure') is not None:
         del hdr['EXPOSURE']
-    hdr.insert('INSTRUME',
-                    ('CAMERA', camera_description),
-                    after=True)
+    hdr.comments['exptime'] = 'Exposure time (second)'
+    radecsys = hdr.get('RADECSYS')
+    # Try to avoid annoying WCS warnings.  Note missing "C"
+    if radecsys is not None:
+        hdr.insert('RADECSYS',
+                   ('RADESYS', radecsys, hdr.comments['RADECSYS']))
+        del hdr['RADECSYS']
+    if hdr.get('instrume'):
+        hdr.insert('INSTRUME',
+                   ('CAMERA', camera_description),
+                   after=True)
     hdr['GAIN'] = (gain, gain_comment)
     # This gets used in ccdp.cosmicray_lacosmic
     hdr['SATLEVEL'] = (satlevel, satlevel_comment)

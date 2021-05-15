@@ -243,7 +243,7 @@ def keyword_arithmetic_image_handler(meta, operand1, operation, operand2,
                 o2 = 0
             elif imagetyp == 'flat':
                 # Check for unprocessed flat
-                if meta.get('flatdiv') is None:
+                if operand2.meta.get('flatdiv') is None:
                     # med is not the best value, since the flats roll
                     # off significantly, but this is the wrong place
                     # to calculate it correctly.  Generally, flats are
@@ -862,8 +862,8 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             y_x = ndimage.measurements.center_of_mass(im)
     
             #print(y_x[::-1])
-            plt.imshow(im)
-            plt.show()
+            #plt.imshow(im)
+            #plt.show()
             #return (y_x[::-1], ND_center)
     
             # Stay in Pythonic y, x coords
@@ -970,15 +970,16 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
 #old_default_ND_params \
 #    = [[  3.63686271e-01,   3.68675375e-01],
 #       [  1.28303305e+03,   1.39479846e+03]]
-fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
-flat_fname = '/data/io/IoIO/raw/2021-04-25/Sky_Flat-0001_R.fit'
-f = CorData.read(flat_fname)
-print(f.ND_params)
-c = CorData.read(fname)#, plot_ND_edges=True)
-print(c.ND_params)
-print(c.ND_angle)
-print("print(c.obj_center, c.desired_center)")
-print(c.obj_center, c.desired_center)
+
+##fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
+##flat_fname = '/data/io/IoIO/raw/2021-04-25/Sky_Flat-0001_R.fit'
+##f = CorData.read(flat_fname)
+##print(f.ND_params)
+##c = CorData.read(fname)#, plot_ND_edges=True)
+##print(c.ND_params)
+##print(c.ND_angle)
+##print("print(c.obj_center, c.desired_center)")
+##print(c.obj_center, c.desired_center)
 
 
 #c = CorData.read(flat_fname, plot_ND_edges=True)
@@ -1011,7 +1012,7 @@ print(c.obj_center, c.desired_center)
 #print(c.desired_center - oc.desired_center)
 #print(c.obj_center - oc.obj_center)
 #print(c.obj_center, c.desired_center)
-c.write('/tmp/test.fits', overwrite=True)
+#c.write('/tmp/test.fits', overwrite=True)
 
 if __name__ == '__main__':
     from IoIO_working_corobsdata.IoIO import CorObsData

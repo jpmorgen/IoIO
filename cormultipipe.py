@@ -26,18 +26,49 @@ from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.table import QTable
 from astropy.time import Time, TimeDelta
 from astropy.stats import mad_std, biweight_location
+from astropy.wcs import FITSFixedWarning
 
 from photutils import Background2D, MedianBackground
 
 import ccdproc as ccdp
 
-from bigmultipipe import num_can_process, WorkerWithKwargs, NoDaemonPool
+#from bigmultipipe import num_can_process, WorkerWithKwargs, NoDaemonPool
+from bigmultipipe import num_can_process, WorkerWithKwargs
+#from multiprocessing import Pool as NoDaemonPool
 from bigmultipipe import multi_logging, prune_pout
 
 from ccdmultipipe import CCDMultiPipe
+from ccdmultipipe.utils import FilterWarningCCDData
 
 import sx694
 from corobsdata import CorData
+
+import multiprocessing.pool
+
+class NoDaemonProcess(multiprocessing.Process):
+    @property
+    def daemon(self):
+        return False
+
+    @daemon.setter
+    def daemon(self, value):
+        pass
+
+
+class NoDaemonContext(type(multiprocessing.get_context())):
+    Process = NoDaemonProcess
+
+# We sub-class multiprocessing.pool.Pool instead of multiprocessing.Pool
+# because the latter is only a wrapper function, not a proper class.
+class NestablePool(multiprocessing.pool.Pool):
+    def __init__(self, *args, **kwargs):
+        kwargs['context'] = NoDaemonContext()
+        super(NestablePool, self).__init__(*args, **kwargs)
+
+class NoDaemonPool(NestablePool):
+    pass
+
+
 
 # Processing global variables.  Since I avoid use of the global
 # statement and don't reassign these at global scope, they stick to
@@ -120,9 +151,132 @@ DARK_EXP_MARGIN = 3
 ND_EDGE_EXPAND = 40
 FLAT_CUT = 0.75
 
+#######################
+# Utilities           #
+#######################
+
+def assure_list(x):
+    """Assures x is type `list`"""
+    if x is None:
+        x = []
+    if not isinstance(x, list):
+        x = [x]
+    return x
+
+def reduced_dir(rawdir, create=False):
+    """Create a parallel directory to raw for reduced
+    files.  e.g. /data/io/IoIO/raw/20241111 ->
+    /data/io/IoIO/reduced/20241111.  Tries to do so in an
+    OS-independent way using os.path.sep.  If `rawdir` is not in the
+    raw directory tree, just return rawdir
+
+    Paramters
+    ---------
+    create : bool
+        Create reduced directory (and parents) if they don't exist
+
+    Returns
+    -------
+    reddir: str
+        Directory name in reduced directory tree structure
+
+    """
+
+    ps = os.path.sep
+    # This ends up returning rawdir if directory doesn't have /raw/
+    reddir = rawdir.replace(f'{ps}raw{ps}', f'{ps}reduced{ps}')
+    if reddir == rawdir:
+        # catch top-level case
+        reddir = rawdir.replace(f'{ps}raw', f'{ps}reduced')
+    if create:
+        os.makedirs(reddir, exist_ok=True)
+    return reddir
+
+def get_dirs_dates(directory,
+                   filt_list=None,
+                   start=None,
+                   stop=None):
+    """Starting a root directory "directory," returns list of tuples
+    (subdir, date) sorted by date.  Handles two cases of directory
+    date formatting YYYYMMDD (ACP) and YYYY-MM-DD (MaxIm)
+
+    Parameters
+    ----------
+    directory : string
+        Directory in which to look for subdirectories
+    filt_list : list of strings 
+        Used to filter out bad directories (e.g. ["cloudy", "bad"]
+        will omit listing of, e.g., 2018-02-02_cloudy and
+        2018-02-03_bad_focus) 
+    start : string YYYY-MM-DD
+        Start date (inclusive).  Default = first date
+    stop : string YYYY-MM-DD
+        Stop date (inclusive).  Default = last date
+
+    """
+    assert os.path.isdir(directory)
+    fulldirs = [os.path.join(directory, d) for d in os.listdir(directory)]
+    # Filter out bad directories first
+    dirs = [os.path.basename(d) for d in fulldirs
+            if (not os.path.islink(d)
+                and os.path.isdir(d)
+                and (filt_list is None
+                     or not np.any([filt in d for filt in filt_list])))]
+    # Prepare to pythonically loop through date formats, trying each on 
+    date_formats = ["%Y-%m-%d", "%Y%m%d"]
+    ddlist = []
+    for thisdir in dirs:
+        d = thisdir
+        dirfail = True
+        for idf in date_formats:
+            # The date formats are two characters shorter than the
+            # length of the strings I am looking for (%Y is two
+            # shorter than YYYY, but %M is the same as MM, etc.)
+            d = d[0:min(len(d),len(idf)+2)]
+            try:
+                thisdate = datetime.datetime.strptime(d, idf)
+                ddlist.append((thisdir, thisdate))
+                dirfail = False
+            except:
+                pass
+        if dirfail:
+            pass
+            #log.debug('Skipping non-date formatted directory: ' + thisdir)
+    # Thanks to https://stackoverflow.com/questions/9376384/sort-a-list-of-tuples-depending-on-two-elements
+    if len(ddlist) == 0:
+        return []
+    ddsorted = sorted(ddlist, key=lambda e:e[1])
+    if start is None:
+        start = ddsorted[0][1]
+    elif isinstance(start, str):
+        start = datetime.datetime.strptime(start, "%Y-%m-%d")
+    elif isinstance(start, Time):
+        start = start.datetime
+    if stop is None:
+        stop = ddsorted[-1][1]
+    elif isinstance(stop, str):
+        stop = datetime.datetime.strptime(stop, "%Y-%m-%d")
+    elif isinstance(stop, Time):
+        stop = stop.datetime
+    if start > stop:
+        log.warning('start date {} > stop date {}, returning empty list'.format(start, stop))
+        return []
+    ddsorted = [dd for dd in ddsorted
+                if start <= dd[1] and dd[1] <= stop]
+    dirs, dates = zip(*ddsorted)
+    dirs = [os.path.join(directory, d) for d in dirs]
+    return list(zip(dirs, dates))
+
+
+#######################
+# RedCorData object   #
+#######################
+
 class RedCorData(CorData):
-    pass
-            
+    pass            
+
+class FwRedCorData(FilterWarningCCDData, RedCorData):
+    warning_filter_list = [FITSFixedWarning]
 
 ######### CorMultiPipe object
 
@@ -150,7 +304,7 @@ class CorMultiPipe(CCDMultiPipe):
         s = data.shape
         # Note Pythonic C index ordering
         if s != (self.naxis2, self.naxis1):
-            return None
+            return (None, {})
         return super().pre_process(data, **kwargs)
 
     def data_process(self, data,
@@ -167,6 +321,9 @@ class CorMultiPipe(CCDMultiPipe):
                            auto=auto,
                            **kwargs)
         return data
+
+class FwCorMultiPipe(CorMultiPipe):
+    ccddata_cls = FwRedCorData
 
 ######### CorMultiPipe prepossessing routines
 def full_frame(im,
@@ -702,17 +859,21 @@ def cor_process(ccd,
     if gain is True:
         gain = gain_key.value_from(nccd.meta)
 
-    # Correct our SATLEVEL and NONLIN units if we are going to
-    # gain-correct.
-    satlevel = nccd.meta.get('satlevel')
-    nonlin = nccd.meta.get('nonlin')
-    if (isinstance(gain, u.Quantity)
-        and satlevel is not None
-        and nonlin is not None):
-        nccd.meta['SATLEVEL'] = satlevel * gain.value
-        nccd.meta.comments['SATLEVEL'] = 'saturation level (electron)'
-        nccd.meta['NONLIN'] = nonlin * gain.value
-        nccd.meta.comments['NONLIN'] = 'Measured nonlinearity point (electron)'
+    ## --> Should this go away because of KeywordArithmeticMixin?
+    ## No, right now I think gain_correct et al. blow away the metadata
+    ## in their call to ccd.multiply instead of calling first_found
+    #
+    ## Correct our SATLEVEL and NONLIN units if we are going to
+    ## gain-correct.
+    #satlevel = nccd.meta.get('satlevel')
+    #nonlin = nccd.meta.get('nonlin')
+    #if (isinstance(gain, u.Quantity)
+    #    and satlevel is not None
+    #    and nonlin is not None):
+    #    nccd.meta['SATLEVEL'] = satlevel * gain.value
+    #    nccd.meta.comments['SATLEVEL'] = 'saturation level (electron)'
+    #    nccd.meta['NONLIN'] = nonlin * gain.value
+    #    nccd.meta.comments['NONLIN'] = 'Measured nonlinearity point (electron)'
 
     if error and readnoise is None:
         # We want to make an error frame but the user has not
@@ -1589,6 +1750,8 @@ def flat_process(ccd, bmp_meta=None,
                  nd_edge_expand=ND_EDGE_EXPAND,
                  in_name=None,
                  **kwargs):
+    if ccd.meta.get('flatdiv') is not None:
+        raise ValueError('Trying to reprocess a processed flat')
     # Use photutils.Background2D to smooth each flat and get a
     # good maximum value.  Mask edges and ND filter so as to
     # increase quality of background map
@@ -1602,16 +1765,15 @@ def flat_process(ccd, bmp_meta=None,
     mask[ccd.data < rdnoise * init_threshold] = True
     ccd.mask = mask
     bkg_estimator = MedianBackground()
-    b = Background2D(ccd, 20, mask=mask, filter_size=5,
+    b = Background2D(ccd.data, 20, mask=mask, filter_size=5,
                      bkg_estimator=bkg_estimator)
     max_flat = np.max(b.background)
-    if max_flat > ccd.meta['NONLIN']:
+    if max_flat > ccd.meta['NONLIN']:#*ccd.unit:
         log.debug(f'flat max value of {max_flat} too bright: {in_name}')
         return None
     ccd.mask = None
-    max_flat *= ccd.unit
     ccd = ccd.divide(max_flat, handle_meta='first_found')
-    ccd.meta['FLATDIV'] = (max_flat.value, 'Normalization value (smoothed max) (electron)')
+    ccd.meta['FLATDIV'] = (max_flat, 'Normalization value (smoothed max) (electron)')
     # Get ready to capture the mean DATE-OBS
     tm = Time(ccd.meta['DATE-OBS'], format='fits')
     if bmp_meta is not None:
@@ -1818,81 +1980,6 @@ def flat_combine(directory=None,
 
 ######### Calibration object
 
-def get_dirs_dates(directory,
-                   filt_list=None,
-                   start=None,
-                   stop=None):
-    """Starting a root directory "directory," returns list of tuples
-    (subdir, date) sorted by date.  Handles two cases of directory
-    date formatting YYYYMMDD (ACP) and YYYY-MM-DD (MaxIm)
-
-    Parameters
-    ----------
-    directory : string
-        Directory in which to look for subdirectories
-    filt_list : list of strings 
-        Used to filter out bad directories (e.g. ["cloudy", "bad"]
-        will omit listing of, e.g., 2018-02-02_cloudy and
-        2018-02-03_bad_focus) 
-    start : string YYYY-MM-DD
-        Start date (inclusive).  Default = first date
-    stop : string YYYY-MM-DD
-        Stop date (inclusive).  Default = last date
-
-    """
-    assert os.path.isdir(directory)
-    fulldirs = [os.path.join(directory, d) for d in os.listdir(directory)]
-    # Filter out bad directories first
-    dirs = [os.path.basename(d) for d in fulldirs
-            if (not os.path.islink(d)
-                and os.path.isdir(d)
-                and (filt_list is None
-                     or not np.any([filt in d for filt in filt_list])))]
-    # Prepare to pythonically loop through date formats, trying each on 
-    date_formats = ["%Y-%m-%d", "%Y%m%d"]
-    ddlist = []
-    for thisdir in dirs:
-        d = thisdir
-        dirfail = True
-        for idf in date_formats:
-            # The date formats are two characters shorter than the
-            # length of the strings I am looking for (%Y is two
-            # shorter than YYYY, but %M is the same as MM, etc.)
-            d = d[0:min(len(d),len(idf)+2)]
-            try:
-                thisdate = datetime.datetime.strptime(d, idf)
-                ddlist.append((thisdir, thisdate))
-                dirfail = False
-            except:
-                pass
-        if dirfail:
-            pass
-            #log.debug('Skipping non-date formatted directory: ' + thisdir)
-    # Thanks to https://stackoverflow.com/questions/9376384/sort-a-list-of-tuples-depending-on-two-elements
-    if len(ddlist) == 0:
-        return []
-    ddsorted = sorted(ddlist, key=lambda e:e[1])
-    if start is None:
-        start = ddsorted[0][1]
-    elif isinstance(start, str):
-        start = datetime.datetime.strptime(start, "%Y-%m-%d")
-    elif isinstance(start, Time):
-        start = start.datetime
-    if stop is None:
-        stop = ddsorted[-1][1]
-    elif isinstance(stop, str):
-        stop = datetime.datetime.strptime(stop, "%Y-%m-%d")
-    elif isinstance(stop, Time):
-        stop = stop.datetime
-    if start > stop:
-        log.warning('start date {} > stop date {}, returning empty list'.format(start, stop))
-        return []
-    ddsorted = [dd for dd in ddsorted
-                if start <= dd[1] and dd[1] <= stop]
-    dirs, dates = zip(*ddsorted)
-    dirs = [os.path.join(directory, d) for d in dirs]
-    return list(zip(dirs, dates))
-
 def dir_has_calibration(directory, glob_include, subdirs=None):
     """Returns True if directory has calibration files matching pattern(s)
 in glob_include.  Optionally checks subdirs"""
@@ -1985,9 +2072,9 @@ class Calibration():
         # gain_correct is set only in the biases and propagated
         # through the rest of the pipeline in cor_process
         self._gain_correct = gain_correct
-        self._bias_glob = self.assure_list(bias_glob)
-        self._dark_glob = self.assure_list(dark_glob)
-        self._flat_glob = self.assure_list(flat_glob)
+        self._bias_glob = assure_list(bias_glob)
+        self._dark_glob = assure_list(dark_glob)
+        self._flat_glob = assure_list(flat_glob)
         self._lockfile = lockfile
         self.flat_cut = flat_cut
         self.nd_edge_expand = nd_edge_expand
@@ -2024,14 +2111,6 @@ class Calibration():
         self._flat_dirs_dates_checked = None
         if reduce:
             self.reduce()
-
-    def assure_list(self, x):
-        """Assures x is type `list`"""
-        if x is None:
-            x = []
-        if not isinstance(x, list):
-            x = [x]
-        return x
 
     @property
     def gain_correct(self):
@@ -2613,7 +2692,8 @@ class Calibration():
 
 if __name__ == "__main__":
     log.setLevel('DEBUG')
-    c = Calibration(start_date='2020-01-01', stop_date='2021-12-31', reduce=True)    
+    c = Calibration(start_date='2020-01-01', stop_date='2021-12-31', reduce=True)
+    #c = Calibration(start_date='2020-01-01', stop_date='2021-02-28', reduce=True)    
     ##t = c.dark_table_create(autoreduce=False, rescan=True)
     #fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
     #fname2 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na_off.fit'
@@ -2631,3 +2711,10 @@ if __name__ == "__main__":
                        post_process_list=[flat_process])
     pout = cmp.pipeline([flat], outdir='/tmp', overwrite=True)
 
+#fname1 = '/data/io/IoIO/raw/20210310/HD 132052-S001-R001-C002-R.fts'
+#pgd = RedCorData.read(fname1)
+#print(pgd.meta)
+
+#print(reduced_dir('/data/io/IoIO/raw/20210513'))
+#print(reduced_dir('/data/io/IoIO/raw/20210513', create=True))
+#print(reduced_dir('/data/io/IoIO/raw'))

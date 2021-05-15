@@ -35,10 +35,15 @@ SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 #    = [[  4.65269008e-03,   8.76050569e-03],
 #       [  1.27189987e+03,   1.37717911e+03]]
 
-# Fri Apr 12 15:42:30 2019 EDT  jpmorgen@snipe
+## Fri Apr 12 15:42:30 2019 EDT  jpmorgen@snipe
+#run_level_default_ND_params \
+#    = [[1.40749551e-02, 2.36320869e-02],
+#       [1.24240593e+03, 1.33789081e+03]]
+
+# Sun Apr 25 00:48:25 2021 EDT  jpmorgen@snipe
 run_level_default_ND_params \
-    = [[1.40749551e-02, 2.36320869e-02],
-       [1.24240593e+03, 1.33789081e+03]]
+    = [[-3.32901729e-01, -3.21280155e-01],
+       [ 1.26037690e+03,  1.38195602e+03]]
 
 # Temporary set to 2 during really hazy weather 
 guider_nd_Filter_number = 3
@@ -89,7 +94,7 @@ class CorObsData(pg.ObsData):
                  y_center=None,
                  n_y_steps=8, # was 15
                  x_filt_width=25,
-                 edge_mask=5,
+                 edge_mask=(5, -15), # Absolute coords, ragged on right edge.  If one value, assumed equal from *each* edge (e.g., (5, -5)
                  cwt_width_arange=None, # Default set by image type in populate_obj
                  cwt_min_snr=1, # Their default seems to work well
                  search_margin=50, # on either side of nominal ND filter
@@ -141,6 +146,9 @@ class CorObsData(pg.ObsData):
 
         self.n_y_steps =              n_y_steps              
         self.x_filt_width =           x_filt_width           
+        edge_mask = np.asarray(edge_mask)
+        if edge_mask.size == 1:
+            edge_mask = np.append(edge_mask, -edge_mask)
         self.edge_mask =              edge_mask              
         self.cwt_width_arange =       cwt_width_arange       
         self.cwt_min_snr =            cwt_min_snr            
@@ -284,7 +292,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         satlevel = self.header.get('SATLEVEL')
         if satlevel is None:
             satlevel = sx694.satlevel
-
+        satlevel *= 0.7
         # Establish some metrics to see if Jupiter is on or off the ND
         # filter.  Easiest one is number of saturated pixels
         # /data/io/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit gives
@@ -301,6 +309,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         # Note, this assignment dereferences im from HDUList[0].data
         im  = im - back_level
         satlevel -= back_level
+        print(f'satlevel: {satlevel}')
         
         # Get the coordinates of the ND filter
         NDc = self.ND_coords
@@ -312,6 +321,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         # can't use the std of the ND filter, since it is too biased
         # by Jupiter when it is there.
         NDmed = np.median(im[NDc])
+        print(f'ND median level {NDmed}')
         boostc = np.where(im[NDc] > (NDmed + 5*self.biasnoise))
         boost_NDc0 = np.asarray(NDc[0])[boostc]
         boost_NDc1 = np.asarray(NDc[1])[boostc]
@@ -339,22 +349,29 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         
         #log.debug('sum of significant pixels on ND filter = ' + str(sum_on_ND_filter))
         print('sum_on_ND_filter = ', sum_on_ND_filter)
+        print(f'num_sat = {num_sat}')
+        
         #if num_sat > 1000 or sum_on_ND_filter < 1E6:
         # Vega is 950,000
-        if num_sat > 1000 or sum_on_ND_filter < 0.75E6:
+        # Sun Apr 25 03:21:11 2021 EDT  jpmorgen@snipe
+        # Vega is now 500,000
+        # Was using num_sat>1000.  Now >500 for Vega
+        # Sat May 01 07:01:06 2021 EDT  jpmorgen@snipe
+        # Has to be >1000 when it is genuinly Jupiter
+        if num_sat > 1000 or sum_on_ND_filter < 200000: #< 0.75E6:
             log.warning('Jupiter outside of ND filter?')
             # Outside the ND filter, Jupiter should be saturating.  To
             # make the center of mass calc more accurate, just set
             # everything that is not getting toward saturation to 0
             # --> Might want to fine-tune or remove this so bright
-            im[np.where(im < satlevel*0.7)] = 0
+            im[np.where(im < satlevel)] = 0
             
             #log.debug('Approx number of saturating pixels ' + str(np.sum(im)/65000))
 
             # 25 worked for a star, 250 should be conservative for
             # Jupiter (see above calcs)
-            # if np.sum(im) < satlevel * 25:
-            if np.sum(im) < satlevel * 250:
+            if np.sum(im) < satlevel * 25:
+            #if np.sum(im) < satlevel * 250:
                 self.quality = 4
                 log.warning('Jupiter (or suitably bright object) not found in image.  This object is unlikely to show up on the ND filter.  Seeting quality to ' + str(self.quality) + ', center to [-99, -99]')
                 self._obj_center = np.asarray([-99, -99])
@@ -444,7 +461,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         for iy in np.arange(0, us[0]):
             bounds = (self.ND_params[1,:]
                       + self.ND_params[0,:]*(iy - us[0]/2)
-                      + np.asarray((self.edge_mask, -self.edge_mask)))
+                      + self.edge_mask)
             bounds = bounds.astype(int)
             for ix in np.arange(bounds[0], bounds[1]):
                 xs.append(ix)
@@ -987,46 +1004,6 @@ def ACP_IPT_Na_R(args):
                 log.info('Exposure would extend past end of ACP exposure, returning') 
                 return
             for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_07_', d),
-                                exptime=0.7,
-                                binning=1,
-                                filt=6)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_071_', d),
-                                exptime=0.71,
-                                binning=1,
-                                filt=6)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_10_', d),
-                                exptime=10,
-                                binning=1,
-                                filt=6)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_15_', d),
-                                exptime=15,
-                                binning=1,
-                                filt=6)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_off_cal_07_', d),
-                                exptime=0.7,
-                                binning=1,
-                                filt=3)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_off_cal_071_', d),
-                                exptime=0.71,
-                                binning=1,
-                                filt=3)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('SII_off_cal_07_', d),
-                                exptime=0.7,
-                                binning=1,
-                                filt=2)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('SII_off_cal_071_', d),
-                                exptime=0.71,
-                                binning=1,
-                                filt=2)
-            for ifilt in range(1):
                 P.MC.acquire_im(pg.uniq_fname('SII_on_cal_07_', d),
                                 exptime=0.7,
                                 binning=1,
@@ -1051,6 +1028,50 @@ def ACP_IPT_Na_R(args):
                                 exptime=20,
                                 binning=1,
                                 filt=1)
+
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('SII_off_cal_07_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=2)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('SII_off_cal_071_', d),
+                                exptime=0.71,
+                                binning=1,
+                                filt=2)
+
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_off_cal_07_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=3)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_off_cal_071_', d),
+                                exptime=0.71,
+                                binning=1,
+                                filt=3)
+
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_07_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=6)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_071_', d),
+                                exptime=0.71,
+                                binning=1,
+                                filt=6)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_10_', d),
+                                exptime=10,
+                                binning=1,
+                                filt=6)
+            for ifilt in range(1):
+                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_15_', d),
+                                exptime=15,
+                                binning=1,
+                                filt=6)
+
             log.debug('CENTERING WITH GUIDEBOX MOVES') 
             P.center_loop()
             while True:
@@ -1088,20 +1109,20 @@ def ACP_IPT_Na_R(args):
                                     binning=1,
                                     filt=0)
                 for ifilt in range(2):
-                    P.MC.acquire_im(pg.uniq_fname('B_', d),
-                                    exptime=0.7,
+                    P.MC.acquire_im(pg.uniq_fname('V_', d),
+                                    exptime=0.2,
                                     binning=1,
-                                    filt=7)
+                                    filt=4)
                 for ifilt in range(2):
                     P.MC.acquire_im(pg.uniq_fname('U_', d),
                                     exptime=20,
                                     binning=1,
                                     filt=5)
                 for ifilt in range(2):
-                    P.MC.acquire_im(pg.uniq_fname('V_', d),
-                                    exptime=0.2,
+                    P.MC.acquire_im(pg.uniq_fname('B_', d),
+                                    exptime=0.7,
                                     binning=1,
-                                    filt=4)
+                                    filt=7)
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
                 P.center_loop()
                 log.info('Collecting Na')
@@ -1125,13 +1146,12 @@ def ACP_IPT_Na_R(args):
                 for i in range(4):
                     P.diff_flex()
                     log.info('Collecting [SII]')
-                    exptime=60
-                    if ((time.time() + exptime) > Tend):
-                        log.info('Exposure would extend past end of ACP exposure, returning') 
-                        return
-                    P.MC.acquire_im(pg.uniq_fname('SII_off-band_', d),
-                                    exptime=exptime,
-                                    filt=2)
+                    # Take an R exposure to get the filter wheel going
+                    # in the right direction and get the Galilean
+                    # satellites lined up
+                    P.MC.acquire_im(pg.uniq_fname('R_', d),
+                                    exptime=0.1,
+                                    filt=1)
                     exptime=300
                     if ((time.time() + exptime) > Tend):
                         log.info('Exposure would extend past end of ACP exposure, returning') 
@@ -1140,6 +1160,13 @@ def ACP_IPT_Na_R(args):
                                     exptime=exptime,
                                     filt=1)
                     P.diff_flex()
+                    exptime=60
+                    if ((time.time() + exptime) > Tend):
+                        log.info('Exposure would extend past end of ACP exposure, returning') 
+                        return
+                    P.MC.acquire_im(pg.uniq_fname('SII_off-band_', d),
+                                    exptime=exptime,
+                                    filt=2)
                     log.debug('CENTERING WITH GUIDEBOX MOVES') 
                     P.center_loop()
         except Exception as e:
@@ -1152,8 +1179,12 @@ def cmd_center(args):
         try:
             P.center_loop()
             # Upset the centering a bit
-            log.info("jogging telescope a bit to force guidebox centering")
-            P.MC.move_with_guider_slews(np.asarray([10,2])/3600)
+            log.info("JOGGING TELESCOPE A BIT TO FORCE GUIDEBOX CENTERING")
+            # Sun Apr 25 04:48:45 2021 EDT  jpmorgen@snipe
+            # MaxIm 6.26 seems to need this?
+            #P.MC.move_with_guider_slews(np.asarray([5,1])/3600)
+            P.MC.move_with_guider_slews(np.asarray([6,3])/3600)
+            #P.MC.move_with_guider_slews(np.asarray([10,3])/3600)
             #P.MC.move_with_guider_slews(np.asarray([20,5])/3600)
             P.MC.guider_start(filter=guider_nd_Filter_number)
             P.center_loop()

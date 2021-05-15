@@ -884,7 +884,11 @@ def reduce_pair(OnBand_fname=None,
             #ADU2R_adjust = 1.15
             # This is in read_ap for now, so don't put it here 
             ADU2R_adjust = 1
-            offscale = Na_eq_width/50 * on_exp/off_exp
+            # Sat May 08 23:27:19 2021 EDT  jpmorgen@snipe
+            # --> Here is where I can use my new absolute ratio
+            # measurements from flat_ratio.py
+            offscale = 1./4.72 * on_exp/off_exp
+            #offscale = Na_eq_width/50 * on_exp/off_exp
             # Based on on-Jupiter images and known Jupiter brightness
             # in MR/R, this seems to be the calibration, though we
             # wonder if the ND filter is doing something funny

@@ -108,7 +108,8 @@ default_guide_box_command_file = os.path.join(raw_data_root, 'GuideBoxCommand.tx
 default_guide_box_log_file = os.path.join(raw_data_root, 'GuideBoxLog.txt')
 
 run_level_main_astrometry = os.path.join(
-    raw_data_root, '2021-03_Astrometry/Main_Astrometry_East_of_Pier.fit')
+    raw_data_root, '2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit')
+    #raw_data_root, '2021-03_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2020-09_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2020-03_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2019-04_Astrometry/Main_Astrometry_East_of_Pier.fit')
@@ -123,7 +124,8 @@ run_level_main_astrometry = os.path.join(
 # --> pier flip doesn't affect N/S because tube rolls over too, E/W is
 # --> affected
 run_level_guider_astrometry = os.path.join(
-    raw_data_root, '2021-03_Astrometry/Guider_Astrometry_East_of_Pier.fit')
+    raw_data_root, '2021-04_Astrometry/Guider_Astrometry_East_of_Pier.fit')
+    #raw_data_root, '2021-03_Astrometry/Guider_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2020-09_Astrometry/Guider_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2020-03_Astrometry/Guider_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2019-04_Astrometry/Guider_Astrometry_West_of_Pier.fit')
@@ -2202,8 +2204,11 @@ guide_box_log_file : str
         return True
 
     def diff_flex(self):
-        """-->Eventually this is going to read a map/model file and calculate the differential flexure to feed to GuideBoxCommander.  There may need to be an additional method for concatenation of this flex and the measured flexure.  THIS IS ONLY FOR JUPITER DEC RIGHT NOW"""
-        plate_ratio = 4.42/(1.56/2)
+        """-->Eventually this is going to read a map/model file and calculate the differential flexure to feed to GuideBoxCommander.  There may need to be an additional method for concatenation of this flex and the measured flexure.  THIS IS ONLY FOR JUPITER DEC RIGHT NOW  --> WARNING THIS HAS GUIDER PLATE SCLAE HARD-CODED IN!"""
+        # Lodestar X2
+        #plate_ratio = 4.42/(1.56/2)
+        # 
+        plate_ratio = 3.01/(1.56/2)
         # 2018
         #if (-40 < self.MC.Telescope.Declination
         #    and self.MC.Telescope.Declination < +10
@@ -2224,14 +2229,29 @@ guide_box_log_file : str
         #    # Note Pythonic transpose
         #    return self.GuideBoxCommander(np.asarray((dec_pix_rate, 0)))
         # 2020 early
+        # if (-40 < self.MC.Telescope.Declination
+        #     and self.MC.Telescope.Declination < +10
+        #     and self.MC.Telescope.Altitude < 30):
+        #     # Change from guider pixels per 10s to main camera pixels per s
+        #     ra_pix_rate = -0.014/10 * plate_ratio
+        #     dec_pix_rate = -0.020/10 * plate_ratio
+        #     # Note Pythonic transpose
+        #     return self.GuideBoxCommander(np.asarray((dec_pix_rate, ra_pix_rate)))
+        # 2021 after guider change
         if (-40 < self.MC.Telescope.Declination
             and self.MC.Telescope.Declination < +10
             and self.MC.Telescope.Altitude < 30):
             # Change from guider pixels per 10s to main camera pixels per s
-            ra_pix_rate = -0.014/10 * plate_ratio
-            dec_pix_rate = -0.020/10 * plate_ratio
+            ra_pix_rate = -0.010/10 * plate_ratio
+            # Fri May 14 10:24:04 2021 EDT  jpmorgen@snipe
+            # This is the formal calculation, but intuition tells me
+            # it is too big of a swing to make at once
+            #dec_pix_rate = +0.051/10 * plate_ratio
+            dec_pix_rate = +0.030/10 * plate_ratio
             # Note Pythonic transpose
             return self.GuideBoxCommander(np.asarray((dec_pix_rate, ra_pix_rate)))
+
+
         return self.GuideBoxCommander(np.asarray((0, 0)))
 
     # --> I'll probably want a bunch of parameters for the exposure

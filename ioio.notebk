@@ -11071,3 +11071,71 @@ sa
 rsync -auv jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/home/jpmorgen/py/IoIO/sx694.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
 rsync -auv jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/home/jpmorgen/py/IoIO/IoIO.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
 rsync -auv jpmorgen@cpe-184-153-133-119.maine.res.rr.com:/home/jpmorgen/py/IoIO/precisionguide_old.py "/cygdrive/c/Users/PLANETARY SCIENCE/Desktop/IoIO/Scripts"
+
+Sun Apr 25 00:22:56 2021 EDT  jpmorgen@snipe
+
+Copied all three of these off to "_safe" on IoIO1U1 and replaced with
+current version on snipe.  This includes the new astrometry but not
+run_level_ND_params
+
+Unfortunately, the safes were from March this year and they seem to
+not work!  At least not with Vega
+
+Mon May 03 21:49:59 2021 EDT  jpmorgen@snipe
+
+Mon May 03 05:51:50 2021 EDT  jpmorgen@snipe
+
+Thinking it might be best to do some reversion in IoIO
+
+
+~/py/precisionguide/IoIO.py.no is the old code...No, it still has
+sx694 in it.  Moving forward?
+
+/data/io/IoIO/raw/2021-04_Astrometry/ has files I want for testing
+
+Mon May 03 06:47:17 2021 EDT  jpmorgen@snipe
+
+Looks like my run_level_default_ND_params might be off?  Not getting
+very straight edges
+
+Mon May 03 07:23:19 2021 EDT  jpmorgen@snipe
+
+Ah Ha!  Fundamental problem with centering is that the ND filter is not
+lined up properly, so the center of mass is totally off.
+
+So now go back to flat
+
+160 - 270
+-110
+
+But
+
+[[-3.32707525e-01 -3.22880506e-01]
+ [ 1.23915169e+03  1.40603931e+03]]
+>>> -166.88761999999997
+
+OK, so the edges are way off, possibly due to angle
+
+So find what is wrong.  Seems a large angle messes with the flat
+ND_param finder.  Bump the number of vertical steps for flats and it
+is now fixed.
+
+Real center of Jupiter seems to be X,Y = 1286, 1132
+
+Mon May 03 21:42:40 2021 EDT  jpmorgen@snipe
+
+Whew!  Found issue and fixed it.  Flats with rotated ND filter were
+not getting enough n_y_steps and led to bad ND_params.  But too many
+n_y_steps gave not enough contrast for normal files.  Fixed in CorData
+so I can analyze flats when the data is home, but don't bother with
+IoIO.py at the scope, since the code long ago worked OK when the right
+thing when the ND_params are correct.
+
+Oh, and I made the edge_mask asymmetric!  This solves the problem of
+the fuzzy edge on the right-hand side and is likly to lead to much
+better centering using the COG technique.
+
+did rsync of IoIO.py.  Still avoiding transition to new
+CorData/precisionguide module system, since there would be a large
+number of changes.  Just copied over the few that were needed in this
+case.
