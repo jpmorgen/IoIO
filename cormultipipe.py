@@ -1,3 +1,5 @@
+#!/usr/bin/python3
+
 """
 The cormultipipe module implements the IoIO coronagraph data reduction
 pipeline using ccdmultipipe/bigmultipipe as its base
@@ -5,10 +7,12 @@ pipeline using ccdmultipipe/bigmultipipe as its base
 
 import inspect
 import os
+import re
 import time
 import datetime
 import glob
 import psutil
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +28,7 @@ from astropy import units as u
 from astropy.io import fits
 from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.table import QTable
-from astropy.time import Time, TimeDelta
+from astropy.time import Time
 from astropy.stats import mad_std, biweight_location
 from astropy.wcs import FITSFixedWarning
 
@@ -32,9 +36,7 @@ from photutils import Background2D, MedianBackground
 
 import ccdproc as ccdp
 
-#from bigmultipipe import num_can_process, WorkerWithKwargs, NoDaemonPool
-from bigmultipipe import num_can_process, WorkerWithKwargs
-#from multiprocessing import Pool as NoDaemonPool
+from bigmultipipe import num_can_process, WorkerWithKwargs, NestablePool
 from bigmultipipe import multi_logging, prune_pout
 
 from ccdmultipipe import CCDMultiPipe
@@ -42,33 +44,6 @@ from ccdmultipipe.utils import FilterWarningCCDData
 
 import sx694
 from corobsdata import CorData
-
-import multiprocessing.pool
-
-class NoDaemonProcess(multiprocessing.Process):
-    @property
-    def daemon(self):
-        return False
-
-    @daemon.setter
-    def daemon(self, value):
-        pass
-
-
-class NoDaemonContext(type(multiprocessing.get_context())):
-    Process = NoDaemonProcess
-
-# We sub-class multiprocessing.pool.Pool instead of multiprocessing.Pool
-# because the latter is only a wrapper function, not a proper class.
-class NestablePool(multiprocessing.pool.Pool):
-    def __init__(self, *args, **kwargs):
-        kwargs['context'] = NoDaemonContext()
-        super(NestablePool, self).__init__(*args, **kwargs)
-
-class NoDaemonPool(NestablePool):
-    pass
-
-
 
 # Processing global variables.  Since I avoid use of the global
 # statement and don't reassign these at global scope, they stick to
@@ -338,21 +313,27 @@ def full_frame(im,
         return None
     return im
 
-def light_image(im, light_tolerance=3, **kwargs):
-    """CorMultiPipe pre-processing routine to reject light-contaminated bias & dark images
-    """
-    s = im.shape
-    m = np.asarray(s)/2 # Middle of CCD
-    q = np.asarray(s)/4 # 1/4 point
+def im_med_min_max(im):
+    """Returns median values of representative dark and light patches
+    of images recorded by the IoIO coronagraph"""
+    s = np.asarray(im.shape)
+    m = s/2 # Middle of CCD
+    q = s/4 # 1/4 point
     m = m.astype(int)
     q = q.astype(int)
-    # --> check lowest y too, since large filters go all the
-    # --> way to the edge See 20200428 dawn biases
+    # Note Y, X.  Use the left middle to avoid any first and last row
+    # issues in biases
     dark_patch = im[m[0]-50:m[0]+50, 0:100]
     light_patch = im[m[0]-50:m[0]+50, q[1]:q[1]+100]
     mdp = np.median(dark_patch)
     mlp = np.median(light_patch)
-    if (np.median(light_patch) - np.median(dark_patch) > light_tolerance):
+    return (mdp, mlp)
+
+def light_image(im, light_tolerance=3, **kwargs):
+    """CorMultiPipe pre-processing routine to reject light-contaminated bias & dark images
+    """
+    mdp, mlp = im_med_min_max(im)
+    if (mlp - mdp > light_tolerance):
         log.debug('light, dark patch medians ({:.4f}, {:.4f})'.format(mdp, mlp))
         return None
     return im
@@ -453,15 +434,145 @@ def nd_filter_mask(ccd_in, nd_edge_expand=ND_EDGE_EXPAND, **kwargs):
         ccd.mask = ccd.mask + mask
     return ccd
 
-def detflux(ccd_in, exptime_units=None, **kwargs):
+def detflux(ccd_in, exptime_unit=None, **kwargs):
     ccd = ccd_in.copy()
-    if exptime_units is None:
-        exptime_units = u.s
-    exptime = ccd.meta['EXPTIME'] * exptime_units
-    ccd = ccd.divide(exptime, handle_meta='first_found')
+    # The exptime_unit stuff may become obsolete with Card Quantities
+    if exptime_unit is None:
+        exptime_unit = u.s
+    exptime = ccd.meta['EXPTIME'] * exptime_unit
+    exptime_uncertainty = ccd.meta.get('EXPTIME-UNCERTAINTY')
+    if exptime_uncertainty is None:
+        ccd = ccd.divide(exptime, handle_meta='first_found')
+    else:
+        exptime_array = np.full_like(ccd, exptime.value)
+        exptime_uncertainty_array = \
+            np.full_like(ccd, exptime_uncertainty)
+        exptime_uncertainty_std = \
+            StdDevUncertainty(exptime_uncertainty_array,
+                              unit=exptime_unit,
+                              copy=False)
+        exp_ccd = CCDData(exptime_array,
+                          uncertainty=exptime_uncertainty_std,
+                          unit=exptime_unit)
+        ccd = ccd.divide(exp_ccd, handle_meta='first_found')
     return ccd
 
 ######### cor_process routines
+def get_filt_name(f, date_obs):
+    """Used in standardize_filt_name.  Returns standarized filter name
+    for all cases in IoIO dataset."""
+    # Dates and documentation from IoIO.notebk
+    if date_obs > '2020-03-01':
+        # Fri Feb 28 11:43:39 2020 EST  jpmorgen@byted
+        # Filters in latest form.  Subsequent renames should hopfully
+        # follow similiar conventions (e.g. I for Bessel I-band
+        # filter, <primary>_on and <primary>_off)
+        # 1 R
+        # 2 1.25" SII_on
+        # 3 1.25" SII_off
+        # 4 Na_off
+        # 5 1.25" V
+        # 6 1.25" U
+        # 7 Na_on
+        # 8 1.25" B
+        # 9 1.25" R
+        return f
+    if date_obs > '2019-03-31':
+        # On 2019-03-31 the 9-position SX "Maxi" falter wheel was
+        # installed.  There was considerable confusion during the
+        # installation due to incorrectly machined adapters and
+        # clearance issues.  The adapters and clearance issues were
+        # straightned out, but an unfortunate byproduct of the
+        # debugging process was to end up swapping the labeled
+        # positions of the U and V and RC and H2O+ filter pairs.  This
+        # was fixed on 2020-03-01
+        # 
+        #
+        # Sat Apr 13 21:38:43 2019 EDT  jpmorgen@snipe
+        # Documentation of where I thought they were (numbers starting
+        # from 1 inserted)
+        #  Filter #0 1 (R) offset: 0
+        #  Filter #1 2(SII_on) offset: 108.6
+        #  Filter #2 3(SII_off) offset: 86.2
+        #  Filter #3 4 (Na_off) offset: -220.6
+        #  Filter #4 5 (H2O+) offset: -327
+        #  Filter #5 6 (RC) offset: 1323.6
+        #  Filter #6 7 (Na_on) offset: -242.4
+        #  Filter #7 8 (V) offset: 265.8
+        #  Filter #8 9 (U) offset: 286.2
+        #
+        # Tue Feb 25 21:19:11 2020 EST  jpmorgen@byted
+        # Documentation of where filters really were from
+        # 2019-03-31 -- 2020-02-25
+        # 1 R
+        # 2 SII_on
+        # 3 SII_off
+        # 4 Na_off
+        # 5 V
+        # 6 UV
+        # 7 Na_on
+        # 8 H2O+
+        # 9 RC
+        if f == 'H2O+':
+            return 'V'
+        if f == 'RC':
+            return 'U'
+        if f == 'V':
+            return 'H2O+'
+        if f == 'U':
+            return 'RC'
+        if f == 'UV':
+            # Just in case some slipped in with this transient
+            return 'U'
+        # everything else should be OK
+        return f
+
+    # On 20190218, just before the large filter wheel installation, I
+    # changed filter naming from verbose to the current convention.
+    # The verbose names were Na_continuum_50A_FWHM, Na_5892A_10A_FWHM,
+    # Na_5890A_10A_FWHM, [SII]_continuum_40A_FWHM, and
+    # [SII]_6731A_10A_FWHM.  The R filter was I think always R, but
+    # may have been 'R-band.'  Also had an "open" slot before I got
+    # the R filter.  The following code should grab both the old a
+    # current naming cases
+    if 'R' in f:
+        return f
+    if 'open' in f:
+        return f
+    if 'cont' in f or 'off' in f:
+        on_off = 'off'
+    else:
+        # Hopefully the above catches the on/off cases and other filters
+        on_off = 'on'
+    if 'SII' in f:
+        line = 'SII'
+    elif 'Na' in f:
+        line = 'Na'
+    else:
+        # We only had 5 slots, so this has covered all the bases
+        raise ValueError(f'unknown filter {f}')
+    return f'{line}_{on_off}'
+
+def standardize_filt_name(hdr_in):
+    """Standardize FILTER keyword across all IoIO data"""
+    if hdr_in.get('ofilter') is not None:
+        # We have been here before, so exit quietly
+        return hdr_in
+    old_filt_name = hdr_in.get('FILTER')
+    if old_filt_name is None:
+        # Probably a BIAS or DARK
+        return hdr_in
+    new_filt_name = get_filt_name(old_filt_name, hdr_in['DATE-OBS'])
+    if old_filt_name == new_filt_name:
+        return hdr_in
+    # Only copy if we are going to change the hdr
+    hdr = hdr_in.copy()
+    hdr['FILTER'] = new_filt_name
+    hdr.insert('FILTER',
+               ('OFILTER', old_filt_name, 'Original filter name'),
+               after=True)
+    return hdr
+
 def kasten_young_airmass(hdr_in):
     """Record airmass considering curvature of Earth
 
@@ -528,7 +639,9 @@ def cor_process(ccd,
                 auto=False,
                 imagetyp=None,
                 ccd_meta=True,
+                fix_filt_name=True,
                 exp_correct=True,
+                date_beg_avg_add=True,
                 airmass_correct=True,
                 oscan=None,
                 trim=None,
@@ -608,8 +721,19 @@ def cor_process(ccd,
         Add CCD metadata
         Default is ``True``
 
+    fix_filt_name : bool
+        Put all filters into namoing convention used starting when the
+        9-position SX Maxi filter wheel was installed in late Feb 2020.
+        Default is ``True``
+
     exp_correct : bool
         Correct for exposure time problems
+        Default is ``True``
+
+    date_beg_avg_add : bool
+        Add DATE-BEG and DATE-AVG FITS keywords, which reflect
+        best-estimate shutter time and observation midpoint.  DATE-AVG
+        should be used for all ephemeris calculations.
         Default is ``True``
 
     airmass_correct : bool
@@ -771,34 +895,49 @@ def cor_process(ccd,
         raise ValueError(f'Unknown IMAGETYP keyword {imagetyp}')
 
     # Convert "yes use this calibration" to calibration _filenames_
-    if isinstance(calibration, Calibration):
+    try:
+        if isinstance(calibration, Calibration):
+            if master_bias is True:
+                master_bias = calibration.best_bias(nccd)
+            if dark_frame is True:
+                dark_frame = calibration.best_dark(nccd)
+            if master_flat is True:
+                master_flat = calibration.best_flat(nccd.meta)
+
         if master_bias is True:
-            master_bias = calibration.best_bias(nccd)
+            raise ValueError('master_bias=True but no Calibration object supplied')
         if dark_frame is True:
-            dark_frame = calibration.best_dark(nccd)
+            raise ValueError('dark_frame=True but no Calibration object supplied')
         if master_flat is True:
-            master_flat = calibration.best_flat(nccd.meta)
+            raise ValueError('master_flat=True but no Calibration object supplied')
 
-    if master_bias is True:
-        raise ValueError('master_bias=True but no Calibration object supplied')
-    if dark_frame is True:
-        raise ValueError('dark_frame=True but no Calibration object supplied')
-    if master_flat is True:
-        raise ValueError('master_flat=True but no Calibration object supplied')
-
+    except Exception as e:
+        log.error(f'No calibration available: calibration system problem {e}')
+        log.error
     if ccd_meta:
         # Put in our SX694 camera metadata
         nccd.meta = sx694.metadata(nccd.meta, *args, **kwargs)
+
+    if fix_filt_name:
+        # Fix my indecision about filter names!
+        nccd.meta = standardize_filt_name(nccd.meta)
 
     if exp_correct:
         # Correct exposure time for driver bug
         nccd.meta = sx694.exp_correct(nccd.meta, *args, **kwargs)
         
+    if date_beg_avg_add:
+        # Add DATE-BEG and DATE-AVG FITS keywords
+        nccd.meta = sx694.date_beg_avg(nccd.meta, *args, **kwargs)
+
     if airmass_correct:
+        # I think this is better at large airmass than what ACP uses,
+        # plus it standardizes everything for times I didn't use ACP
         nccd.meta = kasten_young_airmass(nccd.meta)
+
     # Apply overscan correction unique to the IoIO SX694 CCD.  This
-    # adds our CCD metadata as a necessary step and uses the string
-    # version of master_bias, if available for metadata
+    # uses the string version of master_bias, if available for
+    # metadata
     if oscan is True:
         nccd = subtract_overscan(nccd, master_bias=master_bias,
                                        *args, **kwargs)
@@ -858,22 +997,6 @@ def cor_process(ccd,
 
     if gain is True:
         gain = gain_key.value_from(nccd.meta)
-
-    ## --> Should this go away because of KeywordArithmeticMixin?
-    ## No, right now I think gain_correct et al. blow away the metadata
-    ## in their call to ccd.multiply instead of calling first_found
-    #
-    ## Correct our SATLEVEL and NONLIN units if we are going to
-    ## gain-correct.
-    #satlevel = nccd.meta.get('satlevel')
-    #nonlin = nccd.meta.get('nonlin')
-    #if (isinstance(gain, u.Quantity)
-    #    and satlevel is not None
-    #    and nonlin is not None):
-    #    nccd.meta['SATLEVEL'] = satlevel * gain.value
-    #    nccd.meta.comments['SATLEVEL'] = 'saturation level (electron)'
-    #    nccd.meta['NONLIN'] = nonlin * gain.value
-    #    nccd.meta.comments['NONLIN'] = 'Measured nonlinearity point (electron)'
 
     if error and readnoise is None:
         # We want to make an error frame but the user has not
@@ -1054,10 +1177,7 @@ def fdict_list_collector(fdict_list_creator,
 
     if subdirs is None:
         subdirs = []
-    if glob_include is None:
-        # Trick to make loop on glob_include, below, pass None to
-        # ccdp.ImageFileCollection
-        glob_include = [None]
+    glob_include = assure_list(glob_include)
     if not isinstance(glob_include, list):
         glob_include = [glob_include]
     fdict_list = []
@@ -1078,19 +1198,23 @@ def fdict_list_collector(fdict_list_creator,
             for sl in sub_fdict_list:
                 fdict_list.append(sl)
         # After processing our subdirs, process 'directory.'
+        # Make loop runs at least once
+        if len(glob_include) == 0:
+            glob_include = [None]
         for gi in glob_include:
             # Speed things up considerably by allowing globbing.  As
             # per comment above, if None passed to glob_include, this
             # runs once with None passed to ccdp.ImageFileCollection's
             # glob_include
-            # Avoid anoying warning abotu empty collection
+            # Avoid anoying warning about empty collection
             flist = glob.glob(os.path.join(directory, gi))
+            # Tricky!  Catch the case where AutoFlat is a subdir AND
+            # matches glob_include
+            flist = [f for f in flist if os.path.basename(f) not in subdirs]
             if len(flist) == 0:
                 continue
             collection = ccdp.ImageFileCollection(directory,
                                                   filenames=flist)
-            #collection = ccdp.ImageFileCollection(directory,
-            #                                      glob_include=gi)
             # Call ourselves recursively, but using the code below,
             # since collection is now defined
             gi_fdict_list = fdict_list_collector \
@@ -1116,13 +1240,41 @@ def bias_dark_fdict_creator(collection,
                             imagetyp=None,
                             dccdt_tolerance=DCCDT_TOLERANCE,
                             debug=False):
+    # Create a new collection narrowed to our imagetyp.  
+    directory = collection.location
+    # We require imagetyp designation and are not polite in its absence 
+    collection = collection.filter(imagetyp=imagetyp)
+    # --> Oops, this recycles binned biaes I took for a while to just
+    # waste some time.  For now, let them be rejected later on
+    #
+    # Reject binned and non-full frame images, such as I took early
+    # on.  Note, this currently doesn't leave the directory with a
+    # "bad" marker.  To do that, just uncomment this code and the non
+    # full-frame shapes will be caught later.  If we really wanted to
+    # process other modes properly, we would add ccd.shape and binning
+    # info to the filenames.  
+    #try:
+    #    collection = collection.filter(naxis1=sx694.naxis1,
+    #                                   naxis2=sx694.naxis2)
+    #except Exception as e:
+    #    log.error(f'Problem collecting full-frame files of imagetyp {imagetyp}  in {directory}: {e}')
+    #    return []
+    # Guide camera biases would add another layer of complexity with
+    # no CCD-TEMP
+    if 'ccd-temp' not in collection.keywords:
+        log.error(f'CCD-TEMP not found in any {imagetyp} files in {directory}')
+        return []
     # Create a summary table narrowed to our imagetyp
-    our_imagetyp = collection.summary['imagetyp'] == imagetyp
-    narrow_to_imagetyp = collection.summary[our_imagetyp]
+    narrow_to_imagetyp = collection.summary
     ts = narrow_to_imagetyp['ccd-temp']
     # ccd-temp is recorded as a string.  Convert it to a number so
     # we can sort +/- values properly
     ts = np.asarray(ts)
+    # If some Lodestar guide camera biases snuck in, filter them
+    # here
+    tidx = np.flatnonzero(ts != None)
+    narrow_to_imagetyp = narrow_to_imagetyp[tidx]
+    ts = ts[tidx]
     # Get the sort indices so we can extract fnames in proper order
     tsort_idx = np.argsort(ts)
     # For ease of use, re-order everything in terms of tsort
@@ -1158,8 +1310,8 @@ def bias_dark_fdict_creator(collection,
         for ue in ues:
             exp_idx = np.flatnonzero(exps == ue)
             files = narrow_to_t['file'][exp_idx]
-            full_files = [os.path.join(collection.location, f) for f in files]
-            fdict_list.append({'directory': collection.location,
+            full_files = [os.path.join(directory, f) for f in files]
+            fdict_list.append({'directory': directory,
                                'CCDT': mean_ccdt,
                                'EXPTIME': ue,
                                'fnames': full_files})
@@ -1496,7 +1648,7 @@ def bias_combine(directory=None,
         directory = collection.location
     nfdicts = len(fdict_list)
     if nfdicts == 0:
-        log.debug('No biases found in: ' + directory)
+        log.debug('No usable biases found in: ' + directory)
         return False
 
     one_fdict_size = (num_calibration_files
@@ -1521,7 +1673,7 @@ def bias_combine(directory=None,
         for fdict in fdict_list:
                 wwk.worker(fdict)
     else:
-        with NoDaemonPool(processes=our_num_processes) as p:
+        with NestablePool(processes=our_num_processes) as p:
             p.map(wwk.worker, fdict_list)
 
 def dark_combine_one_fdict(fdict,
@@ -1550,7 +1702,7 @@ def dark_combine_one_fdict(fdict,
     this_dateb1, _ = tm.split('T')
     badbase = '{}_ccdT_{:.1f}_exptime_{}s'.format(
         this_dateb1, mean_ccdt, exptime)
-    badbase = os.path.join(outdir, outbase)
+    badbase = os.path.join(outdir, badbase)
     bad_fname = badbase + '_dark_combined_bad.fits'
 
     # Make a scratch directory that is the date of the first file.
@@ -1702,7 +1854,7 @@ def dark_combine(directory=None,
         directory = collection.location
     nfdicts = len(fdict_list)
     if len(fdict_list) == 0:
-        log.debug('No darks found in: ' + directory)
+        log.debug('No usable darks found in: ' + directory)
         return False
 
     one_fdict_size = (num_calibration_files
@@ -1726,22 +1878,42 @@ def dark_combine(directory=None,
         for fdict in fdict_list:
                 wwk.worker(fdict)
     else:
-        with NoDaemonPool(processes=our_num_processes) as p:
+        with NestablePool(processes=our_num_processes) as p:
             p.map(wwk.worker, fdict_list)
 
 def flat_fdict_creator(collection,
                        imagetyp=None):
     # Create a new collection narrowed to our imagetyp
-    #print(collection.location) # gave expected directory
     directory = collection.location
     collection = collection.filter(imagetyp=imagetyp)
-    filters = collection.values('filter', unique=True)
+    # --> Oops, this recycles wrong-sized flats which are better
+    # rejected later
+    #try:
+    #    collection = collection.filter(naxis1=sx694.naxis1,
+    #                                   naxis2=sx694.naxis2)
+    #except Exception as e:
+    #    log.error(f'Problem collecting full-frame files of imagetyp {imagetyp}  in {directory}: {e}')
+    #    return []
+    if 'filter' not in collection.keywords:
+        log.error(f'filter not found in any {imagetyp} files in {directory}')
+        return []
+    # Keep in mind filters will have our old names
+    ofilters = collection.values('filter', unique=True)
     fdict_list = []
-    for filt in filters:
-        fnames = collection.files_filtered(filter=filt,
-                                           include_path=True)
+    for ofilt in ofilters:
+        # The regexp_match=True is necessary for the H2O+ for some
+        # reason.  re.escape is used for the [] stuff in some of the
+        # older filters, though I am not positive if it is necessary.
+        fcollection = collection.filter(filter=re.escape(ofilt),
+                                        regex_match=True)
+        fnames = fcollection.files_filtered(include_path=True)
+        date_obss = fcollection.values('date-obs')
+        # This is where we associated the old file names with the new
+        # filter designations 
+        filt = get_filt_name(ofilt, date_obss[0])
         fdict_list.append({'directory': directory,
                            'filter': filt,
+                           'ofilter': ofilt,
                            'fnames': fnames})
     return fdict_list
 
@@ -1752,6 +1924,14 @@ def flat_process(ccd, bmp_meta=None,
                  **kwargs):
     if ccd.meta.get('flatdiv') is not None:
         raise ValueError('Trying to reprocess a processed flat')
+    # Use basic patch medians to spot pathological cases
+    mdp, mlp = im_med_min_max(ccd)
+    if mlp < 1000:
+        log.warning(f'flat median of {mlp} {ccd.unit} too low {in_name}')
+        return None
+    if mlp > ccd.meta['NONLIN']:
+        log.warning(f'flat median of {mlp} {ccd.unit} too high {in_name}')
+        return None
     # Use photutils.Background2D to smooth each flat and get a
     # good maximum value.  Mask edges and ND filter so as to
     # increase quality of background map
@@ -1759,21 +1939,27 @@ def flat_process(ccd, bmp_meta=None,
     # Return a copy of ccd with the edge_mask property adjusted.  Do
     # it this way to keep ccd's ND filt parameters intact
     emccd = RedCorData(ccd, edge_mask=-nd_edge_expand)
-    mask[emccd.ND_coords] = True
+    try:
+        mask[emccd.ND_coords] = True
+    except Exception as e:
+        # We should have caught all nasty cases above
+        log.error(f'ND_coords gave error: {e} for {in_name}')
+        return None
     del emccd
     rdnoise = ccd.meta['RDNOISE']
     mask[ccd.data < rdnoise * init_threshold] = True
     ccd.mask = mask
     bkg_estimator = MedianBackground()
-    b = Background2D(ccd.data, 20, mask=mask, filter_size=5,
+    b = Background2D(ccd, 20, mask=mask, filter_size=5,
                      bkg_estimator=bkg_estimator)
     max_flat = np.max(b.background)
-    if max_flat > ccd.meta['NONLIN']:#*ccd.unit:
-        log.debug(f'flat max value of {max_flat} too bright: {in_name}')
+    if max_flat > ccd.meta['NONLIN']*ccd.unit:
+        log.debug(f'flat max value of {max_flat.value} {max_flat.unit} too bright: {in_name}')
         return None
     ccd.mask = None
     ccd = ccd.divide(max_flat, handle_meta='first_found')
-    ccd.meta['FLATDIV'] = (max_flat, 'Normalization value (smoothed max) (electron)')
+    # --> This will get better if Card units are implemented
+    ccd.meta['FLATDIV'] = (max_flat.value, f'Normalization value (smoothed max) ({max_flat.unit})')
     # Get ready to capture the mean DATE-OBS
     tm = Time(ccd.meta['DATE-OBS'], format='fits')
     if bmp_meta is not None:
@@ -1922,6 +2108,7 @@ def flat_combine(directory=None,
                  bitpix=64, # uncertainty and mask not used in griddata
                  griddata_expand_factor=GRIDDATA_EXPAND_FACTOR,
                  **kwargs):
+    print(f'flat_combine directory: {directory}')
     fdict_list = \
         fdict_list_collector(flat_fdict_creator,
                              directory=directory,
@@ -1934,7 +2121,7 @@ def flat_combine(directory=None,
         directory = collection.location
     nfdicts = len(fdict_list)
     if nfdicts == 0:
-        log.debug('No flats found in: ' + directory)
+        log.debug('No usable flats found in: ' + directory)
         return False
     
     one_filt_size = (num_calibration_files
@@ -1975,7 +2162,7 @@ def flat_combine(directory=None,
         for fdict in fdict_list:
                 wwk.worker(fdict)
     else:
-        with NoDaemonPool(processes=our_num_processes) as p:
+        with NestablePool(processes=our_num_processes) as p:
             p.map(wwk.worker, fdict_list)
 
 ######### Calibration object
@@ -2202,7 +2389,7 @@ class Calibration():
             for d in dirs:
                 wwk.worker(d)
         else:
-            with NoDaemonPool(processes=our_num_processes) as p:
+            with NestablePool(processes=our_num_processes) as p:
                 p.map(wwk.worker, dirs)
 
         self.bias_table_create(rescan=True, autoreduce=False)
@@ -2265,7 +2452,7 @@ class Calibration():
             for d in dirs:
                 wwk.worker(d)
         else:
-            with NoDaemonPool(processes=our_num_processes) as p:
+            with NestablePool(processes=our_num_processes) as p:
                 p.map(wwk.worker, dirs)
 
         self.dark_table_create(rescan=True, autoreduce=False)
@@ -2329,7 +2516,7 @@ class Calibration():
             for d in dirs:
                 wwk.worker(d)
         else:
-            with NoDaemonPool(processes=our_num_processes) as p:
+            with NestablePool(processes=our_num_processes) as p:
                 p.map(wwk.worker, dirs)
 
         self.flat_table_create(rescan=True, autoreduce=False)
@@ -2600,121 +2787,105 @@ class Calibration():
         best_filt_date_idx = good_filt_idx[best_filt_date_idx]
         return self._flat_table['fnames'][best_filt_date_idx]
 
-#log.setLevel('DEBUG')
-#
-#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
-##fname = '/data/io/IoIO/raw/20200708/HD 118648-S001-R001-C001-Na_on.fts'
-#fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
-#cmp = CorMultiPipe(auto=True, calibration=c,
-#                   post_process_list=[nd_filter_mask])
-#pout = cmp.pipeline([fname], 
-#                    outdir='/tmp', overwrite=True)
-#out_fnames, pipe_meta = zip(*pout)
-#
-#print(pipe_meta)
+def calibrate_cmd(args):
+    start = args.start
+    stop = args.stop
 
-#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True,
-#                keep_intermediate=False)
-##fname = '/data/io/IoIO/raw/20200711/Bias-S005-R002-C001-B1.fts'
-#fname = '/data/io/IoIO/raw/20200711/Dark-S005-R003-C010-B1.fts'
-#ccd = ccddata_read(fname)
-#ccd = cor_process(ccd, calibration=c, auto=True)
-#ccd.write('/tmp/test.fits', overwrite=True)
-
-#c = Calibration(start_date='2020-05-15', stop_date='2020-05-16', reduce=True,
-#                keep_intermediate=False)
-##fname = '/data/io/IoIO/raw/20200711/Bias-S005-R002-C001-B1.fts'
-#fname = '/data/io/IoIO/raw/20200711/Dark-S005-R003-C010-B1.fts'
-#ccd = ccddata_read(fname)
-#ccd = cor_process(ccd, calibration=c, auto=True)
-#ccd.write('/tmp/test.fits', overwrite=True)
-
-#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True,
-#                keep_intermediate=False)
-#flat_dir = '/data/io/IoIO/raw/2020-05-15'
-#collection = ccdp.ImageFileCollection(flat_dir)
-#flat_combine_one_filt('R', collection=collection, outdir='/tmp', keep_intermediate=True, calibration=c, auto=True)
-
-#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
-##fname = '/data/io/IoIO/raw/20200708/HD 118648-S001-R001-C001-Na_on.fts'
-#fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
-#cmp = CorMultiPipe(auto=True,
-#                   post_process_list=[nd_filter_mask])
-#pout = cmp.pipeline([fname], calibration=c,
-#                    outdir='/tmp', overwrite=True)
-#out_fnames, pipe_meta = zip(*pout)
-#
-#print(pipe_meta)
-
-#c = Calibration(start_date='2020-05-02', stop_date='2020-05-15', reduce=True)
-#cmp = CorMultiPipe(auto=True, calibration=c,
-#                   post_process_list=[detflux])
-#fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
-#fname2 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na_off.fit'
-#pout = cmp.pipeline([fname1, fname2], outdir='/data/Mercury/analysis/2020-05-27/', overwrite=True)
-
-#bias_combine('/data/io/IoIO/raw/20200711', show=False, auto=True, gain_correct=True)
-#bias_combine('/data/io/IoIO/raw/20200708', show=False, auto=True, gain_correct=True)
-
-#bname = '/data/io/IoIO/reduced/Calibration/2020-07-07_ccdT_-10.3_combined_bias.fits'
-#dark_combine('/data/io/IoIO/raw/20200711', show=False,
-#             oscan=True, gain=True, error=True,
-#             master_bias=bname)
-
-#c = Calibration(start_date='2020-07-08', stop_date='2020-07-11')
-#c.reduce_bias()
-#t = c.bias_table_create(autoreduce=False, rescan=True)
-#dsample = '/data/io/IoIO/raw/20200711/Dark-S005-R004-C003-B1.fts'
-#bias = c.best_bias(dsample)
-#print(bias)
-#
-
-#c = Calibration(start_date='2020-07-08', stop_date='2020-07-11', reduce=True)
-
-#c = Calibration(start_date='2020-07-08', stop_date='2020-08-07', reduce=True)
-
-#c = Calibration(start_date='2020-04-24', stop_date='2020-04-26', reduce=True)
-
-#log.setLevel('DEBUG')
-#c = Calibration(start_date='2020-01-01', stop_date='2020-12-31', reduce=True)
-
-#c = Calibration(start_date='2020-01-01', stop_date='2020-12-31', reduce=True)    
-#t = c.flat_table_create(autoreduce=False, rescan=True)
-
-#c = Calibration(start_date='2020-01-01', stop_date='2021-12-31', reduce=True)    
-#t = c.dark_table_create(autoreduce=False, rescan=True)
-
-#flat = '/data/io/IoIO/raw/2020-06-06/Sky_Flat-0002_B.fit'
-#f = RedCorData.read(flat)
-#
-#fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
-#ccd = RedCorData.read(fname1)
+    c = Calibration(raw_data_root=args.raw_data_root,
+                    calibration_root=args.calibration_root,
+                    start_date=start,
+                    stop_date=stop,
+                    reduce=True,
+                    num_processes=args.num_processes)
 
 if __name__ == "__main__":
     log.setLevel('DEBUG')
-    c = Calibration(start_date='2020-01-01', stop_date='2021-12-31', reduce=True)
-    #c = Calibration(start_date='2020-01-01', stop_date='2021-02-28', reduce=True)    
-    ##t = c.dark_table_create(autoreduce=False, rescan=True)
-    #fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
-    #fname2 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na_off.fit'
-    #cmp = CorMultiPipe(auto=True, calibration=c,
-    #                   post_process_list=[detflux, nd_filter_mask])
-    #pout = cmp.pipeline([fname1, fname2], outdir='/tmp', overwrite=True)
-    #pout = cmp.pipeline([fname1], outdir='/tmp', overwrite=True)
+    parser = argparse.ArgumentParser(
+        description='IoIO pipeline processing system')
+    subparsers = parser.add_subparsers(dest='one of the subcommands in {}, above', help='sub-command help')
+    subparsers.required = True
+
+    calibrate_parser = subparsers.add_parser(
+        'calibrate', help='Run calibration to generate bias, dark, flat frames')
+
+    calibrate_parser.add_argument(
+        '--raw_data_root', help=f'raw data root (default: {RAW_DATA_ROOT})',
+        default=RAW_DATA_ROOT)
+    calibrate_parser.add_argument(
+        '--calibration_root',
+        help=f'calibration root (default: {CALIBRATION_ROOT})',
+        default=CALIBRATION_ROOT)
+    calibrate_parser.add_argument(
+        '--start', help='start directory/date (default: earliest -- dangerous!)')
+    calibrate_parser.add_argument(
+        '--stop', help='stop directory/date (default: latest)')
+    calibrate_parser.add_argument(
+        '--num_processes', type=float, default=0,
+        help='number of subprocesses for parallelization; 0=all cores, <1 = fraction of total cores')
+    calibrate_parser.set_defaults(func=calibrate_cmd)
     
-    #ccd = RedCorData.read(fname1)
-    #ccd = cor_process(ccd, calibration=c, auto=True)
-    #ccd.write('/tmp/test.fits', overwrite=True)
+    # Final set of commands that makes argparse work
+    args = parser.parse_args()
+    # This check for func is not needed if I make subparsers.required = True
+    if hasattr(args, 'func'):
+        args.func(args)
 
-    flat = '/data/io/IoIO/raw/2020-06-06/Sky_Flat-0002_B.fit'
-    cmp = CorMultiPipe(auto=True, calibration=c,
-                       post_process_list=[flat_process])
-    pout = cmp.pipeline([flat], outdir='/tmp', overwrite=True)
 
-#fname1 = '/data/io/IoIO/raw/20210310/HD 132052-S001-R001-C002-R.fts'
+
+
+
+    #c = Calibration(start_date='2019-09-01', stop_date='2021-12-31', reduce=True)
+
+
+
+    #c = Calibration(start_date='2020-01-01', stop_date='2021-12-31', reduce=True)
+    ##c = Calibration(start_date='2020-01-01', stop_date='2021-02-28', reduce=True)    
+    ###t = c.dark_table_create(autoreduce=False, rescan=True)
+    ##fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
+    ##fname2 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na_off.fit'
+    ##cmp = CorMultiPipe(auto=True, calibration=c,
+    ##                   post_process_list=[detflux, nd_filter_mask])
+    ##pout = cmp.pipeline([fname1, fname2], outdir='/tmp', overwrite=True)
+    ##pout = cmp.pipeline([fname1], outdir='/tmp', overwrite=True)
+    #
+    ##ccd = RedCorData.read(fname1)
+    ##ccd = cor_process(ccd, calibration=c, auto=True)
+    ##ccd.write('/tmp/test.fits', overwrite=True)
+    #
+    #flat = '/data/io/IoIO/raw/2020-06-06/Sky_Flat-0002_B.fit'
+    #cmp = CorMultiPipe(auto=True, calibration=c,
+    #                   post_process_list=[flat_process])
+    #pout = cmp.pipeline([flat], outdir='/tmp', overwrite=True)
+
+##fname1 = '/data/io/IoIO/raw/20210310/HD 132052-S001-R001-C002-R.fts'
+#fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
 #pgd = RedCorData.read(fname1)
+#pgd.meta = sx694.metadata(pgd.meta)
+#pgd.meta = sx694.exp_correct(pgd.meta)
+#pgd.meta = sx694.date_beg_avg(pgd.meta)
+#print(pgd.meta)
+##
+#pgd = detflux(pgd)
 #print(pgd.meta)
 
-#print(reduced_dir('/data/io/IoIO/raw/20210513'))
-#print(reduced_dir('/data/io/IoIO/raw/20210513', create=True))
-#print(reduced_dir('/data/io/IoIO/raw'))
+##print(reduced_dir('/data/io/IoIO/raw/20210513'))
+##print(reduced_dir('/data/io/IoIO/raw/20210513', create=True))
+##print(reduced_dir('/data/io/IoIO/raw'))
+
+#c = Calibration(start_date='2019-02-18', stop_date='2021-12-31', reduce=True)
+#c = Calibration(start_date='2019-02-12', stop_date='2019-02-12', reduce=True)
+
+#c = Calibration(reduce=True)
+
+
+#f = fdict_list_collector(flat_fdict_creator, directory='/data/io/IoIO/raw/2019-08-25', imagetyp='flat', subdirs=CALIBRATION_SUBDIRS, glob_include=FLAT_GLOB)
+
+#print(f[0])
+
+#c = Calibration(start_date='2017-03-15', stop_date='2017-03-15', reduce=True)
+#c = Calibration(stop_date='2017-05-10', reduce=True)
+#c = Calibration(stop_date='2017-05-10')
+#c.reduce_bias()
+
+#c = Calibration(start_date='2020-07-11', stop_date='2020-07-11', reduce=True)
+#c = Calibration(reduce=True)

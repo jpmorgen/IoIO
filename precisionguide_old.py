@@ -2247,7 +2247,9 @@ guide_box_log_file : str
             # This is the formal calculation, but intuition tells me
             # it is too big of a swing to make at once
             #dec_pix_rate = +0.051/10 * plate_ratio
-            dec_pix_rate = +0.030/10 * plate_ratio
+            #dec_pix_rate = +0.030/10 * plate_ratio
+            # Indeed, this should probably get pretty close
+            dec_pix_rate = +0.037/10 * plate_ratio
             # Note Pythonic transpose
             return self.GuideBoxCommander(np.asarray((dec_pix_rate, ra_pix_rate)))
 

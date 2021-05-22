@@ -1,5 +1,6 @@
 #!/usr/bin/python3
-"""Play with photometry for calibration sources"""
+
+"""Photometry functions for the IoIO coronagraph data reduction system"""
 
 import gc
 import os
@@ -13,6 +14,7 @@ import numpy as np
 from numpy.polynomial import Polynomial
 
 import matplotlib.pyplot as plt
+from matplotlib.dates import datestr2num
 
 import pandas as pd
 
@@ -35,6 +37,16 @@ from cormultipipe import RAW_DATA_ROOT
 from cormultipipe import assure_list, reduced_dir, get_dirs_dates
 from cormultipipe import FwRedCorData, CorMultiPipe, Calibration
 from cormultipipe import nd_filter_mask, mask_nonlin_sat
+
+def kernel_preprocess(ccd,
+                      seeing=5,
+                      **kwargs):
+    sigma = seeing * gaussian_fwhm_to_sigma
+    kernel = Gaussian2DKernel(sigma)
+    kernel.normalize()
+    return {'bmp_data': ccd,
+            bmp_kwargs: {'kernel': kernel}
+    
 
 def is_flux(unit):
     """Determine if we are in flux units or not"""
@@ -229,11 +241,16 @@ def source_catalog(ccd,
 def standard_star_process(ccd,
                           bmp_meta=None,
                           in_name=None,
-                          min_ND_multiple=2,
+                          min_ND_multiple=1,
                           **kwargs):
-    """ 
-    CorMultiPipe post_processing routine to collect standard star photometry.  
-    NOTE: Star is assumed to be the brightest in the field
+    """CorMultiPipe post_processing routine to collect standard star photometry.  
+    NOTE: Star is assumed to be the brightest in the field.  
+
+    NOTE: If this is adapted for other photometric processing,
+    particularly those involving ephemerides, DATE-AVG should be
+    recorded in the bmp_meta.  It was not recorded here because the
+    information needed to generate it is derived from the results of
+    this routine.
 
     min_ND_multiple : number
 
@@ -243,6 +260,7 @@ def standard_star_process(ccd,
         considered in this calculation, but the ND filter is likely to
         be masked using that quantity if `cormultipipe.nd_filter_mask`
         has been called in the `cormultipipe.post_process_list`
+
     """
 
     # Fundamentally, we are going to work from a source catalog table,
@@ -330,6 +348,9 @@ def standard_star_process(ccd,
     # the old exptime and calculating the resulting (incorrect)
     # detector flux.  exptime and oexptime will help work back and
     # forth as needed from flux to counts in standard_star_directory
+    # Note that if we have prepared the source catalog with detflux
+    # processed images, the exposure time uncertainty will be
+    # incorporated.  Otherwise we need to compute it ourselves
     oexptime = ccd.meta.get('oexptime') # Might be None
     detflux = tbl['segment_flux'][0]
     assert isinstance(detflux, u.Quantity), ('SourceCatalog was not prepared properly')
@@ -338,18 +359,27 @@ def standard_star_process(ccd,
         # Work in flux units
         detflux /= exptime
         detflux_err /= exptime
+        exptime_uncertainty = ccd.meta.get('EXPTIME-UNCERTAINTY')
+        if exptime_uncertainty is not None:
+            detflux_err *= np.sqrt((detflux_err/detflux)**2
+                                   + (exptime_uncertainty/exptime.value)**2)
     if oexptime is None:
         odetflux = None
         odetflux_err = None
     else:
-        # Prepare here for dataframe by working as scalars, not
-        # Quantities, since odetflux* may be None
+        # Exptime might actually be close to right, so convert our
+        # detflux, which is in proper flux units calculated above,
+        # back into incorrect odetflux.  The error is unchanged
+        # because all we have to work with is the error we found in
+        # our ccd.meta.  Prepare here for dataframe by working as
+        # scalars, not Quantities, since odetflux may be None and
+        # can't be converted spontaneously like other Quantities
         odetflux = detflux.value * exptime.value / oexptime
         odetflux_err = detflux_err * exptime.value / oexptime
     
     # --> These will get better when Card units are implemented
     ccd.meta['DETFLUX'] = (detflux.value, f'({detflux.unit.to_string()})')
-    ccd.meta['HIERARCH DETFLUX_ERR'] = (detflux_err.value,
+    ccd.meta['HIERARCH DETFLUX-ERR'] = (detflux_err.value,
                                         f'({detflux.unit.to_string()})')
     ccd.meta['xcentrd'] = xcentrd
     ccd.meta['ycentrd'] = ycentrd
@@ -391,32 +421,6 @@ def standard_star_process(ccd,
     bmp_meta['standard_star'] = tmeta
     return ccd
     
-#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
-##fname = '/data/io/IoIO/raw/20200708/HD 118648-S001-R001-C001-Na_on.fts'
-#fname = '/data/io/IoIO/raw/2020-07-15/HD87696-0016_Na_off.fit'
-#cmp = CorMultiPipe(auto=True, calibration=c,
-#                   post_process_list=[nd_filter_mask,
-#                                      source_catalog],
-#                   process_expand_factor=15)
-#pout = cmp.pipeline([fname], outdir='/tmp', overwrite=True)
-#out_fnames, pipe_meta = zip(*pout)
-#
-#print(pipe_meta)
-
-#directory = '/data/io/IoIO/raw/2020-07-15'
-#directory = '/data/io/IoIO/raw/20200708/' # 2 -- 3.4, spotty data
-#directory = '/data/io/IoIO/raw/20210315/' # 2.3 -- 3.0
-#directory = '/data/io/IoIO/raw/20210311/' # 2.3 -- 2.7
-#directory = '/data/io/IoIO/raw/20210310/' # 2.34 lots of measurements
-#directory = '/data/io/IoIO/raw/20210307/' # 2.3 -- 2.6
-#directory = '/data/io/IoIO/raw/20201011/' # Crumy
-#directory = '/data/io/IoIO/raw/20201010/'  # 1.85 -- 1.90 ~very good
-
-#glob_include = ['HD*']
-#glob_include = ['HD*118648*SII_on*']
-#glob_include = ['HD*SII_on*']
-#glob_include = ['HD*-R.fts', 'HD*-R_*.fts']
-
 def standard_star_pipeline(directory,
                            glob_include=None,
                            calibration=None,
@@ -484,31 +488,53 @@ def standard_star_pipeline(directory,
 
 def exposure_correct_plot(exposure_correct_data,
                           show=False,
-                          outname=None):
+                          outname=None,
+                          latency_change_dates=None):
     if len(exposure_correct_data) == 0:
         return
+    latency_change_dates = assure_list(latency_change_dates)
+    latency_change_dates =  ['1000-01-01'] + latency_change_dates
+    latency_changes = [datestr2num(d) for d in latency_change_dates]
+    latency_changes += [np.inf] # optimistic about end date of IoIO observations
     plot_dates = [ecd['plot_date'] for ecd in exposure_correct_data]
     exposure_corrects = [ecd['exposure_correct']
                          for ecd in exposure_correct_data]
+    plot_dates = np.asarray(plot_dates)
+    exposure_corrects = np.asarray(exposure_corrects)
 
     # Plot our exposure correction data
     f = plt.figure()
-    biweight_exposure_correct = biweight_location(exposure_corrects,
-                                                  ignore_nan=True)
-    mad_std_exposure_correct = mad_std(exposure_corrects,
-                                       ignore_nan=True)
     ax = plt.subplot()
     plt.plot_date(plot_dates, exposure_corrects, 'k.')
-    plt.axhline(biweight_exposure_correct, color='red')
-    plt.axhline(biweight_exposure_correct-mad_std_exposure_correct,
-                linestyle='--', color='k', linewidth=1)
-    plt.axhline(biweight_exposure_correct+mad_std_exposure_correct,
-                linestyle='--', color='k', linewidth=1)
-    plt.text(0.5, biweight_exposure_correct + 0.1*mad_std_exposure_correct, 
-             f'{biweight_exposure_correct:.2f} +/- {mad_std_exposure_correct:.2f}',
-             ha='center', transform=ax.get_yaxis_transform())
+
+    # Fit a constant offset to each segment in which we have a
+    # constant latency
+    for iseg in range(len(latency_changes)-1):
+        sidx = np.flatnonzero(
+            np.logical_and(latency_changes[iseg] <= plot_dates,
+                           plot_dates < latency_changes[iseg+1]))
+        if len(sidx) == 0:
+            continue
+        biweight_exposure_correct = biweight_location(exposure_corrects[sidx],
+                                                      ignore_nan=True)
+        mad_std_exposure_correct = mad_std(exposure_corrects[sidx],
+                                           ignore_nan=True)
+        plt.plot_date([min(plot_dates[sidx]), max(plot_dates[sidx])],
+                      [biweight_exposure_correct]*2, 'r-')
+
+        plt.plot_date([min(plot_dates[sidx]), max(plot_dates[sidx])],
+                      [biweight_exposure_correct-mad_std_exposure_correct]*2,
+                      'k--')
+        plt.plot_date([min(plot_dates[sidx]), max(plot_dates[sidx])],
+                      [biweight_exposure_correct+mad_std_exposure_correct]*2,
+                      'k--')
+
+        plt.text(0.5, biweight_exposure_correct + 0.1*mad_std_exposure_correct, 
+                 f'{biweight_exposure_correct:.2f} +/- {mad_std_exposure_correct:.2f}',
+                 ha='center', transform=ax.get_yaxis_transform())
 
     plt.ylabel('Exposure correction (s)')
+    ax.set_ylim([0, 5])
     plt.gcf().autofmt_xdate()  # orient date labels at a slant
     if outname is not None:
         plt.savefig(outname, transparent=True)
@@ -652,6 +678,7 @@ def standard_star_directory(directory,
                 continue
             max_frac_nonlin = np.max(filtdf['max_frac_nonlin'])
             true_fluxes = []
+            best_fluxes = []
             instr_mags = []
             airmasses = []
 
@@ -679,7 +706,9 @@ def standard_star_directory(directory,
                 if n_meas < 3:
                     log.warning(f"Not enough measurements ({n_meas}) in filter {filt} for object {object} in {directory} from {tdf['date_obs'].iloc[0]} to {tdf['date_obs'].iloc[-1]}")
                     continue
-                # Collect oexptimes to monitor exposure_correct
+                # Collect oexptimes to monitor exposure_correct.
+                # To make bookkeeping easy, just put everything in
+                # oexptimes and determine if there are multiple groups 
                 oexptimes = tdf['oexptime'].to_numpy()
                 exptimes = tdf['exptime'].to_numpy()
                 # pands.dataframe.to_numpy() outputs NAN for None when
@@ -730,26 +759,41 @@ def standard_star_directory(directory,
                 valid_uoes = np.asarray(valid_uoes)
                 detfluxes = np.asarray(detfluxes)
                 counts =  np.asarray(counts)
-                # Before precise calibration of exposure_correct, flux is
-                # only reliable for exposure times <=
-                # sx694.max_accurate_exposure
+                # Before precise calibration of exposure_correct, flux
+                # is only reliable for exposure times <=
+                # sx694.max_accurate_exposure.  After calibration, we
+                # can do a reasonable job, but bookkeep it separately
+                # as best_flux, since we use true_flux to check the
+                # exposure_correction
                 true_flux_idx = np.flatnonzero(valid_uoes
                                                <= sx694.max_accurate_exposure)
-                if len(true_flux_idx) == 0:
-                    log.warning(f"No good measurements at exposure times <= sx694.max_accurate_exposure for filter {filt} object {object} in {directory} from {tdf['date_obs'].iloc[0]} to {tdf['date_obs'].iloc[-1]}")
-                    continue
-                true_flux = np.nanmean(detfluxes[true_flux_idx])
-                if np.isnan(true_flux):
+                if len(true_flux_idx) > 0:
+                    best_flux_idx = true_flux_idx
+                    true_flux = np.nanmean(detfluxes[true_flux_idx])
+                else:
+                    best_flux_idx = np.arange(len(detfluxes))
+                    true_flux = None
+                best_flux = np.nanmean(detfluxes[best_flux_idx])
+                if np.isnan(best_flux):
                     log.warning(f"No good flux measurements left for filter {filt} object {object} in {directory} from {tdf['date_obs'].iloc[0]} to {tdf['date_obs'].iloc[-1]}")
                     continue
 
+                #if len(true_flux_idx) == 0:
+                #    log.warning(f"No good measurements at exposure times <= sx694.max_accurate_exposure for filter {filt} object {object} in {directory} from {tdf['date_obs'].iloc[0]} to {tdf['date_obs'].iloc[-1]}")
+                #    continue
+                #true_flux = np.nanmean(detfluxes[true_flux_idx])
+                #if np.isnan(true_flux):
+                #    log.warning(f"No good flux measurements left for filter {filt} object {object} in {directory} from {tdf['date_obs'].iloc[0]} to {tdf['date_obs'].iloc[-1]}")
+                #    continue
+
                 airmasses.append(np.mean(tdf['airmass']))
-                true_fluxes.append(true_flux)
-                instr_mag = u.Magnitude(true_flux*u.electron/u.s)
+                best_fluxes.append(best_flux)
+                instr_mag = u.Magnitude(best_flux*u.electron/u.s)
                 instr_mags.append(instr_mag.value)
 
 
-                if (len(valid_uoes) > 1
+                if (true_flux is not None
+                    and len(valid_uoes) > 1
                     and np.min(valid_uoes) <= sx694.max_accurate_exposure
                     and np.max(valid_uoes) > sx694.max_accurate_exposure):
                     # We have some exposures in this time interval
@@ -785,17 +829,14 @@ def standard_star_directory(directory,
             # night, fit mag vs. airmass to get top-of-the-atmosphere
             # magnitude and extinction coef
             valid_extinction_data = True
-            if true_fluxes is None:
+            if best_fluxes is None:
                 log.warning(f"No good flux measurements for filter {filt} object {object} in {directory}")
-
-            #print('airmasses, true_fluxes, instr_mags', airmasses, true_fluxes, instr_mags)
 
             # Create strip-chart style plot for each filter
             ax = plt.subplot(9, 1, ifilt+1)
             ax.tick_params(which='both', direction='inout',
                            bottom=True, top=True, left=True, right=True)
             ax.set_xlim([min_airmass, max_airmass])
-            #plt.plot(airmasses, true_fluxes, 'k.')
             plt.plot(airmasses, instr_mags, 'k.')
             plt.ylabel(filt)
             plt.text(0.87, 0.1, 
@@ -810,6 +851,8 @@ def standard_star_directory(directory,
             # Fit a line to airmass vs. instr_mags
             # --> This might be a good place for iter_linfit?
             # In any case, throwing out bad points would be good
+            # --> I will eventually want to extract uncertainties for
+            # the fit quantities
             poly = Polynomial.fit(airmasses, instr_mags, deg=1)
             xfit, yfit = poly.linspace()
             plt.plot(xfit, yfit)
@@ -831,7 +874,7 @@ def standard_star_directory(directory,
                          ha='center', va='bottom', transform=ax.transAxes)
 
             # --> Min and Max JD or MJD would probably be better
-            # --> Should write in the max_frac_nonlin
+            # --> Needs uncertainties
             extinction_dict = {'date': just_date,
                                'object': object,
                                'filter': filt,
@@ -932,7 +975,8 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
     if calibration is None:
         calibration = Calibration(start_date=start,
                                   stop_date=stop,
-                                  reduce=True)        
+                                  reduce=True,
+                                  **kwargs)        
 
     extinction_data = []
     exposure_correct_data = []
@@ -951,18 +995,28 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
                            f"{start}--{stop}_exposure_correction.png")
     exposure_correct_plot(exposure_correct_data,
                           outname=outname,
+                          latency_change_dates=sx694.latency_change_dates,
                           show=show)
     return dirs, extinction_data, exposure_correct_data
 
 def standard_star_cmd(args):
-    c = Calibration(start_date=args.calibration_start,
-                    stop_date=args.calibration_stop,
-                    reduce=True)
+    calibration_start = args.calibration_start
+    calibration_stop = args.calibration_stop
+    if calibration_start is None:
+        calibration_start = args.start
+    if calibration_stop is None:
+        calibration_stop = args.stop
+
+    c = Calibration(start_date=calibration_start,
+                    stop_date=calibration_stop,
+                    reduce=True,
+                    num_processes=args.num_processes)
     standard_star_tree(data_root=args.data_root,
                        start=args.start,
                        stop=args.stop,
                        calibration=c,
                        read_csvs=args.read_csvs,
+                       read_pout=args.read_pout,
                        show=args.show,
                        num_processes=args.num_processes)
     
@@ -1058,7 +1112,7 @@ if __name__ == '__main__':
 #
 
 #c = Calibration(start_date='2020-01-01', stop_date='2021-12-31', reduce=True)
-#standard_star_directory('/data/io/IoIO/raw/20210508/', calibration=c)
+##standard_star_directory('/data/io/IoIO/raw/20210508/', calibration=c)
 #standard_star_directory('/data/io/IoIO/raw/20210510/', calibration=c)
 #directory, extinct, expo = \
 #    standard_star_directory('/data/io/IoIO/raw/20210510/',
@@ -1071,3 +1125,10 @@ if __name__ == '__main__':
 #                       show=True,
 #                       calibration=c)
 
+#c = Calibration(start_date='2020-01-01', stop_date='2021-12-31', reduce=True)
+##standard_star_directory('/data/io/IoIO/raw/20210508/', calibration=c)
+#standard_star_directory('/data/io/IoIO/raw/20210517/', calibration=c)
+#directory, extinct, expo = \
+#    standard_star_directory('/data/io/IoIO/raw/20210510/',
+#                            calibration=c,
+#                            read_csvs=False, show=True)

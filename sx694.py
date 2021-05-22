@@ -1,8 +1,16 @@
-"""Global variables and functions for processing SX694 data
+"""Global variables and functions for processing SX694 images
 
-Note: these describe a Starlight Xpress Trius SX694 CCD purchased in
-2017 for the IoIO project.  The later "Pro" version, which has a
-different gain but otherwise similar characteristics.
+Issues unique to MaxIm control of SX products (e.g., exposure time
+correction) and corecting FITS keywords written by ACP are also
+handled here
+
+These variables and functions describe a Starlight Xpress Trius SX694
+CCD purchased in 2017 for the IoIO project.  The later "Pro" version,
+which has a different gain but otherwise similar characteristics.
+
+Note: this is where to put things unique to the *camera*.  Things
+unique to an instrument (e.g. coronagraph) would go somewhere else.
+
 
 This module is intended to be imported like this:
 
@@ -11,6 +19,10 @@ import sx694
 and the variables and functions referred to as sx694.naxis1, etc.
 
 """
+
+from astropy import log
+from astropy import units as u
+from astropy.time import Time
 
 # --> These imports will all go away
 import numpy as np
@@ -35,7 +47,7 @@ naxis2 = 2200
 
 # 16-bit A/D converter, stored in SATLEVEL keyword
 satlevel = 2**16-1
-satlevel_comment = 'Saturation level (adu)'
+satlevel_comment = 'Saturation level in BUNIT'
 
 # Gain measured in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx.
 # Value agrees well with Trius SX-694 advertised value (note, newer
@@ -62,20 +74,7 @@ readnoise_tolerance = 0.5 # Units of electrons
 # since it could be as high as 50k.  Include bias, since that is how
 # we will be working with it.
 nonlin = 42000 #- 1811
-nonlin_comment = 'Measured nonlinearity point (adu)'
-
-# Exposure times at or below this value are counted on the camera and
-# not in MaxIm.  There is a bug in the SX694 MaxIm driver seems to
-# consistently add about exposure_correct seconds to the
-# exposure time before asking the camera to read the CCD out.
-# Measured in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx
-# --> NEEDS TO BE VERIFIED WITH PHOTOMETRY FROM 2019 and 2020
-# Corrected as part of local version of ccd_process
-max_accurate_exposure = 0.7 # s
-#exposure_correct = 1.7 # s
-# Fri Apr 16 13:53:34 2021 EDT  jpmorgen@snipe
-# Experiments using photometry.py
-exposure_correct = 2.3 # s
+nonlin_comment = 'Measured nonlinearity point in BUNIT'
 
 # The SX694 and similar interline transfer CCDs have such low dark
 # current that it is not really practical to map out the dark current
@@ -86,17 +85,31 @@ exposure_correct = 2.3 # s
 # more dark current, so include only them in the dark images
 dark_mask_threshold = 3
 
+# See exp_correct_value.  According to email from Terry Platt Tue, 7
+# Nov 2017 14:04:24 -0700
+# This is unique to the SX Universal CCD drivers in MaxIm 
+max_accurate_exposure = 0.7 # s
+
+latency_change_dates = ['2020-11-01']
+
+# Amplitude of typical wander of Meinburg loopstats thought the day.
+# Primarily due to lack of temperature control of crystal oscillator
+# on PC motherboard used for time keeping.  Convert to RMS, since that
+# better reflects the true distribution of values asssume a standard
+# deviation-like distribution
+ntp_accuracy = 0.005 / np.sqrt(2) # s
+
 def metadata(hdr_in,
-                 camera_description=camera_description,
-                 gain=gain,
-                 gain_comment=gain_comment,
-                 satlevel=satlevel,
-                 satlevel_comment=satlevel_comment,
-                 nonlin=nonlin,
-                 nonlin_comment=nonlin_comment,
-                 readnoise=example_readnoise,
-                 readnoise_comment=example_readnoise_comment,
-                 *args, **kwargs):
+             camera_description=camera_description,
+             gain=gain,
+             gain_comment=gain_comment,
+             satlevel=satlevel,
+             satlevel_comment=satlevel_comment,
+             nonlin=nonlin,
+             nonlin_comment=nonlin_comment,
+             readnoise=example_readnoise,
+             readnoise_comment=example_readnoise_comment,
+             *args, **kwargs):
     """Record SX694 CCD metadata in FITS header object"""
     if hdr_in.get('camera') is not None:
         # We have been here before, so exit quietly
@@ -126,12 +139,33 @@ def metadata(hdr_in,
     hdr['RDNOISE'] = (readnoise, readnoise_comment)
     return hdr
 
+def exp_correct_value(date_obs):
+    """Provides the measured extra exposure correction time for
+    exposures > max_accurate_exposure.  See detailed discussion in
+    IoIO_reduction.notebk on 
+    Sat May 15 22:42:42 2021 EDT  jpmorgen@snipe
+    KEEP THE TABLE IN THIS CODE UP TO DATE
+"""
+
+    if date_obs < '2020-11-01':
+        exposure_correct = 2.00 # s
+        exposure_correct_uncertainty = 0.22 # s 
+    else:
+        exposure_correct = 2.42 # s
+        exposure_correct_uncertainty = 0.25 # s
+
+    # Soften exposure_correct_uncertainty a bit, since the MAD ended
+    # up giving the true minimum latency value because of all the
+    # outliers.  We want more like a 1-sigma.  Distribution is
+    # actually more lumped toward low end with a tail toward high values
+    exposure_correct_uncertainty /= np.sqrt(2)
+    return (exposure_correct, exposure_correct_uncertainty)
+
 def exp_correct(hdr_in,
-                max_accurate_exposure=max_accurate_exposure,
-                exposure_correct=exposure_correct,
                 *args, **kwargs):
-    """Correct exposure time for [SX694] CCD driver problem
-     --> REFINE THIS ESTIMATE BASED ON MORE MEASUREMENTS
+    """Correct exposure time problems for Starlight Xpress drivers in
+    MaxIm.  
+
     """
     if hdr_in.get('OEXPTIME') is not None:
         # We have been here before, so exit quietly
@@ -143,17 +177,127 @@ def exp_correct(hdr_in,
     hdr = hdr_in.copy()
     hdr.insert('EXPTIME', 
                ('OEXPTIME', exptime,
-                'original exposure time (seconds)'),
+                'original exposure time (s)'),
                after=True)
+    exposure_correct, exposure_correct_uncertainty = \
+        exp_correct_value(hdr['DATE-OBS'])
     exptime += exposure_correct
     hdr['EXPTIME'] = (exptime,
-                      'corrected exposure time (seconds)')
+                      'corrected exposure time (s)')
     hdr.insert('OEXPTIME', 
-               ('HIERARCH EXPTIME_CORRECTION',
-                exposure_correct, '(seconds)'),
+               ('HIERARCH EXPTIME-UNCERTAINTY',
+                exposure_correct_uncertainty, 'Measured RMS (s)'),
+               after=True)
+    hdr.insert('OEXPTIME', 
+               ('HIERARCH EXPTIME-CORRECTION',
+                exposure_correct, 'Measured (s)'),
                after=True)
     #add_history(hdr,
     #            'Corrected exposure time for SX694 MaxIm driver bug')
+    return hdr
+
+def date_beg_avg(hdr_in,
+             *args, **kargs):
+    """Add DATE-BEG and DATE-AVG keywords to FITS header
+    See discussion in IoIO.notebk 
+    Mon May 17 13:30:45 2021 EDT  jpmorgen@snipe"""
+    hdr = hdr_in.copy()
+    date_obs_str = hdr['DATE-OBS']
+    date_obs = Time(date_obs_str, format='fits')
+    exposure_correct, exposure_correct_uncertainty = \
+        exp_correct_value(date_obs_str)
+    # Best estimate of shutter latency is 1/2 the round-trip inferred
+    # from exposure correction value
+    shutter_latency = exposure_correct / 2 * u.s
+    shutter_latency_uncertainty = exposure_correct_uncertainty / 2
+    date_beg = date_obs + shutter_latency
+    # Calculate date-obs precision based on how the string is written.
+    # Technically, we should not record subsequent values to higher
+    # precision than we receive, but doing that bookkeeping is a pain.
+    # Instead, use a standard deviation-like approach to recording the
+    # resulting uncertainty.  The reason that is not done in general
+    # is that the precision really does give you some information
+    # about the distribution of the true value being recorded: it has
+    # equal likelyhood of being anywhere between +/- 0.5 of the last
+    # digit recorded (e.g. value of 2 could be anywhere between 1.5
+    # and 2.5).  This is a square probability distribution, rather
+    # than a Gaussian, so stdev is not quite the right astropy
+    # uncertainty type to use.  However, precision is usually small,
+    # so it doesn't matter compared to other errors when added in
+    # quadrature.  In this case, it can be as large as 0.5s, which
+    # dominates.  But it is added in quadrature with the
+    # shutter_laterncy_uncertainty (~0.1s), so there is some genuine
+    # fuzz due to that.  The net result is something like a
+    # broad-shouldered Gaussian of width 0.5.  Call that good enough.
+    if '.' in date_obs_str:
+        _, dec_str = date_obs_str.split('.')
+        places = sum(c.isdigit() for c in dec_str)
+        precision = 10**-places/2
+    else:
+        precision = 0.5
+    date_beg_uncertainty = np.sqrt(precision**2
+                                   + shutter_latency_uncertainty**2
+                                   + ntp_accuracy**2)
+
+    # DATE-AVG we need to have EXPTIME
+    oexptime = hdr.get('OEXPTIME')
+    exptime = hdr['EXPTIME']
+    if exptime > max_accurate_exposure and oexptime is None:
+        log.warning('EXPTIME not corrected for SX MaxIm driver issue.  This should normally have been done before this point')
+        exptime += exposure_correct
+    # A fancy CCD system can possibly have the shutter close and
+    # reopen or even have multiple aperture settings at some f/stop so
+    # that average in the time dimension is something other than the
+    # simple midpoint.  Here all we have is open and close, so the
+    # midpoint is the right thing.
+    date_avg = date_beg + (exptime / 2) * u.s
+
+    if exptime > max_accurate_exposure:
+        # Note that this has shutter_latency_uncertainty show up twice
+        # and then is combined in date_avg_uncertainty as if it is a
+        # true independent quantity.  This is actually a reasonable
+        # approach, since the shutter latency is one packet trip and
+        # the exposure correction is cause by another two
+        exptime_uncertainty = exposure_correct_uncertainty
+    else:
+        # Using the internal CCD timer, the precision with which
+        # EXPTIME is recorded should be far in excess of any other
+        # uncertainties
+        exptime_uncertainty = 0
+    date_avg_uncertainty = np.sqrt(date_beg_uncertainty**2
+                                   + (exptime_uncertainty/2)**2)
+
+    hdr.comments['DATE-OBS'] = 'Commanded shutter time (ISO 8601 UTC)'
+    # These end up appearing in reverse order to this
+    hdr.insert('DATE-OBS',
+               ('HIERARCH NTP-ACCURACY', ntp_accuracy,
+                'RMS typical (s)'),
+               after=True)
+    hdr.insert('DATE-OBS',
+               ('HIERARCH SHUTTER-LATENCY-UNCERTAINTY',
+                shutter_latency_uncertainty,
+                '(s)'),
+               after=True)
+    hdr.insert('DATE-OBS',
+               ('HIERARCH SHUTTER-LATENCY', shutter_latency.value,
+                'Measured indirectly (s)'),
+               after=True)
+    hdr.insert('DATE-OBS',
+               ('HIERARCH DATE-AVG-UNCERTAINTY', date_avg_uncertainty,
+                '(s)'),
+               after=True)
+    hdr.insert('DATE-OBS',
+               ('HIERARCH DATE-BEG-UNCERTAINTY', date_beg_uncertainty,
+                '(s)'),
+               after=True)
+    hdr.insert('DATE-OBS',
+               ('DATE-AVG', date_avg.fits,
+                'Best estimate midpoint of exposure (UTC)'),
+               after=True)
+    hdr.insert('DATE-OBS',
+               ('DATE-BEG', date_beg.fits,
+                'Best estimate shutter open time (UTC)'),
+               after=True)
     return hdr
 
 #####################################################################

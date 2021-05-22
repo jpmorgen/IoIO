@@ -227,7 +227,8 @@ def keyword_arithmetic_image_handler(meta, operand1, operation, operand2,
     """Convert an image to a scalar for FITS keyword arithmetic"""
 
     # This is hard to do in general just looking at the data in
-    # operand2, so start in the cases we know the answer
+    # operand2 except the special case where stdev data = 0 (a value
+    # turned into an array).  Start in the cases we know the answer
     if hasattr(operand2, 'meta'):
         imagetyp = operand2.meta.get('imagetyp')
         if imagetyp is None:
@@ -268,7 +269,12 @@ def keyword_arithmetic_image_handler(meta, operand1, operation, operand2,
         # the need for the code above
         med = np.median(operand2)
         stdev = np.std(operand2)
-        if stdev_threshold * stdev < med:
+        if med == 0:
+            o2 = 0
+        elif stdev_threshold * stdev < np.abs(med):
+            # The most common case here is likely to be stdev = 0, or
+            # numbers that have been made into arrays to make use of
+            # the NDData uncertainty propagation mixin code
             o2 = med
         else:
             o2 = None
@@ -367,6 +373,10 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         sufficient contrast, to provide RUN_LEVEL_DEFAULT_ND_PARAMS.
 
         """
+
+        if self.imagetyp == 'bias' or self.imagetyp == 'dark':
+            return self.default_ND_params
+
 
         # To simplify calculations, everything will be done with the
         # unbinned image.  
