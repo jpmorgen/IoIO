@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import ast
 import os
 import re
 import time
@@ -1516,7 +1517,10 @@ def reduce_cmd(args):
                                            stop=args.stop)):
             collection = ccdproc.ImageFileCollection(directory)
             log.info(collection.location)
-            if args.default_ND_params is None:
+            if args.default_ND_params is not None:
+                default_ND_params = ast.literal_eval(args.default_ND_params)
+                default_ND_params = np.asarray(default_ND_params)
+            else:
                 # --> Improve this to make run-level ND_params by date
                 # We usually expect this, since we are going to run on
                 # a wide range of directories with different ND

@@ -66,19 +66,19 @@ bins."""
     return (hist, centers)
 
 # This is improved with sx694.overscan_estimate
-#def back_level(im, readnoise=None):
-#    # Use the histogram technique to spot the bias level of the image.
-#    # The coronagraph creates a margin of un-illuminated pixels on the
-#    # CCD.  These are great for estimating the bias and scattered
-#    # light for spontanous subtraction.  The ND filter provides a
-#    # similar peak after bias subutraction (or, rather, it is the
-#    # second such peak)
-#    # --> This is very specific to the coronagraph.  Consider porting first peak find from IDL
-#    # --> histogram is wrong because readnoise units are in electrons, not ADU
-#    # --> consider making find_peaks_cwt args relative to readnoise
-#    im_hist, im_hist_centers = hist_of_im(im, readnoise)
-#    im_peak_idx = signal.find_peaks_cwt(im_hist, np.arange(10, 50))
-#    return im_hist_centers[im_peak_idx[0]]
+def back_level(im, readnoise=None):
+    # Use the histogram technique to spot the bias level of the image.
+    # The coronagraph creates a margin of un-illuminated pixels on the
+    # CCD.  These are great for estimating the bias and scattered
+    # light for spontanous subtraction.  The ND filter provides a
+    # similar peak after bias subutraction (or, rather, it is the
+    # second such peak)
+    # --> This is very specific to the coronagraph.  Consider porting first peak find from IDL
+    # --> histogram is wrong because readnoise units are in electrons, not ADU
+    # --> consider making find_peaks_cwt args relative to readnoise
+    im_hist, im_hist_centers = hist_of_im(im, readnoise)
+    im_peak_idx = signal.find_peaks_cwt(im_hist, np.arange(10, 50))
+    return im_hist_centers[im_peak_idx[0]]
 
 class CorObsData(pg.ObsData):
     """Object for containing coronagraph image data used for centering Jupiter
@@ -364,7 +364,10 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
             # make the center of mass calc more accurate, just set
             # everything that is not getting toward saturation to 0
             # --> Might want to fine-tune or remove this so bright
-            im[np.where(im < satlevel)] = 0
+            # Fri Jun 25 14:30:14 2021 EDT  jpmorgen@snipe
+            # Copied over from corobsdata, since caught it there as
+            # potential bug.  Really want to have saturated pixels show
+            im[np.where(im < satlevel*0.7)] = 0
             
             #log.debug('Approx number of saturating pixels ' + str(np.sum(im)/65000))
 
@@ -1146,12 +1149,16 @@ def ACP_IPT_Na_R(args):
                 for i in range(4):
                     P.diff_flex()
                     log.info('Collecting [SII]')
-                    # Take an R exposure to get the filter wheel going
-                    # in the right direction and get the Galilean
-                    # satellites lined up
-                    P.MC.acquire_im(pg.uniq_fname('R_', d),
-                                    exptime=0.1,
-                                    filt=1)
+                    # Wed Jun 16 22:44:52 2021 EDT  jpmorgen@snipe
+                    # Don't need this as much with fixed filter wheel.
+                    # Note before this date, the filter was SII!
+                    ## Take an R exposure to get the filter wheel going
+                    ## in the right direction and get the Galilean
+                    ## satellites lined up
+                    #P.MC.acquire_im(pg.uniq_fname('moving_to_R_', d),
+                    #                exptime=0.1,
+                    #                binning=4,
+                    #                filt=0)
                     exptime=300
                     if ((time.time() + exptime) > Tend):
                         log.info('Exposure would extend past end of ACP exposure, returning') 
