@@ -25,7 +25,7 @@ import pandas as pd
 
 from astropy import log
 from astropy import units as u
-from astropy.io import fits
+from astropy.io.fits import Header, getheader
 from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.table import QTable
 from astropy.time import Time
@@ -37,13 +37,13 @@ from photutils import Background2D, MedianBackground
 import ccdproc as ccdp
 
 from bigmultipipe import num_can_process, WorkerWithKwargs, NestablePool
-from bigmultipipe import multi_logging, prune_pout
+from bigmultipipe import multi_proc, multi_logging, prune_pout
 
 from ccdmultipipe import CCDMultiPipe
 from ccdmultipipe.utils import FilterWarningCCDData
 
 import sx694
-from corobsdata import CorData
+from corobsdata import CorData, overscan_estimate
 
 # Processing global variables.  Since I avoid use of the global
 # statement and don't reassign these at global scope, they stick to
@@ -125,6 +125,11 @@ DARK_EXP_MARGIN = 3
 # centering of object more reliable
 ND_EDGE_EXPAND = 40
 FLAT_CUT = 0.75
+
+# Wed Mar 03 09:59:08 2021 EST  jpmorgen@snipe
+# 2020 -- early 2021
+NA_OFF_ON_RATIO = 4.74
+SII_OFF_ON_RATIO = 4.87
 
 #######################
 # Utilities           #
@@ -242,6 +247,103 @@ def get_dirs_dates(directory,
     dirs = [os.path.join(directory, d) for d in dirs]
     return list(zip(dirs, dates))
 
+def valid_long_exposure(r):
+    """Inspects FITS header or ImageFileCollection row for condition"""
+    return (r['imagetyp'].lower() == 'light'
+            and r['xbinning'] == 1
+            and r['ybinning'] == 1
+            and r['exptime'] > 10)
+
+def multi_row_selector(table, keyword, value_list,
+                       row_selector=None, **kwargs):
+    """Returns lists of indices into a table, one list per value of `keyword`
+
+    Parameters
+    ----------
+    table : `~astropy.table.Table`
+        Usually a `ccdproc.ImageFileCollection.summary`, hence the use
+        of "keyword" instead of "tag".
+
+    keyword : str
+        The primary keyword used for selection (e.g. 'FILTER')
+
+    value_list : list
+        List of allowed values of keyword.  One list of indices into
+        `table` will be returned for each member of value_list
+
+    row_selector : func
+        Function applied on a per-row basis to filter out unwanted
+        rows.  `row_selector` must accept one argument, a
+        `~astropy.table.Table` row and return a `bool` value.  If
+        `row_selector` is `None` no filtering is done
+        Default is `None`
+    """
+    if row_selector is None:
+        row_selector = True
+    retval = {}
+    for value in value_list:
+        idx = [i for i, r in enumerate(table)
+               if (r[keyword.lower()] == value
+                 and row_selector(r, **kwargs))]
+        retval[value] = idx
+    return retval
+    #return [[i for i, r in enumerate(summary_table)
+    #         if (r[keyword.lower()] == value
+    #             and row_selector(r, **kwargs))]
+    #        for value in value_list]
+        
+
+def closest_in_time(collection, value_pair,
+                    row_selector=None,
+                    keyword='filter',
+                    directory=None):
+    """Returns list of filename pairs.  In all pairs, the second
+    observation is the closest in time to the first observation,
+    relative to all other second observations.  Example use: for each
+    on-band image, find the off-band image recorded closest in time
+    
+    Parameters
+    ----------
+    collection : `~astropy.ccdproc.ImageFileCollection`
+
+    value_pair : tuple
+        Values of `keyword` used to construct pairs
+
+    keyword : str
+        FITS keyword used to select pairs
+        Default is ``filter``
+
+    TODO
+    ----
+    Could possibly be generalized to finding groups
+
+    """
+
+    directory = collection.location or directory
+    if directory is None:
+        raise ValueError('Collection does not have a location.  Specify directory')
+    summary_table = collection.summary
+    row_dict = multi_row_selector(summary_table,
+                                  keyword, value_pair,
+                                  row_selector)
+
+    pair_list = []
+    for i_on in row_dict[value_pair[0]]:
+        t_on = Time(summary_table[i_on]['date-obs'], format='fits')
+        # Seach all second values
+        t_offs = Time(summary_table[row_dict[value_pair[1]]]['date-obs'],
+                      format='fits')
+        if len(t_offs) == 0:
+            continue
+        dts = [t_on - T for T in t_offs]
+        idx_best1 = np.argmin(np.abs(dts))
+        # Unwrap
+        i_off = row_dict[value_pair[1]][idx_best1]
+        pair = [os.path.join(directory,
+                             summary_table[i]['file'])
+                             for i in (i_on, i_off)]
+        pair_list.append(pair)
+    return pair_list
 
 #######################
 # RedCorData object   #
@@ -274,12 +376,10 @@ class CorMultiPipe(CCDMultiPipe):
                          **kwargs)
 
     def pre_process(self, data, **kwargs):
-        """Add full-frame check permanently to pipeline"""
+        """Add full-frame check permanently to pipeline."""
         kwargs = self.kwargs_merge(**kwargs)
-        s = data.shape
-        # Note Pythonic C index ordering
-        if s != (self.naxis2, self.naxis1):
-            return (None, {})
+        if full_frame(data, **kwargs) is None:
+                return None
         return super().pre_process(data, **kwargs)
 
     def data_process(self, data,
@@ -291,27 +391,48 @@ class CorMultiPipe(CCDMultiPipe):
             calibration = self.calibration
         if auto is None:
             auto = self.auto
-        data = cor_process(data,
-                           calibration=calibration,
-                           auto=auto,
-                           **kwargs)
-        return data
+        if isinstance(data, CCDData):
+            data = cor_process(data,
+                               calibration=calibration,
+                               auto=auto,
+                               **kwargs)
+            return data
+        # Allow processing of individual CCDData in the case where an
+        # input file is actually a list (of lists...) of input files
+        return [self.data_process(d,
+                                  calibration=calibration,
+                                  auto=auto,
+                                  **kwargs)
+                for d in data]
 
 class FwCorMultiPipe(CorMultiPipe):
     ccddata_cls = FwRedCorData
 
 ######### CorMultiPipe prepossessing routines
-def full_frame(im,
+def full_frame(data,
                naxis1=sx694.naxis1,
                naxis2=sx694.naxis2,
                **kwargs):
-    """CorMultiPipe pre-processing routine to select full-frame images (currently permanently installed into CorMultiPipe.pre_process) 
+    """CorMultiPipe pre-processing routine to select full-frame images.
+        In the case where data is a list, if any ccd is not full
+        frame, the entire list fails.  Currently permanently installed
+        into CorMultiPipe.pre_process.
+
     """
-    s = im.shape
-    # Note Pythonic C index ordering
-    if s != (naxis2, naxis1):
-        return None
-    return im
+    if isinstance(data, CCDData):
+        s = data.shape
+        # Note Pythonic C index ordering
+        if s != (naxis2, naxis1):
+            return None
+        return data
+    for ccd in data:
+        ff = full_frame(ccd, naxis1=naxis1,
+                        naxis2=naxis2,
+                        **kwargs)
+        if ff is None:
+            return None
+    return data
+
 
 def im_med_min_max(im):
     """Returns median values of representative dark and light patches
@@ -377,6 +498,32 @@ def mask_nonlin_sat(ccd, bmp_meta=None, margin=0.1, **kwargs):
     ccd = mask_above_key(ccd, bmp_meta=bmp_meta, key='SATLEVEL')
     ccd = mask_above_key(ccd, bmp_meta=bmp_meta, key='NONLIN')
     return ccd
+
+def combine_masks(data, **kwargs):
+    """Combine CCDData masks in a list of CCDData"""
+    # Avoid working with large arrays if we don't have to
+    newmask = None
+    for ccd in data:
+        if ccd.mask is None:
+            continue
+        if newmask is None:
+            newmask = ccd.mask
+            continue
+        newmask += ccd.mask
+    if newmask is None:
+        return data
+    # Write mask into ccds
+    newdata = []
+    for ccd in data:
+        ccd.mask = newmask
+        newdata.append(ccd)
+    return data
+
+def multi_filter_proc(data, **kwargs):
+    #return multi_proc(nd_filter_mask, **kwargs)(data)
+    return multi_proc(nd_filter_mask,
+                      element_type=CCDData,
+                      **kwargs)(data)
 
 def jd_meta(ccd, bmp_meta=None, **kwargs):
     """CorMultiPipe post-processing routine to return JD
@@ -460,7 +607,17 @@ def detflux(ccd_in, exptime_unit=None, **kwargs):
 ######### cor_process routines
 def get_filt_name(f, date_obs):
     """Used in standardize_filt_name.  Returns standarized filter name
-    for all cases in IoIO dataset."""
+    for all cases in IoIO dataset.
+
+    Parameters
+    ----------
+    f : str
+        filter name
+
+    date_obs : str
+        FITS format DATE-OBS keyword representing the date on which
+        filter f was recorded into the FITS header
+    """
     # Dates and documentation from IoIO.notebk
     if date_obs > '2020-03-01':
         # Fri Feb 28 11:43:39 2020 EST  jpmorgen@byted
@@ -554,7 +711,18 @@ def get_filt_name(f, date_obs):
     return f'{line}_{on_off}'
 
 def standardize_filt_name(hdr_in):
-    """Standardize FILTER keyword across all IoIO data"""
+    """Standardize FILTER keyword across all IoIO data
+
+    Parameters
+    ----------
+    hdr_in : `~astropy.fits.io.Header`
+        input FITS header
+
+    Returns
+    -------
+    `~astropy.fits.io.Header` with FILTER card updated to standard
+        form and OFILTER card (original FILTER) added, if appropriate
+    """
     if hdr_in.get('ofilter') is not None:
         # We have been here before, so exit quietly
         return hdr_in
@@ -614,24 +782,17 @@ def subtract_overscan(ccd, oscan=None, *args, **kwargs):
         return ccd
     nccd = ccd.copy()
     if oscan is None:
-        # Interface with sx694.overscan_estimate, which doesn't take
-        # CCDData for the primary input data
-        im = nccd.data
-        hdr = nccd.meta
-        # Fix problem where BUNIT is not recorded until file is
-        # written
-        hdr['BUNIT'] = nccd.unit.to_string()
-        oscan = sx694.overscan_estimate(im, hdr, hdr_out=nccd.meta,
-                                        *args, **kwargs)
+        oscan = overscan_estimate(ccd, meta=nccd.meta,
+                                  *args, **kwargs)
     nccd = nccd.subtract(oscan*u.adu, handle_meta='first_found')
     nccd.meta['HIERARCH OVERSCAN_VALUE'] = (oscan, 'overscan value subtracted (adu)')
     nccd.meta['HIERARCH SUBTRACT_OVERSCAN'] \
         = (True, 'Overscan has been subtracted')
-    # Keep track of our precise saturation level
-    satlevel = nccd.meta.get('satlevel')
-    if satlevel is not None:
-        satlevel -= oscan
-        nccd.meta['SATLEVEL'] = satlevel # still in adu
+    ## Keep track of our precise saturation level
+    #satlevel = nccd.meta.get('satlevel')
+    #if satlevel is not None:
+    #    satlevel -= oscan
+    #    nccd.meta['SATLEVEL'] = satlevel # still in adu
     return nccd
 
 def cor_process(ccd,
@@ -913,7 +1074,7 @@ def cor_process(ccd,
 
     except Exception as e:
         log.error(f'No calibration available: calibration system problem {e}')
-        log.error
+        raise
     if ccd_meta:
         # Put in our SX694 camera metadata
         nccd.meta = sx694.metadata(nccd.meta, *args, **kwargs)
@@ -1663,7 +1824,7 @@ def bias_combine(directory=None,
 
     num_subprocesses = int(num_processes / our_num_processes)
     subprocess_mem_frac = mem_frac / our_num_processes
-    log.debug('bias_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
+    log.debug(f'bias_combine: {directory} nfdicts = {nfdicts}, num_processes = {num_processes}, mem_frac = {mem_frac}, our_num_processes = {our_num_processes}, num_subprocesses = {num_subprocesses}, subprocess_mem_frac = {subprocess_mem_frac}')
 
     wwk = WorkerWithKwargs(bias_combine_one_fdict,
                            num_processes=num_subprocesses,
@@ -2690,7 +2851,7 @@ class Calibration():
         """Returns filename of best-matched bias for a file"""
         if ccdt_tolerance is None:
             ccdt_tolerance = self._ccdt_tolerance
-        if isinstance(fname_ccd_or_hdr, fits.Header):
+        if isinstance(fname_ccd_or_hdr, Header):
             hdr = fname_ccd_or_hdr
         elif isinstance(fname_ccd_or_hdr, CCDData):
             hdr = fname_ccd_or_hdr.meta
@@ -2723,7 +2884,7 @@ class Calibration():
             ccdt_tolerance = self._ccdt_tolerance
         if dark_exp_margin is None:
             dark_exp_margin = self._dark_exp_margin
-        if isinstance(fname_ccd_or_hdr, fits.Header):
+        if isinstance(fname_ccd_or_hdr, Header):
             hdr = fname_ccd_or_hdr
         elif isinstance(fname_ccd_or_hdr, CCDData):
             hdr = fname_ccd_or_hdr.meta
@@ -2765,7 +2926,7 @@ class Calibration():
 
     def best_flat(self, fname_ccd_or_hdr):
         """Returns filename of best-matched flat for a file"""
-        if isinstance(fname_ccd_or_hdr, fits.Header):
+        if isinstance(fname_ccd_or_hdr, Header):
             hdr = fname_ccd_or_hdr
         elif isinstance(fname_ccd_or_hdr, CCDData):
             hdr = fname_ccd_or_hdr.meta
@@ -2787,16 +2948,108 @@ class Calibration():
         best_filt_date_idx = good_filt_idx[best_filt_date_idx]
         return self._flat_table['fnames'][best_filt_date_idx]
 
+##########################
+# Command line functions
+##########################
 def calibrate_cmd(args):
-    start = args.start
-    stop = args.stop
-
     c = Calibration(raw_data_root=args.raw_data_root,
                     calibration_root=args.calibration_root,
-                    start_date=start,
-                    stop_date=stop,
+                    start_date=args.start,
+                    stop_date=args.stop,
                     reduce=True,
                     num_processes=args.num_processes)
+
+def filt_check_dir(directory):
+    log.info(f'Checking {directory}')
+    fnames = os.listdir(directory)
+    for f in fnames:
+        _, extension = os.path.splitext(f)
+        if extension not in ['.fits', '.fit']:
+            continue
+        isbadname = False
+        badnames = ['oving_to', 'Mercury', 'Venus', '_sequence', 'PinPoint']
+        for bn in badnames:
+            if bn in f:
+                isbadname = True
+                break
+        if isbadname:
+            continue
+
+        try:
+            hdr = getheader(os.path.join(directory, f))
+            if hdr['IMAGETYP'] != 'LIGHT':
+                continue         
+            hdr = standardize_filt_name(hdr)
+            filt = hdr['FILTER']
+            ofilt = hdr.get('OFILTER')
+            
+        except Exception as e:
+            log.info(f'{e} {os.path.join(directory, f)}')
+            continue
+
+        if filt == 'open':
+            continue
+
+        # See if we can match our filt to the fname
+        if filt in f:
+            # Success, so just move on quietly
+            continue
+
+        if ofilt and ofilt in f:
+            # Old filter matches
+            continue
+
+        if ('IPT_Na_R' in f
+            or 'Na_IPT_R' in f
+            or 'PrecisionGuideDataFile' in f):
+            # These are sequence names in early 2018 that is just too inscrutable
+            continue
+
+        ## Try some cases I have run across in 2017 and 2018
+        if 'IPT-' in f:
+            line = 'SII'
+        elif 'Na' in f:
+            line = 'Na'
+        else:
+            line = ''
+        #if 'on-band' in f:
+        #    on_off = 'on'
+        #elif 'off-band' in f:
+        #    on_off = 'off'
+        #else:
+        #    on_off = ''
+
+        if 'cont' in f:
+            on_off = 'off'
+        if 'on' in f:
+            on_off = 'on'
+        elif 'off' in f:
+            on_off = 'off'
+        else:
+            on_off = ''
+
+        if f'{line}_{on_off}' != filt:
+            log.error(f'FILTER = {filt}; {os.path.join(directory, f)}')
+
+        #else:
+        #    fname_compare = f        
+        #
+        #    if 'on-band.fit' in bf:
+        #        on_off = 'on'
+        #    elif 'off-band.fit' in bf:
+        #        on_off = 'off'
+
+
+def filt_check_tree(directory=RAW_DATA_ROOT):
+    dirs = [dd[0] for dd in get_dirs_dates(directory)]
+    for d in dirs:
+        filt_check_dir(d)
+
+def filt_check_cmd(args):
+    if args.directory:
+        filt_check_dir(args.directory)
+    else:
+        filt_check_tree(args.tree)
 
 if __name__ == "__main__":
     log.setLevel('DEBUG')
@@ -2805,9 +3058,9 @@ if __name__ == "__main__":
     subparsers = parser.add_subparsers(dest='one of the subcommands in {}, above', help='sub-command help')
     subparsers.required = True
 
+    #### calibrate
     calibrate_parser = subparsers.add_parser(
         'calibrate', help='Run calibration to generate bias, dark, flat frames')
-
     calibrate_parser.add_argument(
         '--raw_data_root', help=f'raw data root (default: {RAW_DATA_ROOT})',
         default=RAW_DATA_ROOT)
@@ -2823,7 +3076,20 @@ if __name__ == "__main__":
         '--num_processes', type=float, default=0,
         help='number of subprocesses for parallelization; 0=all cores, <1 = fraction of total cores')
     calibrate_parser.set_defaults(func=calibrate_cmd)
-    
+
+    #### filt_check
+    filt_check_parser = subparsers.add_parser(
+        'filt_check', help='Spot inconsistencies between filter names')
+    filt_check_parser.add_argument(
+        '--tree',
+        help=f'(default action) Root of directory tree to check (default directory: {RAW_DATA_ROOT})',
+        metavar='DIRECTORY',
+        default=RAW_DATA_ROOT)
+    filt_check_parser.add_argument(
+        '--directory',
+        help=f'Single directory to check')
+    filt_check_parser.set_defaults(func=filt_check_cmd)
+
     # Final set of commands that makes argparse work
     args = parser.parse_args()
     # This check for func is not needed if I make subparsers.required = True
@@ -2889,3 +3155,7 @@ if __name__ == "__main__":
 
 #c = Calibration(start_date='2020-07-11', stop_date='2020-07-11', reduce=True)
 #c = Calibration(reduce=True)
+
+#na_back_on = '/data/io/IoIO/raw/20210525/Jupiter-S007-R001-C001-Na_off.fts'
+#ccd = CorData.read(na_back_on)
+#nd_filter_mask(ccd)

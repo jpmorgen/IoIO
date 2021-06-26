@@ -235,8 +235,8 @@ plt.show()
 
 ##-## ######## Time series of your key of choice
 ##-## #key = 'ONBSUB'
-##-## #key = 'OFFSCALE'
-##-## key = 'ADU2R'
+##-## key = 'OFFSCALE'
+##-## #key = 'ADU2R'
 ##-## plt.plot_date(pds, 
 ##-##               [row[key] for row in rlist], 'k.', ms=1) #, alpha=0.2) # doesn't show up in eps
 ##-## plt.xlabel('UT Date')
@@ -389,48 +389,48 @@ plt.show()
 ##-## plt.savefig('Torus_vs_T_hires.png', transparent=True, dpi=1200)
 ##-## plt.show()
 
-######## Time series of torus annular aperture.
-# Subtract the estimated telluric sodium background
-
-torus = [row[onoff + 'torus'] for row in median_ap_list]
-#torus = [row[onoff + 'Rjp15'] for row in median_ap_list]
-#torus = [row[onoff + 'Rjp50'] for row in median_ap_list]
-mpds = np.asarray(mpds)
-torus = np.asarray(torus)
-T0 = Time('2017-12-01T00:00:00', format='fits')
-#T0 = Time('2016-12-01T00:00:00', format='fits')
-T1 = Time('2018-07-10T00:00:00', format='fits')
-good_idx = np.where(mpds > T0.plot_date)
-# unwrap
-mpds = mpds[good_idx]
-torus = torus[good_idx]
-sorted_idx = np.argsort(mpds)
-mpds = mpds[sorted_idx]
-torus = torus[sorted_idx]
-plt.plot_date(mpds, torus, 'C1.')
-torus_med = medfilt(torus, N_med)
-plt.plot_date(mpds, torus_med, ',', linestyle='-')
-axes = plt.gca()
-legend_list = ['5 < Rj < 15 nightly median',
-               str(N_med) + '-day running median']
-if onoff == 'AP':
-    legend_list.append('linear extrapolation')
-    axes.set_ylim([0, 50])
-    #axes.set_ylim([0, 1000])
-    ylabel = ''
-else:
-    if onoff == 'On':
-        axes.set_ylim([0, 3000])
-    else:
-        axes.set_ylim([0, 1500])
-    ylabel = onoff + '-band'
-axes.set_xlim([T0.plot_date, T1.plot_date])
-plt.legend(legend_list, loc='upper right')
-plt.xlabel('UT Date')
-plt.ylabel(line + ' ' + ylabel + ' Surface Brightness (R)')
-plt.gcf().autofmt_xdate()  # orient date labels at a slant
-plt.savefig('Torus_vs_T_hires.png', transparent=True, dpi=1200)
-plt.show()
+##-## ######## Time series of torus annular aperture.
+##-## # Subtract the estimated telluric sodium background
+##-## 
+##-## torus = [row[onoff + 'torus'] for row in median_ap_list]
+##-## #torus = [row[onoff + 'Rjp15'] for row in median_ap_list]
+##-## #torus = [row[onoff + 'Rjp50'] for row in median_ap_list]
+##-## mpds = np.asarray(mpds)
+##-## torus = np.asarray(torus)
+##-## T0 = Time('2017-12-01T00:00:00', format='fits')
+##-## #T0 = Time('2016-12-01T00:00:00', format='fits')
+##-## T1 = Time('2018-07-10T00:00:00', format='fits')
+##-## good_idx = np.where(mpds > T0.plot_date)
+##-## # unwrap
+##-## mpds = mpds[good_idx]
+##-## torus = torus[good_idx]
+##-## sorted_idx = np.argsort(mpds)
+##-## mpds = mpds[sorted_idx]
+##-## torus = torus[sorted_idx]
+##-## plt.plot_date(mpds, torus, 'C1.')
+##-## torus_med = medfilt(torus, N_med)
+##-## plt.plot_date(mpds, torus_med, ',', linestyle='-')
+##-## axes = plt.gca()
+##-## legend_list = ['5 < Rj < 15 nightly median',
+##-##                str(N_med) + '-day running median']
+##-## if onoff == 'AP':
+##-##     legend_list.append('linear extrapolation')
+##-##     axes.set_ylim([0, 50])
+##-##     #axes.set_ylim([0, 1000])
+##-##     ylabel = ''
+##-## else:
+##-##     if onoff == 'On':
+##-##         axes.set_ylim([0, 3000])
+##-##     else:
+##-##         axes.set_ylim([0, 1500])
+##-##     ylabel = onoff + '-band'
+##-## axes.set_xlim([T0.plot_date, T1.plot_date])
+##-## plt.legend(legend_list, loc='upper right')
+##-## plt.xlabel('UT Date')
+##-## plt.ylabel(line + ' ' + ylabel + ' Surface Brightness (R)')
+##-## plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-## plt.savefig('Torus_vs_T_hires.png', transparent=True, dpi=1200)
+##-## plt.show()
 
 
 ##-## ######### Check offsets and scaling for final reduced images

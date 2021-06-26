@@ -30,7 +30,8 @@ from photutils import SourceCatalog
 from photutils.background import Background2D
 from photutils.utils import calc_total_error
 
-from bigmultipipe import no_outfile, prune_pout
+from bigmultipipe import bmp_cleanup, no_outfile, prune_pout
+from precisionguide import pgproperty
 
 import sx694
 from cormultipipe import RAW_DATA_ROOT
@@ -38,15 +39,13 @@ from cormultipipe import assure_list, reduced_dir, get_dirs_dates
 from cormultipipe import FwRedCorData, CorMultiPipe, Calibration
 from cormultipipe import nd_filter_mask, mask_nonlin_sat
 
-def kernel_preprocess(ccd,
-                      seeing=5,
-                      **kwargs):
-    sigma = seeing * gaussian_fwhm_to_sigma
-    kernel = Gaussian2DKernel(sigma)
-    kernel.normalize()
-    return {'bmp_data': ccd,
-            bmp_kwargs: {'kernel': kernel}
-    
+def simple_show(im, **kwargs):
+    impl = plt.imshow(im, origin='lower',
+                      cmap=plt.cm.gray,
+                      filternorm=0, interpolation='none',
+                      **kwargs)
+    plt.show()
+
 
 def is_flux(unit):
     """Determine if we are in flux units or not"""
@@ -57,191 +56,499 @@ def is_flux(unit):
     if len(sidx) == 0 or unit.powers[sidx] != -1:
         return False
     return True
-    
-def source_catalog_cleanup(ccd,
-                           bmp_meta=None,
-                           in_name=None, **kwargs):
-    """Delete large metadata output of :func:`source_catalog()` so as to
-    avoid inter-process communication of this information via pickled
-    files"""
-    
-    try:
-        del bmp_meta['source_catalog']
-    except:
-        log.warning(f'source_catalog not found in bmp_meta of {in_name}')
-    return ccd
-    
-# Alternately, this could be source_catalog_process and a helper
-# routine, source_catalog_create could return an actual SourceCatalog
-# instead of the wierd bmp_meta return.  For now this is all I need
-def source_catalog(ccd,
-                   bmp_meta=None,
-                   in_name=None,
-                   seeing=5,
-                   **kwargs):
-    """CorMultiPipe post-processing routine to create a `~astropy.photutils.SourceCatalog`
 
-    If no sources are found, a warning is logged, the return value is
-    `None` and bmp_meta is set to {}.
+class control_property(pgproperty):
+    """Decorator for Photometry.  
 
-    NOTE: the `~astropy.photutils.SourceCatalog` is constructed to
-    (hopefully) have the correct units for all Quantities, in
-    particular `segment_flux.`  That means this and related Quantities
-    will track the units of the `ccd` that was passed to this object
-
-    This should be used in concert with another function that extracts
-    the desired information from the
-    `~astropy.photutils.SourceCatalog`.  Then
-    `source_catalog_cleanup` should be used for the reasons stated
-    in its docstring
-
-    Parameters
-    ----------
-    seeing : number
-        Seeing FWHM (pixel)
-
-    --> consider making (one or more) plot keyword(s)
+    Handles simple set and get cases and runs :meth:`init_calc()` when
+    a value is changed
 
     """
-    # This is going to expand by a factor of 15 for default seeing=5
-    sigma = seeing * gaussian_fwhm_to_sigma
-    kernel = Gaussian2DKernel(sigma)
-    kernel.normalize()
-    # Make a source mask to enable optimal background estimation
-    mask = make_source_mask(ccd.data, nsigma=2, npixels=5,
-                            filter_kernel=kernel, mask=ccd.mask,
-                            dilate_size=11)
-    #impl = plt.imshow(mask, origin='lower',
-    #                  cmap=plt.cm.gray,
-    #                  filternorm=0, interpolation='none')
-    #plt.show()
-    
-    ##mean, median, std = sigma_clipped_stats(data, sigma=3.0, mask=mask)
-    #
-    
-    box_size = int(np.mean(ccd.shape) / 10)
-    back = Background2D(ccd, box_size, mask=mask, coverage_mask=ccd.mask)
-    threshold = back.background + (2.0* back.background_rms)
+    def __set__(self, obj, val):
+        obj_dict = obj.__dict__
+        if self.fset:
+            # Just in case there is an extra thing to do.  In general,
+            # these simple properties don't need custom setters
+            val = self.fset(obj, val)
+        old_val = obj_dict.get(self._key)
+        if old_val is val or old_val == val:
+            # Just in case == doesn't check "is" first  If nothing
+            # changes, nothing changes
+            return
+        if old_val is not None:
+            # This is our initial set or changing from nothing to something
+            log.debug(f'resetting {self._key} requires re-initialization of calculated quantities')
+            obj.init_calc()
+        obj_dict[self._key] = val
 
-    #print(f'background_median = {back.background_median}, background_rms_median = {back.background_rms_median}')
-    
-    #impl = plt.imshow(back.background, origin='lower',
-    #                  cmap=plt.cm.gray,
-    #                  filternorm=0, interpolation='none')
-    #back.plot_meshes()
-    #plt.show()
-    
-    npixels = 5
-    segm = detect_sources(ccd.data*ccd.unit, threshold, npixels=npixels,
-                          filter_kernel=kernel, mask=ccd.mask)
-    
-    if segm is None:
-        # detect_sources logs a WARNING and returns None if no sources
-        # are found.  Treat this as a fatal error
-        log.warning(f'No sources found: {in_name}')
-        bmp_meta = {}
-        return None
+class Photometry:
+    def __init__(self,
+                 seeing=5, # pixels
+                 n_connected_pixels=5,
+                 source_mask_dilate=11, # pixels
+                 source_mask_nsigma=2, # pixels
+                 n_back_boxes=10, # number of boxes in each dimension used to calculate background
+                 back_rms_scale=2.0, # Scale background rms for threshold calculation
+                 no_deblend=False,
+                 deblend_nlevels=32,
+                 deblend_contrast=0.001,
+                 ccd=None,
+                 precalc=False,
+                 **kwargs):
+        self.seeing = seeing
+        self.n_connected_pixels = n_connected_pixels
+        self.source_mask_dilate = source_mask_dilate
+        self.source_mask_nsigma = source_mask_nsigma
+        self.n_back_boxes = n_back_boxes
+        self.back_rms_scale = back_rms_scale
+        self._no_deblend = no_deblend
+        self.deblend_nlevels = deblend_nlevels
+        self.deblend_contrast = deblend_contrast
+        self.ccd = ccd
+        self.init_calc()
 
-    # It does save a little time and a factor ~1.3 in memory if we
-    # don't deblend
-    segm_deblend = deblend_sources(ccd.data, segm, 
-                                   npixels=npixels,
-                                   filter_kernel=kernel, nlevels=32,
-                                   contrast=0.001)
-    
-    #impl = plt.imshow(segm, origin='lower',
-    #                  cmap=plt.cm.gray,
-    #                  filternorm=0, interpolation='none')
-    #plt.show()
+    def init_calc(self):
+        # Kernel ends up getting reset when it doesn't necessarily
+        # need to be, but more pain than it is worth to address that
+        self._kernel = None
+        self._source_mask = None
+        self._back_obj = None
+        self._segm_image = None
+        self._segm_deblend = None
+        self._source_catalog = None
 
-    # https://photutils.readthedocs.io/en/stable/segmentation.html
-
-
-    # Very strange this is not working!
-    #print(ccd.unit, back.background_rms.unit, effective_gain.unit)
-    #inputs = [ccd, back.background_rms, effective_gain]
-    #has_unit = [hasattr(x, 'unit') for x in inputs]
-    #use_units = all(has_unit)
-    #print(has_unit)
-    #print(use_units)
-    #use_units = np.all(has_unit)
-    #print(use_units)
-
-    # As per calc_total_error documentation, effective_gain converts
-    # ccd.data into count-based units, so it is exptime when we have
-    # flux units
-    # --> Eventually get units into this properly with the
-    # CardQuantity stuff I have been working on, or however that turns
-    # out, for now assume everything is in seconds
-    if is_flux(ccd.unit):
-        effective_gain = ccd.meta['EXPTIME']*u.s
-    else:
-        effective_gain = 1*u.s
-
-    ###try:
-    ###    #t = ccd.data*ccd.unit
-    ###    #print(f'ccd.data*ccd.unit unit {t.unit} {back.background_rms} {effective_gain.unit}')
-    ###    error = calc_total_error(ccd.data,
-    ###                             back.background_rms,
-    ###                             effective_gain)
-    ###    print(f'success: {in_name}')
-    ###except Exception as e:
-    ###    print(f'fail {e} for {in_name}')
-    ###    error = calc_total_error(ccd.data,
-    ###                             back.background_rms,
-    ###                             effective_gain) 
-
-    # Use the advertised error, which is supposed to be a bit fluffier
-    #sc = SourceCatalog(ccd.data, segm_deblend, 
-    #                   error=ccd.uncertainty.array,
-    #                   mask=ccd.mask)
-
-    #sc = SourceCatalog(ccd.data, segm_deblend, 
-    #                   error=error,
-    #                   mask=ccd.mask)
-
-
-    #total_error = np.sqrt(back.background_rms.value**2 + ccd.uncertainty.array)
-    #compare = total_error - error
-    #print(f'max val {np.max(ccd.uncertainty.array):.2f} max difference {np.max(np.abs(compare)):.2f} {in_name}')
-    #sc = SourceCatalog(ccd.data, segm_deblend, 
-    #                   error=total_error,
-    #                   mask=ccd.mask)
-
-    if ccd.uncertainty is None:
-        log.warning(f'photometry being conducted on ccd data with no uncertainty.  Is this file being properly reduced? {in_name}')
-        if ccd.unit == u.adu:
-            log.warning(f'File is still in adu, cannot calculate proper '
-                        f'Poisson error for sources {in_name}')
-            total_error = np.zeros_like(ccd)*u.adu
-        else:
-            total_error = calc_total_error(ccd,
-                                           back.background_rms.value,
-                                           effective_gain) 
-    else:
-        uncert = ccd.uncertainty.array*ccd.unit
-        if ccd.uncertainty.uncertainty_type == 'std':
-            total_error = np.sqrt(back.background_rms**2 + uncert**2)
-        elif ccd.uncertainty.uncertainty_type == 'var':
-            # --> if I work in units make var units ccd.unit**2
-            var  = uncert*ccd.unit
-            total_error = np.sqrt(back.background_rms**2 + var)
-        else:
-            raise ValueError(f'Unsupported uncertainty type {ccd.uncertainty.uncertainty_type} for {in_name}')
+    def precalc(self):
+        if self.ccd is None:
+            # Can't do too much, but at least put the kernel in.  This
+            # is guaranteed to work because kernel dependencies
+            # (seeing) has a default value
+            self.kernel
+            return
+        self.source_catalog
         
-    ###compare = total_error - error
-    ###print(f'max val {np.max(ccd.uncertainty.array):.2f} max difference {np.max(np.abs(compare)):.2f} {in_name}')
-    # Call to SourceCatalog is a little awkward because it expects a Quantity
-    sc = SourceCatalog(ccd.data*ccd.unit, segm_deblend, 
-                       error=total_error,
-                       mask=ccd.mask)
-    bmp_meta['source_catalog'] = sc
-    return ccd
+
+    @control_property
+    def seeing(self):
+        pass
+
+    @control_property
+    def source_mask_dilate(self):
+        pass
+        
+    @control_property
+    def source_mask_nsigma(self):
+        pass
+    
+    @control_property
+    def n_connected_pixels(self):
+        pass
+
+    @control_property
+    def n_back_boxes(self):
+        pass
+
+    @control_property
+    def back_rms_scale(self):
+        pass
+    
+    @property
+    def no_deblend(self):
+        return self._no_deblend
+
+    @no_deblend.setter
+    def no_deblend(self, value):
+        if value != self._no_deblend:
+            if value:
+                log.warning('Preparing to recalculate source_catalog with deblended image')
+            else:
+                log.warning('Preparing to recalculate source_catalog with non-deblended image')
+            self._segm_deblend = None
+            self._source_catalog = None
+        self._no_deblend = value
+    
+    @control_property
+    def deblend_nlevels(self):
+        pass
+    
+    @control_property
+    def deblend_contrast(self):
+        pass
+    
+    @control_property
+    def ccd(self):
+        pass
+
+    @property
+    def coverage_mask(self):
+        if self.ccd.mask is None:
+            return None
+        return self.ccd.mask        
+
+    @property
+    def kernel(self):
+        """Generic "round" kernel from a characterisitic seeing in FWHM.  This
+        can get much more complicated in a subclass, a la GALEX
+        grism-mode streaks, if necessary
+
+        """
+        if self._kernel is not None:
+            return self._kernel
+        sigma = self.seeing * gaussian_fwhm_to_sigma
+        kernel = Gaussian2DKernel(sigma)
+        kernel.normalize()
+        self._kernel = kernel
+        return self._kernel
+
+    @property
+    def source_mask(self):
+        """Make a source mask to enable optimal background estimation"""
+        if self._source_mask is not None:
+            return self._source_mask
+        source_mask = make_source_mask(self.ccd.data,
+                                       nsigma=self.source_mask_nsigma,
+                                       npixels=self.n_connected_pixels,
+                                       filter_kernel=self.kernel,
+                                       mask=self.coverage_mask,
+                                       dilate_size=self.source_mask_dilate)
+        self._source_mask = source_mask
+        return self._source_mask
+
+    def show_source_mask(self):
+        impl = plt.imshow(self.source_mask, origin='lower',
+                          cmap=plt.cm.gray,
+                          filternorm=0, interpolation='none')
+        plt.show()
+
+    @property
+    def back_obj(self):
+        if self._back_obj is not None:
+            return self._back_obj
+        box_size = int(np.mean(self.ccd.shape) / self.n_back_boxes)
+        back = Background2D(self.ccd, box_size, mask=self.source_mask,
+                            coverage_mask=self.coverage_mask)
+        self._back_obj = back
+        return self._back_obj
+
+    def show_background(self):
+        impl = plt.imshow(self.back_obj.background.value, origin='lower',
+                          cmap=plt.cm.gray,
+                          filternorm=0, interpolation='none')
+        self.back_obj.plot_meshes()
+        plt.show()
+
+    @property
+    def segm_image(self):
+        if self._segm_image is not None:
+            return self._segm_image
+        threshold = (self.back_obj.background +
+                     (self.back_rms_scale * self.back_obj.background_rms))
+        segm = detect_sources(self.ccd.data*self.ccd.unit,
+                              threshold, npixels=self.n_connected_pixels,
+                              filter_kernel=self.kernel, mask=self.ccd.mask)
+        self._segm_image = segm
+        return self._segm_image
+
+    @property
+    def segm_deblend(self):
+        # It does save a little time and a factor ~1.3 in memory if we
+        # don't deblend
+        if self.no_deblend:
+            return self.segm_image
+        if self._segm_deblend is not None:
+            return self._segm_deblend
+        if self.segm_image is None:
+            # Pathological case of no sources found
+            return None
+        segm_deblend = deblend_sources(self.ccd.data,
+                                       self.segm_image, 
+                                       npixels=self.n_connected_pixels,
+                                       filter_kernel=self.kernel,
+                                       nlevels=self.deblend_nlevels,
+                                       contrast=self.deblend_contrast)
+        self._segm_deblend = segm_deblend
+        return self._segm_deblend
+
+    def show_segm(self):
+        """Show the segmentation image *that will be used for source catalog*.
+This will be the *deblended* version by default.  Set
+`Photometry.no_deblend`=True to display the non-deblended segmentation
+image
+
+        """
+        impl = plt.imshow(self.segm_deblend, origin='lower',
+                          cmap=plt.cm.gray,
+                          filternorm=0, interpolation='none')
+        plt.show()
+
+    @property
+    def source_catalog(self):
+        if self._source_catalog is not None:
+            return self._source_catalog
+        if self.segm_deblend is None:
+            # Pathological case of no sources found
+            return None
+
+        # As per calc_total_error documentation, effective_gain converts
+        # ccd.data into count-based units, so it is exptime when we have
+        # flux units
+        # --> Eventually get units into this properly with the
+        # CardQuantity stuff I have been working on, or however that turns
+        # out, for now assume everything is in seconds
+        if is_flux(self.ccd.unit):
+            effective_gain = self.ccd.meta['EXPTIME']*u.s
+        else:
+            effective_gain = 1*u.s
+
+        if self.ccd.uncertainty is None:
+            log.warning(f'photometry being conducted on ccd data with no uncertainty.  Is this file being properly reduced?  Soldiering on....')
+            if self.ccd.unit == u.adu:
+                log.warning(f'File is still in adu, cannot calculate proper '
+                            f'Poisson error for sources')
+                total_error = np.zeros_like(self.ccd)*u.adu
+            else:
+                total_error = \
+                    calc_total_error(self.ccd,
+                                     self.back_obj.background_rms.value,
+                                     effective_gain) 
+        else:
+            uncert = self.ccd.uncertainty.array*self.ccd.unit
+            if self.ccd.uncertainty.uncertainty_type == 'std':
+                total_error = np.sqrt(self.back_obj.background_rms**2
+                                      + uncert**2)
+            elif self.ccd.uncertainty.uncertainty_type == 'var':
+                # --> if I work in units make var units ccd.unit**2
+                var  = uncert*self.ccd.unit
+                total_error = np.sqrt(self.back_obj.background_rms**2 + var)
+            else:
+                raise ValueError(f'Unsupported uncertainty type {self.ccd.uncertainty.uncertainty_type} for {in_name}')
+
+        # Call to SourceCatalog is a little awkward because it expects a Quantity
+        sc = SourceCatalog(self.ccd.data*self.ccd.unit,
+                           self.segm_deblend, 
+                           error=total_error,
+                           mask=self.ccd.mask)
+        self._source_catalog = sc
+        return self._source_catalog
+
+
+#def kernel_process(ccd,
+#                   seeing=5,
+#                   bmp_meta=None,
+#                   **kwargs):
+#    sigma = seeing * gaussian_fwhm_to_sigma
+#    kernel = Gaussian2DKernel(sigma)
+#    kernel.normalize()
+#    bmp_meta['kernel'] = kernel
+#    ccd = bmp_cleanup(ccd, bmp_meta=bmp_meta, add='kernel')
+#    return ccd
+#    
+#def source_mask_process(ccd,
+#                        bmp_meta=None,
+#                        show_mask=False,
+#                        source_mask_dilate=11,
+#                        **kwargs):
+#    kernel = bmp_meta.get('kernel')
+#    if kernel is None:
+#        ccd = kernel_process(ccd, bmp_meta=bmp_meta, **kwargs)
+#        kernel = bmp_meta.get('kernel')
+#    # Make a source mask to enable optimal background estimation
+#    mask = make_source_mask(ccd.data, nsigma=2, npixels=5,
+#                            filter_kernel=kernel, mask=ccd.mask,
+#                            dilate_size=source_mask_dilate)
+#    if show_mask:
+#        impl = plt.imshow(mask, origin='lower',
+#                          cmap=plt.cm.gray,
+#                          filternorm=0, interpolation='none')
+#        plt.show()
+#    bmp_meta['source_mask'] = mask
+#    ccd = bmp_cleanup(ccd, bmp_meta=bmp_meta, add='source_mask')
+#    return ccd
+#
+#def background_process(ccd,
+#                       bmp_meta=None,
+#                       in_name=None,
+#                       **kwargs):
+#    # Make sure our dependencies have run.  kernel comes along for
+#    # free with source_mask
+#    source_mask = bmp_meta.get('source_mask')
+#    if source_mask is None:
+#        ccd = source_mask_process(ccd, bmp_meta=bmp_meta, **kwargs)
+#        source_mask = bmp_meta.get('source_mask')
+#    kernel = bmp_meta['kernel']
+#    
+#    box_size = int(np.mean(ccd.shape) / 10)
+#    back = Background2D(ccd, box_size, mask=source_mask, coverage_mask=ccd.mask)
+#
+#    return ccd
+#    
+#def source_catalog_process(ccd,
+#                           bmp_meta=None,
+#                           in_name=None,
+#                           **kwargs):
+#    """CorMultiPipe post-processing routine to create a `~astropy.photutils.SourceCatalog`
+#
+#    If no sources are found, a warning is logged, the return value is
+#    `None` and bmp_meta is set to {}.
+#
+#    NOTE: the `~astropy.photutils.SourceCatalog` is constructed to
+#    (hopefully) have the correct units for all Quantities, in
+#    particular `segment_flux.`  That means this and related Quantities
+#    will track the units of the `ccd` that was passed to this object
+#
+#    This should be used in concert with another function that extracts
+#    the desired information from the
+#    `~astropy.photutils.SourceCatalog`.  Then
+#    `source_catalog_cleanup` should be used for the reasons stated
+#    in its docstring
+#
+#    Parameters
+#    ----------
+#    --> consider making (one or more) plot keyword(s)
+#
+#    """
+#    # Make sure our dependencies have run.  kernel comes along for
+#    # free with source_mask
+#    source_mask = bmp_meta.get('source_mask')
+#    if source_mask is None:
+#        ccd = source_mask_process(ccd, bmp_meta=bmp_meta, **kwargs)
+#        source_mask = bmp_meta.get('source_mask')
+#    kernel = bmp_meta['kernel']
+#
+#    # This is going to expand by a factor of 15 for default kernel
+#    # with seeing=5
+#    
+#    ##mean, median, std = sigma_clipped_stats(data, sigma=3.0, mask=mask)
+#    #
+#    
+#    box_size = int(np.mean(ccd.shape) / 10)
+#    back = Background2D(ccd, box_size, mask=source_mask, coverage_mask=ccd.mask)
+#
+#
+#
+#
+#    threshold = back.background + (2.0* back.background_rms)
+#
+#    #print(f'background_median = {back.background_median}, background_rms_median = {back.background_rms_median}')
+#    
+#    #impl = plt.imshow(back.background, origin='lower',
+#    #                  cmap=plt.cm.gray,
+#    #                  filternorm=0, interpolation='none')
+#    #back.plot_meshes()
+#    #plt.show()
+#    
+#    npixels = 5
+#    segm = detect_sources(ccd.data*ccd.unit, threshold, npixels=npixels,
+#                          filter_kernel=kernel, mask=ccd.mask)
+#    
+#    if segm is None:
+#        # detect_sources logs a WARNING and returns None if no sources
+#        # are found.  Treat this as a fatal error
+#        log.warning(f'No sources found: {in_name}')
+#        bmp_meta.clear()
+#        return None
+#
+#    # It does save a little time and a factor ~1.3 in memory if we
+#    # don't deblend
+#    segm_deblend = deblend_sources(ccd.data, segm, 
+#                                   npixels=npixels,
+#                                   filter_kernel=kernel, nlevels=32,
+#                                   contrast=0.001)
+#    
+#    #impl = plt.imshow(segm, origin='lower',
+#    #                  cmap=plt.cm.gray,
+#    #                  filternorm=0, interpolation='none')
+#    #plt.show()
+#
+#    # https://photutils.readthedocs.io/en/stable/segmentation.html
+#
+#
+#    # Very strange this is not working!
+#    #print(ccd.unit, back.background_rms.unit, effective_gain.unit)
+#    #inputs = [ccd, back.background_rms, effective_gain]
+#    #has_unit = [hasattr(x, 'unit') for x in inputs]
+#    #use_units = all(has_unit)
+#    #print(has_unit)
+#    #print(use_units)
+#    #use_units = np.all(has_unit)
+#    #print(use_units)
+#
+#    # As per calc_total_error documentation, effective_gain converts
+#    # ccd.data into count-based units, so it is exptime when we have
+#    # flux units
+#    # --> Eventually get units into this properly with the
+#    # CardQuantity stuff I have been working on, or however that turns
+#    # out, for now assume everything is in seconds
+#    if is_flux(ccd.unit):
+#        effective_gain = ccd.meta['EXPTIME']*u.s
+#    else:
+#        effective_gain = 1*u.s
+#
+#    ###try:
+#    ###    #t = ccd.data*ccd.unit
+#    ###    #print(f'ccd.data*ccd.unit unit {t.unit} {back.background_rms} {effective_gain.unit}')
+#    ###    error = calc_total_error(ccd.data,
+#    ###                             back.background_rms,
+#    ###                             effective_gain)
+#    ###    print(f'success: {in_name}')
+#    ###except Exception as e:
+#    ###    print(f'fail {e} for {in_name}')
+#    ###    error = calc_total_error(ccd.data,
+#    ###                             back.background_rms,
+#    ###                             effective_gain) 
+#
+#    # Use the advertised error, which is supposed to be a bit fluffier
+#    #sc = SourceCatalog(ccd.data, segm_deblend, 
+#    #                   error=ccd.uncertainty.array,
+#    #                   mask=ccd.mask)
+#
+#    #sc = SourceCatalog(ccd.data, segm_deblend, 
+#    #                   error=error,
+#    #                   mask=ccd.mask)
+#
+#
+#    #total_error = np.sqrt(back.background_rms.value**2 + ccd.uncertainty.array)
+#    #compare = total_error - error
+#    #print(f'max val {np.max(ccd.uncertainty.array):.2f} max difference {np.max(np.abs(compare)):.2f} {in_name}')
+#    #sc = SourceCatalog(ccd.data, segm_deblend, 
+#    #                   error=total_error,
+#    #                   mask=ccd.mask)
+#
+#    if ccd.uncertainty is None:
+#        log.warning(f'photometry being conducted on ccd data with no uncertainty.  Is this file being properly reduced? {in_name}')
+#        if ccd.unit == u.adu:
+#            log.warning(f'File is still in adu, cannot calculate proper '
+#                        f'Poisson error for sources {in_name}')
+#            total_error = np.zeros_like(ccd)*u.adu
+#        else:
+#            total_error = calc_total_error(ccd,
+#                                           back.background_rms.value,
+#                                           effective_gain) 
+#    else:
+#        uncert = ccd.uncertainty.array*ccd.unit
+#        if ccd.uncertainty.uncertainty_type == 'std':
+#            total_error = np.sqrt(back.background_rms**2 + uncert**2)
+#        elif ccd.uncertainty.uncertainty_type == 'var':
+#            # --> if I work in units make var units ccd.unit**2
+#            var  = uncert*ccd.unit
+#            total_error = np.sqrt(back.background_rms**2 + var)
+#        else:
+#            raise ValueError(f'Unsupported uncertainty type {ccd.uncertainty.uncertainty_type} for {in_name}')
+#        
+#    ###compare = total_error - error
+#    ###print(f'max val {np.max(ccd.uncertainty.array):.2f} max difference {np.max(np.abs(compare)):.2f} {in_name}')
+#    # Call to SourceCatalog is a little awkward because it expects a Quantity
+#    sc = SourceCatalog(ccd.data*ccd.unit, segm_deblend, 
+#                       error=total_error,
+#                       mask=ccd.mask)
+#    bmp_meta['source_catalog'] = sc
+#    ccd = bmp_cleanup(ccd, bmp_meta=bmp_meta, add='source_catalog')
+#    return ccd
 
 def standard_star_process(ccd,
                           bmp_meta=None,
                           in_name=None,
                           min_ND_multiple=1,
+                          photometry=None,
                           **kwargs):
     """CorMultiPipe post_processing routine to collect standard star photometry.  
     NOTE: Star is assumed to be the brightest in the field.  
@@ -261,37 +568,29 @@ def standard_star_process(ccd,
         be masked using that quantity if `cormultipipe.nd_filter_mask`
         has been called in the `cormultipipe.post_process_list`
 
+
+    photometry : Photometry object
+        Used to calculate SourceCatalog
     """
 
     # Fundamentally, we are going to work from a source catalog table,
-    # but we need to start from a SourceCatalog object
+    # but we need to start from a SourceCatalog object.  The 
+    # Photometry object passed into our pipeline will help us do that
+    # in a way that naturally disposes of the large intermediate
+    # images when we are done with the pipeline.
 
     if bmp_meta is None:
         bmp_meta = {}
-    # Check for existing source_catalog in metadata.
-    sc = bmp_meta.get('source_catalog')
+    if photometry is None:
+        photometry = Photometry(**kwargs)
+    photometry.ccd = ccd
+    sc = photometry.source_catalog
     if sc is None:
-        # Make our own catalog, extract table, and cleanup.  This
-        # saves making a flag for the end of the routine or creating
-        # our own custom object with context. --> If we do more with
-        # the SourceCatalog, we will need to adopt one of these
-        ccd = source_catalog(ccd,
-                             bmp_meta=bmp_meta,
-                             in_name=in_name,
-                             **kwargs)
-        if ccd is None:
-            assert bmp_meta == {}, ('source_catalog should have done this')
-            return None
-        sc = bmp_meta['source_catalog']
-        tbl = sc.to_table()
-        ccd = source_catalog_cleanup(ccd,
-                                     bmp_meta=bmp_meta,
-                                     in_name=in_name,
-                                     **kwargs)
-    else:
-        # Rely on external stuff that created the source_catalog to
-        # delete it
-        tbl = sc.to_table()
+        log.error(f'No source catalog: {in_name}')
+        bmp_meta.clear()
+        return None
+    
+    tbl = sc.to_table()
     
     tbl.sort('segment_flux', reverse=True)
 
@@ -302,7 +601,7 @@ def standard_star_process(ccd,
     if max_val >= nonlin:
         log.warning(f'Too bright: {in_name}')
         # Don't forget to clear out the meta
-        bmp_meta = {}
+        bmp_meta.clear()
         return None
     
     # tbl['xcentroid'].info.format = '.2f'  # optional format
@@ -333,7 +632,7 @@ def standard_star_process(ccd,
     min_ND_dist = min_ND_multiple * (ND_edges[1] - ND_edges[0])
     if ccd.obj_to_ND < min_ND_dist:
         log.warning(f'Too close: ccd.obj_to_ND = {ccd.obj_to_ND} {in_name}')
-        bmp_meta = {}
+        bmp_meta.clear()
         return None
     center = np.asarray(ccd.shape)/2
     radius = ((xcentrd-center[1])**2 + (ycentrd-center[0])**2)**0.5
@@ -424,10 +723,11 @@ def standard_star_process(ccd,
 def standard_star_pipeline(directory,
                            glob_include=None,
                            calibration=None,
+                           photometry=None,
                            num_processes=None,
                            read_pout=False,
                            write_pout=False,
-                           **kwargs):
+                           **kwargs): 
     """
     Parameters
     ----------
@@ -443,6 +743,8 @@ def standard_star_pipeline(directory,
     write_pout : str or bool
         If str, full filename to write pickled pout to.  If True,
         write to 'standard_star.pout' in `directory`.  Default is ``False``
+
+    **kwargs passed on to Photometry and CorMultiPipe
 
     """
 
@@ -461,6 +763,11 @@ def standard_star_pipeline(directory,
         glob_include = ['HD*']
     glob_include = assure_list(glob_include)
 
+    if calibration is None:
+        calibration = Calibration(reduce=True)
+    if photometry is None:
+        photometry = Photometry(precalc=True, **kwargs)
+
     flist = []
     for gi in glob_include:
         flist += glob.glob(os.path.join(directory, gi))
@@ -468,11 +775,13 @@ def standard_star_pipeline(directory,
     if len(flist) == 0:
         return (directory, [])
 
-    cmp = CorMultiPipe(auto=True, calibration=calibration,
-                       num_processes=num_processes,
+    cmp = CorMultiPipe(auto=True,
+                       calibration=calibration,
+                       photometry=photometry,
                        post_process_list=[nd_filter_mask,
                                           standard_star_process,
                                           no_outfile],
+                       num_processes=num_processes,
                        process_expand_factor=15,
                        **kwargs)
     # Pipeline is set with no_outfile so it won't produce any files,
@@ -620,6 +929,8 @@ def standard_star_directory(directory,
 
     if pout is None:
         directory, pout = standard_star_pipeline(directory,
+                                                 calibration=calibration,
+                                                 photometry=photometry,
                                                  read_pout=read_pout,
                                                  write_pout=write_pout,
                                                  **kwargs)
@@ -805,6 +1116,7 @@ def standard_star_directory(directory,
                     exposure_corrects = (counts[ec_idx]/true_flux
                                         - valid_uoes[ec_idx])
                     exposure_corrects = exposure_corrects.tolist()
+                    # --> This may be more efficiently done using julian2num
                     date_obs = tdf['date_obs'].iloc[ec_idx].tolist()
                     texposure_correct_data = \
                         [{'plot_date': d.plot_date,
@@ -963,6 +1275,7 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
                        start=None,
                        stop=None,
                        calibration=None,
+                       photometry=None,
                        read_csvs=True,
                        show=False,
                        ccddata_cls=FwRedCorData, # less verbose
@@ -973,10 +1286,9 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
         log.warning('No directories found')
         return
     if calibration is None:
-        calibration = Calibration(start_date=start,
-                                  stop_date=stop,
-                                  reduce=True,
-                                  **kwargs)        
+        calibration = Calibration(reduce=True)
+    if photometry is None:
+        photometry = Photometry(precalc=True, **kwargs)
 
     extinction_data = []
     exposure_correct_data = []
@@ -984,6 +1296,7 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
         _, extinct, expo = \
             standard_star_directory(d,
                                     calibration=calibration,
+                                    photometry=photometry,
                                     read_csvs=read_csvs,
                                     ccddata_cls=ccddata_cls,
                                     **kwargs)
@@ -991,10 +1304,12 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
         exposure_correct_data.extend(expo)
 
     rd = reduced_dir(data_root, create=True)
-    outname = os.path.join(rd,
-                           f"{start}--{stop}_exposure_correction.png")
+    # This is fast enough so that I don't need to save the plots.
+    # Easier to just run with show=True and manipilate the plot by hand
+    #outname = os.path.join(rd,
+    #                       f"{start}--{stop}_exposure_correction.png")
     exposure_correct_plot(exposure_correct_data,
-                          outname=outname,
+                          #outname=outname,
                           latency_change_dates=sx694.latency_change_dates,
                           show=show)
     return dirs, extinction_data, exposure_correct_data
@@ -1002,11 +1317,6 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
 def standard_star_cmd(args):
     calibration_start = args.calibration_start
     calibration_stop = args.calibration_stop
-    if calibration_start is None:
-        calibration_start = args.start
-    if calibration_stop is None:
-        calibration_stop = args.stop
-
     c = Calibration(start_date=calibration_start,
                     stop_date=calibration_stop,
                     reduce=True,
@@ -1028,16 +1338,16 @@ if __name__ == '__main__':
         '--data_root', help='raw data root',
         default=RAW_DATA_ROOT)
     parser.add_argument(
-        '--start', help='start directory/date (default: earliest -- dangerous!)')
+        '--calibration_start', help='calibration start date')
+    parser.add_argument(
+        '--calibration_stop', help='calibration stop date')
+    parser.add_argument(
+        '--start', help='start directory/date (default: earliest)')
     parser.add_argument(
         '--stop', help='stop directory/date (default: latest)')
     parser.add_argument(
         '--num_processes', type=float, default=0,
         help='number of subprocesses for parallelization; 0=all cores, <1 = fraction of total cores')
-    parser.add_argument(
-        '--calibration_start', help='calibration start date (default: START)')
-    parser.add_argument(
-        '--calibration_stop', help='calibration stop date (default: STOP)')
     parser.add_argument(
         '--read_csvs', action=argparse.BooleanOptionalAction, default=True,
         help='re-read previous results from CSV files in each subdirectory')
@@ -1096,7 +1406,7 @@ if __name__ == '__main__':
 #test = '/data/io/IoIO/raw/20210310/HD 132052-S001-R001-C002-R.fts'
 ##ccd = CCDData.read(test, unit=u.adu)
 ##bmp_meta = {}
-##ccd = source_catalog(ccd,
+##ccd = source_catalog_process(ccd,
 ##                         bmp_meta=bmp_meta,
 ##                         in_name=test)
 #
@@ -1106,7 +1416,7 @@ if __name__ == '__main__':
 #ccd = RedCorData.read(test)
 #ccd = cor_process(ccd, calibration=c, auto=True)
 #bmp_meta = {}
-#ccd = source_catalog(ccd,
+#ccd = source_catalog_process(ccd,
 #                     bmp_meta=bmp_meta,
 #                     in_name=test)
 #
@@ -1132,3 +1442,43 @@ if __name__ == '__main__':
 #    standard_star_directory('/data/io/IoIO/raw/20210510/',
 #                            calibration=c,
 #                            read_csvs=False, show=True)
+
+#standard_star_directory('/data/io/IoIO/raw/20210517/',
+#                        read_pout=False, read_csvs=False)
+
+#test = '/data/io/IoIO/raw/20210310/HD 132052-S001-R001-C002-R.fts'
+#cmp = CorMultiPipe(auto=True, post_process_list=[nd_filter_mask,
+#                                                 standard_star_process],
+#                   process_expand_factor=15)
+#pout = cmp.pipeline([test], outdir='/tmp', overwrite=True)
+
+#standard_star_pipeline('/data/io/IoIO/raw/20200720/',
+#                       read_pout=False, write_pout=True)
+
+#standard_star_directory('/data/io/IoIO/raw/20200720/',
+#                        read_pout=False, read_csvs=False)
+
+
+#test = '/data/io/IoIO/raw/20210310/HD 132052-S001-R001-C002-R.fts'
+#ccd = FwRedCorData.read(test, unit=u.adu)
+#p = Photometry(ccd=ccd)
+
+#dirs, extinction_data, exposure_correct_data = \
+#    standard_star_tree(start='2021-05-10', stop='2021-05-11',
+#                       show=True)
+
+#dirs, extinction_data, exposure_correct_data = \
+#    standard_star_tree(start='2020-07-20', stop='2020-07-20',
+#                       read_pout=False, read_csvs=False, show=True)
+
+
+#dirs, extinction_data, exposure_correct_data = \
+#    standard_star_tree(start='2021-05-10', stop='2021-05-10',
+#                       read_pout=False, read_csvs=False, show=True)
+
+#log.setLevel('DEBUG')
+#standard_star_directory('/data/io/IoIO/raw/20210510/',
+#                        read_pout=False, read_csvs=False)
+#standard_star_directory('/data/io/IoIO/raw/20200720/',
+#                        read_pout=False, read_csvs=False)
+

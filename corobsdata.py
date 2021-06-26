@@ -7,6 +7,7 @@ appropriate for reduction go in a separate module
 import numpy as np
 from scipy import signal, ndimage
 import matplotlib.pyplot as plt
+import matplotlib.transforms as transforms
 
 from astropy import log
 from astropy import units as u
@@ -43,7 +44,7 @@ import sx694
 #    = [[1.40749551e-02, 2.36320869e-02],
 #       [1.24240593e+03, 1.33789081e+03]]
 
-# Mon May 03 11:19:33 2021 EDT  jpmorgen@snipe
+# Sun Apr 25 00:48:25 2021 EDT  jpmorgen@snipe
 RUN_LEVEL_DEFAULT_ND_PARAMS \
     = [[-3.32901729e-01, -3.21280155e-01],
        [ 1.26037690e+03,  1.38195602e+03]]
@@ -153,7 +154,7 @@ def overscan_estimate(ccd_in, meta=None, master_bias=None,
             # Convert bias back to ADU for subtraction
             bias = bias.divide(gain*u.electron/u.adu)
         ccd = ccd.subtract(bias)
-        ccd.meta['subtract_bias'] = True
+        ccd.meta['HIERARCH subtract_bias'] = True
     if type(ccd) != CorData and ccd.meta.get('subtract_bias') is None:
         # Don't gunk up logs when we are taking data, but subclasses
         # of CorObs (e.g. RedCorObs) will produce message
@@ -867,8 +868,12 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             im[boost_NDc0, boost_NDc1] *= 1000
             # Clean up any signal from clouds off the ND filter, which can
             # mess up the center of mass calculation
-            #im[np.where(im < satlevel)] = 0
-            im[np.where(im < sx694.satlevel)] = 0
+            # Fri Jun 25 14:35:05 2021 EDT  jpmorgen@snipe
+            # Not sure what I was thinking by using the
+            # sx694.satlevel, since satlevel may be adjusted for gain
+            # --> check this for error
+            im[np.where(im < satlevel)] = 0
+            #im[np.where(im < sx694.satlevel)] = 0
             y_x = ndimage.measurements.center_of_mass(im)
     
             #print(y_x[::-1])
