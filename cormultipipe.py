@@ -355,6 +355,12 @@ class RedCorData(CorData):
 class FwRedCorData(FilterWarningCCDData, RedCorData):
     warning_filter_list = [FITSFixedWarning]
 
+class OffCorData(RedCorData):
+    def __init__(self, *args,
+                 no_obj_center=True,
+                 **kwargs):
+        super().__init__(*args, no_obj_center=no_obj_center, **kwargs)
+
 ######### CorMultiPipe object
 
 class CorMultiPipe(CCDMultiPipe):
@@ -379,7 +385,7 @@ class CorMultiPipe(CCDMultiPipe):
         """Add full-frame check permanently to pipeline."""
         kwargs = self.kwargs_merge(**kwargs)
         if full_frame(data, **kwargs) is None:
-                return None
+                return (None, {})
         return super().pre_process(data, **kwargs)
 
     def data_process(self, data,
@@ -407,6 +413,9 @@ class CorMultiPipe(CCDMultiPipe):
 
 class FwCorMultiPipe(CorMultiPipe):
     ccddata_cls = FwRedCorData
+
+class OffCorMultiPipe(CorMultiPipe):
+    ccddata_cls = OffCorData
 
 ######### CorMultiPipe prepossessing routines
 def full_frame(data,
@@ -459,7 +468,7 @@ def light_image(im, light_tolerance=3, **kwargs):
         return None
     return im
 
-######### CorMultiPipe postpossessing routines
+######### CorMultiPipe post-processing routines
 def mask_above_key(ccd_in, bmp_meta=None, key=None, margin=0.1, **kwargs):
     """CorMultiPipe post-processing routine to mask pixels > input key
     """
@@ -803,6 +812,7 @@ def cor_process(ccd,
                 fix_filt_name=True,
                 exp_correct=True,
                 date_beg_avg_add=True,
+                remove_raw_jd=True,
                 airmass_correct=True,
                 oscan=None,
                 trim=None,
@@ -895,6 +905,10 @@ def cor_process(ccd,
         Add DATE-BEG and DATE-AVG FITS keywords, which reflect
         best-estimate shutter time and observation midpoint.  DATE-AVG
         should be used for all ephemeris calculations.
+        Default is ``True``
+
+    remove_raw_jd : bool
+        Remove *JD* keywords not calculated from DATE-BEG and DATE-AVG
         Default is ``True``
 
     airmass_correct : bool
@@ -1091,6 +1105,12 @@ def cor_process(ccd,
         # Add DATE-BEG and DATE-AVG FITS keywords
         nccd.meta = sx694.date_beg_avg(nccd.meta, *args, **kwargs)
 
+    if remove_raw_jd:
+        if nccd.meta.get('JD*'):
+            del nccd.meta['JD*']
+        if nccd.meta.get('*JD-OBS'):
+            del nccd.meta['*JD-OBS']
+        
     if airmass_correct:
         # I think this is better at large airmass than what ACP uses,
         # plus it standardizes everything for times I didn't use ACP

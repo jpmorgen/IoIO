@@ -1,3 +1,6 @@
+"""I think this is obsolete
+"""
+
 from scipy import signal, ndimage
 import numpy as np
 

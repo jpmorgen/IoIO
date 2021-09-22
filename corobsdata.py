@@ -9,6 +9,23 @@ from scipy import signal, ndimage
 import matplotlib.pyplot as plt
 import matplotlib.transforms as transforms
 
+#from ginga import toolkit
+#from ginga.qtw.QtHelp import QtGui, QtCore
+#from ginga.gw import Viewers
+#from ginga.misc import log
+#
+#toolkit.use('qt5')
+#logger = log.get_logger("viewer1", log_stderr=True, level=40)
+#app = QtGui.QApplication([])
+#w = QtGui.QMainWindow(logger)
+#w.show()
+#app.setActiveWindow(w)
+#w.raise_()
+#w.activateWindow()
+#
+##v = Viewers.CanvasView(logger=logger)
+
+
 from astropy import log
 from astropy import units as u
 from astropy.stats import biweight_location
@@ -311,33 +328,33 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         if (instrument == 'SX-H694'
             or instrument == 'IoIO Coronagraph'):
             self.meta = sx694.metadata(self.meta)
-        # Define y pixel value along ND filter where we want our
-        # center --> This may change if we are able to track ND filter
-        # sag in Y.
+            # Define y pixel value along ND filter where we want our
+            # center --> This may change if we are able to track ND filter
+            # sag in Y.
         self.y_center_offset        = y_center_offset
         if default_ND_params is True:
             default_ND_params = RUN_LEVEL_DEFAULT_ND_PARAMS
         if default_ND_params is not None:
             default_ND_params       = np.asarray(default_ND_params)
-        self.default_ND_params      = default_ND_params
+            self.default_ND_params      = default_ND_params
         if cwt_width_arange_flat is None:
             cwt_width_arange_flat   = np.arange(2, 60)
-        self.cwt_width_arange_flat  = cwt_width_arange_flat
+            self.cwt_width_arange_flat  = cwt_width_arange_flat
         if cwt_width_arange is None:
             cwt_width_arange        = np.arange(8, 80)
-        self.cwt_width_arange       = cwt_width_arange       
-        self.n_y_steps              = n_y_steps              
-        self.x_filt_width           = x_filt_width
-        self.edge_mask              = edge_mask
-        self.cwt_min_snr            = cwt_min_snr            
-        self.search_margin          = search_margin           
-        self.max_fit_delta_pix      = max_fit_delta_pix      
-        self.max_parallel_delta_pix = max_parallel_delta_pix
-        self.max_ND_width_range	    = max_ND_width_range
-        self.small_filt_crop        = small_filt_crop
-        self.plot_prof		    = plot_prof 
-        self.plot_dprof             = plot_dprof
-        self.plot_ND_edges	    = plot_ND_edges
+            self.cwt_width_arange       = cwt_width_arange       
+            self.n_y_steps              = n_y_steps              
+            self.x_filt_width           = x_filt_width
+            self.edge_mask              = edge_mask
+            self.cwt_min_snr            = cwt_min_snr            
+            self.search_margin          = search_margin           
+            self.max_fit_delta_pix      = max_fit_delta_pix      
+            self.max_parallel_delta_pix = max_parallel_delta_pix
+            self.max_ND_width_range	    = max_ND_width_range
+            self.small_filt_crop        = small_filt_crop
+            self.plot_prof		    = plot_prof 
+            self.plot_dprof             = plot_dprof
+            self.plot_ND_edges	    = plot_ND_edges
 
         self.no_obj_center          = no_obj_center
 
@@ -425,7 +442,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                 tb_ND_params = RUN_LEVEL_DEFAULT_ND_PARAMS
             else:
                 tb_ND_params = default_ND_params
-            # Make a copy so we don't mess up the primary data array
+                # Make a copy so we don't mess up the primary data array
             im = self.data.copy()
             xtop = self.binned(self.ND_edges(ytop, tb_ND_params))
             xbot = self.binned(self.ND_edges(ybot, tb_ND_params))
@@ -469,8 +486,8 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         yrange = np.arange(ytop, ybot, y_bin)
         if yrange[-1] + y_bin > ybot:
             yrange = yrange[0:-1]
-        # picturing the image in C fashion, indexed from the top down,
-        # ypt_top is the top point from which we bin y_bin rows together
+            # picturing the image in C fashion, indexed from the top down,
+            # ypt_top is the top point from which we bin y_bin rows together
 
         for ypt_top in yrange:
             # We will be referencing the measured points to the center
@@ -637,7 +654,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                 raise ValueError('Not able to find ND filter position')
             log.warning('Unable to improve filter position over initial guess')
             return default_ND_params
-            
+        
         ND_edges = np.asarray(ND_edges) + bounds[0]
         ypts = np.asarray(ypts)
         
@@ -660,18 +677,18 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         if self.plot_ND_edges:
             plt.plot(ypts, ND_edges)
             plt.show()
-        
+            
 
         # Try an iterative approach to fitting lines to the ND_edges
         ND_edges = np.asarray(ND_edges)
         ND_params0 = iter_linfit(ypts-im.shape[0]/2, ND_edges[:,0],
-                                    self.max_fit_delta_pix)
+                                 self.max_fit_delta_pix)
         ND_params1 = iter_linfit(ypts-im.shape[0]/2, ND_edges[:,1],
-                                    self.max_fit_delta_pix)
+                                 self.max_fit_delta_pix)
         # Note when np.polyfit is given 2 vectors, the coefs
         # come out in columns, one per vector, as expected in C.
         ND_params = np.transpose(np.asarray((ND_params0, ND_params1)))
-                
+        
         # DEBUGGING
         #plt.plot(ypts, self.ND_edges(ypts, ND_params))
         #plt.show()
@@ -751,7 +768,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
 
     @pgcoordproperty
     def obj_center(self):
-        """Returns center pixel coords of Jupiter whether or not Jupiter is on ND filter.  Unbinned pixel coords are returned.  Use [Cor]Obs_Data.binned() to convert to binned pixels.
+        """Returns center pixel coords of Jupiter whether or not Jupiter is on ND filter.  Unbinned pixel coords are returned.  Use [Cor]ObsData.binned() to convert to binned pixels.
         """
 
         # Check to see if we really want to calculate the center
@@ -767,7 +784,18 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         back_level = self.background / (np.prod(self.binning))
 
         satlevel = self.meta.get('SATLEVEL')# * self.unit
-        readnoise = self.meta.get('RDNOISE')# * u.electron
+        # sx695 doesn't always get to pure saturation, particularly
+        # when there is significant blooming over a large area (?), so
+        # give ourselves some margin
+        satlevel *= 0.75
+        # --> This gets better with FITS header units
+        readnoise = self.meta.get('RDNOISE') * u.electron
+        gain = self.meta.get('GAIN') * u.electron / u.adu
+        if self.unit == u.adu:
+            readnoise /= gain
+        elif self.unit != u.electron:
+            raise ValueError(f'Unknown unit {self.unit}.  Expecting u.adu or u.electron')
+        readnoise = readnoise.value
 
         # Establish some metrics to see if Jupiter is on or off the ND
         # filter.  Easiest one is number of saturated pixels
@@ -777,6 +805,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # additional scattered light).  A star off the ND filter
         # /data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit
         # gives 124 num_sat
+        print(f'satlevel: {satlevel}, max im: {np.max(im)}')
         satc = np.where(im >= satlevel)
         num_sat = len(satc[0])
         #log.debug('Number of saturated pixels in image: ' + str(num_sat))
@@ -796,7 +825,9 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # can't use the std of the ND filter, since it is too biased
         # by Jupiter when it is there.
         NDmed = np.median(im[NDc])
-        boostc = np.where(im[NDc] > (NDmed + 5*readnoise))
+        print(f'ND median level {NDmed}, 5*readnoise= {6*readnoise}')
+
+        boostc = np.where(im[NDc] > (NDmed + 6*readnoise))
         boost_NDc0 = np.asarray(NDc[0])[boostc]
         boost_NDc1 = np.asarray(NDc[1])[boostc]
 
@@ -823,6 +854,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         
         #log.debug('sum of significant pixels on ND filter = ' + str(sum_on_ND_filter))
         print('sum_on_ND_filter = ', sum_on_ND_filter)
+        print(f'num_sat = {num_sat}')
         #if num_sat > 1000 or sum_on_ND_filter < 1E6:
         # Vega is 950,000
         if num_sat > 1000 or sum_on_ND_filter < 0.75E6:
@@ -857,10 +889,10 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                 rr = np.sqrt(xx**2 + yy**2)
                 im[np.where(rr > 200)] = 0
                 y_x = np.asarray(ndimage.measurements.center_of_mass(im))
-    
+                
                 self._obj_center = y_x
                 log.info('Object center (X, Y; binned) = ' +
-                      str(self.binned(self._obj_center)[::-1]))
+                         str(self.binned(self._obj_center)[::-1]))
         else:
             # Here is where we boost what is sure to be Jupiter, if Jupiter is
             # in the ND filter
@@ -875,7 +907,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             im[np.where(im < satlevel)] = 0
             #im[np.where(im < sx694.satlevel)] = 0
             y_x = ndimage.measurements.center_of_mass(im)
-    
+            
             #print(y_x[::-1])
             #plt.imshow(im)
             #plt.show()
@@ -886,9 +918,9 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             log.debug('Object center (X, Y; binned) = '
                       + str(self.binned(self._obj_center)[::-1]))
             self.quality = 6
-        self.header['OBJ_CR0'] = (self._obj_center[1], 'Object center X')
-        self.header['OBJ_CR1'] = (self._obj_center[0], 'Object center Y')
-        self.header['QUALITY'] = (self.quality, 'Quality on 0-10 scale of center determination')
+            self.header['OBJ_CR0'] = (self._obj_center[1], 'Object center X')
+            self.header['OBJ_CR1'] = (self._obj_center[0], 'Object center Y')
+            self.header['QUALITY'] = (self.quality, 'Quality on 0-10 scale of center determination')
         return self._obj_center
 
     @pgproperty
@@ -963,7 +995,67 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                 = (self.obj_to_ND,
                    'Obj perp dist to ND filt (pix)')
 
+class RedCorData(CorData):
+    """This might end up going into the regular CorData if it is not too slow"""
+    @pgcoordproperty
+    def obj_center(self):
+        """Refines determination of Jupiter's center on ND filter (if appropriate)"""
+        com_center = super().obj_center
+        # Use ND width as measuring stick
+        ND_width = self.ND_params[1,1] - self.ND_params[1,0]
+        print('ND_width:', ND_width)
+        print('obj_to_ND:', self.obj_to_ND)
+        if (self.quality < 5
+            or (self.obj_to_ND
+                > ND_width / 2)):
+            # Poor quality or just too far out from ND center
+            return com_center
+        patch_half_width = ND_width / 2
+        patch_half_width = patch_half_width.astype(int)
+        icom_center = com_center.astype(int)
+        print('icom_center:', icom_center)
+        ll = icom_center - patch_half_width
+        ur = icom_center + patch_half_width
+        print('ll', ll)
+        print('ur', ur)
+        patch = self[ll[0]:ur[0], ll[1]:ur[1]]
+        patch -= np.median(patch)
+        print('patch.shape:', patch.shape)
+        rpatch = np.rot90(patch)
+        plt.imshow(patch)
+        plt.show()
+        plt.imshow(rpatch)
+        plt.show()
 
+        cpatch = signal.correlate2d(patch, rpatch)
+        ccenter = np.asarray(ndimage.measurements.center_of_mass(cpatch))
+        # Return array is twice the size of patch
+        center = ccenter/2 + ll
+        # --> consider check with com_center
+        dcenter = center - com_center
+        dcenter_threshold = 10
+        if np.linalg.norm(dcenter) > dcenter_threshold:
+            log.warning(f'correlated center more than '
+                        f'{dcenter_threshold} pixels from COM threashold')
+        print(dcenter)
+       
+        plt.imshow(cpatch)
+        plt.show()
+        from ccdmultipipe.utils.ccddata import FbuCCDData
+        out = FbuCCDData(cpatch, unit='adu')
+        out.write('/tmp/cpatch.fits', overwrite=True)
+
+        return center
+
+    
+
+        #
+        #print('ccenter:', ccenter)
+        #print('ccenter/2 + ll:', ccenter/2 + ll)
+        ##print(com_center)
+        #
+        #return com_center        
+        
 #class TestObs(CorData):
 #    pass
 #
@@ -1030,21 +1122,44 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
 #c.write('/tmp/test.fits', overwrite=True)
 
 if __name__ == '__main__':
-    from IoIO_working_corobsdata.IoIO import CorObsData
-    log.setLevel('DEBUG')
-    old_default_ND_params \
-        = [[  3.63686271e-01,   3.68675375e-01],
-           [  1.28303305e+03,   1.39479846e+03]]
-    fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
-    #fname = '/data/io/IoIO/raw/2021-04-25/Sky_Flat-0001_R.fit'
-    c = CorData.read(fname)#, plot_ND_edges=True)
-    oc = CorObsData(fname, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)
-    print(c.ND_params - oc.ND_params)
-    print(c.ND_angle - oc.ND_angle)
-    print(c.desired_center - oc.desired_center)
-    print(c.obj_center - oc.obj_center)
-    print(c.obj_center, c.desired_center)
-    c.write('/tmp/test.fits', overwrite=True)
+    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
+    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S1.fit'
+    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S2.fit'
+    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S3.fit'
+    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S4.fit'
+    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S8.fit'
+    fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge1.fit'
+
+    from IoIO import CorObsData
+    ccd = CorObsData(fname)
+    print(ccd.obj_center)
+    print(ccd.quality)
+
+    ccd = CorData.read(fname)
+    print(ccd.obj_center)
+    print(ccd.quality)
+
+    ccd = RedCorData.read(fname)
+    #print(ccd.obj_center)
+    #ccd = CorData.read(fname)
+    print(ccd.obj_center)
+    print(ccd.quality)
+
+    #from IoIO_working_corobsdata.IoIO import CorObsData
+    #log.setLevel('DEBUG')
+    #old_default_ND_params \
+    #    = [[  3.63686271e-01,   3.68675375e-01],
+    #       [  1.28303305e+03,   1.39479846e+03]]
+    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
+    ##fname = '/data/io/IoIO/raw/2021-04-25/Sky_Flat-0001_R.fit'
+    #c = CorData.read(fname)#, plot_ND_edges=True)
+    #oc = CorObsData(fname, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)
+    #print(c.ND_params - oc.ND_params)
+    #print(c.ND_angle - oc.ND_angle)
+    #print(c.desired_center - oc.desired_center)
+    #print(c.obj_center - oc.obj_center)
+    #print(c.obj_center, c.desired_center)
+    #c.write('/tmp/test.fits', overwrite=True)
     
 
     #log.setLevel('DEBUG')
@@ -1110,4 +1225,3 @@ if __name__ == '__main__':
     #print(c.obj_center - oc.obj_center)
     #print(c.obj_center, c.desired_center)
     #c.write('/tmp/test.fits', overwrite=True)
-
