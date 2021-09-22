@@ -505,7 +505,104 @@ plt.show()
 ##-##     plt.gcf().autofmt_xdate()  # orient date labels at a slant
 ##-##     plt.show()
 
-    
+
+##-## ######### Constant OFFSCALE
+##-## ######### Check offsets and scaling for final reduced images
+##-## ### 2021 looks beautifully flat
+##-## if onoff == 'AP':
+##-##     plt.plot_date(mpds, 
+##-##                   [row[onoff + 'Rjp15'] - 1000*ADU2R_adjust for row in median_ap_list], '^')
+##-##     plt.plot_date(mpds, 
+##-##                   [(row[onoff + 'Rjp30'] - 750*ADU2R_adjust) * 1 for row in median_ap_list], 's')
+##-##     plt.plot_date(mpds, 
+##-##                   [(row[onoff + 'back'] - 680*ADU2R_adjust) * 1 for row in median_ap_list], 'x')
+##-##     axes = plt.gca()
+##-##     #axes.set_ylim([-50, 700])
+##-##     axes.set_ylim([-500, 7000])
+##-##     plt.xlabel('UT Date')
+##-##     plt.ylabel(line + ' Surface Brightness (R)')
+##-##     plt.legend(['Rj < 7.5 nightly median - 900', '(Rj < 15 nightly median - 320) * 1.5', '(20 < Rj < 25 nightly median - 70) * 2.2'])
+##-##     plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-##     plt.show()
+
+##-## ######### Constant OFFSCALE
+##-## ######### Check offsets and scaling for final reduced images
+##-## ### 2020 gradual change from 2020-04 to 2020-07, where inner apertures
+##-## ### are higher in 2020-04
+##-## if onoff == 'AP':
+##-##     plt.plot_date(mpds, 
+##-##                   [row[onoff + 'Rjp15'] - 300*ADU2R_adjust for row in median_ap_list], '^')
+##-##     plt.plot_date(mpds, 
+##-##                   [(row[onoff + 'Rjp30'] - 65*ADU2R_adjust) * 1 for row in median_ap_list], 's')
+##-##     plt.plot_date(mpds, 
+##-##                   [(row[onoff + 'back'] - 0*ADU2R_adjust) * 1 for row in median_ap_list], 'x')
+##-##     axes = plt.gca()
+##-##     #axes.set_ylim([-50, 700])
+##-##     axes.set_ylim([-500, 7000])
+##-##     plt.xlabel('UT Date')
+##-##     plt.ylabel(line + ' Surface Brightness (R)')
+##-##     plt.legend(['Rj < 7.5 nightly median - 900', '(Rj < 15 nightly median - 320) * 1.5', '(20 < Rj < 25 nightly median - 70) * 2.2'])
+##-##     plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-##     plt.show()
+
+##-## ######### Constant OFFSCALE
+##-## ######### Check offsets and scaling for final reduced images
+##-## ### early 2020
+##-## if onoff == 'AP':
+##-##     plt.plot_date(mpds, 
+##-##                   [row[onoff + 'Rjp15'] - 550*ADU2R_adjust for row in median_ap_list], '^')
+##-##     plt.plot_date(mpds, 
+##-##                   [(row[onoff + 'Rjp30'] - 250*ADU2R_adjust) * 1 for row in median_ap_list], 's')
+##-##     plt.plot_date(mpds, 
+##-##                   [(row[onoff + 'back'] - 100*ADU2R_adjust) * 1 for row in median_ap_list], 'x')
+##-##     axes = plt.gca()
+##-##     #axes.set_ylim([-50, 700])
+##-##     axes.set_ylim([-500, 7000])
+##-##     plt.xlabel('UT Date')
+##-##     plt.ylabel(line + ' Surface Brightness (R)')
+##-##     plt.legend(['Rj < 7.5 nightly median - 900', '(Rj < 15 nightly median - 320) * 1.5', '(20 < Rj < 25 nightly median - 70) * 2.2'])
+##-##     plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-##     plt.show()
+
+##-## ######### Constant OFFSCALE
+##-## ######### Check offsets and scaling for final reduced images
+##-## ### 2019 after larger filter wheel -- very nice overlay
+##-## if onoff == 'AP':
+##-##     plt.plot_date(mpds, 
+##-##                   [row[onoff + 'Rjp15'] - 400*ADU2R_adjust for row in median_ap_list], '^')
+##-##     plt.plot_date(mpds, 
+##-##                   [(row[onoff + 'Rjp30'] - 100*ADU2R_adjust) * 1 for row in median_ap_list], 's')
+##-##     plt.plot_date(mpds, 
+##-##                   [(row[onoff + 'back'] - 0*ADU2R_adjust) * 1 for row in median_ap_list], 'x')
+##-##     axes = plt.gca()
+##-##     #axes.set_ylim([-50, 700])
+##-##     axes.set_ylim([-500, 7000])
+##-##     plt.xlabel('UT Date')
+##-##     plt.ylabel(line + ' Surface Brightness (R)')
+##-##     plt.legend(['Rj < 7.5 nightly median - 900', '(Rj < 15 nightly median - 320) * 1.5', '(20 < Rj < 25 nightly median - 70) * 2.2'])
+##-##     plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-##     plt.show()
+
+##-## ######### Constant OFFSCALE
+##-## ######### Check offsets and scaling for final reduced images
+##-## ### 2018 Indeed, evidence for volcanic activity pretty much disappears
+##-## if onoff == 'AP':
+##-##     plt.plot_date(mpds, 
+##-##                   [row[onoff + 'Rjp15'] - 900*ADU2R_adjust for row in median_ap_list], '^')
+##-##     plt.plot_date(mpds, 
+##-##                   [(row[onoff + 'Rjp30'] - 320*ADU2R_adjust) * 1 for row in median_ap_list], 's')
+##-##     plt.plot_date(mpds, 
+##-##                   [(row[onoff + 'back'] - 90*ADU2R_adjust) * 1 for row in median_ap_list], 'x')
+##-##     axes = plt.gca()
+##-##     #axes.set_ylim([-50, 700])
+##-##     axes.set_ylim([-500, 7000])
+##-##     plt.xlabel('UT Date')
+##-##     plt.ylabel(line + ' Surface Brightness (R)')
+##-##     plt.legend(['Rj < 7.5 nightly median - 900', '(Rj < 15 nightly median - 320) * 1.5', '(20 < Rj < 25 nightly median - 70) * 2.2'])
+##-##     plt.gcf().autofmt_xdate()  # orient date labels at a slant
+##-##     plt.show()
+
+
 
 ##-## ####### Plot ADU2R
 ##-## plt.plot_date(pds,

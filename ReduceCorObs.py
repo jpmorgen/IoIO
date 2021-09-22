@@ -35,9 +35,12 @@ import IoIO
 #from IoIO import CorObsData, run_level_default_ND_params
 import define as D
 
+from cormultipipe import NA_OFF_ON_RATIO, SII_OFF_ON_RATIO
+
 # Constants for use in code
-rversion = 0.2 # reduction version 
+rversion = 0.3 # reduction version 
 data_root = '/data/io/IoIO'
+# Note: plate scale stayed the same when instrument changed
 plate_scale = 1.56/2 # arcsec/pix
 # For greping filter names out of headers, since I may change them or
 # expand the number
@@ -79,10 +82,13 @@ Twheel = Time('2019-03-27T00:00:00', format='fits')
 #SII_on_loss = 0.95
 # 2019 [this seems to be good enough for all dates when looking at
 # read_ap results]
-SII_on_loss = 1.1
+#SII_on_loss = 1.1
 #Na_on_loss = 0.8
 # 2019
 #Na_on_loss = 0.6 ---> 0.5 [see on_loss code below]
+# Sat Jun 26 17:49:12 2021 EDT  jpmorgen@snipe
+# Doing constant OFFSCALE, no on_loss
+
 # Tue Jul 24 17:37:12 2018 EDT  jpmorgen@snipe
 # See notes in ioio.notebk of this day
 global_bias = 1633 # ADU
@@ -846,6 +852,9 @@ def reduce_pair(OnBand_fname=None,
         header['DOFFBSUB'] = (bias_dark - OffBandObsData.back_level,
                              'off-band back - ind. est. back via histogram')
 
+        on_exp = header['EXPTIME']
+        off_exp = OffBandObsData.header['EXPTIME']
+        
         # --> consider just storing this in the header and letting
         # --> subsequent reduction & analysis do things in native
         # --> coordinates
@@ -872,11 +881,8 @@ def reduce_pair(OnBand_fname=None,
              or header.get('DECOFF') is not None)):
             if header['OBJECT'] != 'Jupiter':
                 return
-            print('BOO')
             line = 'Na'
             # Try simple scaled subtraction.
-            on_exp = header['EXPTIME']
-            off_exp = OffBandObsData.header['EXPTIME']
             # Value of 50 is from simple quoted off-band FWHM
             # Na_eq_width is a measurement of the filter eq_width and
             # the ADU2R_adjust was calculated by Carl for Fraunhofer
@@ -1057,19 +1063,21 @@ def reduce_pair(OnBand_fname=None,
             # But we can still have the line look right in our table
             line = '[SII]'
             eq_width = SII_eq_width
-            on_loss = SII_on_loss
+            #on_loss = SII_on_loss
+            off_on_ratio = SII_OFF_ON_RATIO
         elif 'Na' in OnBandObsData.header['FILTER']:
             line = 'Na'
             eq_width = Na_eq_width
-            if T < Twheel:
-                on_loss = 0.8
-            else:
-                on_loss = 0.45
+            off_on_ratio = NA_OFF_ON_RATIO
+            #if T < Twheel:
+            #    on_loss = 0.8
+            #else:
+            #    on_loss = 0.45
         else:
             raise ValueError('Improper filter ' +
                              OnBandObsData.header['FILTER'])
-        header['ON_LOSS'] \
-            = (on_loss, 'on-band scat. light loss for discrete sources')
+        #header['ON_LOSS'] \
+        #    = (on_loss, 'on-band scat. light loss for discrete sources')
         off_im[OffBandObsData.ND_coords] = 0
         # X--> Temporarily fix offscale and add MOFFSCL to header
         #moffscale = on_jup/off_jup
@@ -1080,7 +1088,8 @@ def reduce_pair(OnBand_fname=None,
         #    offscale = 1.18
         #offscale = moffscale
         offscale = on_jup/off_jup
-        off_im = off_im * offscale * on_loss
+        #off_im = off_im * offscale * on_loss
+        off_im = off_im / off_exp * on_exp / off_on_ratio
         scat_sub_im = on_im - off_im
         ## DEBUGGING
         #bad_idx = np.where(on_im > 100)
@@ -1103,7 +1112,8 @@ def reduce_pair(OnBand_fname=None,
         scat_sub_im[O.ND_coords] = good_ndpix
         header['OFFFNAME'] = (OffBand_HDUList.filename(),
                               'off-band file')
-        header['OFFSCALE'] = (offscale, 'scale factor applied to off-band im')
+        header['HIERARCH OFF_ON_RATIO'] = (off_on_ratio, 'off- to on-band filt cont ratio')
+        header['OFFSCALE'] = (offscale, 'on- to off-Jupiter count ratio')
         # Establish calibration in Rayleighs.  Brown & Schneider 1981
         # Jupiter is 5.6 MR/A
         # --> This is between the Na lines, so it is not quite right.  The

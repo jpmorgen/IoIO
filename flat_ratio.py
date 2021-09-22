@@ -25,6 +25,7 @@ def flist_to_dict(flist):
     return dlist
     
 def flat_flux(fname_or_ccd):
+    print(fname_or_ccd)
     ccd = RedCorData.read(fname_or_ccd)
     maxval = ccd.meta['FLATDIV']
     exptime = ccd.meta['EXPTIME']
@@ -36,8 +37,8 @@ c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
 #c = Calibration(start_date='2020-01-01', stop_date='2020-04-24', reduce=True)
 #c = Calibration(start_date='2020-01-01', stop_date='2020-12-31', reduce=True)
 
-on_list = glob.glob(os.path.join(CALIBRATION_ROOT, '*on_flat*'))
-off_list = glob.glob(os.path.join(CALIBRATION_ROOT, '*off_flat*'))
+on_list = glob.glob(os.path.join(CALIBRATION_ROOT, '*on_flat.fits'))
+off_list = glob.glob(os.path.join(CALIBRATION_ROOT, '*off_flat.fits'))
 
 on_dlist = flist_to_dict(on_list)
 off_dlist = flist_to_dict(off_list)
@@ -89,7 +90,8 @@ for ib, band in enumerate(['Na', 'SII']):
                 linestyle='--', color='k', linewidth=1)
     plt.axhline(y=biweight_ratio-mad_std_ratio,
                 linestyle='--', color='k', linewidth=1)
-plt.gcf().autofmt_xdate()
+    plt.ylim([biweight_ratio-3*mad_std_ratio, biweight_ratio+3*mad_std_ratio])
+    plt.gcf().autofmt_xdate()
 
 #plt.savefig(ps.path.join(CALIBRATION_ROOT, 'off_on_ratio_vs_time.png'), transparent=True)
 show= True

@@ -31,6 +31,7 @@ SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 #       [  1.28303305e+03,   1.39479846e+03]]
 
 ## Fri Feb 08 19:35:56 2019 EST  jpmorgen@snipe
+# Start 2019-02-07 ?
 #run_level_default_ND_params \
 #    = [[  4.65269008e-03,   8.76050569e-03],
 #       [  1.27189987e+03,   1.37717911e+03]]
