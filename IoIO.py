@@ -366,7 +366,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
             # everything that is not getting toward saturation to 0
             # --> Might want to fine-tune or remove this so bright
             # Fri Jun 25 14:30:14 2021 EDT  jpmorgen@snipe
-            # Copied over from corobsdata, since caught it there as
+            # Copied over from cordata, since caught it there as
             # potential bug.  Really want to have saturated pixels show
             im[np.where(im < satlevel*0.7)] = 0
             

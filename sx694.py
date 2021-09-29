@@ -298,11 +298,18 @@ def date_beg_avg(hdr_in,
                ('DATE-BEG', date_beg.fits,
                 'Best estimate shutter open time (UTC)'),
                after=True)
+    # Remove now inaccurate and obsolete keywords
+    if hdr.get('date'):
+        del hdr['DATE']
+    if hdr.get('TIME-OBS'):
+        del hdr['TIME-OBS']
+    if hdr.get('UT'):
+        del hdr['UT']
     return hdr
 
-#####################################################################
-# --> These will all go away when corobsdata system is commissioned #
-#####################################################################
+##########################################################################
+# --> These will all go away when IoIO.corobsdata system is commissioned #
+##########################################################################
 
 # --> this is really more of a generic utility.  Also, this could be
 # incorporated with ObsData if the ObsData image + header property

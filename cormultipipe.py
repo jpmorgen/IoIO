@@ -25,6 +25,7 @@ import pandas as pd
 
 from astropy import log
 from astropy import units as u
+from astropy import coordinates as coord
 from astropy.io.fits import Header, getheader
 from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.table import QTable
@@ -40,18 +41,28 @@ from bigmultipipe import num_can_process, WorkerWithKwargs, NestablePool
 from bigmultipipe import multi_proc, multi_logging, prune_pout
 
 from ccdmultipipe import CCDMultiPipe
-from ccdmultipipe.utils import FilterWarningCCDData
 
 import sx694
-from corobsdata import CorData, overscan_estimate
+from cordata import CorData, overscan_estimate
 
 # Processing global variables.  Since I avoid use of the global
 # statement and don't reassign these at global scope, they stick to
 # these values and provide handy defaults for routines and object
 # inits.  It is also a way to be lazy about documenting all of the
-# code :-o  --> This is causing some problems with the way I refer to
-# the same names in the code.  Consider all caps for these constants
+# code :-o
 
+# General FITS WCS reference:
+# https://fits.gsfc.nasa.gov/fits_wcs.html
+# https://heasarc.gsfc.nasa.gov/docs/fcg/standard_dict.html
+
+# See IoIO.notebk Tue Sep 28 08:54:57 2021 EDT  jpmorgen@snipe
+# I wasn't always consistent or correct with my naming or location
+IOIO_1_LOCATION = coord.EarthLocation.from_geodetic(
+    '110 15 25.18 W', '31 56 21.27 N', 1096.342, 'WGS84')
+IOIO_1_LOCATION.info.name = 'IoIO_1'
+
+IOIO_1_LOCATION.info.meta = {
+    'longname': 'Io Input/Output observatory location 1'}
 
 # Tests with first iteration of pipeline showed that the real gain in
 # speed is from the physical processors, not the logical processes
@@ -352,8 +363,8 @@ def closest_in_time(collection, value_pair,
 class RedCorData(CorData):
     pass            
 
-class FwRedCorData(FilterWarningCCDData, RedCorData):
-    warning_filter_list = [FITSFixedWarning]
+#class FwRedCorData(FilterWarningCCDData, RedCorData):
+#    warning_filter_list = [FITSFixedWarning]
 
 class OffCorData(RedCorData):
     def __init__(self, *args,
@@ -411,8 +422,8 @@ class CorMultiPipe(CCDMultiPipe):
                                   **kwargs)
                 for d in data]
 
-class FwCorMultiPipe(CorMultiPipe):
-    ccddata_cls = FwRedCorData
+#class FwCorMultiPipe(CorMultiPipe):
+#    ccddata_cls = FwRedCorData
 
 class OffCorMultiPipe(CorMultiPipe):
     ccddata_cls = OffCorData
@@ -750,6 +761,61 @@ def standardize_filt_name(hdr_in):
                after=True)
     return hdr
 
+def obs_location_to_hdr(hdr_in, location=None):
+    """Standardize FITS header keys for observatory location and name
+    
+    Parameters
+    ----------
+    location : `astropy.coordinates.EarthLocation`
+        Location of observatory to be encoded in FITS header.
+        ``location.name`` is used as TELESCOP keyword and
+        location.info.meta('longname') as the comment to that keyword
+    """
+    if location is None:
+        return hdr_in
+    hdr = hdr_in.copy()
+    lon, lat, alt = location.to_geodetic()
+    hdr['LAT-OBS'] = (lat.value, 'WGS84 Geodetic latitude (deg)')
+    hdr['LONG-OBS'] = (lon.value, 'WGS84 Geodetic longitude (deg)')
+    hdr['ALT-OBS'] = (alt.value, 'WGS84 altitude (m)')
+    name = location.info.name
+    try:
+        longname = location.info.meta.get('longname')
+    except:
+        longname = ''
+    if name is not None:
+        hdr['TELESCOP'] = (name, longname)
+    # delete non-standard keywords
+    if hdr.get('OBSERVAT'):
+        del hdr['OBSERVAT'] # ACP
+    if hdr.get('SITELONG'):
+        del hdr['SITELONG'] # MaxIm
+    if hdr.get('SITELAT'):
+        del hdr['SITELAT'] # MaxIm
+    return hdr
+
+def fix_radecsys_in_hdr(hdr_in):
+    """Change the depreciated RADECSYS keyword to RADESYS
+
+    WCS paper I (Greisen, E. W., and Calabretta, M. R., Astronomy &
+    Astrophysics, 395, 1061-1075, 2002.) defines RADESYSa instead of
+    RADECSYS.  The idea is RADESYS refers to the primary system
+    (e.g. FK4, ICRS, etc.) and RADESYS[A-Z] applies to other systems
+    in the other keywords that might be in units with other
+    distorions, etc.  So moving RADECSYS to RADESYS is forward
+    compatible
+
+    """
+    radecsys = hdr_in.get('RADECSYS')
+    if radecsys is None:
+        return hdr_in
+    hdr = hdr_in.copy()
+    hdr.insert('RADECSYS',
+               ('RADESYS', radecsys, 'Equatorial coordinate system'))
+    del hdr['RADECSYS']
+    return hdr    
+
+
 def kasten_young_airmass(hdr_in):
     """Record airmass considering curvature of Earth
 
@@ -813,6 +879,8 @@ def cor_process(ccd,
                 exp_correct=True,
                 date_beg_avg_add=True,
                 remove_raw_jd=True,
+                obs_location=True,
+                fix_radecsys=True,
                 airmass_correct=True,
                 oscan=None,
                 trim=None,
@@ -904,11 +972,21 @@ def cor_process(ccd,
     date_beg_avg_add : bool
         Add DATE-BEG and DATE-AVG FITS keywords, which reflect
         best-estimate shutter time and observation midpoint.  DATE-AVG
-        should be used for all ephemeris calculations.
+        should be used for all ephemeris calculations.  Also removes
+        inaccurate/obsolete DATE, TIME-OBS, and UT keywords  
         Default is ``True``
 
     remove_raw_jd : bool
         Remove *JD* keywords not calculated from DATE-BEG and DATE-AVG
+        Default is ``True``
+
+    obs_location : bool
+        Standardize FITS header keys for observatory location and
+        name.  Also deletes inaccurate/non-standard keywords
+        Default is ``True``
+
+    fix_radecsys : bool
+        Change RADECSYS to RADESYS as per latest FITS standard
         Default is ``True``
 
     airmass_correct : bool
@@ -1089,6 +1167,7 @@ def cor_process(ccd,
     except Exception as e:
         log.error(f'No calibration available: calibration system problem {e}')
         raise
+
     if ccd_meta:
         # Put in our SX694 camera metadata
         nccd.meta = sx694.metadata(nccd.meta, *args, **kwargs)
@@ -1111,6 +1190,13 @@ def cor_process(ccd,
         if nccd.meta.get('*JD-OBS'):
             del nccd.meta['*JD-OBS']
         
+    if obs_location:
+        nccd.meta = obs_location_to_hdr(nccd.meta,
+                                        location=IOIO_1_LOCATION)
+
+    if fix_radecsys:
+        nccd.meta = fix_radecsys_in_hdr(nccd.meta)
+
     if airmass_correct:
         # I think this is better at large airmass than what ACP uses,
         # plus it standardizes everything for times I didn't use ACP

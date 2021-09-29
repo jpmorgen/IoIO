@@ -32,6 +32,8 @@ from astropy.stats import biweight_location
 
 from astropy_fits_key import FitsKeyArithmeticMixin
 
+from ccdmultipipe.utils import FilterWarningCCDData
+
 from precisionguide import pgproperty, pgcoordproperty
 from precisionguide import MaxImPGD, NoCenterPGD, CenterOfMassPGD
 from precisionguide.utils import hist_of_im, iter_linfit
@@ -320,17 +322,9 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                  no_obj_center=False, # set to True to save calc, BIAS, DARK, FLAT always set to True
                  **kwargs):
         super().__init__(*args, **kwargs)
-        # Add our camera metadata.  Note, because there are many ways
-        # this object is instantiated (e.g. during arithmetic), makes
-        # sure we only do the FITS header manipulations when we are
-        # reasonably sure we have our camera.
-        instrument = self.meta.get('instrume')
-        if (instrument == 'SX-H694'
-            or instrument == 'IoIO Coronagraph'):
-            self.meta = sx694.metadata(self.meta)
-            # Define y pixel value along ND filter where we want our
-            # center --> This may change if we are able to track ND filter
-            # sag in Y.
+        # Define y pixel value along ND filter where we want our
+        # center --> This may change if we are able to track ND filter
+        # sag in Y.
         self.y_center_offset        = y_center_offset
         if default_ND_params is True:
             default_ND_params = RUN_LEVEL_DEFAULT_ND_PARAMS
@@ -777,6 +771,18 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             self.no_obj_center = True
         if self.no_obj_center:
             return NoCenterPGD(self).obj_center           
+
+        # --> I am not sure this is the right place to put this.
+        # --> Should instead be where I need it first
+
+        # Add our camera metadata.  Note, because there are many ways
+        # this object is instantiated (e.g. during arithmetic), makes
+        # sure we only do the FITS header manipulations when we are
+        # reasonably sure we have our camera.
+        instrument = self.meta.get('instrume')
+        if (instrument == 'SX-H694'
+            or instrument == 'IoIO Coronagraph'):
+            self.meta = sx694.metadata(self.meta)
 
         # Work with a copy of the unbinned data array, since we are
         # going to muck with it
