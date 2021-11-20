@@ -1008,6 +1008,10 @@ class RedCorData(CorData):
         """Refines determination of Jupiter's center on ND filter (if appropriate)"""
         com_center = super().obj_center
         # Use ND width as measuring stick
+        # --> This section of code could be a separate procedure.  See
+        # comet_figure for motivation
+        # --> There might alreadcy be something that does this in
+        # astropy or elsewhere
         ND_width = self.ND_params[1,1] - self.ND_params[1,0]
         print('ND_width:', ND_width)
         print('obj_to_ND:', self.obj_to_ND)
@@ -1017,6 +1021,7 @@ class RedCorData(CorData):
             # Poor quality or just too far out from ND center
             return com_center
         patch_half_width = ND_width / 2
+        # --> Check to see what type patch_half_width really is at this point
         patch_half_width = patch_half_width.astype(int)
         icom_center = com_center.astype(int)
         print('icom_center:', icom_center)

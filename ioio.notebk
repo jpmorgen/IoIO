@@ -11139,3 +11139,8 @@ did rsync of IoIO.py.  Still avoiding transition to new
 CorData/precisionguide module system, since there would be a large
 number of changes.  Just copied over the few that were needed in this
 case.
+
+Wed Oct 27 08:38:08 2021 EDT  jpmorgen@snipe
+
+--> Not shutting off properly in case where we go below the horizon
+Does shut od when get to quitat time
