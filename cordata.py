@@ -303,7 +303,7 @@ def keyword_arithmetic_image_handler(meta, operand1, operation, operand2,
 
 class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
     def __init__(self, *args,
-                 default_ND_params=True, # Use RUN_LEVEL_DEFAULT_ND_PARAMS
+                 default_ND_params=None,
                  y_center_offset=0, # *Unbinned* Was 70 for a while See desired_center
                  n_y_steps=8, # was 15 (see adjustment in flat code)
                  x_filt_width=25,
@@ -325,12 +325,8 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # Define y pixel value along ND filter where we want our
         # center --> This may change if we are able to track ND filter
         # sag in Y.
+        self.default_ND_params = default_ND_params
         self.y_center_offset        = y_center_offset
-        if default_ND_params is True:
-            default_ND_params = RUN_LEVEL_DEFAULT_ND_PARAMS
-        if default_ND_params is not None:
-            default_ND_params       = np.asarray(default_ND_params)
-            self.default_ND_params      = default_ND_params
         if cwt_width_arange_flat is None:
             cwt_width_arange_flat   = np.arange(2, 60)
             self.cwt_width_arange_flat  = cwt_width_arange_flat
@@ -354,6 +350,21 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
 
         self.arithmetic_keylist = ['satlevel', 'nonlin']
         self.handle_image = keyword_arithmetic_image_handler
+
+    @pgproperty
+    def default_ND_params(self):
+        # Define our array and default value all in one (a little
+        # risky if FNPAR are partially broken in the FITS header)
+        ND_params = np.asarray(RUN_LEVEL_DEFAULT_ND_PARAMS)
+        # Code from flat correction part of cor_process to use the
+        # master flat ND params as default
+        for i in range(2):
+            for j in range(2):
+                fndpar = self.meta.get(f'fndpar{i}{j}')
+                if fndpar is None:
+                    break
+                ND_params[j][i] = fndpar
+        return ND_params
 
     @pgproperty
     def imagetyp(self):
