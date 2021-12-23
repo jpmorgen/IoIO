@@ -816,11 +816,11 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
 
         # Establish some metrics to see if Jupiter is on or off the ND
         # filter.  Easiest one is number of saturated pixels
-        # /data/io/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit gives
+        # /data/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit gives
         # 4090 of these.  Calculation below suggests 1000 should be a
         # good minimum number of saturated pixels (assuming no
         # additional scattered light).  A star off the ND filter
-        # /data/io/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit
+        # /data/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit
         # gives 124 num_sat
         print(f'satlevel: {satlevel}, max im: {np.max(im)}')
         satc = np.where(im >= satlevel)
@@ -1081,9 +1081,9 @@ class RedCorData(CorData):
 #class TestObs(CorData):
 #    pass
 #
-#bias_fname = '/data/io/IoIO/reduced/Calibration/2020-07-11_ccdT_-5.3_bias_combined.fits'
+#bias_fname = '/data/IoIO/reduced/Calibration/2020-07-11_ccdT_-5.3_bias_combined.fits'
 #master_bias = CorData.read(bias_fname)
-#dfname = '/data/io/IoIO/raw/20200711/Dark-S005-R003-C010-B1.fts'
+#dfname = '/data/IoIO/raw/20200711/Dark-S005-R003-C010-B1.fts'
 #dark = CorData.read(dfname)
 ##o = overscan_estimate(dark, meta=dark.meta, master_bias=bias_fname)
 #o = overscan_estimate(dark, meta=dark.meta, master_bias=master_bias)
@@ -1100,8 +1100,8 @@ class RedCorData(CorData):
 #    = [[  3.63686271e-01,   3.68675375e-01],
 #       [  1.28303305e+03,   1.39479846e+03]]
 
-##fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
-##flat_fname = '/data/io/IoIO/raw/2021-04-25/Sky_Flat-0001_R.fit'
+##fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
+##flat_fname = '/data/IoIO/raw/2021-04-25/Sky_Flat-0001_R.fit'
 ##f = CorData.read(flat_fname)
 ##print(f.ND_params)
 ##c = CorData.read(fname)#, plot_ND_edges=True)
@@ -1144,13 +1144,14 @@ class RedCorData(CorData):
 #c.write('/tmp/test.fits', overwrite=True)
 
 if __name__ == '__main__':
-    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
-    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S1.fit'
-    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S2.fit'
-    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S3.fit'
-    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S4.fit'
-    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S8.fit'
-    fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge1.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S1.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S2.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S3.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S4.fit'
+    fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S8.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge1.fit'
 
     from IoIO import CorObsData
     ccd = CorObsData(fname)
@@ -1172,8 +1173,8 @@ if __name__ == '__main__':
     #old_default_ND_params \
     #    = [[  3.63686271e-01,   3.68675375e-01],
     #       [  1.28303305e+03,   1.39479846e+03]]
-    #fname = '/data/io/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
-    ##fname = '/data/io/IoIO/raw/2021-04-25/Sky_Flat-0001_R.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
+    ##fname = '/data/IoIO/raw/2021-04-25/Sky_Flat-0001_R.fit'
     #c = CorData.read(fname)#, plot_ND_edges=True)
     #oc = CorObsData(fname, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)
     #print(c.ND_params - oc.ND_params)
@@ -1191,7 +1192,7 @@ if __name__ == '__main__':
     #
     #default_ND_params = True
     #from IoIO import CorObsData
-    #fname = '/data/io/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit'
+    #fname = '/data/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit'
     #c = CorData.read(fname, default_ND_params=default_ND_params)#,
     #                 #plot_ND_edges=True)
     #oc = CorObsData(fname, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)#,
@@ -1213,10 +1214,10 @@ if __name__ == '__main__':
     ##print(s.meta)
     ##print(s.arithmetic_keylist)
     #
-    #off_filt_fname = '/data/io/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit'
-    #bias_fname = '/data/io/IoIO/reduced/Calibration/2020-03-26_ccdT_-20.2_bias_combined.fits'
-    #dark_fname = '/data/io/IoIO/reduced/Calibration/2020-03-25_ccdT_-0.3_exptime_3.0s_dark_combined.fits'
-    #flat_fname = '/data/io/IoIO/reduced/Calibration/2020-03-30_Na_off_flat.fits'
+    #off_filt_fname = '/data/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit'
+    #bias_fname = '/data/IoIO/reduced/Calibration/2020-03-26_ccdT_-20.2_bias_combined.fits'
+    #dark_fname = '/data/IoIO/reduced/Calibration/2020-03-25_ccdT_-0.3_exptime_3.0s_dark_combined.fits'
+    #flat_fname = '/data/IoIO/reduced/Calibration/2020-03-30_Na_off_flat.fits'
     #off = CorData.read(off_filt_fname)
     #bias = CorData.read(bias_fname)
     #dark = CorData.read(dark_fname)
@@ -1236,7 +1237,7 @@ if __name__ == '__main__':
     ##print(f'self-substract SATLEVEL = {t.meta["satlevel"]} NONLIN = {t.meta["nonlin"]}, med = {np.median(t)}')
     #
     #
-    #fname = '/data/io/IoIO/raw/20200522/SII_on-band_005.fits'
+    #fname = '/data/IoIO/raw/20200522/SII_on-band_005.fits'
     #c = CorData.read(fname)
     #
     #oc = CorObsData(fname)#, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)#,

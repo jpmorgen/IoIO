@@ -90,13 +90,15 @@ NUM_DARK_EXPTIMES = 8
 NUM_FILTS = 9
 NUM_CALIBRATION_FILES = 11
 
-DATA_ROOT = '/data/io/IoIO'
-RAW_DATA_ROOT = os.path.join(DATA_ROOT, 'raw')
-REDUCED_ROOT = os.path.join(DATA_ROOT, 'reduced')
-CALIBRATION_ROOT = os.path.join(REDUCED_ROOT, 'Calibration')
+IoIO_ROOT = '/data/IoIO'
+RAW_DATA_ROOT = os.path.join(IoIO_ROOT, 'raw')
+# These are MaxIm and ACP day-level raw data directories, respectively
+DATE_FORMATS = ["%Y-%m-%d", "%Y%m%d"]
+CALIBRATION_ROOT = os.path.join(IoIO_ROOT, 'Calibration')
 CALIBRATION_SCRATCH = os.path.join(CALIBRATION_ROOT, 'scratch')
 # string to append to processed files to avoid overwrite of raw data
 OUTNAME_APPEND = "_p"
+
 
 # Lockfiles to prevent multiple upstream parallel processes from
 # simultanously autoreducing calibration data
@@ -154,17 +156,68 @@ def assure_list(x):
         x = [x]
     return x
 
-def reduced_dir(rawdir, create=False):
-    """Create a parallel directory to raw for reduced
-    files.  e.g. /data/io/IoIO/raw/20241111 ->
-    /data/io/IoIO/reduced/20241111.  Tries to do so in an
-    OS-independent way using os.path.sep.  If `rawdir` is not in the
-    raw directory tree, just return rawdir
+def datetime_dir(directory,
+                 date_formats=DATE_FORMATS):
+    """Returns datetime object corresponding to date found in directory
 
     Paramters
     ---------
+    directory : str
+        directory basename.  Possible to have a string following the
+        date, e.g. _cloudy, but may be buggy if date_formats expands
+        to more than ["%Y-%m-%d", "%Y%m%d"]
+
+    date_formats : list
+        list of datetime formats representing valid data-containing
+        directories.  E.g. YYYY-MM-DD (MaxIm) and YYYYMMDD (ACP)
+        ["%Y-%m-%d", "%Y%m%d"]
+
+    Returns
+    -------
+    thisdate : datetime.datetime or False
+
+"""
+    for idf in date_formats:
+        try:
+            # This is a total ugly hack dependent on the particular
+            # date formats I have.  But it allows directories with
+            # date formats and other things like _cloudy to be
+            # considered as valid data.  It works by noting the date
+            # formats are two characters shorter than the length of
+            # the strings I am looking for (%Y is two shorter than
+            # YYYY, but %M is the same as MM, etc.)
+            d = directory
+            d = d[0:min(len(d),len(idf)+2)]
+            thisdate = datetime.datetime.strptime(d, idf)
+            return thisdate
+        except:
+            pass
+    return False
+    
+def reduced_dir(rawdir, reddir_top,
+                create=False,
+                date_formats=DATE_FORMATS):
+    """Create a parallel directory to a rawdir rooted in reddir_top into
+    which reduced files will be deposited.
+
+    Paramters
+    ---------
+    rawdir : str
+        Name of raw directory from which to start.  If this is at or
+        below a night directory (see date_formats), a name of the same
+        type will be returned
+
+    reddir_top : str
+        The name of the top-level reduced directory
+
     create : bool
         Create reduced directory (and parents) if they don't exist
+        Default is ``False``
+
+    date_formats : list
+        list of datetime formats representing valid data-containing
+        directories.  E.g. YYYY-MM-DD (MaxIm) and YYYYMMDD (ACP)
+        ["%Y-%m-%d", "%Y%m%d"]
 
     Returns
     -------
@@ -172,38 +225,59 @@ def reduced_dir(rawdir, create=False):
         Directory name in reduced directory tree structure
 
     """
-
     ps = os.path.sep
-    # This ends up returning rawdir if directory doesn't have /raw/
-    reddir = rawdir.replace(f'{ps}raw{ps}', f'{ps}reduced{ps}')
-    if reddir == rawdir:
-        # catch top-level case
-        reddir = rawdir.replace(f'{ps}raw', f'{ps}reduced')
-    if create:
-        os.makedirs(reddir, exist_ok=True)
-    return reddir
+    # List all elements of the path to the raw directory
+    rawlist = []
+    rparent = rawdir
+    d = True
+    while d:
+        rparent, d = os.path.split(rparent)
+        rawlist.append(d)
+    # Get all directories underneath a date_format directory, keeping
+    # in mind rawlist would list these first
+    redlist = []
+    date_dir = False
+    for d in rawlist:
+        if datetime_dir(d):
+            date_dir = d
+            break
+        redlist.append(d)
+    reddir = reddir_top
+    for d in reversed(redlist):
+        reddir += ps + d
+    if date_dir:
+        return reddir + ps + date_dir
+    return reddir_top
 
 def get_dirs_dates(directory,
                    filt_list=None,
                    start=None,
-                   stop=None):
+                   stop=None,
+                   date_formats=DATE_FORMATS):
     """Starting a root directory "directory," returns list of tuples
-    (subdir, date) sorted by date.  Handles two cases of directory
-    date formatting YYYYMMDD (ACP) and YYYY-MM-DD (MaxIm)
+    (subdir, date) sorted by date.  Handles all cases of directory
+    date formatting in the date_formats list
 
     Parameters
     ----------
     directory : string
         Directory in which to look for subdirectories
+
     filt_list : list of strings 
         Used to filter out bad directories (e.g. ["cloudy", "bad"]
         will omit listing of, e.g., 2018-02-02_cloudy and
         2018-02-03_bad_focus) 
+
     start : string YYYY-MM-DD
         Start date (inclusive).  Default = first date
+
     stop : string YYYY-MM-DD
         Stop date (inclusive).  Default = last date
 
+    date_formats : list
+        list of regexp representing valid data-containing
+        directories.  E.g. YYYY-MM-DD (MaxIm) and YYYYMMDD (ACP)
+        ["%Y-%m-%d", "%Y%m%d"]
     """
     assert os.path.isdir(directory)
     fulldirs = [os.path.join(directory, d) for d in os.listdir(directory)]
@@ -213,26 +287,11 @@ def get_dirs_dates(directory,
                 and os.path.isdir(d)
                 and (filt_list is None
                      or not np.any([filt in d for filt in filt_list])))]
-    # Prepare to pythonically loop through date formats, trying each on 
-    date_formats = ["%Y-%m-%d", "%Y%m%d"]
     ddlist = []
     for thisdir in dirs:
-        d = thisdir
-        dirfail = True
-        for idf in date_formats:
-            # The date formats are two characters shorter than the
-            # length of the strings I am looking for (%Y is two
-            # shorter than YYYY, but %M is the same as MM, etc.)
-            d = d[0:min(len(d),len(idf)+2)]
-            try:
-                thisdate = datetime.datetime.strptime(d, idf)
-                ddlist.append((thisdir, thisdate))
-                dirfail = False
-            except:
-                pass
-        if dirfail:
-            pass
-            #log.debug('Skipping non-date formatted directory: ' + thisdir)
+        thisdate = datetime_dir(thisdir, date_formats=date_formats)
+        if thisdate:
+            ddlist.append((thisdir, thisdate))
     # Thanks to https://stackoverflow.com/questions/9376384/sort-a-list-of-tuples-depending-on-two-elements
     if len(ddlist) == 0:
         return []
@@ -3224,12 +3283,12 @@ if __name__ == "__main__":
     ##ccd = cor_process(ccd, calibration=c, auto=True)
     ##ccd.write('/tmp/test.fits', overwrite=True)
     #
-    #flat = '/data/io/IoIO/raw/2020-06-06/Sky_Flat-0002_B.fit'
+    #flat = '/data/IoIO/raw/2020-06-06/Sky_Flat-0002_B.fit'
     #cmp = CorMultiPipe(auto=True, calibration=c,
     #                   post_process_list=[flat_process])
     #pout = cmp.pipeline([flat], outdir='/tmp', overwrite=True)
 
-##fname1 = '/data/io/IoIO/raw/20210310/HD 132052-S001-R001-C002-R.fts'
+##fname1 = '/data/IoIO/raw/20210310/HD 132052-S001-R001-C002-R.fts'
 #fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
 #pgd = RedCorData.read(fname1)
 #pgd.meta = sx694.metadata(pgd.meta)
@@ -3240,9 +3299,9 @@ if __name__ == "__main__":
 #pgd = detflux(pgd)
 #print(pgd.meta)
 
-##print(reduced_dir('/data/io/IoIO/raw/20210513'))
-##print(reduced_dir('/data/io/IoIO/raw/20210513', create=True))
-##print(reduced_dir('/data/io/IoIO/raw'))
+##print(reduced_dir('/data/IoIO/raw/20210513'))
+##print(reduced_dir('/data/IoIO/raw/20210513', create=True))
+##print(reduced_dir('/data/IoIO/raw'))
 
 #c = Calibration(start_date='2019-02-18', stop_date='2021-12-31', reduce=True)
 #c = Calibration(start_date='2019-02-12', stop_date='2019-02-12', reduce=True)
@@ -3250,7 +3309,7 @@ if __name__ == "__main__":
 #c = Calibration(reduce=True)
 
 
-#f = fdict_list_collector(flat_fdict_creator, directory='/data/io/IoIO/raw/2019-08-25', imagetyp='flat', subdirs=CALIBRATION_SUBDIRS, glob_include=FLAT_GLOB)
+#f = fdict_list_collector(flat_fdict_creator, directory='/data/IoIO/raw/2019-08-25', imagetyp='flat', subdirs=CALIBRATION_SUBDIRS, glob_include=FLAT_GLOB)
 
 #print(f[0])
 
@@ -3262,6 +3321,14 @@ if __name__ == "__main__":
 #c = Calibration(start_date='2020-07-11', stop_date='2020-07-11', reduce=True)
 #c = Calibration(reduce=True)
 
-#na_back_on = '/data/io/IoIO/raw/20210525/Jupiter-S007-R001-C001-Na_off.fts'
+#na_back_on = '/data/IoIO/raw/20210525/Jupiter-S007-R001-C001-Na_off.fts'
 #ccd = CorData.read(na_back_on)
 #nd_filter_mask(ccd)
+
+#    while rparent != ps:
+
+
+#print(reduced_dir2('/data/IoIO/raw/20201111', '/tmp'))
+#print(reduced_dir2('/data/IoIO/raw/T20201111', '/tmp'))
+#print(get_dirs_dates('/data/IoIO/raw', start='2018-02-20', stop='2018-03-01'))
+#print(reduced_dir('/data/IoIO/raw', '/tmp'))
