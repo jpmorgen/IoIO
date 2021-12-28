@@ -5,7 +5,9 @@ appropriate for reduction go in a separate module
 """
 
 import numpy as np
-from scipy import signal, ndimage
+from scipy import signal
+from scipy.ndimage import gaussian_filter
+from scipy.ndimage.measurements import center_of_mass
 import matplotlib.pyplot as plt
 import matplotlib.transforms as transforms
 
@@ -39,7 +41,6 @@ from precisionguide import MaxImPGD, NoCenterPGD, CenterOfMassPGD
 from precisionguide.utils import hist_of_im, iter_linfit
 
 import sx694
-
 
 # Ideally I make this a function that returns the proper
 # default_ND_params as a function of date.  However, there is no point
@@ -546,10 +547,9 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                                     self.ND_edges(
                                         rowpt+ypt_top,
                                         default_ND_params))))
-                    #print('this_ND_center: ', this_ND_center)
-                    #print('subim_hw: ', subim_hw)
-                    dcenter = np.abs(this_ND_center  - self.shape[1]/2)
-                    if dcenter > self.shape[1]/4:
+                    dcenter = np.abs(this_ND_center
+                                     - self.unbinned(self.shape)[1]/2)
+                    if dcenter > self.unbinned(self.shape)[1]/4:
                         raise ValueError('this_ND_center too far off')
                     left = max((0, this_ND_center-subim_hw))
                     right = min((this_ND_center+subim_hw,
@@ -759,6 +759,16 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         ND_coords = (ys, xs)
         return ND_coords
 
+    # --> change this to a regular method
+    def ND_coords_above(self, level):
+        """Returns tuple of coordinates of pixels with decent signal in ND filter"""
+        # Get the coordinates of the ND filter
+        NDc = self.ND_coords
+        abovec = np.where(self.self_unbinned.data[NDc] > level)
+        above_NDc0 = np.asarray(NDc[0])[abovec]
+        above_NDc1 = np.asarray(NDc[1])[abovec]
+        return (above_NDc0, above_NDc1)
+
     # Turn ND_angle into a "getter"
     @pgproperty
     def ND_angle(self):
@@ -771,21 +781,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
     def background(self):
         return overscan_estimate(self)
 
-    @pgcoordproperty
-    def obj_center(self):
-        """Returns center pixel coords of Jupiter whether or not Jupiter is on ND filter.  Unbinned pixel coords are returned.  Use [Cor]ObsData.binned() to convert to binned pixels.
-        """
-
-        # Check to see if we really want to calculate the center
-        imagetyp = self.meta.get('IMAGETYP')
-        if imagetyp.lower() in ['bias', 'dark', 'flat']:
-            self.no_obj_center = True
-        if self.no_obj_center:
-            return NoCenterPGD(self).obj_center           
-
-        # --> I am not sure this is the right place to put this.
-        # --> Should instead be where I need it first
-
+    def get_metadata(self):
         # Add our camera metadata.  Note, because there are many ways
         # this object is instantiated (e.g. during arithmetic), makes
         # sure we only do the FITS header manipulations when we are
@@ -794,17 +790,12 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         if (instrument == 'SX-H694'
             or instrument == 'IoIO Coronagraph'):
             self.meta = sx694.metadata(self.meta)
+        # Other cameras would be added here...
 
-        # Work with a copy of the unbinned data array, since we are
-        # going to muck with it
-        im = self.self_unbinned.data.copy()
-        back_level = self.background / (np.prod(self.binning))
-
-        satlevel = self.meta.get('SATLEVEL')# * self.unit
-        # sx695 doesn't always get to pure saturation, particularly
-        # when there is significant blooming over a large area (?), so
-        # give ourselves some margin
-        satlevel *= 0.75
+    @property
+    def readnoise(self):
+        """Returns CCD readnoise as value in same unit as primary array"""
+        self.get_metadata()
         # --> This gets better with FITS header units
         readnoise = self.meta.get('RDNOISE') * u.electron
         gain = self.meta.get('GAIN') * u.electron / u.adu
@@ -812,7 +803,35 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             readnoise /= gain
         elif self.unit != u.electron:
             raise ValueError(f'Unknown unit {self.unit}.  Expecting u.adu or u.electron')
-        readnoise = readnoise.value
+        return readnoise.value
+        
+    @property
+    def nonlin(self):
+        """Returns nonlinearity level in same unit as primary array"""
+        self.get_metadata()
+        return self.meta.get('NONLIN')# * self.unit
+        
+    
+
+    @pgcoordproperty
+    def obj_center(self):
+        """Returns center pixel coords of Jupiter whether or not Jupiter is on ND filter.  Unbinned pixel coords are returned.  Use [Cor]ObsData.binned() to convert to binned pixels.
+        """
+
+        plt.imshow(self)
+        plt.show()
+        
+        # Check to see if we really want to calculate the center
+        imagetyp = self.meta.get('IMAGETYP')
+        if imagetyp.lower() in ['bias', 'dark', 'flat']:
+            self.no_obj_center = True
+        if self.no_obj_center:
+            return NoCenterPGD(self).obj_center           
+
+        # Work with a copy of the unbinned data array, since we are
+        # going to muck with it.  Make sure it is not raw int
+        im = np.double(self.self_unbinned.data.copy()) / (np.prod(self.binning))
+        back_level = self.background / (np.prod(self.binning))
 
         # Establish some metrics to see if Jupiter is on or off the ND
         # filter.  Easiest one is number of saturated pixels
@@ -822,31 +841,15 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # additional scattered light).  A star off the ND filter
         # /data/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit
         # gives 124 num_sat
-        print(f'satlevel: {satlevel}, max im: {np.max(im)}')
-        satc = np.where(im >= satlevel)
+        log.debug(f'back_level = {self.background}, self.nonlin: {self.nonlin}, max im: {np.max(im)}')
+        satc = np.where(im >= self.nonlin)
         num_sat = len(satc[0])
-        #log.debug('Number of saturated pixels in image: ' + str(num_sat))
 
         # Work another way to see if the ND filter has a low flux
         # Note, this assignment dereferences im from HDUList[0].data
         im  = im - back_level
-        satlevel -= back_level
+        nonlin = self.nonlin - back_level
         
-        # Get the coordinates of the ND filter
-        NDc = self.ND_coords
-
-        # Filter ND coords for ones that are at least 5 std of the
-        # bias noise above the median.  Calculate a fresh median for
-        # the ND filter just in case it is different than the median
-        # of the image as a whole (which is now 0 -- see above).  We
-        # can't use the std of the ND filter, since it is too biased
-        # by Jupiter when it is there.
-        NDmed = np.median(im[NDc])
-        print(f'ND median level {NDmed}, 5*readnoise= {6*readnoise}')
-
-        boostc = np.where(im[NDc] > (NDmed + 6*readnoise))
-        boost_NDc0 = np.asarray(NDc[0])[boostc]
-        boost_NDc1 = np.asarray(NDc[1])[boostc]
 
         # Come up with a metric for when Jupiter is in the ND filter.
         # Below is my scratch work        
@@ -863,82 +866,135 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # 
         # np.pi * (Rj/plate)**2 * 1000 
         # array([ 3119112.76311733,  1103540.18436529])
-        
-        sum_on_ND_filter = np.sum(im[boost_NDc0, boost_NDc1])
+
+        # Filter ND coords for ones that are at least 6 std of the
+        # bias noise above the median.  Calculate a fresh median for
+        # the ND filter just in case it is different than the median
+        # of the image as a whole (which is now 0 -- see above).  We
+        # can't use the std of the ND filter, since it is too biased
+        # by Jupiter when it is there.
+        NDmed = np.median(im[self.ND_coords])
+        log.debug(f'ND median level {NDmed}, 6*self.readnoise= {6*self.readnoise}')
+        usable_ND_coords = self.ND_coords_above(NDmed + 6*self.readnoise)
+        sum_on_ND_filter = np.sum(im[usable_ND_coords[0],
+                                     usable_ND_coords[1]])
         # Adjust for the case where ND filter may have a fairly
         # high sky background.  We just want Jupiter
-        sum_on_ND_filter -= NDmed * len(boost_NDc0)
+        sum_on_ND_filter -= NDmed * len(usable_ND_coords[0])
+        jup_sat_threshold = 1000
+        min_source_threshold = 250
+        # Vega is 950,000, Jupiter is 1E6, leave it usable for Vega
+        jup_sum_on_ND_filter_threshold = 0.75E6
         
-        #log.debug('sum of significant pixels on ND filter = ' + str(sum_on_ND_filter))
-        print('sum_on_ND_filter = ', sum_on_ND_filter)
-        print(f'num_sat = {num_sat}')
-        #if num_sat > 1000 or sum_on_ND_filter < 1E6:
-        # Vega is 950,000
-        if num_sat > 1000 or sum_on_ND_filter < 0.75E6:
-            log.warning('Jupiter outside of ND filter?')
+        log.debug(f'Number of saturated pixels in image = {num_sat}; Jupiter nominal threshold = {jup_sat_threshold}, minimum source {min_source_threshold}')
+        log.debug(f'Sum of significant pixels on ND filter = {sum_on_ND_filter:5.3e}; threshold = {jup_sum_on_ND_filter_threshold:5.3e}')
+        if (num_sat > jup_sat_threshold
+            or sum_on_ND_filter < jup_sum_on_ND_filter_threshold):
+            log.debug('Jupiter outside of ND filter?')
             # Outside the ND filter, Jupiter should be saturating.  To
             # make the center of mass calc more accurate, just set
             # everything that is not getting toward saturation to 0
             # --> Might want to fine-tune or remove this so bright
-            im[np.where(im < satlevel*0.7)] = 0
-            
-            #log.debug('Approx number of saturating pixels ' + str(np.sum(im)/65000))
+            im[np.where(im < nonlin*0.7)] = 0
 
             # 25 worked for a star, 250 should be conservative for
             # Jupiter (see above calcs)
-            # if np.sum(im) < satlevel * 25:
-            if np.sum(im) < satlevel * 250:
-                self.quality = 4
-                log.warning('Jupiter (or suitably bright object) not found in image.  This object is unlikely to show up on the ND filter.  Seeting quality to ' + str(self.quality) + ', center to [-99, -99]')
-                self._obj_center = np.asarray([-99, -99])
-            else:
-                self.quality = 6
-                # If we made it here, Jupiter is outside the ND filter,
-                # but shining bright enough to be found
-                # --> Try iterative approach
-                ny, nx = im.shape
-                y_x = np.asarray(ndimage.measurements.center_of_mass(im))
-                print(y_x)
-                y = np.arange(ny) - y_x[0]
-                x = np.arange(nx) - y_x[1]
-                # input/output Cartesian direction by default
-                xx, yy = np.meshgrid(x, y)
-                rr = np.sqrt(xx**2 + yy**2)
-                im[np.where(rr > 200)] = 0
-                y_x = np.asarray(ndimage.measurements.center_of_mass(im))
-                
-                self._obj_center = y_x
-                log.info('Object center (X, Y; binned) = ' +
-                         str(self.binned(self._obj_center)[::-1]))
-        else:
-            # Here is where we boost what is sure to be Jupiter, if Jupiter is
-            # in the ND filter
-            # --> this has trouble when there is bright skys
-            im[boost_NDc0, boost_NDc1] *= 1000
-            # Clean up any signal from clouds off the ND filter, which can
-            # mess up the center of mass calculation
-            # Fri Jun 25 14:35:05 2021 EDT  jpmorgen@snipe
-            # Not sure what I was thinking by using the
-            # sx694.satlevel, since satlevel may be adjusted for gain
-            # --> check this for error
-            im[np.where(im < satlevel)] = 0
-            #im[np.where(im < sx694.satlevel)] = 0
-            y_x = ndimage.measurements.center_of_mass(im)
-            
-            #print(y_x[::-1])
-            #plt.imshow(im)
-            #plt.show()
-            #return (y_x[::-1], ND_center)
-    
-            # Stay in Pythonic y, x coords
-            self._obj_center = np.asarray(y_x)
-            log.debug('Object center (X, Y; binned) = '
-                      + str(self.binned(self._obj_center)[::-1]))
+            # if np.sum(im) < nonlin * 25:
+            if np.sum(im) < nonlin * 250:
+                log.debug('Jupiter (or suitably bright object) not found in image.')
+                return NoCenterPGD(self).obj_center           
+
+            # If we made it here, Jupiter is outside the ND filter,
+            # but shining bright enough to be found
+            # Use iterative approach
+            ny, nx = im.shape
+            y_x = np.asarray(center_of_mass(im))
+            log.debug(f'First iteration COM (X, Y; binned) = {self.binned(y_x)[::-1]}')
+            y = np.arange(ny) - y_x[0]
+            x = np.arange(nx) - y_x[1]
+            # input/output Cartesian direction by default
+            xx, yy = np.meshgrid(x, y)
+            rr = np.sqrt(xx**2 + yy**2)
+            # --> Make this property of object
+            im[np.where(rr > 200)] = 0
+            y_x = np.asarray(center_of_mass(im))
+            log.debug(f'Second iteration COM (X, Y; binned) = {self.binned(y_x)[::-1]}')
             self.quality = 6
-            self.header['OBJ_CR0'] = (self._obj_center[1], 'Object center X')
-            self.header['OBJ_CR1'] = (self._obj_center[0], 'Object center Y')
-            self.header['QUALITY'] = (self.quality, 'Quality on 0-10 scale of center determination')
-        return self._obj_center
+            return y_x
+
+        # If we made it here, we are reasonably sure Jupiter or a
+        # suitably bright object is on the ND filter
+        log.debug(f'Bright object on ND filter')
+
+        # Zero out all pixels that (1) are not on the ND filter and
+        # (2) do not have decent signal
+        boost_factor = nonlin*1000
+        boost_ND_coords = self.ND_coords_above(NDmed + 6*self.readnoise)
+        im[boost_ND_coords[0], boost_ND_coords[1]] *= boost_factor
+        im[np.where(im < boost_factor)] = 0
+        
+        # First iteration COM
+        y_x = np.asarray(center_of_mass(im))
+        log.debug(f'First iteration COM (X, Y; binned) = {self.binned(y_x)[::-1]}')        
+        # Work with a patch of our (background-subtracted) image
+        # centered on the first iteration COM.  
+        ND_width = self.ND_params[1,1] - self.ND_params[1,0]
+        patch_half_width = ND_width / 2
+        patch_half_width = patch_half_width.astype(int)
+        iy_x = y_x.astype(int)
+        ll = iy_x - patch_half_width
+        ur = iy_x + patch_half_width
+        patch = im[ll[0]:ur[0], ll[1]:ur[1]]
+        patch /= boost_factor
+
+        plt.imshow(patch)
+        plt.show()
+
+        # Check for the case when Jupiter is near the edge of the ND
+        # filter.  Optical effects result in bright pixels on the ND
+        # filter that confuse the COM.
+        bad_ND_coords = self.ND_coords_above(nonlin)
+        nbad = len(bad_ND_coords[0])
+        bright_on_ND_threshold = 50
+        log.debug(f'Number of bright pixels on ND filter = {nbad}; threshold = {bright_on_ND_threshold}')
+        if nbad > bright_on_ND_threshold: 
+            log.debug(f'Setting bright pixels to ND median value')
+            # As per calculations above, this is ~5% of Jupiter's area
+            # Experiments with /data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit and friends show there is an edge of ~5 pixels around the plateau
+            bad_patch = np.zeros_like(patch)
+            bad_patch[np.where(patch > nonlin)] = nonlin
+            plt.imshow(bad_patch)
+            plt.show()
+            bad_patch = gaussian_filter(bad_patch, sigma=5)
+            plt.imshow(bad_patch)
+            plt.show()
+            patch[np.where(bad_patch > 0.1*np.max(bad_patch))] = NDmed
+            plt.imshow(patch)
+            plt.show()
+            pcenter = np.asarray(center_of_mass(patch))
+            y_x = pcenter + ll
+            log.debug(f'Scattered light cleaned COM (X, Y; binned) = {self.binned(y_x)[::-1]}')        
+            
+            self.quality = 6
+            return y_x
+        
+        # If we made it here, Jupiter should be clean on the ND
+        # filter.
+        pcenter = np.asarray(center_of_mass(patch))
+        y_x = pcenter + ll
+        log.debug(f'Jupiter COM from patch (X, Y; binned) = {self.binned(y_x)[::-1]}')
+
+        ## --> Experiment with a really big hammer.  Wasn't any
+        ## slower, but didn't give an different answer
+        #pccd = CorData(patch, meta=self.meta)
+        #photometry = Photometry(ccd=pccd)
+        #sc = photometry.source_catalog
+        #tbl = sc.to_table()
+        #tbl.sort('segment_flux', reverse=True)
+        #tbl.show_in_browser()
+
+        self.quality = 8
+        return y_x
 
     @pgproperty
     def obj_to_ND(self):
@@ -1012,63 +1068,85 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                 = (self.obj_to_ND,
                    'Obj perp dist to ND filt (pix)')
 
-class RedCorData(CorData):
-    """This might end up going into the regular CorData if it is not too slow"""
-    @pgcoordproperty
-    def obj_center(self):
-        """Refines determination of Jupiter's center on ND filter (if appropriate)"""
-        com_center = super().obj_center
-        # Use ND width as measuring stick
-        # --> This section of code could be a separate procedure.  See
-        # comet_figure for motivation
-        # --> There might alreadcy be something that does this in
-        # astropy or elsewhere
-        ND_width = self.ND_params[1,1] - self.ND_params[1,0]
-        print('ND_width:', ND_width)
-        print('obj_to_ND:', self.obj_to_ND)
-        if (self.quality < 5
-            or (self.obj_to_ND
-                > ND_width / 2)):
-            # Poor quality or just too far out from ND center
-            return com_center
-        patch_half_width = ND_width / 2
-        # --> Check to see what type patch_half_width really is at this point
-        patch_half_width = patch_half_width.astype(int)
-        icom_center = com_center.astype(int)
-        print('icom_center:', icom_center)
-        ll = icom_center - patch_half_width
-        ur = icom_center + patch_half_width
-        print('ll', ll)
-        print('ur', ur)
-        patch = self[ll[0]:ur[0], ll[1]:ur[1]]
-        patch -= np.median(patch)
-        print('patch.shape:', patch.shape)
-        rpatch = np.rot90(patch)
-        plt.imshow(patch)
-        plt.show()
-        plt.imshow(rpatch)
-        plt.show()
-
-        cpatch = signal.correlate2d(patch, rpatch)
-        ccenter = np.asarray(ndimage.measurements.center_of_mass(cpatch))
-        # Return array is twice the size of patch
-        center = ccenter/2 + ll
-        # --> consider check with com_center
-        dcenter = center - com_center
-        dcenter_threshold = 10
-        if np.linalg.norm(dcenter) > dcenter_threshold:
-            log.warning(f'correlated center more than '
-                        f'{dcenter_threshold} pixels from COM threashold')
-        print(dcenter)
-       
-        plt.imshow(cpatch)
-        plt.show()
-        from ccdmultipipe.utils.ccddata import FbuCCDData
-        out = FbuCCDData(cpatch, unit='adu')
-        out.write('/tmp/cpatch.fits', overwrite=True)
-
-        return center
-
+## This ended up being no better
+#class RedCorData(CorData):
+#    """This might end up going into the regular CorData if it is not too slow"""
+#
+#    @pgcoordproperty
+#    def obj_center(self):
+#        """Refines determination of Jupiter's center on ND filter (if appropriate)"""
+#        com_center = super().obj_center
+#        # Use ND width as measuring stick
+#        # --> This section of code could be a separate procedure.  See
+#        # comet_figure for motivation
+#        # --> There might already be something that does this in
+#        # astropy or elsewhere
+#        ND_width = self.ND_params[1,1] - self.ND_params[1,0]
+#        print('ND_width:', ND_width)
+#        print('obj_to_ND:', self.obj_to_ND)
+#        if (self.quality <= 6
+#            or (self.obj_to_ND
+#                > ND_width / 2)):
+#            # Poor quality or just too far out from ND center
+#            return com_center
+#        patch_half_width = ND_width / 2
+#        # --> Check to see what type patch_half_width really is at this point
+#        patch_half_width = patch_half_width.astype(int)
+#        icom_center = com_center.astype(int)
+#        print('icom_center:', icom_center)
+#        ll = icom_center - patch_half_width
+#        ur = icom_center + patch_half_width
+#
+#        # Boost what we hope is Jupiter
+#        im = np.double(self.self_unbinned.data.copy())
+#        # When Jupiter is near the edge of the ND filter, optical
+#        # effects result in bright pixels on the ND filter that
+#        # confuse the COM.  Try knocking down those bright pixels
+#        NDmed = np.median(self.self_unbinned.data[self.ND_coords])
+#        bad_ND_coords = self.ND_coords_above(self.nonlin)
+#        im[bad_ND_coords[0], bad_ND_coords[1]] = NDmed
+#        boost_ND_coords = self.ND_coords_above(NDmed + 6*self.readnoise)
+#        im[boost_ND_coords[0], boost_ND_coords[1]] *= 1000
+#        patch = im[ll[0]:ur[0], ll[1]:ur[1]]
+#        patch -= np.median(patch)
+#
+#        ## --> experimenting with jupiter-like convolution
+#        ##kernel = Gaussian2DKernel(50)
+#        #kernel = Gaussian2DKernel(4)
+#        #kernel.normalize()
+#        ##patch = convolve(patch, kernel)
+#        #cpatch = signal.correlate2d(patch, kernel)
+#
+#        print('patch.shape:', patch.shape)
+#        rpatch = np.rot90(patch)
+#        plt.imshow(patch)
+#        plt.show()
+#        plt.imshow(rpatch)
+#        plt.show()
+#
+#        cpatch = signal.correlate2d(patch, rpatch)
+#        ccenter = np.unravel_index(np.argmax(cpatch), cpatch.shape)
+#        ccenter = np.asarray(ccenter)
+#        ccenter = np.asarray(center_of_mass(cpatch))
+#        print(f'ccenter = {ccenter}')
+#        # Return array is twice the size of patch
+#        center = ccenter/2 + ll
+#        # --> consider check with com_center
+#        dcenter = center - com_center
+#        dcenter_threshold = 10
+#        if np.linalg.norm(dcenter) > dcenter_threshold:
+#            log.warning(f'correlated center more than '
+#                        f'{dcenter_threshold} pixels from COM threashold')
+#        print(dcenter)
+#       
+#        plt.imshow(cpatch)
+#        plt.show()
+#        from ccdmultipipe.utils.ccddata import FbuCCDData
+#        out = FbuCCDData(cpatch, unit='adu')
+#        out.write('/tmp/cpatch.fits', overwrite=True)
+#
+#        return center
+#
     
 
         #
@@ -1144,29 +1222,37 @@ class RedCorData(CorData):
 #c.write('/tmp/test.fits', overwrite=True)
 
 if __name__ == '__main__':
+    log.setLevel('DEBUG')
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S1.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S2.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S3.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S4.fit'
-    fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S5.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S6.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S8.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S9.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge1.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S10.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Gal_sat_on_ND.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit'
+    fname = '/data/IoIO/raw/20210616/CK20R040-S001-R001-C001-R_dupe-6.fts'
 
-    from IoIO import CorObsData
-    ccd = CorObsData(fname)
-    print(ccd.obj_center)
-    print(ccd.quality)
+    #from IoIO import CorObsData
+    #ccd = CorObsData(fname)
+    #print(ccd.obj_center)
+    #print(ccd.quality)
 
     ccd = CorData.read(fname)
     print(ccd.obj_center)
     print(ccd.quality)
 
-    ccd = RedCorData.read(fname)
+    #ccd = RedCorData.read(fname)
+    ##print(ccd.obj_center)
+    ##ccd = CorData.read(fname)
     #print(ccd.obj_center)
-    #ccd = CorData.read(fname)
-    print(ccd.obj_center)
-    print(ccd.quality)
+    #print(ccd.quality)
 
     #from IoIO_working_corobsdata.IoIO import CorObsData
     #log.setLevel('DEBUG')

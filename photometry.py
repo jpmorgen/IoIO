@@ -21,7 +21,7 @@ import pandas as pd
 from astropy import log
 from astropy import units as u
 from astropy.time import Time
-from astropy.convolution import Gaussian2DKernel, convolve
+from astropy.convolution import Gaussian2DKernel
 from astropy.stats import gaussian_fwhm_to_sigma, sigma_clipped_stats
 from astropy.stats import mad_std, biweight_location
 
@@ -36,7 +36,7 @@ from precisionguide import pgproperty
 import sx694
 from cormultipipe import RAW_DATA_ROOT
 from cormultipipe import assure_list, reduced_dir, get_dirs_dates
-from cormultipipe import FwRedCorData, CorMultiPipe, Calibration
+from cormultipipe import RedCorData, CorMultiPipe, Calibration
 from cormultipipe import nd_filter_mask, mask_nonlin_sat
 
 def simple_show(im, **kwargs):
@@ -1278,7 +1278,7 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
                        photometry=None,
                        read_csvs=True,
                        show=False,
-                       ccddata_cls=FwRedCorData, # less verbose
+                       ccddata_cls=RedCorData,
                        **kwargs):
     dirs_dates = get_dirs_dates(data_root, start=start, stop=stop)
     dirs, _ = zip(*dirs_dates)
