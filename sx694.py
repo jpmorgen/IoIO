@@ -290,6 +290,19 @@ def date_beg_avg(hdr_in,
                ('HIERARCH DATE-BEG-UNCERTAINTY', date_beg_uncertainty,
                 '(s)'),
                after=True)
+    # Avoid annoying WCS warnings
+    hdr.insert('DATE-OBS',
+               ('MJD-AVG', date_avg.mjd,
+                'Best estimate midpoint of exposure (MJD)'),
+               after=True)
+    hdr.insert('DATE-OBS',
+               ('MJD-BEG', date_beg.mjd,
+                'Best estimate shutter open time (MJD)'),
+               after=True)
+    hdr.insert('DATE-OBS',
+               ('MJD-OBS', date_obs.mjd,
+                'Commanded shutter time (MJD)'),
+               after=True)
     hdr.insert('DATE-OBS',
                ('DATE-AVG', date_avg.fits,
                 'Best estimate midpoint of exposure (UTC)'),

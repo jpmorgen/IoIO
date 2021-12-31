@@ -76,15 +76,15 @@ RUN_LEVEL_DEFAULT_ND_PARAMS \
 # pixels and so is OK
 SMALL_FILT_CROP = np.asarray(((350, 550), (1900, 2100)))
 
-# Experiments with
+# Experiments with medfilt show:
 # /data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit and
 # friends for how high the peak in a 1D profile gets above the ND median
 # Jupiter = 1700
-# Vega = 700
-# Mercury = 200
-# Galsat = 40
-# Noisey sky = 26
-PROFILE_PEAK_THRESHOLD = 100
+# Vega = 600
+# Mercury = 70 on 90 off
+# Galsat = 38
+# Noisey sky = 18
+PROFILE_PEAK_THRESHOLD = 20
 
 # Definitive Jupiter good conditions 
 BRIGHT_SAT_THRESHOLD = 1000
@@ -307,8 +307,13 @@ def keyword_arithmetic_image_handler(meta, operand1, operation, operand2,
         # If we made it here, we need to use a general approach to
         # recognize structure.  This fails for biases and darks, hence
         # the need for the code above
-        med = np.median(operand2)
-        stdev = np.std(operand2)
+        if hasattr(operand2, 'data'):
+            # --> np.std is seeing the data and stdev for some reason
+            im = operand2.data
+        else:
+            im = operand2
+        med = np.median(im)
+        stdev = np.std(im)
         if med == 0:
             o2 = 0
         elif stdev_threshold * stdev < np.abs(med):
@@ -725,7 +730,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
 
         dp = abs((ND_params[0,1] - ND_params[0,0]) * im.shape[0]/2)
         if dp > self.max_parallel_delta_pix:
-            txt = 'ND filter edges are not parallel.  Edges are off by ' + str(dp) + ' pixels.'
+            txt = f'ND filter edges are not parallel.  Edges are off by {dp:.0f} pixels.'
             #print(txt)
             #plt.plot(ypts, ND_edges)
             #plt.show()
@@ -822,13 +827,11 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         """Returns CCD readnoise as value in same unit as primary array"""
         self.get_metadata()
         # --> This gets better with FITS header units
-        readnoise = self.meta.get('RDNOISE') * u.electron
-        gain = self.meta.get('GAIN') * u.electron / u.adu
+        readnoise = self.meta.get('RDNOISE')
         if self.unit == u.adu:
+            gain = self.meta.get('GAIN')
             readnoise /= gain
-        elif self.unit != u.electron:
-            raise ValueError(f'Unknown unit {self.unit}.  Expecting u.adu or u.electron')
-        return readnoise.value
+        return readnoise
         
     @property
     def nonlin(self):
@@ -868,16 +871,18 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         num_sat = (im >= self.nonlin).sum()
 
         # Make a 1D profile along the ND filter to search for a source there
-        ND_profile = np.empty(self.shape[0])
+        us = self.unbinned(self.shape)
+        ND_profile = np.empty(us[0])
         for iy in np.arange(im.shape[0]):
             es = self.ND_edges(iy).astype(int)
-            ND_profile[iy] = np.average(im[iy, es[0]:es[1]])
+            row = im[iy, es[0]:es[1]]
+            # Get rid of cosmic rays
+            row = signal.medfilt(row, 3)
+            ND_profile[iy] = np.mean(row)
 
         diffs2 = (ND_profile[1:] - ND_profile[0:-1])**2
         profile_variance = np.sqrt(np.median(diffs2))
-        
-        #plt.plot(ND_profile)
-        #plt.show()
+
         ND_width = (self.ND_params[1,1]
                     - self.ND_params[1,0])
         prof_peak_idx = signal.find_peaks_cwt(ND_profile,
@@ -888,9 +893,13 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         ymax = ND_profile[ymax_idx]
         med = np.median(ND_profile)
         std = np.std(ND_profile)
+        peak_contrast = (ymax - med)/profile_variance
+        log.debug(f'profile peak_contrast = {peak_contrast}, threshold = {self.profile_peak_threshold}, peak y = {ymax_idx}')
 
-        source_on_ND_filter = ((ymax - med)/profile_variance
-                               > self.profile_peak_threshold)
+        #plt.plot(ND_profile)
+        #plt.show()
+
+        source_on_ND_filter = (peak_contrast > self.profile_peak_threshold)
 
         # Work another way to see if the ND filter has a low flux
         im  = im - back_level
@@ -989,8 +998,8 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         patch = im[ll[0]:ur[0], ll[1]:ur[1]]
         patch /= boost_factor
 
-        plt.imshow(patch)
-        plt.show()
+        #plt.imshow(patch)
+        #plt.show()
 
 
         # Check for the case when Jupiter is near the edge of the ND
@@ -1003,17 +1012,20 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         if nbad > bright_on_ND_threshold: 
             log.debug(f'Setting bright pixels to ND median value')
             # As per calculations above, this is ~5% of Jupiter's area
-            # Experiments with /data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit and friends show there is an edge of ~5 pixels around the plateau
+            # Experiments with
+            # /data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit
+            # and friends show there is an edge of ~5 pixels around
+            # the plateau.  Use gaussian filter to fuzz out our saturated pixels
             bad_patch = np.zeros_like(patch)
             bad_patch[np.where(patch > nonlin)] = nonlin
-            plt.imshow(bad_patch)
-            plt.show()
+            #plt.imshow(bad_patch)
+            #plt.show()
             bad_patch = gaussian_filter(bad_patch, sigma=5)
-            plt.imshow(bad_patch)
-            plt.show()
+            #plt.imshow(bad_patch)
+            #plt.show()
             patch[np.where(bad_patch > 0.1*np.max(bad_patch))] = NDmed
-            plt.imshow(patch)
-            plt.show()
+            #plt.imshow(patch)
+            #plt.show()
             pcenter = np.asarray(center_of_mass(patch))
             y_x = pcenter + ll
             log.debug(f'Scattered light cleaned COM (X, Y; binned) = {self.binned(y_x)[::-1]}')        
@@ -1025,7 +1037,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # filter.
         pcenter = np.asarray(center_of_mass(patch))
         y_x = pcenter + ll
-        log.debug(f'Jupiter COM from patch (X, Y; binned) = {self.binned(y_x)[::-1]}')
+        log.debug(f'Object COM from clean patch (X, Y; binned) = {self.binned(y_x)[::-1]}')
         self.quality = 8
         return y_x
 
@@ -1291,7 +1303,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
 if __name__ == '__main__':
     log.setLevel('DEBUG')
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
-    fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S1.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S1.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S2.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S3.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S4.fit'
@@ -1302,14 +1314,16 @@ if __name__ == '__main__':
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S9.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge1.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S10.fit'
-    #fname = '/data/IoIO/raw/2021-04_Astrometry/Gal_sat_on_ND.fit'
+    fname = '/data/IoIO/raw/2021-04_Astrometry/Gal_sat_on_ND.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit'
     #fname = '/data/IoIO/raw/20210616/CK20R040-S001-R001-C001-R_dupe-6.fts'
     #fname = '/data/IoIO/raw/2021-05-18/Mercury-0007_R.fit'
-    #fname = '/data/IoIO/raw/2021-05-18/Mercury-0006_R.fit'
+    #fname = '/data/IoIO/raw/2021-05-18/Mercury-0006_Na-on.fit'
+    #fname = '/data/IoIO/raw/2021-05-18/Mercury-0006_Na_off.fit'
     #fname = '/data/IoIO/raw/2021-05-18/Mercury-0003_R.fit'
 
     #fname = '/data/IoIO/raw/2021-04_Astrometry/VegaOnND.fit'
+    
     #from IoIO import CorObsData
     #ccd = CorObsData(fname)
     #print(ccd.obj_center)

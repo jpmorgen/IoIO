@@ -31,7 +31,6 @@ from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.table import QTable
 from astropy.time import Time
 from astropy.stats import mad_std, biweight_location
-from astropy.wcs import FITSFixedWarning
 
 from photutils import Background2D, MedianBackground
 
@@ -73,7 +72,8 @@ IOIO_1_LOCATION.info.meta = {
 # speed, just max out on physical processors to get the steepest gains
 # and leave the asymptote for other jobs
 MAX_NUM_PROCESSES = psutil.cpu_count(logical=False)
-MAX_MEM_FRAC = 0.85
+# Was 0.85 for 64Gb
+MAX_MEM_FRAC = 0.92
 
 # Calculate the maximum CCDdata size based on 64bit primary & uncert +
 # 8 bit mask / 8 bits per byte.  It will be compared to
@@ -246,8 +246,12 @@ def reduced_dir(rawdir, reddir_top,
     for d in reversed(redlist):
         reddir += ps + d
     if date_dir:
-        return reddir + ps + date_dir
-    return reddir_top
+        reddir = reddir + ps + date_dir
+    else:
+        reddir = reddir_top
+    if create:
+        os.makedirs(reddir, exist_ok=True)
+    return reddir
 
 def get_dirs_dates(directory,
                    filt_list=None,
@@ -422,9 +426,6 @@ def closest_in_time(collection, value_pair,
 class RedCorData(CorData):
     pass            
 
-#class FwRedCorData(FilterWarningCCDData, RedCorData):
-#    warning_filter_list = [FITSFixedWarning]
-
 class OffCorData(RedCorData):
     def __init__(self, *args,
                  no_obj_center=True,
@@ -451,6 +452,7 @@ class CorMultiPipe(CCDMultiPipe):
                          process_expand_factor=process_expand_factor,
                          **kwargs)
 
+    # --> This might fail with multi files
     def pre_process(self, data, **kwargs):
         """Add full-frame check permanently to pipeline."""
         kwargs = self.kwargs_merge(**kwargs)
@@ -462,12 +464,14 @@ class CorMultiPipe(CCDMultiPipe):
                      calibration=None,
                      auto=None,
                      **kwargs):
+        """Process data, adding RAWFNAME keyword"""
         kwargs = self.kwargs_merge(**kwargs)
         if calibration is None:
             calibration = self.calibration
         if auto is None:
             auto = self.auto
         if isinstance(data, CCDData):
+            data = raw_fname(data, **kwargs)
             data = cor_process(data,
                                calibration=calibration,
                                auto=auto,
@@ -539,6 +543,11 @@ def light_image(im, light_tolerance=3, **kwargs):
     return im
 
 ######### CorMultiPipe post-processing routines
+def raw_fname(ccd_in, in_name=None, **kwargs):
+    ccd = ccd_in.copy()
+    ccd.meta['RAWFNAME'] = in_name
+    return ccd
+
 def mask_above_key(ccd_in, bmp_meta=None, key=None, margin=0.1, **kwargs):
     """CorMultiPipe post-processing routine to mask pixels > input key
     """
@@ -661,10 +670,10 @@ def nd_filter_mask(ccd_in, nd_edge_expand=ND_EDGE_EXPAND, **kwargs):
     return ccd
 
 def detflux(ccd_in, exptime_unit=None, **kwargs):
+    # --> put in a check for flux units
     ccd = ccd_in.copy()
     # The exptime_unit stuff may become obsolete with Card Quantities
-    if exptime_unit is None:
-        exptime_unit = u.s
+    exptime_unit = exptime_unit or u.s
     exptime = ccd.meta['EXPTIME'] * exptime_unit
     exptime_uncertainty = ccd.meta.get('EXPTIME-UNCERTAINTY')
     if exptime_uncertainty is None:
@@ -681,6 +690,12 @@ def detflux(ccd_in, exptime_unit=None, **kwargs):
                           uncertainty=exptime_uncertainty_std,
                           unit=exptime_unit)
         ccd = ccd.divide(exp_ccd, handle_meta='first_found')
+    # Make sure to scale rdnoise, which doesn't participate in
+    # additive operations
+    rdnoise = ccd.meta.get('rdnoise')
+    if rdnoise is not None:
+        rdnoise /= exptime.value
+        ccd.meta['RDNOISE'] = (rdnoise, '(electron/s)')
     return ccd
 
 ######### cor_process routines
@@ -711,7 +726,7 @@ def get_filt_name(f, date_obs):
         # 6 1.25" U
         # 7 Na_on
         # 8 1.25" B
-        # 9 1.25" R
+        # 9 1.25" R_125
         return f
     if date_obs > '2019-03-31':
         # On 2019-03-31 the 9-position SX "Maxi" falter wheel was
@@ -1246,8 +1261,6 @@ def cor_process(ccd,
     if remove_raw_jd:
         if nccd.meta.get('JD*'):
             del nccd.meta['JD*']
-        if nccd.meta.get('*JD-OBS'):
-            del nccd.meta['*JD-OBS']
         
     if obs_location:
         nccd.meta = obs_location_to_hdr(nccd.meta,
@@ -1697,8 +1710,9 @@ def bias_combine_one_fdict(fdict,
     num_files = len(fnames)
     mean_ccdt = fdict['CCDT']
     directory = fdict['directory']
-    tmp = RedCorData.read(fnames[0])
-    tm = tmp.meta['DATE-OBS']
+    # Avoid annoying WCS warning messages
+    hdr = getheader(fnames[0])
+    tm = hdr['DATE-OBS']
     this_dateb1, _ = tm.split('T')
     outbase = os.path.join(outdir, this_dateb1)
     bad_fname = outbase + '_ccdT_XXX' + '_bias_combined_bad.fits'
@@ -1728,6 +1742,7 @@ def bias_combine_one_fdict(fdict,
                        outdir=sdir,
                        create_outdir=True,
                        overwrite=True,
+                       fits_fixed_ignore=True, 
                        pre_process_list=[light_image],
                        post_process_list=[bias_stats, jd_meta])
     #combined_base = outbase + '_bias_combined'
@@ -1875,8 +1890,8 @@ def bias_combine_one_fdict(fdict,
     mean = np.mean(tim)*im_gain
     tmin = np.min(tim)*im_gain
     tmax = np.max(tim)*im_gain
-    print('std, mean, med, tmin, tmax (electron)')
-    print(std, mean, med, tmin, tmax)
+    log.info(f'combine bias statistics for {outbase}')
+    log.info(f'std = {std:.2f}; mean = {mean:.2f}, med = {med:.2f}; min = {tmin:.2f}; max = {tmax:.2f}')
     im.meta['DATE-OBS'] = (this_date, 'Average of DATE-OBS from set of biases')
     im.meta['CCD-TEMP'] = (mean_ccdt, 'Average CCD temperature for combined biases')
     im.meta['RDNOISE'] = (av_rdnoise, 'Measured readnoise (electron)')
@@ -1961,6 +1976,10 @@ def bias_combine(directory=None,
     **kwargs passed to bias_combine_one_fdict
 
     """
+    if collection is not None:
+        # Make sure 'directory' is a valid variable
+        directory = collection.location
+    log.info(f'bias_combine directory: {directory}')
     fdict_list = \
         fdict_list_collector(bias_dark_fdict_creator,
                              directory=directory,
@@ -1969,9 +1988,6 @@ def bias_combine(directory=None,
                              imagetyp='BIAS',
                              glob_include=glob_include,
                              dccdt_tolerance=DCCDT_TOLERANCE)
-    if collection is not None:
-        # Make sure 'directory' is a valid variable
-        directory = collection.location
     nfdicts = len(fdict_list)
     if nfdicts == 0:
         log.debug('No usable biases found in: ' + directory)
@@ -1989,7 +2005,7 @@ def bias_combine(directory=None,
 
     num_subprocesses = int(num_processes / our_num_processes)
     subprocess_mem_frac = mem_frac / our_num_processes
-    log.debug(f'bias_combine: {directory} nfdicts = {nfdicts}, num_processes = {num_processes}, mem_frac = {mem_frac}, our_num_processes = {our_num_processes}, num_subprocesses = {num_subprocesses}, subprocess_mem_frac = {subprocess_mem_frac}')
+    log.debug(f'bias_combine: {directory} nfdicts = {nfdicts}, num_processes = {num_processes}, mem_frac = {mem_frac}, our_num_processes = {our_num_processes}, num_subprocesses = {num_subprocesses}, subprocess_mem_frac = {subprocess_mem_frac:.2f}')
 
     wwk = WorkerWithKwargs(bias_combine_one_fdict,
                            num_processes=num_subprocesses,
@@ -2023,8 +2039,9 @@ def dark_combine_one_fdict(fdict,
     mean_ccdt = fdict['CCDT']
     exptime = fdict['EXPTIME']
     directory = fdict['directory']
-    tmp = RedCorData.read(fnames[0])
-    tm = tmp.meta['DATE-OBS']
+    # Avoid annoying WCS warning messages
+    hdr = getheader(fnames[0])
+    tm = hdr['DATE-OBS']
     this_dateb1, _ = tm.split('T')
     badbase = '{}_ccdT_{:.1f}_exptime_{}s'.format(
         this_dateb1, mean_ccdt, exptime)
@@ -2043,6 +2060,7 @@ def dark_combine_one_fdict(fdict,
                        outdir=sdir,
                        create_outdir=True,
                        overwrite=True,
+                       fits_fixed_ignore=True, 
                        pre_process_list=[light_image],
                        post_process_list=[jd_meta])
     pout = cmp.pipeline(fnames, **kwargs)
@@ -2067,7 +2085,7 @@ def dark_combine_one_fdict(fdict,
     mem = psutil.virtual_memory()
     out_fnames = list(out_fnames)
     if len(out_fnames) == 1:
-        print('single out_fname = ', out_fnames)
+        log.debug(f'single out_fname = {out_fnames}')
         im = RedCorData.read(out_fnames[0])
     else:
         im = \
@@ -2117,9 +2135,8 @@ def dark_combine_one_fdict(fdict,
     tmin = np.min(tim)
     tmax = np.max(tim)
     rdnoise = np.sqrt(np.median((tim[1:] - tim[0:-1])**2))
-    print('combined dark statistics for ' + outbase)
-    print('std, rdnoise, mean, med, min, max, n_dark_pix')
-    print(std, rdnoise, mean, med, tmin, tmax, n_dark_pix)
+    log.info(f'combined dark statistics for {outbase}')
+    log.info(f'std = {std:.2f}; rdnoise = {rdnoise:.2f}; mean = {mean:.2f}; med = {med:.2f}; min = {tmin:.2f}; max = {tmax:.2f}; n_dark_pix = {n_dark_pix}')
     im.meta['STD'] = (std, 'Standard deviation of image (electron)')
     im.meta['MEDIAN'] = (med, 'Median of image (electron)')
     im.meta['MEAN'] = (mean, 'Mean of image (electron)')
@@ -2167,6 +2184,10 @@ def dark_combine(directory=None,
                  bitpix=MAX_CCDDATA_BITPIX,
                  process_expand_factor=COR_PROCESS_EXPAND_FACTOR,
                  **kwargs):
+    if collection is not None:
+        # Make sure 'directory' is a valid variable
+        directory = collection.location
+    log.info(f'dark_combine directory: {directory}')
     fdict_list = \
         fdict_list_collector(bias_dark_fdict_creator,
                              directory=directory,
@@ -2175,9 +2196,6 @@ def dark_combine(directory=None,
                              imagetyp='DARK',
                              glob_include=glob_include,
                              dccdt_tolerance=dccdt_tolerance)
-    if collection is not None:
-        # Make sure 'directory' is a valid variable
-        directory = collection.location
     nfdicts = len(fdict_list)
     if len(fdict_list) == 0:
         log.debug('No usable darks found in: ' + directory)
@@ -2194,7 +2212,7 @@ def dark_combine(directory=None,
                                         process_size=one_fdict_size)
     num_subprocesses = int(num_processes / our_num_processes)
     subprocess_mem_frac = mem_frac / our_num_processes
-    log.debug('dark_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
+    log.debug(f'dark_combine: {directory} num_processes = {num_processes}, mem_frac = {mem_frac:.0f}, our_num_processes = {our_num_processes}, num_subprocesses = {num_subprocesses}, subprocess_mem_frac = {subprocess_mem_frac:.2f}')
 
     wwk = WorkerWithKwargs(dark_combine_one_fdict,
                            num_processes=num_subprocesses,
@@ -2227,16 +2245,24 @@ def flat_fdict_creator(collection,
     ofilters = collection.values('filter', unique=True)
     fdict_list = []
     for ofilt in ofilters:
-        # The regexp_match=True is necessary for the H2O+ for some
-        # reason.  re.escape is used for the [] stuff in some of the
-        # older filters, though I am not positive if it is necessary.
-        fcollection = collection.filter(filter=re.escape(ofilt),
-                                        regex_match=True)
+        # The collection.filter stuff causes problems with my old
+        # filter names but the regexp stuff used to get around that
+        # gets R125 and R confused.  So handle things in the same
+        # date-dependent way that get_filt_name does
+        date_obs = collection.values('date-obs')[0]
+        if date_obs > '2020-03-01':
+            # Latest filter names don't confuse collection.filter
+            fcollection = collection.filter(filter=ofilt)
+        else:
+            # The regexp_match=True is necessary for the H2O+ for some
+            # reason.  re.escape is used for the [] stuff in some of the
+            # older filters, though I am not positive if it is necessary.
+            fcollection = collection.filter(filter=re.escape(ofilt),
+                                            regex_match=True)
         fnames = fcollection.files_filtered(include_path=True)
-        date_obss = fcollection.values('date-obs')
         # This is where we associated the old file names with the new
         # filter designations 
-        filt = get_filt_name(ofilt, date_obss[0])
+        filt = get_filt_name(ofilt, date_obs)
         fdict_list.append({'directory': directory,
                            'filter': filt,
                            'ofilter': ofilt,
@@ -2310,8 +2336,9 @@ def flat_combine_one_fdict(fdict,
     num_files = len(fnames)
     this_filter = fdict['filter']
     directory = fdict['directory']
-    tmp = RedCorData.read(fnames[0])
-    tm = tmp.meta['DATE-OBS']
+    # Avoid annoying WCS warning messages
+    hdr = getheader(fnames[0])
+    tm = hdr['DATE-OBS']
     this_dateb1, _ = tm.split('T')
     outbase = os.path.join(outdir, this_dateb1)
     bad_fname = outbase + '_' + this_filter + '_flat_bad.fits'
@@ -2323,8 +2350,6 @@ def flat_combine_one_fdict(fdict,
 
     # Make a scratch directory that is the date of the first file.
     # Not as fancy as the biases, but, hey, it is a scratch directory
-    tmp = RedCorData.read(fnames[0])
-    tm = tmp.meta['DATE-OBS']
     sdir = os.path.join(calibration_scratch, this_dateb1)
 
     cmp = CorMultiPipe(num_processes=num_processes,
@@ -2335,6 +2360,7 @@ def flat_combine_one_fdict(fdict,
                        outdir=sdir,
                        create_outdir=True,
                        overwrite=True,
+                       fits_fixed_ignore=True, 
                        post_process_list=[flat_process, jd_meta],
                        **kwargs)
     pout = cmp.pipeline(fnames, **kwargs)
@@ -2357,6 +2383,7 @@ def flat_combine_one_fdict(fdict,
     mem = psutil.virtual_memory()
     #print(f'flat_combine_one_filt: mem_frac {mem_frac}; num_processes {num_processes}')
     #print(f'flat_combine_one_filt: mem_limit {mem.available*mem_frac/2**20}')
+
     im = \
         ccdp.combine(list(out_fnames),
                      method='average',
@@ -2382,7 +2409,7 @@ def flat_combine_one_fdict(fdict,
     values = im[points]
     xi = emccd.ND_coords
 
-    log.debug(f'flat_combine_one_filt post CorObsData: mem available: {mem.available/2**20}')
+    log.debug(f'flat_combine_one_filt post CorObsData: mem available: {mem.available/2**20:.0}')
 
     # Linear behaved much better
     nd_replacement = interpolate.griddata(points,
@@ -2434,7 +2461,10 @@ def flat_combine(directory=None,
                  bitpix=64, # uncertainty and mask not used in griddata
                  griddata_expand_factor=GRIDDATA_EXPAND_FACTOR,
                  **kwargs):
-    print(f'flat_combine directory: {directory}')
+    if collection is not None:
+        # Make sure 'directory' is a valid variable
+        directory = collection.location
+    log.info(f'flat_combine directory: {directory}')
     fdict_list = \
         fdict_list_collector(flat_fdict_creator,
                              directory=directory,
@@ -2442,9 +2472,6 @@ def flat_combine(directory=None,
                              subdirs=subdirs,
                              imagetyp='FLAT',
                              glob_include=glob_include)
-    if collection is not None:
-        # Make sure 'directory' is a valid variable
-        directory = collection.location
     nfdicts = len(fdict_list)
     if nfdicts == 0:
         log.debug('No usable flats found in: ' + directory)
@@ -2469,16 +2496,7 @@ def flat_combine(directory=None,
     num_subprocesses = int(num_processes / our_num_processes)
     # Similarly, the memory fraction for each process we will spawn
     subprocess_mem_frac = mem_frac / our_num_processes
-    log.debug('flat_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
-    
-    # Combining files is the slow part, so we want the maximum of
-    # processes doing that in parallel
-    log.debug(f'flat_combine: {directory}, nfdicts = {nfdicts}, our_num_processes = {our_num_processes}')
-    # Number of sub-processes in each process we will spawn
-    num_subprocesses = int(num_processes / our_num_processes)
-    # Similarly, the memory fraction for each process we will spawn
-    subprocess_mem_frac = mem_frac / our_num_processes
-    log.debug('flat_combine: {} num_processes = {}, mem_frac = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(directory, num_processes, mem_frac, our_num_processes, num_subprocesses, subprocess_mem_frac))
+    log.debug(f'flat_combine: {directory} num_processes = {num_processes}, mem_frac = {mem_frac:.0f}, our_num_processes = {our_num_processes}, num_subprocesses = {num_subprocesses}, subprocess_mem_frac = {subprocess_mem_frac:.2f}')
 
     wwk = WorkerWithKwargs(flat_combine_one_fdict,
                            num_processes=num_subprocesses,
@@ -2550,6 +2568,8 @@ class Calibration():
                  raw_data_root=RAW_DATA_ROOT,
                  calibration_root=CALIBRATION_ROOT,
                  subdirs=CALIBRATION_SUBDIRS,
+                 fits_fixed_ignore=True,
+                 warning_ignore_list=[],
                  keep_intermediate=False,
                  ccdt_tolerance=CCDT_TOLERANCE,
                  dark_exp_margin=DARK_EXP_MARGIN,
@@ -2693,7 +2713,7 @@ class Calibration():
         num_subprocesses = int(self.num_processes / our_num_processes)
         subprocess_mem_frac = self.mem_frac / our_num_processes
         log.debug(f'Calibration.reduce_bias: ndirs_dates = {ndirs_dates}')
-        log.debug('Calibration.reduce_bias: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
+        log.debug(f'Calibration.reduce_bias: self.num_processes = {self.num_processes}, our_num_processes = {our_num_processes}, num_subprocesses = {num_subprocesses}, subprocess_mem_frac = {subprocess_mem_frac:.2f}')
         #return
         wwk = WorkerWithKwargs(bias_combine,
                                subdirs=self._subdirs,
@@ -2756,7 +2776,7 @@ class Calibration():
         num_subprocesses = int(self.num_processes / our_num_processes)
         subprocess_mem_frac = self.mem_frac / our_num_processes
         log.debug(f'Calibration.reduce_dark: ndirs_dates = {ndirs_dates}')
-        log.debug('Calibration.reduce_dark: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
+        log.debug(f'Calibration.reduce_dark: self.num_processes = {self.num_processes}, our_num_processes = {our_num_processes}, num_subprocesses = {num_subprocesses}, subprocess_mem_frac = {subprocess_mem_frac:.2f}')
         #return
         wwk = WorkerWithKwargs(dark_combine,
                                subdirs=self._subdirs,
@@ -2820,7 +2840,7 @@ class Calibration():
         num_subprocesses = int(self.num_processes / our_num_processes)
         subprocess_mem_frac = self.mem_frac / our_num_processes
         log.debug(f'Calibration.reduce_flat: ndirs_dates = {ndirs_dates}')
-        log.debug('Calibration.reduce_flat: self.num_processes = {}, our_num_processes = {}, num_subprocesses = {}, subprocess_mem_frac = {}'.format(self.num_processes, our_num_processes, num_subprocesses, subprocess_mem_frac))
+        log.debug(f'Calibration.reduce_flat: self.num_processes = {self.num_processes}, our_num_processes = {our_num_processes}, num_subprocesses = {num_subprocesses}, subprocess_mem_frac = {subprocess_mem_frac:.2f}')
         wwk = WorkerWithKwargs(flat_combine,
                                subdirs=self._subdirs,
                                glob_include=self._flat_glob,
@@ -3021,8 +3041,7 @@ class Calibration():
         elif isinstance(fname_ccd_or_hdr, CCDData):
             hdr = fname_ccd_or_hdr.meta
         elif isinstance(fname_ccd_or_hdr, str):
-            ccd = RedCorData.read(fname_ccd_or_hdr)
-            hdr = ccd.meta
+            hdr = getheader(fname_ccd_or_hdr)
         tm = Time(hdr['DATE-OBS'], format='fits')
         ccdt = hdr['CCD-TEMP']
         # This is the entry point for reduction 
@@ -3054,8 +3073,7 @@ class Calibration():
         elif isinstance(fname_ccd_or_hdr, CCDData):
             hdr = fname_ccd_or_hdr.meta
         elif isinstance(fname_ccd_or_hdr, str):
-            ccd = RedCorData.read(fname_ccd_or_hdr)
-            hdr = ccd.meta
+            hdr = getheader(fname_ccd_or_hdr)
         tm = Time(hdr['DATE-OBS'], format='fits')
         ccdt = hdr['CCD-TEMP']
         exptime = hdr['EXPTIME']
@@ -3096,8 +3114,7 @@ class Calibration():
         elif isinstance(fname_ccd_or_hdr, CCDData):
             hdr = fname_ccd_or_hdr.meta
         elif isinstance(fname_ccd_or_hdr, str):
-            ccd = RedCorData.read(fname_ccd_or_hdr)
-            hdr = ccd.meta
+            hdr = getheader(fname_ccd_or_hdr)
         tm = Time(hdr['DATE-OBS'], format='fits')
         filt = hdr['FILTER']
         # This is the entry point for reduction 
@@ -3332,3 +3349,4 @@ if __name__ == "__main__":
 #print(reduced_dir2('/data/IoIO/raw/T20201111', '/tmp'))
 #print(get_dirs_dates('/data/IoIO/raw', start='2018-02-20', stop='2018-03-01'))
 #print(reduced_dir('/data/IoIO/raw', '/tmp'))
+
