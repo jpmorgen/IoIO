@@ -423,6 +423,26 @@ def closest_in_time(collection, value_pair,
 # RedCorData object   #
 #######################
 
+#class RedCorData(CorData):
+#    """This might end up going into the regular CorData if it is not too slow"""
+#
+#    @pgcoordproperty
+#    def obj_center(self):
+#        """Refines determination of Jupiter's center on ND filter (if appropriate)"""
+#        com_center = super().obj_center
+#        # Use ND width as measuring stick
+#        # --> This section of code could be a separate procedure.  See
+#        # comet_figure for motivation
+#        # --> There might already be something that does this in
+#        # astropy or elsewhere
+#        ND_width = self.ND_params[1,1] - self.ND_params[1,0]
+#        print('ND_width:', ND_width)
+#        print('obj_to_ND:', self.obj_to_ND)
+#        if (self.quality <= 6
+#            or (self.obj_to_ND
+#                > ND_width / 2)):
+#            # Poor quality or just too far out from ND center
+#            return com_center
 class RedCorData(CorData):
     pass            
 

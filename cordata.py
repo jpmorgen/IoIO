@@ -41,6 +41,7 @@ from precisionguide import MaxImPGD, NoCenterPGD, CenterOfMassPGD
 from precisionguide.utils import hist_of_im, iter_linfit
 
 import sx694
+from photometry import Photometry
 
 # Ideally I make this a function that returns the proper
 # default_ND_params as a function of date.  However, there is no point
@@ -93,7 +94,12 @@ BRIGHT_SAT_THRESHOLD = 1000
 # for one bright source
 MIN_SOURCE_THRESHOLD = 250
 
-
+def simple_show(im, **kwargs):
+    impl = plt.imshow(im, origin='lower',
+                      cmap=plt.cm.gray,
+                      filternorm=0, interpolation='none',
+                      **kwargs)
+    plt.show()
 
 def overscan_estimate(ccd_in, meta=None, master_bias=None,
                       binsize=None, min_width=1, max_width=8, box_size=100,
@@ -344,6 +350,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                  plot_prof=False,
                  plot_dprof=False,
                  plot_ND_edges=False,
+                 show=False, # Show images
                  no_obj_center=False, # set to True to save calc, BIAS, DARK, FLAT always set to True
                  profile_peak_threshold=PROFILE_PEAK_THRESHOLD,
                  bright_sat_threshold=BRIGHT_SAT_THRESHOLD,
@@ -354,12 +361,12 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # center --> This may change if we are able to track ND filter
         # sag in Y.
         self.default_ND_params = default_ND_params
-        self.y_center_offset        = y_center_offset
+        self.y_center_offset        	= y_center_offset
         if cwt_width_arange_flat is None:
-            cwt_width_arange_flat   = np.arange(2, 60)
+            cwt_width_arange_flat   	= np.arange(2, 60)
             self.cwt_width_arange_flat  = cwt_width_arange_flat
         if cwt_width_arange is None:
-            cwt_width_arange        = np.arange(8, 80)
+            cwt_width_arange        	= np.arange(8, 80)
             self.cwt_width_arange       = cwt_width_arange       
             self.n_y_steps              = n_y_steps              
             self.x_filt_width           = x_filt_width
@@ -368,11 +375,12 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             self.search_margin          = search_margin           
             self.max_fit_delta_pix      = max_fit_delta_pix      
             self.max_parallel_delta_pix = max_parallel_delta_pix
-            self.max_ND_width_range	    = max_ND_width_range
+            self.max_ND_width_range	= max_ND_width_range
             self.small_filt_crop        = small_filt_crop
-            self.plot_prof		    = plot_prof 
+            self.plot_prof		= plot_prof 
             self.plot_dprof             = plot_dprof
-            self.plot_ND_edges	    = plot_ND_edges
+            self.plot_ND_edges	    	= plot_ND_edges
+            self.show 			= show
 
         self.no_obj_center          = no_obj_center
         self.profile_peak_threshold = profile_peak_threshold
@@ -846,6 +854,8 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         """Returns center pixel coords of Jupiter whether or not Jupiter is on ND filter.  Unbinned pixel coords are returned.  Use [Cor]ObsData.binned() to convert to binned pixels.
         """
 
+        if self.show:
+            simple_show(self)
         # Check to see if we really want to calculate the center
         imagetyp = self.meta.get('IMAGETYP')
         if imagetyp.lower() in ['bias', 'dark', 'flat']:
@@ -998,9 +1008,8 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         patch = im[ll[0]:ur[0], ll[1]:ur[1]]
         patch /= boost_factor
 
-        #plt.imshow(patch)
-        #plt.show()
-
+        if self.show:
+            simple_show(patch)
 
         # Check for the case when Jupiter is near the edge of the ND
         # filter.  Optical effects result in bright pixels on the ND
@@ -1010,36 +1019,51 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         bright_on_ND_threshold = 50
         log.debug(f'Number of bright pixels on ND filter = {nbad}; threshold = {bright_on_ND_threshold}')
         if nbad > bright_on_ND_threshold: 
-            log.debug(f'Setting bright pixels to ND median value')
             # As per calculations above, this is ~5% of Jupiter's area
             # Experiments with
             # /data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit
             # and friends show there is an edge of ~5 pixels around
             # the plateau.  Use gaussian filter to fuzz out our saturated pixels
+            log.debug(f'Setting excessive bright pixels to ND median value')
             bad_patch = np.zeros_like(patch)
             bad_patch[np.where(patch > nonlin)] = nonlin
-            #plt.imshow(bad_patch)
-            #plt.show()
+            if self.show:
+                simple_show(bad_patch)
             bad_patch = gaussian_filter(bad_patch, sigma=5)
-            #plt.imshow(bad_patch)
-            #plt.show()
+            if self.show:
+                simple_show(bad_patch)
             patch[np.where(bad_patch > 0.1*np.max(bad_patch))] = NDmed
-            #plt.imshow(patch)
-            #plt.show()
-            pcenter = np.asarray(center_of_mass(patch))
-            y_x = pcenter + ll
-            log.debug(f'Scattered light cleaned COM (X, Y; binned) = {self.binned(y_x)[::-1]}')        
-            
+            if self.show:
+                simple_show(patch)
             self.quality = 6
-            return y_x
-
-        # If we made it here, Jupiter should be clean on the ND
-        # filter.
+        else:
+            log.debug(f'ND filter is clean')
+            self.quality = 8
         pcenter = np.asarray(center_of_mass(patch))
         y_x = pcenter + ll
-        log.debug(f'Object COM from clean patch (X, Y; binned) = {self.binned(y_x)[::-1]}')
-        self.quality = 8
-        return y_x
+        #log.debug(f'Object COM from clean patch (X, Y; binned) = {self.binned(y_x)[::-1]}, quality = {self.quality}')
+        #return y_x
+
+        # --> Experiment with a really big hammer.  Wasn't any
+        # slower, but didn't give an different answer
+        pccd = CorData(patch, meta=self.meta)
+        photometry = Photometry(ccd=pccd)
+        if self.show:
+            photometry.show_source_mask()
+            photometry.show_background()
+            photometry.show_segm()
+        sc = photometry.source_catalog
+        tbl = sc.to_table()
+        tbl.sort('segment_flux', reverse=True)
+        tbl.show_in_browser()
+        xpcentrd = tbl['xcentroid'][0]
+        ypcentrd = tbl['ycentroid'][0]
+        print(ll[::-1])
+        print(pcenter[::-1])
+        print(xpcentrd, ypcentrd)
+        photometry_y_x = np.asarray((ypcentrd, xpcentrd)) + ll
+        log.debug(f'Patch COM = {self.binned(y_x)[::-1]} (X, Y; binned); Photometry brightest centroid {self.binned(photometry_y_x)[::-1]}; quality = {self.quality}')        
+        return photometry_y_x
 
         ## First iteration COM
         #pcenter = np.asarray(center_of_mass(patch))
@@ -1314,7 +1338,7 @@ if __name__ == '__main__':
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S9.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge1.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S10.fit'
-    fname = '/data/IoIO/raw/2021-04_Astrometry/Gal_sat_on_ND.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Gal_sat_on_ND.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit'
     #fname = '/data/IoIO/raw/20210616/CK20R040-S001-R001-C001-R_dupe-6.fts'
     #fname = '/data/IoIO/raw/2021-05-18/Mercury-0007_R.fit'
@@ -1323,13 +1347,20 @@ if __name__ == '__main__':
     #fname = '/data/IoIO/raw/2021-05-18/Mercury-0003_R.fit'
 
     #fname = '/data/IoIO/raw/2021-04_Astrometry/VegaOnND.fit'
-    
+
+    fname = '/data/IoIO/raw/20210507/Na_off-band_001.fits'
+    fname = '/data/IoIO/raw/20210507/Na_on-band_001.fits'
+    fname = '/data/IoIO/raw/20210507/R_003.fits'
+    fname = '/data/IoIO/raw/20210507/SII_on-band_001.fits'
+    fname = '/data/IoIO/raw/20210507/Na_on-band_002.fits'
+    fname = '/data/IoIO/raw/20210507/Na_off-band_002.fits'
+    fname = '/data/IoIO/raw/20210507/SII_off-band_005.fits'    
     #from IoIO import CorObsData
     #ccd = CorObsData(fname)
     #print(ccd.obj_center)
     #print(ccd.quality)
 
-    ccd = CorData.read(fname)
+    ccd = CorData.read(fname, show=True)
     print(ccd.obj_center)
     print(ccd.quality)
 
