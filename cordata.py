@@ -797,12 +797,11 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         ND_coords = (ys, xs)
         return ND_coords
 
-    # --> change this to a regular method
-    def ND_coords_above(self, level):
-        """Returns tuple of coordinates of pixels with decent signal in ND filter"""
+    def ND_coords_above(self, im, level):
+        """Returns tuple of coordinates of pixels in im with decent signal in ND filter"""
         # Get the coordinates of the ND filter
         NDc = self.ND_coords
-        abovec = np.where(self.self_unbinned.data[NDc] > level)
+        abovec = np.where(im[NDc] > level)
         above_NDc0 = np.asarray(NDc[0])[abovec]
         above_NDc1 = np.asarray(NDc[1])[abovec]
         return (above_NDc0, above_NDc1)
@@ -847,6 +846,8 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         self.get_metadata()
         return self.meta.get('NONLIN')# * self.unit
         
+    def patch(self, ll, ur):
+        """Returns a patch of the PGData object starting from"""
     
 
     @pgcoordproperty
@@ -993,7 +994,8 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         NDstd = np.std(im[self.ND_coords])
         log.debug(f'ND median, std {NDmed}, {NDstd}, 6*self.readnoise= {6*self.readnoise}')
         boost_factor = nonlin*1000
-        boost_ND_coords = self.ND_coords_above(NDmed + 6*self.readnoise)
+        boost_ND_coords = self.ND_coords_above(im,
+                                               NDmed + 6*self.readnoise)
         im[boost_ND_coords[0], boost_ND_coords[1]] *= boost_factor
         im[np.where(im < boost_factor)] = 0
 
@@ -1014,7 +1016,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # Check for the case when Jupiter is near the edge of the ND
         # filter.  Optical effects result in bright pixels on the ND
         # filter that confuse the COM.
-        bad_ND_coords = self.ND_coords_above(nonlin)
+        bad_ND_coords = self.ND_coords_above(im, nonlin + back_level)
         nbad = len(bad_ND_coords[0])
         bright_on_ND_threshold = 50
         log.debug(f'Number of bright pixels on ND filter = {nbad}; threshold = {bright_on_ND_threshold}')
@@ -1333,7 +1335,10 @@ if __name__ == '__main__':
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S4.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S5.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S6.fit'
-    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit'
+
+    # Good bright Jupiter on edge of ND filter
+    fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit'
+    
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S8.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S9.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge1.fit'
@@ -1348,13 +1353,16 @@ if __name__ == '__main__':
 
     #fname = '/data/IoIO/raw/2021-04_Astrometry/VegaOnND.fit'
 
-    fname = '/data/IoIO/raw/20210507/Na_off-band_001.fits'
-    fname = '/data/IoIO/raw/20210507/Na_on-band_001.fits'
-    fname = '/data/IoIO/raw/20210507/R_003.fits'
-    fname = '/data/IoIO/raw/20210507/SII_on-band_001.fits'
-    fname = '/data/IoIO/raw/20210507/Na_on-band_002.fits'
-    fname = '/data/IoIO/raw/20210507/Na_off-band_002.fits'
-    fname = '/data/IoIO/raw/20210507/SII_off-band_005.fits'    
+    #fname = '/data/IoIO/raw/20210507/Na_off-band_001.fits'
+    #fname = '/data/IoIO/raw/20210507/Na_on-band_001.fits'
+    #fname = '/data/IoIO/raw/20210507/R_003.fits'
+
+    # Good satellite
+    #fname = '/data/IoIO/raw/20210507/SII_on-band_001.fits'
+    
+    #fname = '/data/IoIO/raw/20210507/Na_on-band_002.fits'
+    #fname = '/data/IoIO/raw/20210507/Na_off-band_002.fits'
+    #fname = '/data/IoIO/raw/20210507/SII_off-band_005.fits'    
     #from IoIO import CorObsData
     #ccd = CorObsData(fname)
     #print(ccd.obj_center)
@@ -1450,3 +1458,8 @@ if __name__ == '__main__':
     #print(c.obj_center - oc.obj_center)
     #print(c.obj_center, c.desired_center)
     #c.write('/tmp/test.fits', overwrite=True)
+
+#fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit'
+#ccd = CorData.read(fname, show=True)
+#cpatch = CorData(ccd.data, meta=ccd.meta)
+#cpatch.ND_params[1,:] = ccd.ND_params[1,:] - 1100
