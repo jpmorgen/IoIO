@@ -1,7 +1,6 @@
 """IoIO Photometry object"""
 
 import numpy as np
-from numpy.polynomial import Polynomial
 
 import matplotlib.pyplot as plt
 
@@ -9,7 +8,6 @@ from astropy import log
 from astropy import units as u
 from astropy.convolution import Gaussian2DKernel
 from astropy.stats import gaussian_fwhm_to_sigma, sigma_clipped_stats
-from astropy.stats import mad_std, biweight_location
 
 from photutils import make_source_mask, detect_sources, deblend_sources
 from photutils import SourceCatalog

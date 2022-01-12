@@ -12,6 +12,9 @@ import csv
 import argparse
 from pathlib import Path
 
+import numpy as np
+from numpy.polynomial import Polynomial
+
 import matplotlib.pyplot as plt
 from matplotlib.dates import datestr2num
 
@@ -20,16 +23,20 @@ import pandas as pd
 from astropy import log
 from astropy import units as u
 from astropy.time import Time
+from astropy.stats import mad_std, biweight_location
 
 # bmp_cleanup can go away now that Photometry is an object
 from bigmultipipe import bmp_cleanup, no_outfile, prune_pout
 
 import sx694
-from cormultipipe import RAW_DATA_ROOT
+from cormultipipe import IoIO_ROOT, RAW_DATA_ROOT
 from cormultipipe import assure_list, reduced_dir, get_dirs_dates
 from cormultipipe import RedCorData, CorMultiPipe, Calibration
 from cormultipipe import nd_filter_mask, mask_nonlin_sat
 
+from photometry import Photometry, is_flux
+
+PHOTOMETRY_ROOT = os.path.join(IoIO_ROOT, 'StandardStar')
 
 #def kernel_process(ccd,
 #                   seeing=5,
@@ -427,6 +434,8 @@ def standard_star_pipeline(directory,
                            num_processes=None,
                            read_pout=False,
                            write_pout=False,
+                           outdir_root=PHOTOMETRY_ROOT,
+                           fits_fixed_ignore=False,
                            **kwargs): 
     """
     Parameters
@@ -448,7 +457,7 @@ def standard_star_pipeline(directory,
 
     """
 
-    rd = reduced_dir(directory, create=False)
+    rd = reduced_dir(directory, outdir_root, create=False)
     default_outname = os.path.join(rd, 'standard_star.pout')
     if read_pout is True:
         read_pout = default_outname
@@ -481,6 +490,7 @@ def standard_star_pipeline(directory,
                        post_process_list=[nd_filter_mask,
                                           standard_star_process,
                                           no_outfile],
+                       fits_fixed_ignore=fits_fixed_ignore, 
                        num_processes=num_processes,
                        process_expand_factor=15,
                        **kwargs)
@@ -524,23 +534,26 @@ def exposure_correct_plot(exposure_correct_data,
                            plot_dates < latency_changes[iseg+1]))
         if len(sidx) == 0:
             continue
+        mindate = min(plot_dates[sidx])
+        maxdate = max(plot_dates[sidx])
         biweight_exposure_correct = biweight_location(exposure_corrects[sidx],
                                                       ignore_nan=True)
         mad_std_exposure_correct = mad_std(exposure_corrects[sidx],
                                            ignore_nan=True)
-        plt.plot_date([min(plot_dates[sidx]), max(plot_dates[sidx])],
+        plt.plot_date([mindate, maxdate],
                       [biweight_exposure_correct]*2, 'r-')
 
-        plt.plot_date([min(plot_dates[sidx]), max(plot_dates[sidx])],
+        plt.plot_date([mindate, maxdate],
                       [biweight_exposure_correct-mad_std_exposure_correct]*2,
                       'k--')
-        plt.plot_date([min(plot_dates[sidx]), max(plot_dates[sidx])],
+        plt.plot_date([mindate, maxdate],
                       [biweight_exposure_correct+mad_std_exposure_correct]*2,
                       'k--')
 
-        plt.text(0.5, biweight_exposure_correct + 0.1*mad_std_exposure_correct, 
+        plt.text((mindate + maxdate)/2,
+                 0.5*biweight_exposure_correct, 
                  f'{biweight_exposure_correct:.2f} +/- {mad_std_exposure_correct:.2f}',
-                 ha='center', transform=ax.get_yaxis_transform())
+                 ha='center')#, transform=ax.get_yaxis_transform())
 
     plt.ylabel('Exposure correction (s)')
     ax.set_ylim([0, 5])
@@ -562,6 +575,7 @@ def standard_star_directory(directory,
                             photometry_time_window=1*u.min,
                             stability_factor=np.inf,
                             min_airmass_points=3,
+                            outdir_root=PHOTOMETRY_ROOT,
                             **kwargs):
     """
     Parameters
@@ -591,7 +605,7 @@ def standard_star_directory(directory,
         Higher number accepts more data (see code)
 
     """
-    rd = reduced_dir(directory, create=False)
+    rd = reduced_dir(directory, outdir_root, create=False)
     default_extinction_outname = os.path.join(rd, 'extinction.csv')
     default_exposure_correction_outname = \
         os.path.join(rd, 'exposure_correction.csv')
@@ -629,10 +643,9 @@ def standard_star_directory(directory,
 
     if pout is None:
         directory, pout = standard_star_pipeline(directory,
-                                                 calibration=calibration,
-                                                 photometry=photometry,
                                                  read_pout=read_pout,
                                                  write_pout=write_pout,
+                                                 outdir_root=outdir_root,
                                                  **kwargs)
 
     if len(pout) == 0:
@@ -849,6 +862,7 @@ def standard_star_directory(directory,
             ax.tick_params(which='both', direction='inout',
                            bottom=True, top=True, left=True, right=True)
             ax.set_xlim([min_airmass, max_airmass])
+            plt.gca().invert_yaxis()
             plt.plot(airmasses, instr_mags, 'k.')
             plt.ylabel(filt)
             plt.text(0.87, 0.1, 
@@ -979,6 +993,7 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
                        read_csvs=True,
                        show=False,
                        ccddata_cls=RedCorData,
+                       outdir_root=PHOTOMETRY_ROOT,                       
                        **kwargs):
     dirs_dates = get_dirs_dates(data_root, start=start, stop=stop)
     dirs, _ = zip(*dirs_dates)
@@ -999,17 +1014,26 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
                                     photometry=photometry,
                                     read_csvs=read_csvs,
                                     ccddata_cls=ccddata_cls,
+                                    outdir_root=outdir_root,
                                     **kwargs)
         extinction_data.extend(extinct)
         exposure_correct_data.extend(expo)
 
-    rd = reduced_dir(data_root, create=True)
+    rd = reduced_dir(data_root, outdir_root, create=True)
     # This is fast enough so that I don't need to save the plots.
     # Easier to just run with show=True and manipilate the plot by hand
-    #outname = os.path.join(rd,
-    #                       f"{start}--{stop}_exposure_correction.png")
+    if start is None:
+        start_str = ''
+    else:
+        start_str = start + '--'
+    if stop is None:
+        stop_str = ''
+    else:
+        stop_str = stop + '_'
+    outname = os.path.join(rd,
+                           f"{start_str}{stop_str}exposure_correction.png")
     exposure_correct_plot(exposure_correct_data,
-                          #outname=outname,
+                          outname=outname,
                           latency_change_dates=sx694.latency_change_dates,
                           show=show)
     return dirs, extinction_data, exposure_correct_data
@@ -1022,13 +1046,15 @@ def standard_star_cmd(args):
                     reduce=True,
                     num_processes=args.num_processes)
     standard_star_tree(data_root=args.data_root,
+                       outdir_root=args.outdir_root,
                        start=args.start,
                        stop=args.stop,
                        calibration=c,
                        read_csvs=args.read_csvs,
                        read_pout=args.read_pout,
                        show=args.show,
-                       num_processes=args.num_processes)
+                       num_processes=args.num_processes,
+                       fits_fixed_ignore=args.fits_fixed_ignore)
     
 if __name__ == '__main__':
     log.setLevel('DEBUG')
@@ -1037,6 +1063,9 @@ if __name__ == '__main__':
     parser.add_argument(
         '--data_root', help='raw data root',
         default=RAW_DATA_ROOT)
+    parser.add_argument(
+        '--outdir_root', help='photometry output root',
+        default=PHOTOMETRY_ROOT)
     parser.add_argument(
         '--calibration_start', help='calibration start date')
     parser.add_argument(
@@ -1057,6 +1086,10 @@ if __name__ == '__main__':
     parser.add_argument(
         '--show', action=argparse.BooleanOptionalAction,
         help='show PyPlot of top-level results (pauses terminal)',
+        default=False)
+    parser.add_argument(
+        '--fits_fixed_ignore', action=argparse.BooleanOptionalAction,
+        help='turn off WCS warning messages',
         default=False)
     
     args = parser.parse_args()
