@@ -364,23 +364,23 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         self.y_center_offset        	= y_center_offset
         if cwt_width_arange_flat is None:
             cwt_width_arange_flat   	= np.arange(2, 60)
-            self.cwt_width_arange_flat  = cwt_width_arange_flat
+        self.cwt_width_arange_flat  	= cwt_width_arange_flat
         if cwt_width_arange is None:
             cwt_width_arange        	= np.arange(8, 80)
             self.cwt_width_arange       = cwt_width_arange       
-            self.n_y_steps              = n_y_steps              
-            self.x_filt_width           = x_filt_width
-            self.edge_mask              = edge_mask
-            self.cwt_min_snr            = cwt_min_snr            
-            self.search_margin          = search_margin           
-            self.max_fit_delta_pix      = max_fit_delta_pix      
-            self.max_parallel_delta_pix = max_parallel_delta_pix
-            self.max_ND_width_range	= max_ND_width_range
-            self.small_filt_crop        = small_filt_crop
-            self.plot_prof		= plot_prof 
-            self.plot_dprof             = plot_dprof
-            self.plot_ND_edges	    	= plot_ND_edges
-            self.show 			= show
+        self.n_y_steps              	= n_y_steps              
+        self.x_filt_width           	= x_filt_width
+        self.edge_mask              	= edge_mask
+        self.cwt_min_snr            	= cwt_min_snr            
+        self.search_margin          	= search_margin           
+        self.max_fit_delta_pix      	= max_fit_delta_pix      
+        self.max_parallel_delta_pix 	= max_parallel_delta_pix
+        self.max_ND_width_range		= max_ND_width_range
+        self.small_filt_crop        	= small_filt_crop
+        self.plot_prof			= plot_prof 
+        self.plot_dprof             	= plot_dprof
+        self.plot_ND_edges	    	= plot_ND_edges
+        self.show 			= show
 
         self.no_obj_center          = no_obj_center
         self.profile_peak_threshold = profile_peak_threshold
@@ -1055,6 +1055,10 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             photometry.show_background()
             photometry.show_segm()
         sc = photometry.source_catalog
+        if sc is None:
+            log.warning('No sources found in patch.  Bright conditions?  Consider using OffCorData')
+            return NoCenterPGD(self).obj_center            
+            
         tbl = sc.to_table()
         tbl.sort('segment_flux', reverse=True)
         tbl.show_in_browser()
