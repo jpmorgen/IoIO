@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 import pandas as pd
 
+from astropy.io.fits import getheader
 from astropy.stats import mad_std, biweight_location
 from astropy.time import Time
 
@@ -26,14 +27,15 @@ def flist_to_dict(flist):
     
 def flat_flux(fname_or_ccd):
     print(fname_or_ccd)
-    ccd = RedCorData.read(fname_or_ccd)
-    maxval = ccd.meta['FLATDIV']
-    exptime = ccd.meta['EXPTIME']
+    hdr = getheader(fname_or_ccd)
+    #ccd = RedCorData.read(fname_or_ccd)
+    maxval = hdr['FLATDIV']
+    exptime = hdr['EXPTIME']
     flux = maxval/exptime
     return flux
     
-
-c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
+c = Calibration(reduce=True)
+#c = Calibration(start_date='2020-07-07', stop_date='2020-08-22', reduce=True)
 #c = Calibration(start_date='2020-01-01', stop_date='2020-04-24', reduce=True)
 #c = Calibration(start_date='2020-01-01', stop_date='2020-12-31', reduce=True)
 
@@ -93,7 +95,7 @@ for ib, band in enumerate(['Na', 'SII']):
     plt.ylim([biweight_ratio-3*mad_std_ratio, biweight_ratio+3*mad_std_ratio])
     plt.gcf().autofmt_xdate()
 
-#plt.savefig(ps.path.join(CALIBRATION_ROOT, 'off_on_ratio_vs_time.png'), transparent=True)
+plt.savefig(ps.path.join(CALIBRATION_ROOT, 'flat__ratio_vs_time.png'), transparent=True)
 show= True
 if show:
     plt.show()
