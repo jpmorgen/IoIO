@@ -1281,6 +1281,12 @@ def cor_process(ccd,
     if remove_raw_jd:
         if nccd.meta.get('JD*'):
             del nccd.meta['JD*']
+        # ACP adds these, but based on DATE-OBS, not DATE-AVG
+        if nccd.meta.get('HJD-OBS'):
+            del nccd.meta['HJD-OBS']
+        if nccd.meta.get('BJD-OBS'):
+            del nccd.meta['BJD-OBS']
+        
         
     if obs_location:
         nccd.meta = obs_location_to_hdr(nccd.meta,
