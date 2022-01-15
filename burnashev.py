@@ -19,6 +19,8 @@ from astropy import log
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 
+from astroquery.vizier import Vizier
+
 from specutils import Spectrum1D, SpectralRegion
 from specutils.manipulation import extract_region
 
@@ -33,7 +35,9 @@ class Burnashev():
         
     @property
     def catalog(self):
-        """Burnashev catalog, with star names only, no RA and DEC.  Some non-stellar objects, calibrations, etc. included"""
+        """Returns raw Burnashev catalog as list of dict.  
+
+        """
         if self._cat is not None:
             return self._cat
             
@@ -89,7 +93,10 @@ class Burnashev():
 
     @property
     def stars(self):
-        """Star names, RA and DEC of Burnashev astronomical targets"""
+        """Returns list dict of star name fields used in Burnashev
+        catalog together with their RA and DEC.  
+
+        """
         if self._stars is not None:
             return self._stars
         with open(os.path.join(BURNASHEV_ROOT, 'stars.dat')) as f:
@@ -117,40 +124,87 @@ class Burnashev():
         self._stars = stars
         return stars
 
-    def closest_name(self, coord):
-        """Given SkyCoord, find closest star name in catalog"""
+    def closest_name_to(self, coord):
+        """Find Burnashev name field and angular distance of closest
+        catalog star to coord
+
+        This method is important since the primary index of the the
+        Burnashev catalog is BS designation (Bright Star catalogue,
+        5th Revised Ed.; Hoffleit et al., 1991).  SIMBAD does not
+        provide BS designations as IDs when searching using other
+        catalog designations.  In other words, a SIMBAD search on BS
+        24 will yield HD 493 as a valid identifier, but not the other
+        way around.  Thus, the Burnashev catalog is most conveniently
+        searched by coordinate.
+
+        Parameters
+        ----------
+        coord : `~astropy.coordinates.SkyCoord`
+            Input coordinate
+
+        Returns
+        -------
+        name, min_angle: tuple
+            Burnashev catalog name field of star to `coord` and its angular
+            distance from `coord`.
+
+        See also
+        -------
+        `:meth:Burnashev.entry_by_name`
+
+        """
+
         angles = []
         for star in self.stars:
-            a = my_star.separation(star['coord'])
+            a = coord.separation(star['coord'])
             angles.append(a)
         min_angle = min(angles)
         min_idx = angles.index(min_angle)
         name = self.stars[min_idx]['Name']
-        return name
+        return (name, min_angle)
 
     def entry_by_name(self, name):
-        """Given a star's catalog name (or subset), return catalog entry"""
-        for entry in self.catalog:
-            if name in entry['Name']:
-                return entry
-        return None
+        """Return Burnashev catalog entry given its name
 
-    def entry_by_coord(self, coord):
-        """"Returns closets catalog entry to star at coord"""
-        name = self.closest_name(coord)
-        entry = self.entry_by_name(name)
+        Parameters
+        ----------
+        name: str
+            Full or partial match to Burnashev catalog name field.
+            Name fields are a concatenation of Bright Star catalogue,
+            5th Revised Ed. (Hoffleit et al., 1991) designations in
+            the form "BS NNNN" plus common identifiers in various
+            abbreviated forms. e.g.: "BS 0015 ALF AND".  
+
+        Returns
+        -------
+        entry : dict
+            Burnashev catalog entry for name.  WARNING: no check for
+            multiple matches is done -- only the first entry is
+            returned.  
+
+        See also
+        --------
+        `:meth:Burnashev.closest_name_by_coord`
+
+        """
+        # https://stackoverflow.com/questions/8653516/python-list-of-dictionaries-search
+        entry = next((e for e in self.catalog if name in e['Name']), None)
         return entry
 
-    def get_spec(self, name_or_coord):
-        """Returns a spectrum for a star.  Star specifided either by name or coordinate"""
-        if isinstance(name_or_coord, str):
-            entry_getter = self.entry_by_name
-        elif isinstance(name_or_coord, SkyCoord):
-            entry_getter = self.entry_by_coord
-        entry = entry_getter(name_or_coord)
-        if entry is None:
-            log.warning('No entry found')
-            return None
+    def get_spec(self, name):
+        """Returns a spectrum for a Burnashev spectrophotometric
+        standard star.
+
+        Parameters
+        ----------
+        name : str
+            Burnashev catalog name field or subset thereof.  WARNING:
+            it is assumed that `:meth:Burnashev.closest_by_name` has
+            been used to retrieve the proper Burnashev name field.
+            That said, names in the form "BS NNNN" may be safe. 
+
+        """
+        entry = self.entry_by_name(name)
         lambdas = entry['lambda1']*u.nm + np.arange(N_SPEC_POINTS)*DELTA_LAMBDA
         flux = 10**entry['logE'] * u.milliWatt * u.m**-2 * u.cm**-1
         spec = Spectrum1D(spectral_axis=lambdas, flux=flux)
@@ -166,15 +220,20 @@ class Burnashev():
 #
 #stars = read_stars()
 
-b = Burnashev()
-my_star = SkyCoord(f'12h23m42.2s', f'-26d18m22.2s')
-name = b.closest_name(my_star)
-print(b.entry_by_name(name))
+#b = Burnashev()
+#my_star = SkyCoord(f'12h23m42.2s', f'-26d18m22.2s')
+#name, dist = b.closest_name_to(my_star)
+#print(f'distance to {name} is {dist}')
+#print(b.entry_by_name(name))
+#
+#print(b.entry_by_name('BS 0057'))
+#
+#print(b.entry_by_name('Margaret'))
+#
+#spec1 = b.get_spec('BS 0057')
+#
+#spec2 = b.get_spec(name)
 
-print(b.entry_by_name('BS 0057'))
 
-print(b.entry_by_name('Margaret'))
-
-spec1 = b.get_spec('BS 0057')
-
-spec2 = b.get_spec(my_star)
+burnashev_vizier_entry = Vizier.find_catalogs('Burnashev')
+burnashev_catalog = Vizier.get_catalogs(burnashev_vizier_entry.keys())
