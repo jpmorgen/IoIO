@@ -1,12 +1,16 @@
-"""Process Burnashev data
+"""Module for Burnashev (1985) spectrophotometric standard star data
 
-The data in digital form are available from 
-
-http://cdsarc.u-strasbg.fr/viz-bin/cat/III/126
-
-in particular the ftp section:
+NOTE: Data must be dowloaded by hand from 
 
 https://cdsarc.cds.unistra.fr/ftp/III/126/
+
+Put all the files into a directory and not that directory in
+BURNASHEV_ROOT
+
+Hand download is required because astroquery.vizier is broken for this
+catalog.  The spectra are stored as many columns in each star's row.
+An astropy.vizier query returns the star names and coordinates,
+appropriate for each row but simply labels the spectra as "Spectrum"
 
 """
 
@@ -18,8 +22,6 @@ import numpy as np
 from astropy import log
 from astropy import units as u
 from astropy.coordinates import SkyCoord
-
-from astroquery.vizier import Vizier
 
 from specutils import Spectrum1D, SpectralRegion
 from specutils.manipulation import extract_region
@@ -233,7 +235,3 @@ class Burnashev():
 #spec1 = b.get_spec('BS 0057')
 #
 #spec2 = b.get_spec(name)
-
-
-burnashev_vizier_entry = Vizier.find_catalogs('Burnashev')
-burnashev_catalog = Vizier.get_catalogs(burnashev_vizier_entry.keys())
