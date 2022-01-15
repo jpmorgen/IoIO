@@ -16,6 +16,7 @@ import gzip
 import numpy as np
 
 from astropy import units as u
+from astropy.coordinates import SkyCoord
 
 from specutils import Spectrum1D, SpectralRegion
 from specutils.manipulation import extract_region
@@ -74,6 +75,31 @@ def read_cat():
         cat.append(entry)
     return cat
 
+def read_stars():
+    with open(os.path.join(BURNASHEV_ROOT, 'stars.dat')) as f:
+        bstars = f.read()
+
+    bstars = bstars.split('\n')
+    stars = []
+    for line in bstars:
+        if len(line) == 0:
+            break
+
+        name = line[0:19].strip()
+        RAh = int(line[19:22])
+        RAm = int(line[22:25])
+        RAs = float(line[25:30])
+        DECd = int(line[30:34])
+        DECm = int(line[34:37])
+        DECs = float(line[37:40])
+
+        c = SkyCoord(f'{RAh}h{RAm}m{RAs}s', f'{DECd}d{DECm}m{DECs}s')
+
+        entry = {'Name': name,
+                 'coord': c}
+        stars.append(entry)
+    return stars
+
 def get_spec(cat_entry):
     lambdas = cat_entry['lambda1']*u.nm + np.arange(N_SPEC_POINTS)*DELTA_LAMBDA
     flux = 10**cat_entry['logE'] * u.milliWatt * u.m**-2 * u.cm**-1
@@ -86,22 +112,12 @@ spec = get_spec(star)
 filter_bandpass = SpectralRegion(5000*u.AA, 6000*u.AA)
 sub_spec = extract_region(spec, filter_bandpass)
 
-with open(os.path.join(BURNASHEV_ROOT, 'stars.dat')) as f:
-    bstars = f.read()
+stars = read_stars()
 
-    bstars = bstars.split('\n')
-    stars = []
-    for line in bstars:
-        if len(line) == 0:
-            break
-        
-        entry = {'Name': line[0:19].strip(),
-                 'RAh': int(line[19:22]),
-                 'RAm': int(line[22:25]),
-                 'RAs': float(line[25:30]),
-                 'DECd': float(line[30:34]),
-                 'DECm': float(line[34:37]),
-                 'DECs': float(line[37:40]),
-                 'SpType': line[40:51].strip(),
-                 }
-        stars.append(entry)
+my_star = SkyCoord(f'12h23m42.2s', f'-26d18m22.2s')
+angles = []
+for star in stars:
+    a = my_star.separation(star['coord'])
+    angles.append(a)
+min_angle = min(angles)
+min_idx = angles.index(min_angle)
