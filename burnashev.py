@@ -9,8 +9,10 @@ BURNASHEV_ROOT
 
 Hand download is required because astroquery.vizier is broken for this
 catalog.  The spectra are stored as many columns in each star's row.
-An astropy.vizier query returns the star names and coordinates,
-appropriate for each row but simply labels the spectra as "Spectrum"
+An astropy.vizier query returns the star names and coordinates, but
+stores each spectrum as the string "Spectrum."
+
+TODO: make a non-vizier download client for astroquerey
 
 """
 
@@ -19,12 +21,17 @@ import gzip
 
 import numpy as np
 
+import matplotlib.pyplot as plt
+
 from astropy import log
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 
 from specutils import Spectrum1D, SpectralRegion
-from specutils.manipulation import extract_region
+from specutils.manipulation import (extract_region,
+                                    FluxConservingResampler,
+                                    LinearInterpolatedResampler,
+                                    SplineInterpolatedResampler)
 
 BURNASHEV_ROOT = '/data/Burnashev/'
 N_SPEC_POINTS = 200
@@ -34,7 +41,8 @@ class Burnashev():
     def __init__(self):
         self._cat = None
         self._stars = None
-        
+        self._catalog_coords = None        
+
     @property
     def catalog(self):
         """Returns raw Burnashev catalog as list of dict.  
@@ -74,8 +82,6 @@ class Burnashev():
                 stop = start + 10
                 p = float(line[start:stop])
                 log_e.append(p)
-            #log_e = np.asarray(log_e)*np.log(u.milliWatt * u.m**-2 * u.cm**-1)
-            #log_e = np.asarray(log_e)*np.log(u.erg/u.s/u.cm**2/u.cm)
             log_e = np.asarray(log_e)
             flux = 10**log_e*u.erg/u.s/u.cm**2/u.cm
 
@@ -126,6 +132,18 @@ class Burnashev():
         self._stars = stars
         return stars
 
+    @property
+    def catalog_coords(self):
+        """Store catalog star coordinates in
+        `~astropy.coordinates.SkyCoord` object
+        """
+        if self._catalog_coords is not None:
+            return self._catalog_coords
+        # This could also be done with a Pandas dataframe slice
+        coords = [s['coord'] for s in self.stars]
+        self._catalog_coords = SkyCoord(coords)
+        return self._catalog_coords
+
     def closest_name_to(self, coord):
         """Find Burnashev name field and angular distance of closest
         catalog star to coord
@@ -155,15 +173,19 @@ class Burnashev():
         `:meth:Burnashev.entry_by_name`
 
         """
+        idx, angle, d3d = coord.match_to_catalog_sky(self.catalog_coords)
+        name = self.stars[idx]['Name']
+        return (name, angle)
 
-        angles = []
-        for star in self.stars:
-            a = coord.separation(star['coord'])
-            angles.append(a)
-        min_angle = min(angles)
-        min_idx = angles.index(min_angle)
-        name = self.stars[min_idx]['Name']
-        return (name, min_angle)
+
+        #angles = []
+        #for star in self.stars:
+        #    a = coord.separation(star['coord'])
+        #    angles.append(a)
+        #min_angle = min(angles)
+        #min_idx = angles.index(min_angle)
+        #name = self.stars[min_idx]['Name']
+        #return (name, min_angle)
 
     def entry_by_name(self, name):
         """Return Burnashev catalog entry given its name
@@ -207,10 +229,62 @@ class Burnashev():
 
         """
         entry = self.entry_by_name(name)
-        lambdas = entry['lambda1']*u.nm + np.arange(N_SPEC_POINTS)*DELTA_LAMBDA
-        flux = 10**entry['logE'] * u.milliWatt * u.m**-2 * u.cm**-1
+        lambdas = entry['lambda1']*u.AA + np.arange(N_SPEC_POINTS)*DELTA_LAMBDA
+        flux = 10**entry['logE'] * u.erg/u.s/u.cm**2/u.cm
+        #flux = 10**entry['logE'] * u.milliWatt * u.m**-2 * u.cm**-1
         spec = Spectrum1D(spectral_axis=lambdas, flux=flux)
         return spec
+
+
+    # Specific to IoIO
+    def get_filt(self, fname, **kwargs):
+        # https://github.com/astropy/specutils/issues/880
+        filt_arr = np.loadtxt(fname, **kwargs)
+        wave = filt_arr[:,0]*u.nm
+        trans = filt_arr[:,1]
+        # Clean up datatheif reading
+        #trans = np.asarray(trans)
+        trans[trans < 0] = 0
+        trans *= u.percent
+        filt = Spectrum1D(spectral_axis=wave, flux=trans)
+        return filt
+        
+def flux_in_filt(spec, filt, resampler=None):
+    if resampler is None:
+        raise ValueError('specutils.manipulation resampler must be specified')
+
+    # Make filter spectral axis consistent with star spectrum.  Need
+    # to make a new filter spectrum as a result
+    filt_spectral_axis = filt.spectral_axis.to(spec.spectral_axis.unit)
+    filt = Spectrum1D(spectral_axis=filt_spectral_axis,
+                      flux=filt.flux)
+    filter_bandpass = SpectralRegion(np.min(filt.spectral_axis),
+                                     np.max(filt.spectral_axis))
+    # Work only with our filter bandpass
+    spec = extract_region(spec, filter_bandpass)
+
+    #resampler = FluxConservingResampler()
+    #resampler = LinearInterpolatedResampler()
+    #resampler = SplineInterpolatedResampler()
+    spec = resampler(spec, filt.spectral_axis) 
+    #filt = resampler(filt, spec.spectral_axis)
+    f, ax = plt.subplots()
+    ax.step(filt.spectral_axis, filt.flux)
+    ax.set_title(f"{filt_name}")
+    plt.show()
+
+    spec = spec * filt
+    f, ax = plt.subplots()
+    ax.step(spec.spectral_axis, spec.flux)
+    ax.set_title(f"{filt_name}")
+    plt.show()
+
+    dlambda = filter_bandpass.upper - filter_bandpass.lower
+    bandpass_flux = np.nansum(spec.flux)*dlambda
+    bandpass_flux = bandpass_flux.to(u.erg/u.s/u.cm**2)
+    print(f'{filt_name} flux = {bandpass_flux}')
+    
+
 
 # --> TODO: some sort of filter tool
 
@@ -235,3 +309,58 @@ class Burnashev():
 #spec1 = b.get_spec('BS 0057')
 #
 #spec2 = b.get_spec(name)
+
+    
+
+b = Burnashev()
+my_star = SkyCoord(f'12h23m42.2s', f'-26d18m22.2s')
+name, dist = b.closest_name_to(my_star)
+orig_spec = b.get_spec(name)
+
+filt_root = '/data/IoIO/observing'
+filt_names = ['U', 'B', 'V', 'R', 'I',
+              'SII_on', 'SII_off', 'Na_on', 'Na_off']
+
+for filt_name in filt_names:
+    fname = os.path.join(filt_root, filt_name+'.txt')
+    try:
+        filt = b.get_filt(fname)
+    except:
+        filt = b.get_filt(fname, delimiter=',')
+    #ax = plt.subplots()[1]  
+    #ax.plot(filt.spectral_axis, filt.flux)  
+    #ax.set_xlabel("Wavelenth")  
+    #ax.set_ylabel("Transmission")
+    #ax.set_title(f"{filt_name}")
+    #plt.show()
+
+    spec = orig_spec
+    # Make filter spectral axis consistent with star spectrum.  Need
+    # to make a new filter spectrum as a result
+    filt_spectral_axis = filt.spectral_axis.to(spec.spectral_axis.unit)
+    filt = Spectrum1D(spectral_axis=filt_spectral_axis,
+                      flux=filt.flux)
+    filter_bandpass = SpectralRegion(np.min(filt.spectral_axis),
+                                     np.max(filt.spectral_axis))
+    # Work only with our bandpass
+    spec = extract_region(spec, filter_bandpass)
+    #resampler = FluxConservingResampler()
+    resampler = LinearInterpolatedResampler()
+    #resampler = SplineInterpolatedResampler()
+    spec = resampler(spec, filt.spectral_axis) 
+    #filt = resampler(filt, spec.spectral_axis)
+    f, ax = plt.subplots()
+    ax.step(filt.spectral_axis, filt.flux)
+    ax.set_title(f"{filt_name}")
+    plt.show()
+
+    spec = spec * filt
+    f, ax = plt.subplots()
+    ax.step(spec.spectral_axis, spec.flux)
+    ax.set_title(f"{filt_name}")
+    plt.show()
+
+    dlambda = filter_bandpass.upper - filter_bandpass.lower
+    bandpass_flux = np.nansum(spec.flux)*dlambda
+    bandpass_flux = bandpass_flux.to(u.erg/u.s/u.cm**2)
+    print(f'{filt_name} flux = {bandpass_flux}')
