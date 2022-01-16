@@ -29,9 +29,9 @@ from astropy.coordinates import SkyCoord
 
 from specutils import Spectrum1D, SpectralRegion
 from specutils.manipulation import (extract_region,
-                                    FluxConservingResampler,
-                                    LinearInterpolatedResampler,
-                                    SplineInterpolatedResampler)
+                                    LinearInterpolatedResampler)
+
+from specutils.analysis import line_flux
 
 BURNASHEV_ROOT = '/data/Burnashev/'
 N_SPEC_POINTS = 200
@@ -249,12 +249,9 @@ class Burnashev():
         filt = Spectrum1D(spectral_axis=wave, flux=trans)
         return filt
         
-def flux_in_filt(spec, filt, resampler=None):
-    if resampler is None:
-        raise ValueError('specutils.manipulation resampler must be specified')
-
-    # Make filter spectral axis consistent with star spectrum.  Need
-    # to make a new filter spectrum as a result
+def flux_in_filt(spec, filt, resampler=None, energy=False):
+    # Make filter spectral axis unit consistent with star spectrum.
+    # Need to make a new filter spectrum as a result
     filt_spectral_axis = filt.spectral_axis.to(spec.spectral_axis.unit)
     filt = Spectrum1D(spectral_axis=filt_spectral_axis,
                       flux=filt.flux)
@@ -263,30 +260,44 @@ def flux_in_filt(spec, filt, resampler=None):
     # Work only with our filter bandpass
     spec = extract_region(spec, filter_bandpass)
 
-    #resampler = FluxConservingResampler()
-    #resampler = LinearInterpolatedResampler()
-    #resampler = SplineInterpolatedResampler()
-    spec = resampler(spec, filt.spectral_axis) 
-    #filt = resampler(filt, spec.spectral_axis)
-    f, ax = plt.subplots()
-    ax.step(filt.spectral_axis, filt.flux)
-    ax.set_title(f"{filt_name}")
-    plt.show()
+    if (len(spec.spectral_axis) == len(filt.spectral_axis)
+        and np.all((spec.spectral_axis == filt.spectral_axis))):
+        # No need to resample
+        pass
+    else:
+        if resampler is None:
+            resampler = LinearInterpolatedResampler()
+        # Resample lower resolution to higher
+        spec_dlambda = np.median(spec.spectral_axis[1:]
+                                 - spec.spectral_axis[0:-1])
+        filt_dlambda = np.median(filt.spectral_axis[1:]
+                                 - filt.spectral_axis[0:-1])
+        if spec_dlambda > filt_dlambda:
+            spec = resampler(spec, filt.spectral_axis)
+        else:
+            filt = resampler(filt, spec.spectral_axis)
+
+    filt = resampler(filt, spec.spectral_axis)
+    #f, ax = plt.subplots()
+    #ax.step(filt.spectral_axis, filt.flux)
+    #ax.set_title(f"{filt_name}")
+    #plt.show()
 
     spec = spec * filt
-    f, ax = plt.subplots()
-    ax.step(spec.spectral_axis, spec.flux)
-    ax.set_title(f"{filt_name}")
-    plt.show()
+    #f, ax = plt.subplots()
+    #ax.step(spec.spectral_axis, spec.flux)
+    #ax.set_title(f"{filt_name}")
+    #plt.show()
 
-    dlambda = filter_bandpass.upper - filter_bandpass.lower
-    bandpass_flux = np.nansum(spec.flux)*dlambda
-    bandpass_flux = bandpass_flux.to(u.erg/u.s/u.cm**2)
-    print(f'{filt_name} flux = {bandpass_flux}')
-    
+    if energy:
+        filt_flux = line_flux(spec)
+        filt_flux = filt_flux.to(u.erg * u.cm**-2 * u.s**-1)
+    else:
+        # Assumes a single-bandpass filter
+        dlambda = filter_bandpass.upper - filter_bandpass.lower
+        filt_flux = np.nansum(spec.photon_flux)*dlambda
+    return filt_flux
 
-
-# --> TODO: some sort of filter tool
 
 #cat = read_cat()
 #star = cat[234]
@@ -312,55 +323,58 @@ def flux_in_filt(spec, filt, resampler=None):
 
     
 
-b = Burnashev()
-my_star = SkyCoord(f'12h23m42.2s', f'-26d18m22.2s')
-name, dist = b.closest_name_to(my_star)
-orig_spec = b.get_spec(name)
-
-filt_root = '/data/IoIO/observing'
-filt_names = ['U', 'B', 'V', 'R', 'I',
-              'SII_on', 'SII_off', 'Na_on', 'Na_off']
-
-for filt_name in filt_names:
-    fname = os.path.join(filt_root, filt_name+'.txt')
-    try:
-        filt = b.get_filt(fname)
-    except:
-        filt = b.get_filt(fname, delimiter=',')
-    #ax = plt.subplots()[1]  
-    #ax.plot(filt.spectral_axis, filt.flux)  
-    #ax.set_xlabel("Wavelenth")  
-    #ax.set_ylabel("Transmission")
-    #ax.set_title(f"{filt_name}")
-    #plt.show()
-
-    spec = orig_spec
-    # Make filter spectral axis consistent with star spectrum.  Need
-    # to make a new filter spectrum as a result
-    filt_spectral_axis = filt.spectral_axis.to(spec.spectral_axis.unit)
-    filt = Spectrum1D(spectral_axis=filt_spectral_axis,
-                      flux=filt.flux)
-    filter_bandpass = SpectralRegion(np.min(filt.spectral_axis),
-                                     np.max(filt.spectral_axis))
-    # Work only with our bandpass
-    spec = extract_region(spec, filter_bandpass)
-    #resampler = FluxConservingResampler()
-    resampler = LinearInterpolatedResampler()
-    #resampler = SplineInterpolatedResampler()
-    spec = resampler(spec, filt.spectral_axis) 
-    #filt = resampler(filt, spec.spectral_axis)
-    f, ax = plt.subplots()
-    ax.step(filt.spectral_axis, filt.flux)
-    ax.set_title(f"{filt_name}")
-    plt.show()
-
-    spec = spec * filt
-    f, ax = plt.subplots()
-    ax.step(spec.spectral_axis, spec.flux)
-    ax.set_title(f"{filt_name}")
-    plt.show()
-
-    dlambda = filter_bandpass.upper - filter_bandpass.lower
-    bandpass_flux = np.nansum(spec.flux)*dlambda
-    bandpass_flux = bandpass_flux.to(u.erg/u.s/u.cm**2)
-    print(f'{filt_name} flux = {bandpass_flux}')
+# b = Burnashev()
+# my_star = SkyCoord(f'12h23m42.2s', f'-26d18m22.2s')
+# name, dist = b.closest_name_to(my_star)
+# orig_spec = b.get_spec(name)
+# 
+# filt_root = '/data/IoIO/observing'
+# filt_names = ['U', 'B', 'V', 'R', 'I',
+#               'SII_on', 'SII_off', 'Na_on', 'Na_off']
+# 
+# for filt_name in filt_names:
+#     fname = os.path.join(filt_root, filt_name+'.txt')
+#     try:
+#         filt = b.get_filt(fname)
+#     except:
+#         filt = b.get_filt(fname, delimiter=',')
+#     #ax = plt.subplots()[1]  
+#     #ax.plot(filt.spectral_axis, filt.flux)  
+#     #ax.set_xlabel("Wavelenth")  
+#     #ax.set_ylabel("Transmission")
+#     #ax.set_title(f"{filt_name}")
+#     #plt.show()
+# 
+#     spec = orig_spec
+#     filt_flux = flux_in_filt(orig_spec, filt)
+#     print(f'{filt_name} flux = {filt_flux}')
+#     
+#     ## Make filter spectral axis consistent with star spectrum.  Need
+#     ## to make a new filter spectrum as a result
+#     #filt_spectral_axis = filt.spectral_axis.to(spec.spectral_axis.unit)
+#     #filt = Spectrum1D(spectral_axis=filt_spectral_axis,
+#     #                  flux=filt.flux)
+#     #filter_bandpass = SpectralRegion(np.min(filt.spectral_axis),
+#     #                                 np.max(filt.spectral_axis))
+#     ## Work only with our bandpass
+#     #spec = extract_region(spec, filter_bandpass)
+#     ##resampler = FluxConservingResampler()
+#     #resampler = LinearInterpolatedResampler()
+#     ##resampler = SplineInterpolatedResampler()
+#     #spec = resampler(spec, filt.spectral_axis) 
+#     ##filt = resampler(filt, spec.spectral_axis)
+#     #f, ax = plt.subplots()
+#     #ax.step(filt.spectral_axis, filt.flux)
+#     #ax.set_title(f"{filt_name}")
+#     #plt.show()
+#     #
+#     #spec = spec * filt
+#     #f, ax = plt.subplots()
+#     #ax.step(spec.spectral_axis, spec.flux)
+#     #ax.set_title(f"{filt_name}")
+#     #plt.show()
+#     #
+#     #dlambda = filter_bandpass.upper - filter_bandpass.lower
+#     #bandpass_flux = np.nansum(spec.flux)*dlambda
+#     #bandpass_flux = bandpass_flux.to(u.erg/u.s/u.cm**2)
+#     #print(f'{filt_name} flux = {bandpass_flux}')
