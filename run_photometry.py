@@ -883,6 +883,21 @@ def standard_star_directory(directory,
             xfit, yfit = poly.linspace()
             plt.plot(xfit, yfit)
             instr_mag_am0 = poly(0)
+            # --> Convert back to flux for Burnashev and other catalog comparison
+            flux_am0 = u.Magnitude(instr_mag_am0).physical
+            # --> WORKING HERE
+            # --> need to grab coords or name through SIMBAD might be
+            # good for that, since that grabs real coords and
+            # broad-band Johnson-cousins.  Need a separate query to
+            # SDSS for their filters
+            # 
+            # bname, dist = burnashev.closest_name_to()
+            # if dist < some FOV measure:
+            #    spec = burnashev.get_spec(bname)
+            #    filt_prof = get_filt(filt)
+            #    flux = flux_in_filt(spec, filt_prof)
+            #    --> Need to put plate scale somewhere sensible.  See
+            # exoplanets.py 
             extinction = poly.deriv()
             extinction = extinction(0)
             airmasses = np.asarray(airmasses)

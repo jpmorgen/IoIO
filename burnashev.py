@@ -238,7 +238,7 @@ class Burnashev():
 
 
 # Specific to IoIO
-def get_filt(self, fname, **kwargs):
+def get_filt(fname, **kwargs):
     # https://github.com/astropy/specutils/issues/880
     filt_arr = np.loadtxt(fname, **kwargs)
     wave = filt_arr[:,0]*u.nm
@@ -294,10 +294,12 @@ def flux_in_filt(spec, filt, resampler=None, energy=False):
         filt_flux = line_flux(spec)
         filt_flux = filt_flux.to(u.erg * u.cm**-2 * u.s**-1)
     else:
-        # Photon.  Integrate by hand
-        # This assume that the 
+        # Photon.  Integrate by hand with simple trapezoidal,
+        # non-interpolated technique.  THis is OK, since our filter
+        # curves are nicely sampled
         spec_dlambda = spec.spectral_axis[1:] - spec.spectral_axis[0:-1]
-        filt_flux = np.nansum(spec_dlambda*spec.photon_flux[0:-1])
+        av_bin_flux = (spec.photon_flux[1:] + spec.photon_flux[0:-1])/2
+        filt_flux = np.nansum(spec_dlambda*av_bin_flux)
     return filt_flux
 
 #cat = read_cat()
