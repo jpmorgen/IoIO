@@ -25,11 +25,11 @@ import pandas as pd
 
 from astropy import log
 from astropy import units as u
-from astropy import coordinates as coord
 from astropy.io.fits import Header, getheader
 from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.table import QTable
 from astropy.time import Time
+from astropy.coordinates import Angle, EarthLocation, SkyCoord
 from astropy.stats import mad_std, biweight_location
 
 from photutils import Background2D, MedianBackground
@@ -56,12 +56,12 @@ from cordata import CorData, overscan_estimate
 
 # See IoIO.notebk Tue Sep 28 08:54:57 2021 EDT  jpmorgen@snipe
 # I wasn't always consistent or correct with my naming or location
-IOIO_1_LOCATION = coord.EarthLocation.from_geodetic(
+IOIO_1_LOCATION = EarthLocation.from_geodetic(
     '110 15 25.18 W', '31 56 21.27 N', 1096.342, 'WGS84')
 IOIO_1_LOCATION.info.name = 'IoIO_1'
 
 IOIO_1_LOCATION.info.meta = {
-    'longname': 'Io Input/Output observatory location 1'}
+    'longname': 'Io Input/Output observatory Benson AZ USA'}
 
 # Tests with first iteration of pipeline showed that the real gain in
 # speed is from the physical processors, not the logical processes
@@ -973,6 +973,7 @@ def cor_process(ccd,
                 exp_correct=True,
                 date_beg_avg_add=True,
                 remove_raw_jd=True,
+                correct_obj_offset=True,
                 obs_location=True,
                 fix_radecsys=True,
                 airmass_correct=True,
@@ -1074,6 +1075,15 @@ def cor_process(ccd,
         Remove *JD* keywords not calculated from DATE-BEG and DATE-AVG
         Default is ``True``
 
+    correct_obj_offset : bool
+        Recognizing standard observations are recorded offset from the
+        coronagraph, use RAOFF and DECOFF keywords to correct OBJCTRA
+        and OBJCTDEC keywords to target position.  RA and DEC keywords
+        are set to the previous values of OBJCTRA and OBJCTDEC, which
+        is the nominal center of the FOV, subject to telescope
+        pointing errors. 
+        Default is ``True``
+
     obs_location : bool
         Standardize FITS header keys for observatory location and
         name.  Also deletes inaccurate/non-standard keywords
@@ -1108,7 +1118,7 @@ def cor_process(ccd,
         when a manufacturer's value is used.
         Default is ``None``.
 
-    dark_frame : bool, str, `~astropy.nddata.CCDData` or None, optional
+    dark_frame : bool, str, `~atropy.nddata.CCDData` or None, optional
         A dark frame to be subtracted from the ccd. The unit of the
         master dark frame should match the unit of the image **after
         gain correction** if ``gain_corrected`` is True.  If True,
@@ -1287,6 +1297,30 @@ def cor_process(ccd,
         if nccd.meta.get('BJD-OBS'):
             del nccd.meta['BJD-OBS']
         
+    if correct_obj_offset:
+        # These are in files written by both MaxIm and ACP *when the
+        # telescope is connected*.  The ACP shell out version of the
+        # IoIO python script was not connected to the telescope, so no
+        # RA or OBJCTRA, etc. keywords are set in that case.
+        objctra = nccd.meta.get('OBJCTRA')
+        objctdec = nccd.meta.get('OBJCTDEC')
+        if objctra is not None and objctdec is not None:
+            raoff = nccd.meta.get('RAOFF') or 0
+            decoff = nccd.meta.get('DECOFF') or 0
+            raoff = Angle(raoff*u.arcmin)
+            decoff = Angle(decoff*u.arcmin)
+            cent = SkyCoord(objctra, objctdec, unit=(u.hour, u.deg))
+            target = SkyCoord(cent.ra - raoff, cent.dec - decoff)
+            target_ra_dec = target.to_string(style='hmsdms').split()
+            cent_ra_dec = cent.to_string(style='hmsdms').split()
+            nccd.meta['OBJCTRA'] = (target_ra_dec[0],
+                                    '[hms J2000] Target right assention')
+            nccd.meta['OBJCTDEC'] = (target_ra_dec[1],
+                                     '[dms J2000] Target declination')
+            nccd.meta['RA'] = (cent_ra_dec[0],
+                               '[hms J2000] Center commanded right ascension')
+            nccd.meta['DEC'] = (cent_ra_dec[1],
+                                '[dms J2000] Center commanded declination')
         
     if obs_location:
         nccd.meta = obs_location_to_hdr(nccd.meta,

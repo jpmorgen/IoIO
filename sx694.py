@@ -137,6 +137,22 @@ def metadata(hdr_in,
     # conditions were too bright
     hdr['NONLIN'] = (nonlin, nonlin_comment)
     hdr['RDNOISE'] = (readnoise, readnoise_comment)
+    # MaxIm records [XY]PIXSZ if available from camera and FOCALLEN if
+    # provided by user
+    xpixsz = hdr.get('XPIXSZ')
+    ypixsz = hdr.get('YPIXSZ')
+    focal_length = hdr.get('FOCALLEN')
+    if xpixsz and ypixsz and focal_length:
+        # Be completely general -- not all CCDs have square pixels
+        pixel_size = np.average((xpixsz, xpixsz))
+        # Proper FITS header units would make these obsolete
+        pixel_size *= u.micron 
+        focal_length *= u.mm
+        plate_scale = pixel_size / focal_length
+        plate_scale *= u.radian
+        plate_scale = plate_scale.to(u.arcsec)
+        # Proper FITS header units would make this easier
+        hdr['PIXSCALE'] = (plate_scale.value, '[arcsec] approximate unbinned pixel scale')    
     return hdr
 
 def exp_correct_value(date_obs):
