@@ -14,7 +14,7 @@ from cormultipipe import (RAW_DATA_ROOT,
                           nd_filter_mask, mask_nonlin_sat)
 
 EXOPLANET_ROOT = '/data/exoplanets'
-EXOPLANET_ROOT = '/tmp'
+GLOB_INCLUDE = ['TOI-*', 'WASP-*', 'GJ*']
 
 # General FITS WCS reference:
 # https://fits.gsfc.nasa.gov/fits_wcs.html
@@ -116,17 +116,18 @@ if __name__ == "__main__":
     dirs, _ = zip(*dirs_dates)
     assert len(dirs) > 0
 
-    glob_include = ['TOI-*', 'WASP-*', 'GJ*']
     c = Calibration(reduce=True)
-
 
     cmp = OffCorMultiPipe(auto=True, calibration=c,
                           fits_fixed_ignore=True, outname_ext='.fits', 
-                          post_process_list=[barytime, nd_filter_mask, as_single])
+                          post_process_list=[barytime,
+                                             mask_nonlin_sat,
+                                             nd_filter_mask,
+                                             as_single])
 
     for d in dirs:
         flist = []
-        for gi in glob_include:
+        for gi in GLOB_INCLUDE:
             flist += glob.glob(os.path.join(d, gi))
         if len(flist) == 0:
             log.debug(f'No exoplant observations in {d}')

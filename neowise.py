@@ -10,16 +10,11 @@ from ccdmultipipe import as_single
 
 from cormultipipe import (RAW_DATA_ROOT,
                           get_dirs_dates, reduced_dir,
-                          Calibration, OffCorMultiPipe, 
+                          Calibration, OffCorMultiPipe, FixFnameCorMultipipe,
                           nd_filter_mask, mask_nonlin_sat, detflux)
 
-class FixFnameOffCorMultipipe(OffCorMultiPipe):
-    def outname_create(self, *args,
-                       **kwargs):
-        outname = super().outname_create(*args, **kwargs)
-        outname = outname.replace('Na-on', 'Na_on')
-        return outname
-
+class FixFnameOffCorMultipipe(FixFnameCorMultipipe, OffCorMultiPipe):
+    pass
 
 NEOWISE_ROOT = '/data/NEOWISE_2020F3'
 

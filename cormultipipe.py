@@ -511,6 +511,15 @@ class CorMultiPipe(CCDMultiPipe):
 class OffCorMultiPipe(CorMultiPipe):
     ccddata_cls = OffCorData
 
+
+class FixFnameCorMultipipe(CorMultiPipe):
+    def outname_create(self, *args,
+                       **kwargs):
+        outname = super().outname_create(*args, **kwargs)
+        outname = outname.replace('Na-on', 'Na_on')
+        return outname
+
+
 ######### CorMultiPipe prepossessing routines
 def full_frame(data,
                naxis1=sx694.naxis1,
@@ -1251,26 +1260,7 @@ def cor_process(ccd,
     else:
         raise ValueError(f'Unknown IMAGETYP keyword {imagetyp}')
 
-    # Convert "yes use this calibration" to calibration _filenames_
-    try:
-        if isinstance(calibration, Calibration):
-            if master_bias is True:
-                master_bias = calibration.best_bias(nccd)
-            if dark_frame is True:
-                dark_frame = calibration.best_dark(nccd)
-            if master_flat is True:
-                master_flat = calibration.best_flat(nccd.meta)
-
-        if master_bias is True:
-            raise ValueError('master_bias=True but no Calibration object supplied')
-        if dark_frame is True:
-            raise ValueError('dark_frame=True but no Calibration object supplied')
-        if master_flat is True:
-            raise ValueError('master_flat=True but no Calibration object supplied')
-
-    except Exception as e:
-        log.error(f'No calibration available: calibration system problem {e}')
-        raise
+    # Correct metadata, particularly filter names, before we try calibration
 
     if ccd_meta:
         # Put in our SX694 camera metadata
@@ -1333,6 +1323,28 @@ def cor_process(ccd,
         # I think this is better at large airmass than what ACP uses,
         # plus it standardizes everything for times I didn't use ACP
         nccd.meta = kasten_young_airmass(nccd.meta)
+
+    # Convert "yes use this calibration" to calibration _filenames_
+    # now that we have good metadata
+    try:
+        if isinstance(calibration, Calibration):
+            if master_bias is True:
+                master_bias = calibration.best_bias(nccd)
+            if dark_frame is True:
+                dark_frame = calibration.best_dark(nccd)
+            if master_flat is True:
+                master_flat = calibration.best_flat(nccd.meta)
+
+        if master_bias is True:
+            raise ValueError('master_bias=True but no Calibration object supplied')
+        if dark_frame is True:
+            raise ValueError('dark_frame=True but no Calibration object supplied')
+        if master_flat is True:
+            raise ValueError('master_flat=True but no Calibration object supplied')
+
+    except Exception as e:
+        log.error(f'No calibration available: calibration system problem {e}')
+        raise
 
     # Apply overscan correction unique to the IoIO SX694 CCD.  This
     # uses the string version of master_bias, if available for

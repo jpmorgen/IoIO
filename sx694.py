@@ -193,7 +193,7 @@ def exp_correct(hdr_in,
     hdr = hdr_in.copy()
     hdr.insert('EXPTIME', 
                ('OEXPTIME', exptime,
-                'original exposure time (s)'),
+                'commanded exposure time (s)'),
                after=True)
     exposure_correct, exposure_correct_uncertainty = \
         exp_correct_value(hdr['DATE-OBS'])

@@ -29,6 +29,7 @@ from astropy.stats import mad_std, biweight_location
 from astropy.coordinates import SkyCoord, Angle
 from astroquery.simbad import Simbad
 from astropy.modeling import models, fitting
+from astropy.visualization import quantity_support
 #from astropy.modeling.models import Exponential1D #, BlackBody
 
 from specutils import Spectrum1D, SpectralRegion
@@ -52,21 +53,81 @@ FILT_ROOT = '/data/IoIO/observing'
 # Small filters are 15 arcmin.  Could even fluf this out if I think I
 # haven't synced the telescope on some old observations
 POINTING_TOLERANCE = 15*u.arcmin
+AVOID_HBETA = 5000*u.AA
 
 class CorBurnashev(Burnashev):
-    def calc_spec(self, entry):
+    def calc_spec(self, entry, plot=False, title=''):
         spec = super().calc_spec(entry)
-        #bb = BlackBody(temperature=9602*u.K)
-        #bbspec = Spectrum1D(spectral_axis=spec.spectral_axis,
-        #                    flux=bb(spec.spectral_axis))
-        #bbspec *=1E3
-        #extrapolator = interp1d(spec.spectral_axis, spec.flux,
-        #                        kind='quadratic', fill_value='extrapolate')
-        #f, ax = plt.subplots()
-        #ax.step(bbspec.spectral_axis, bbspec.flux)
-        #ax.step(spec.spectral_axis, spec.flux)
-        #plt.show()
-        return spec
+        spec_med_dlambda = np.median(spec.spectral_axis[1:]
+                                     - spec.spectral_axis[0:-1])
+        spec_med_dlambda = spec_med_dlambda.to(spec.spectral_axis.unit)
+        last_spec_lambda = spec.spectral_axis[-1]
+        lstart = last_spec_lambda.to(spec.spectral_axis.unit) + spec_med_dlambda
+        lstop = 1*u.micron
+        lstop = lstop.to(spec.spectral_axis.unit)
+        num_extra = int(np.round((lstop - lstart) / spec_med_dlambda))
+        lstop = lstart + num_extra * spec_med_dlambda
+        extra_lambda =  np.linspace(lstart.value, lstop.value, num_extra+1)
+        full_lambda = np.concatenate((spec.spectral_axis.value, extra_lambda))
+
+        # HACK Total hacky decision on where to start fitting
+        model_bandpass = SpectralRegion(AVOID_HBETA,
+                                        spec.spectral_axis[-1])
+        to_model = extract_region(spec, model_bandpass)
+
+
+        # HACK ALERT!  Round off exponential with sloping line
+        tail_model = models.Linear1D() + models.Exponential1D()
+        # This works for Vega but always pegs at upper limit.  -1000
+        # might be the best 
+        #tail_model.tau_1.bounds = (-1500, -500)
+        tail_model.tau_1.bounds = (-1500, -600)
+
+        ## Not so bad for Vega, wrong way on other random star
+        #tail_model = models.Const1D() + models.Logarithmic1D()
+
+        ## Too steep
+        #tail_model = models.Const1D() + models.Exponential1D()
+        #tail_model.amplitude_0.bounds = (0, to_model.flux[-1])
+        #tail_model.tau_1.bounds = (-1500, -500)
+
+        ## Problems with undershoot or blowup
+        #tail_model = models.Linear1D()
+        #tail_model = models.Polynomial1D(2)
+
+        #tail_model = models.Shift() | models.Exponential1D() + models.Const1D()
+        #tail_model.offset_0 = model_bandpass.lower.value
+        #tail_model.offset_0.fixed = True
+        #tail_model.tau_1.max = -400
+
+        ## Doesn't work, possibly need constrains
+        #tail_model = BlackBody()
+        ## Doesn't work, possibly need constrains
+        #tail_model = models.Const1D() + models.PowerLaw1D()
+
+        fiter = fitting.LevMarLSQFitter()
+        tail_fit = fiter(tail_model, to_model.spectral_axis.value, to_model.flux.value)
+
+        yfit = tail_fit(to_model.spectral_axis.value)
+
+        extrap_flux = tail_fit(extra_lambda)
+        extrap_flux[extrap_flux < 0] = 0
+        full_flux = np.concatenate((spec.flux.value, extrap_flux))
+        full_lambda *= spec.spectral_axis.unit
+        full_spec = Spectrum1D(spectral_axis=full_lambda,
+                               flux=full_flux*spec.flux.unit)
+        
+
+        if plot:
+            quantity_support()
+            f, ax = plt.subplots()
+            ax.step(full_spec.spectral_axis, full_spec.flux)
+            ax.step(spec.spectral_axis, spec.flux)
+            ax.step(to_model.spectral_axis, yfit)
+            ax.set_title(title)
+            plt.show()
+
+        return full_spec
         
 
     def get_filt(self, filt_name, **kwargs):
@@ -84,7 +145,9 @@ class CorBurnashev(Burnashev):
         filt = Spectrum1D(spectral_axis=wave, flux=trans)
         return filt
 
-    def flux_in_filt(self, spec, filt, resampler=None, energy=False):
+    def flux_in_filt(self, spec, filt,
+                     resampler=None, energy=False,
+                     plot=False, title=''):
         # Make filter spectral axis unit consistent with star spectrum.
         # Need to make a new filter spectrum as a result
         filt_spectral_axis = filt.spectral_axis.to(spec.spectral_axis.unit)
@@ -113,16 +176,30 @@ class CorBurnashev(Burnashev):
                 filt = resampler(filt, spec.spectral_axis)
 
         filt = resampler(filt, spec.spectral_axis)
-        #f, ax = plt.subplots()
-        #ax.step(filt.spectral_axis, filt.flux)
-        #ax.set_title(f"{filt_name}")
-        #plt.show()
 
+        orig_spec = spec
         spec = spec * filt
-        # f, ax = plt.subplots()
-        # ax.step(spec.spectral_axis, spec.flux)
-        # ax.set_title(f"{filt_name}")
-        # plt.show()
+        if plot:
+            quantity_support()
+            star_color='tab:blue'
+            filter_color='tab:red'
+            filtered_color='tab:green'
+            f, ax = plt.subplots()
+            ax.step(orig_spec.spectral_axis, orig_spec.flux,
+                    color=star_color,
+                    label='Star')
+            ax.step(spec.spectral_axis, spec.flux,
+                    color=filtered_color,
+                    label='Filter*Star')
+            ax.legend(loc='upper left')
+            ax2 = ax.twinx()
+            ax2.tick_params(axis='y', labelcolor=filter_color)
+            ax2.step(filt.spectral_axis, filt.flux,
+                     color=filter_color,
+                     label='Filter')
+            ax.set_title(title)
+            ax2.legend(loc='upper right')
+            plt.show()
 
         if energy:
             filt_flux = line_flux(spec)
@@ -792,9 +869,9 @@ def standard_star_directory(directory,
                     # exposure_corrects.extend(exposure_correct)
                     # exposure_correct_plot_dates.extend(plot_dates)
 
-            # Having collected fluxes for this object and filter over the
-            # night, fit mag vs. airmass to get top-of-the-atmosphere
-            # magnitude and extinction coef
+            # Having collected fluxes for this object and filter over
+            # the night, fit mag vs. airmass to get airless magnitude
+            # and extinction coef
             if best_fluxes is None:
                 log.warning(f"No good flux measurements for filter {filt} object {obj} in {directory}")
 
@@ -830,11 +907,14 @@ def standard_star_directory(directory,
             zero_point = ''
             calibration_str = np.NAN*u.dimensionless_unscaled
             rayleigh_conversion = np.NAN*u.dimensionless_unscaled
+            # --> I now have the ability to do all of the filters in
+            # both Burnashev and formal UBVRI
             if (simbad_match
                 and flux_col in simbad_entry.colnames
                 and not simbad_entry[flux_col].mask):
                 # Prefer Simbad-listed mags for UBVRI
                 zero_point = simbad_entry[flux_col] - instr_mag_am0
+                zero_point = zero_point.value
                 calibration_str = f'Zero point mag {zero_point:.2f}'
             elif burnashev_match:
                 # We have to integrate the filter
@@ -851,14 +931,14 @@ def standard_star_directory(directory,
                 flux_am0 = u.Magnitude(instr_mag_am0).physical    
                 flux_am0 *= u.electron/u.s
                 rayleigh_conversion = star_sb / flux_am0
-                calibration_str = f'{rayleigh_conversion:0.2}'
+                calibration_str = f'{rayleigh_conversion:0.2e}'
             extinction = poly.deriv()
             extinction = extinction(0)
             airmasses = np.asarray(airmasses)
             dof = num_airmass_points - 2
             red_chisq = np.sum((poly(airmasses) - instr_mags)**2) / dof
             plt.text(0.5, 0.8, 
-                     f'Top of atm. instr mag = {instr_mag_am0:.2f} (electron/s)',
+                     f'Airless instr mag = {instr_mag_am0:.2f} (electron/s)',
                      ha='center', va='bottom', transform=ax.transAxes)
 
             plt.text(0.5, 0.65, 
@@ -878,7 +958,7 @@ def standard_star_directory(directory,
                                'object': obj,
                                'filter': filt,
                                'instr_mag_am0': instr_mag_am0,
-                               'zero_point': zero_point.value,
+                               'zero_point': zero_point,
                                'rayleigh_conversion': rayleigh_conversion.value,
                                'extinction_coef': extinction,
                                'min_am': min(airmasses),
@@ -1280,72 +1360,76 @@ if __name__ == '__main__':
 #pix_solid_angle.to(u.arcsec**2)    
 
 ## Check the standard Alpha Lyrae
-my_star = SkyCoord('18h 36m 56.33635s', '+38d 47m 01.2802s')
+#my_star = SkyCoord('18h 36m 56.33635s', '+38d 47m 01.2802s')
 #my_star = SkyCoord(f'12h23m42.2s', f'-26d18m22.2s')
 
-b = CorBurnashev()
-name, dist, coord = b.closest_name_to(my_star)
-spec = b.get_spec(name)
-spec_med_dlambda = np.median(spec.spectral_axis[1:]
-                             - spec.spectral_axis[0:-1])
-spec_med_dlambda = spec_med_dlambda.to(spec.spectral_axis.unit)
-last_spec_lambda = spec.spectral_axis[-1]
-lstart = last_spec_lambda.to(spec.spectral_axis.unit) + spec_med_dlambda
-lstop = 1*u.micron
-lstop = lstop.to(spec.spectral_axis.unit)
-num_extra = int(np.round((lstop - lstart) / spec_med_dlambda))
-lstop = lstart + num_extra * spec_med_dlambda
-extra_lambda =  np.linspace(lstart.value, lstop.value, num_extra+1)
-full_lambda = np.concatenate((spec.spectral_axis.value, extra_lambda))
-
-# HACK Total hacky decision on where to start fitting
-model_bandpass = SpectralRegion(last_spec_lambda-1500*u.AA,
-                                spec.spectral_axis[-1])
-to_model = extract_region(spec, model_bandpass)
-
-## Too steep
-#tail_model = models.Const1D() + models.Exponential1D()
-#tail_model.amplitude_0.bounds = (0, to_model.flux[-1])
-#tail_model.tau_1.bounds = (-1500, -500)
-
-#tail_model = models.Linear1D()
-#tail_model = models.Polynomial1D(2)
-
-# HACK ALERT!  Round off exponential with sloping line
-tail_model = models.Linear1D() + models.Exponential1D()
-# This works for Vega but always pegs at upper limit
-#tail_model.tau_1.bounds = (-1500, -500)
-tail_model.tau_1.bounds = (-1500, -600)
-
-
-#tail_model = models.Shift() | models.Exponential1D() + models.Const1D()
-#tail_model.offset_0 = model_bandpass.lower.value
-#tail_model.offset_0.fixed = True
-#tail_model.tau_1.max = -400
-
-## Doesn't work, possibly need constrains
-#tail_model = BlackBody()
-## Doesn't work, possibly need constrains
-#tail_model = models.Const1D() + models.PowerLaw1D()
-
-fiter = fitting.LevMarLSQFitter()
-tail_fit = fiter(tail_model, to_model.spectral_axis.value, to_model.flux.value)
-
-yfit = tail_fit(to_model.spectral_axis.value)
-
-#m = models.Exponential1D()
-# --> decent parameters
-#yfit = m.evaluate(to_model.spectral_axis.value, 3E1, -1000.)
-
-extrap_flux = tail_fit(extra_lambda)
-full_flux = np.concatenate((spec.flux.value, extrap_flux))
-full_spec = Spectrum1D(spectral_axis=full_lambda*spec.spectral_axis.unit,
-                       flux=full_flux*spec.flux.unit)
-f, ax = plt.subplots()
-ax.step(full_spec.spectral_axis, full_spec.flux)
-ax.step(spec.spectral_axis, spec.flux)
-ax.step(to_model.spectral_axis, yfit)
-plt.show()
+# b = CorBurnashev()
+# name, dist, coord = b.closest_name_to(my_star)
+# spec = b.get_spec(name)
+# spec_med_dlambda = np.median(spec.spectral_axis[1:]
+#                              - spec.spectral_axis[0:-1])
+# spec_med_dlambda = spec_med_dlambda.to(spec.spectral_axis.unit)
+# last_spec_lambda = spec.spectral_axis[-1]
+# lstart = last_spec_lambda.to(spec.spectral_axis.unit) + spec_med_dlambda
+# lstop = 1*u.micron
+# lstop = lstop.to(spec.spectral_axis.unit)
+# num_extra = int(np.round((lstop - lstart) / spec_med_dlambda))
+# lstop = lstart + num_extra * spec_med_dlambda
+# extra_lambda =  np.linspace(lstart.value, lstop.value, num_extra+1)
+# full_lambda = np.concatenate((spec.spectral_axis.value, extra_lambda))
+# 
+# # HACK Total hacky decision on where to start fitting
+# model_bandpass = SpectralRegion(last_spec_lambda-1500*u.AA,
+#                                 spec.spectral_axis[-1])
+# to_model = extract_region(spec, model_bandpass)
+# 
+# 
+# # HACK ALERT!  Round off exponential with sloping line
+# tail_model = models.Linear1D() + models.Exponential1D()
+# # This works for Vega but always pegs at upper limit
+# #tail_model.tau_1.bounds = (-1500, -500)
+# tail_model.tau_1.bounds = (-1500, -600)
+# 
+# ## Not so bad for Vega, wrong way on other random star
+# #tail_model = models.Const1D() + models.Logarithmic1D()
+# 
+# ## Too steep
+# #tail_model = models.Const1D() + models.Exponential1D()
+# #tail_model.amplitude_0.bounds = (0, to_model.flux[-1])
+# #tail_model.tau_1.bounds = (-1500, -500)
+# 
+# ## Problems with undershoot or blowup
+# #tail_model = models.Linear1D()
+# #tail_model = models.Polynomial1D(2)
+# 
+# #tail_model = models.Shift() | models.Exponential1D() + models.Const1D()
+# #tail_model.offset_0 = model_bandpass.lower.value
+# #tail_model.offset_0.fixed = True
+# #tail_model.tau_1.max = -400
+# 
+# ## Doesn't work, possibly need constrains
+# #tail_model = BlackBody()
+# ## Doesn't work, possibly need constrains
+# #tail_model = models.Const1D() + models.PowerLaw1D()
+# 
+# fiter = fitting.LevMarLSQFitter()
+# tail_fit = fiter(tail_model, to_model.spectral_axis.value, to_model.flux.value)
+# 
+# yfit = tail_fit(to_model.spectral_axis.value)
+# 
+# #m = models.Exponential1D()
+# # --> decent parameters
+# #yfit = m.evaluate(to_model.spectral_axis.value, 3E1, -1000.)
+# 
+# extrap_flux = tail_fit(extra_lambda)
+# full_flux = np.concatenate((spec.flux.value, extrap_flux))
+# full_spec = Spectrum1D(spectral_axis=full_lambda*spec.spectral_axis.unit,
+#                        flux=full_flux*spec.flux.unit)
+# f, ax = plt.subplots()
+# ax.step(full_spec.spectral_axis, full_spec.flux)
+# ax.step(spec.spectral_axis, spec.flux)
+# ax.step(to_model.spectral_axis, yfit)
+# plt.show()
 
 #blew up
 #extrapolator = interp1d(spec.spectral_axis, spec.flux,
@@ -1388,3 +1472,64 @@ plt.show()
 #    spec = orig_spec
 #    filt_flux = b.flux_in_filt(orig_spec, filt)
 #    print(f'{filt_name} flux = {filt_flux}')
+
+##b = CorBurnashev()
+##
+##filt_names = ['U', 'B', 'V', 'R', 'I',
+##              'SII_on', 'SII_off', 'Na_on', 'Na_off']
+##star_list = ['HD 1280  ',
+##             'HD 6695  ',
+##             'HD 12869 ',
+##             'HD 18411 ',
+##             'HD 25867 ',
+##             'HD 32301 ',
+##             'HD 39357 ',
+##             'HD 50635 ',
+##             'HD 64648 ',
+##             'HD 77350 ',
+##             'HD 85376 ',
+##             'HD 95310 ',
+##             'HD 103578',
+##             'HD 112412',
+##             'HD 118232',
+##             'HD 120136',
+##             'HD 128167',
+##             'HD 133640',
+##             'HD 143894',
+##             'HD 154029',
+##             'HD 166230',
+##             'HD 177196',
+##             'HD 187013',
+##             'HD 191747',
+##             'HD 198639',
+##             'HD 204414',
+##             'HD 210459',
+##             'HD 217782']
+##
+##s = Simbad()
+##simbad_results = s.query_objects(star_list)
+##
+##for obj, simbad_entry in zip(star_list, simbad_results):
+##    simbad_coords = SkyCoord(simbad_entry['RA'],
+##                             simbad_entry['DEC'],
+##                             unit=(u.hour, u.deg))
+##    name, _, _ = b.closest_name_to(simbad_coords)
+##    spec = b.get_spec(name)#, plot=True, title=obj)
+##    print(f'{obj}')
+##    for filt_name in filt_names:
+##        filt = b.get_filt(filt_name)
+##        filt_flux = b.flux_in_filt(spec, filt,
+##                                   plot=True,
+##                                   title=f'{obj} {filt_name}')
+##        print(f'{filt_name} {filt_flux}')
+##        #f, ax = plt.subplots()
+##        #ax.step(filt.spectral_axis, filt.flux)
+##        #ax.set_title(f"{filt_name}")
+##        #plt.show()
+##        #ax.set_xlabel("Wavelenth")  
+##        #ax.set_ylabel("Transmission")
+##        #ax.set_title(f"{filt_name}")
+##        #plt.show()
+##        #break
+##    break
+##

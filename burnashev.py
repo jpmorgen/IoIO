@@ -236,7 +236,7 @@ class Burnashev():
         spec = Spectrum1D(spectral_axis=lambdas[good_idx], flux=flux[good_idx])
         return spec
         
-    def get_spec(self, name):
+    def get_spec(self, name, **kwargs):
         """Returns a spectrum for a Burnashev spectrophotometric
         standard star.
 
@@ -250,7 +250,7 @@ class Burnashev():
 
         """
         entry = self.entry_by_name(name)
-        return self.calc_spec(entry)
+        return self.calc_spec(entry, **kwargs)
 
     #def find_longest(self):
     #    red_bandpass = SpectralRegion(800*u.nm, 900*u.nm)
