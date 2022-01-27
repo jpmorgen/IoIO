@@ -210,10 +210,10 @@ def overscan_estimate(ccd_in, meta=None, master_bias=None,
     # Corners method
     s = ccd.shape
     bs = box_size
-    c00 = biweight_location(ccd[0:bs,0:bs])
-    c10 = biweight_location(ccd[s[0]-bs:s[0],0:bs])
-    c01 = biweight_location(ccd[0:bs,s[1]-bs:s[1]])
-    c11 = biweight_location(ccd[s[0]-bs:s[0],s[1]-bs:s[1]])
+    c00 = biweight_location(ccd.data[0:bs,0:bs])
+    c10 = biweight_location(ccd.data[s[0]-bs:s[0],0:bs])
+    c01 = biweight_location(ccd.data[0:bs,s[1]-bs:s[1]])
+    c11 = biweight_location(ccd.data[s[0]-bs:s[0],s[1]-bs:s[1]])
     corners_method = min(c00, c10, c01, c11)
     # Histogram method.  The first peak is the bias, the second is the
     # ND filter.  Note that the 1.25" filters do a better job at this
@@ -335,6 +335,7 @@ def keyword_arithmetic_image_handler(meta, operand1, operation, operand2,
 class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
     def __init__(self, *args,
                  default_ND_params=None,
+                 ND_params=None, # for _slice
                  y_center_offset=0, # *Unbinned* Was 70 for a while See desired_center
                  n_y_steps=8, # was 15 (see adjustment in flat code)
                  x_filt_width=25,
@@ -360,7 +361,10 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # Define y pixel value along ND filter where we want our
         # center --> This may change if we are able to track ND filter
         # sag in Y.
+        if ND_params is not None:
+            default_ND_params = ND_params
         self.default_ND_params = default_ND_params
+        self.ND_params = ND_params
         self.y_center_offset        	= y_center_offset
         if cwt_width_arange_flat is None:
             cwt_width_arange_flat   	= np.arange(2, 60)
@@ -422,6 +426,21 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         if edge_mask.size == 1:
             edge_mask = np.append(edge_mask, -edge_mask)
         return edge_mask        
+
+    def _slice(self, item):
+        """Override PGData _slice to handle ND_params"""
+        kwargs = super()._slice(item)
+        yslice = item[0]
+        xslice = item[1]
+        yorg = yslice.start or 0
+        xorg = xslice.start or 0
+        ND_params = self.ND_params.copy()
+        ND_params[1, :] -= xorg
+        kwargs['ND_params'] = ND_params
+        return kwargs
+
+    # --> Can work on a ND_params_[un]binned to make ND_params
+    # --> potentially run in natural image
 
     @pgproperty
     def ND_params(self):
@@ -488,8 +507,8 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                 tb_ND_params = default_ND_params
                 # Make a copy so we don't mess up the primary data array
             im = self.data.copy()
-            xtop = self.binned(self.ND_edges(ytop, tb_ND_params))
-            xbot = self.binned(self.ND_edges(ybot, tb_ND_params))
+            xtop = self.coord_binned(self.ND_edges(ytop, tb_ND_params))
+            xbot = self.coord_binned(self.ND_edges(ybot, tb_ND_params))
             # Get the far left and right coords, keeping in mind ND
             # filter might be oriented CW or CCW of vertical
             x0 = int(np.min((xbot, xtop))
@@ -586,8 +605,8 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                                         rowpt+ypt_top,
                                         default_ND_params))))
                     dcenter = np.abs(this_ND_center
-                                     - self.unbinned(self.shape)[1]/2)
-                    if dcenter > self.unbinned(self.shape)[1]/4:
+                                     - self.coord_unbinned(self.shape)[1]/2)
+                    if dcenter > self.coord_unbinned(self.shape)[1]/4:
                         raise ValueError('this_ND_center too far off')
                     left = max((0, this_ND_center-subim_hw))
                     right = min((this_ND_center+subim_hw,
@@ -760,7 +779,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             ND_params = self.ND_params
 
         ND_params = np.asarray(ND_params)
-        imshape = self.unbinned(self.shape)
+        imshape = self.coord_unbinned(self.shape)
         # --> I might be able to do this as a comprehension
         if np.asarray(y).size == 1:
             return ND_params[1,:] + ND_params[0,:]*(y - imshape[0]/2)
@@ -775,7 +794,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         
         # ND is referenced
         xs = [] ; ys = []
-        us = self.unbinned(self.shape)
+        us = self.coord_unbinned(self.shape)
         for iy in np.arange(0, us[0]):
             bounds = (self.ND_params[1,:]
                       + self.ND_params[0,:]*(iy - us[0]/2)
@@ -816,6 +835,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
 
     @pgproperty
     def background(self):
+        """This might eventually get better, but for now just returns overscan"""
         return overscan_estimate(self)
 
     def get_metadata(self):
@@ -846,10 +866,6 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         self.get_metadata()
         return self.meta.get('NONLIN')# * self.unit
         
-    def patch(self, ll, ur):
-        """Returns a patch of the PGData object starting from"""
-    
-
     @pgcoordproperty
     def obj_center(self):
         """Returns center pixel coords of Jupiter whether or not Jupiter is on ND filter.  Unbinned pixel coords are returned.  Use [Cor]ObsData.binned() to convert to binned pixels.
@@ -864,10 +880,14 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         if self.no_obj_center:
             return NoCenterPGD(self).obj_center           
 
-        # Work with a copy of the unbinned data array, since we are
-        # going to muck with it.  Make sure it is not raw int and flux
-        # normalize it
-        im = np.double(self.self_unbinned.data.copy()) / (np.prod(self.binning))
+        # --> Work with an unbinned version of ourselves to handle
+        # specifics of flux (this may change to work always in binned)
+        # Make sure we copy since we are going to muck with it and
+        # self_unbinned does not return a copy of unbinned data.  Make
+        # sure it is not raw int and flux normalize it
+        ccd = self.self_unbinned.copy()
+        ccd = ccd.divide(np.prod(self.binning))
+        #im = np.double(self.self_unbinned.data.copy()) / (np.prod(self.binning))
         back_level = self.background / (np.prod(self.binning))
 
         # Establish some metrics to see if Jupiter is on or off the ND
@@ -878,16 +898,16 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # additional scattered light).  A star off the ND filter
         # /data/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit
         # gives 124 num_sat
-        log.debug(f'back_level = {self.background}, self.nonlin: {self.nonlin}, max im: {np.max(im)}')
-        num_sat = (im >= self.nonlin).sum()
+        log.debug(f'back_level = {back_level}, nonlin: {ccd.nonlin}, max im: {np.max(ccd)}')
+        num_sat = (ccd.data >= ccd.nonlin).sum()
 
         # Make a 1D profile along the ND filter to search for a source there
-        us = self.unbinned(self.shape)
+        us = ccd.shape
         ND_profile = np.empty(us[0])
-        for iy in np.arange(im.shape[0]):
-            es = self.ND_edges(iy).astype(int)
-            row = im[iy, es[0]:es[1]]
-            # Get rid of cosmic rays
+        for iy in np.arange(us[0]):
+            es = ccd.ND_edges(iy).astype(int)
+            row = ccd.data[iy, es[0]:es[1]]
+            # Get rid of cosmic rays --> Eventually just leave binned
             row = signal.medfilt(row, 3)
             ND_profile[iy] = np.mean(row)
 
@@ -913,8 +933,8 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         source_on_ND_filter = (peak_contrast > self.profile_peak_threshold)
 
         # Work another way to see if the ND filter has a low flux
-        im  = im - back_level
-        nonlin = self.nonlin - back_level
+        ccd  = ccd.subtract(back_level*ccd.unit)
+        nonlin = ccd.nonlin
 
         # Come up with a metric for when Jupiter is off the ND filter.
         # Below is my scratch work        
@@ -940,7 +960,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             # make the center of mass calc more accurate, just set
             # everything that is not getting toward saturation to 0
             # --> Might want to fine-tune or remove this so bright
-            im[np.where(im < nonlin*0.7)] = 0
+            ccd.data[np.where(ccd.data < nonlin*0.7)] = 0
             
             # Catch Jupiter at it's minimum 
             # --> This logic doesn't work well to rule out case where
@@ -951,7 +971,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             # whatever.  If I really wanted to rule out these cases
             # without this effort, I would set min_source_threshold to
             # 1000 or change the logic above
-            sum_bright_pixels = np.sum(im)
+            sum_bright_pixels = np.sum(ccd.data)
             if sum_bright_pixels < nonlin * self.min_source_threshold:
                 log.debug(f'No bright source found: number of bright pixels ~ {sum_bright_pixels/nonlin} < {self.min_source_threshold} self.min_source_threshold')
                 return NoCenterPGD(self).obj_center           
@@ -967,18 +987,18 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                 log.debug('Bright source off of ND filter')
             
             # Use iterative approach
-            ny, nx = im.shape
-            y_x = np.asarray(center_of_mass(im))
-            log.debug(f'First iteration COM (X, Y; binned) = {self.binned(y_x)[::-1]}')
+            ny, nx = ccd.shape
+            y_x = np.asarray(center_of_mass(ccd.data))
+            log.debug(f'First iteration COM (X, Y; binned) = {self.coord_binned(y_x)[::-1]}')
             y = np.arange(ny) - y_x[0]
             x = np.arange(nx) - y_x[1]
             # input/output Cartesian direction by default
             xx, yy = np.meshgrid(x, y)
             rr = np.sqrt(xx**2 + yy**2)
             # --> Make this property of object
-            im[np.where(rr > 200)] = 0
-            y_x = np.asarray(center_of_mass(im))
-            log.debug(f'Second iteration COM (X, Y; binned) = {self.binned(y_x)[::-1]}')
+            ccd.data[np.where(rr > 200)] = 0
+            y_x = np.asarray(center_of_mass(ccd.data))
+            log.debug(f'Second iteration COM (X, Y; binned) = {self.coord_binned(y_x)[::-1]}')
             self.quality = 6
             return y_x
 
@@ -990,24 +1010,24 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # (2) do not have decent signal.  Not sure the fastest way to
         # do this given that we will work with a patch, below.  This
         # is certainly the quickest to program up
-        NDmed = np.median(im[self.ND_coords])
-        NDstd = np.std(im[self.ND_coords])
+        NDmed = np.median(ccd.data[ccd.ND_coords])
+        NDstd = np.std(ccd.data[ccd.ND_coords])
         log.debug(f'ND median, std {NDmed}, {NDstd}, 6*self.readnoise= {6*self.readnoise}')
         boost_factor = nonlin*1000
-        boost_ND_coords = self.ND_coords_above(im,
-                                               NDmed + 6*self.readnoise)
-        im[boost_ND_coords[0], boost_ND_coords[1]] *= boost_factor
-        im[np.where(im < boost_factor)] = 0
+        boost_ND_coords = ccd.ND_coords_above(ccd.data,
+                                             NDmed + 6*self.readnoise)
+        ccd.data[boost_ND_coords[0], boost_ND_coords[1]] *= boost_factor
+        ccd.data[np.where(ccd.data < boost_factor)] = 0
 
         # Use the peak on the ND filter to extract a patch over
         # which we calculate the COM
         patch_half_width = ND_width
         patch_half_width = patch_half_width.astype(int)
-        es = self.ND_edges(ymax_idx)
+        es = ccd.ND_edges(ymax_idx)
         iy_x = np.asarray((ymax_idx, np.average(es))).astype(int)
         ll = iy_x - patch_half_width
         ur = iy_x + patch_half_width
-        patch = im[ll[0]:ur[0], ll[1]:ur[1]]
+        patch = ccd[ll[0]:ur[0], ll[1]:ur[1]]
         patch /= boost_factor
 
         if self.show:
@@ -1016,7 +1036,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # Check for the case when Jupiter is near the edge of the ND
         # filter.  Optical effects result in bright pixels on the ND
         # filter that confuse the COM.
-        bad_ND_coords = self.ND_coords_above(im, nonlin + back_level)
+        bad_ND_coords = ccd.ND_coords_above(ccd.data, nonlin + back_level)
         nbad = len(bad_ND_coords[0])
         bright_on_ND_threshold = 50
         log.debug(f'Number of bright pixels on ND filter = {nbad}; threshold = {bright_on_ND_threshold}')
@@ -1046,8 +1066,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         #log.debug(f'Object COM from clean patch (X, Y; binned) = {self.binned(y_x)[::-1]}, quality = {self.quality}')
         #return y_x
 
-        # --> Experiment with a really big hammer.  Wasn't any
-        # slower, but didn't give an different answer
+        # --> Experiment with a really big hammer.  Does offer some improvement
         pccd = CorData(patch, meta=self.meta)
         photometry = Photometry(ccd=pccd)
         if self.show:
@@ -1068,16 +1087,16 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         print(pcenter[::-1])
         print(xpcentrd, ypcentrd)
         photometry_y_x = np.asarray((ypcentrd, xpcentrd)) + ll
-        log.debug(f'Patch COM = {self.binned(y_x)[::-1]} (X, Y; binned); Photometry brightest centroid {self.binned(photometry_y_x)[::-1]}; quality = {self.quality}')        
+        log.debug(f'Patch COM = {self.coord_binned(y_x)[::-1]} (X, Y; binned); Photometry brightest centroid {self.coord_binned(photometry_y_x)[::-1]}; quality = {self.quality}')        
         return photometry_y_x
 
         ## First iteration COM
         #pcenter = np.asarray(center_of_mass(patch))
         #y_x = pcenter + ll
-        #log.debug(f'First iteration COM (X, Y; binned) = {self.binned(y_x)[::-1]}')        
+        #log.debug(f'First iteration COM (X, Y; binned) = {self.coord_binned(y_x)[::-1]}')        
         #
         ##y_x = np.asarray(center_of_mass(im))
-        ##log.debug(f'First iteration COM (X, Y; binned) = {self.binned(y_x)[::-1]}')        
+        ##log.debug(f'First iteration COM (X, Y; binned) = {self.coord_binned(y_x)[::-1]}')        
         ### Work with a patch of our (background-subtracted) image
         ### centered on the first iteration COM.  
         ##ND_width = self.ND_params[1,1] - self.ND_params[1,0]
@@ -1115,7 +1134,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
         # http://mathworld.wolfram.com/Point-LineDistance2-Dimensional.html
         # has a better factor
-        imshape = self.unbinned(self.shape)
+        imshape = self.coord_unbinned(self.shape)
         m = np.average(self.ND_params[0,:])
         b = np.average(self.ND_params[1,:])
         x1 = 1100; x2 = 1200
@@ -1143,18 +1162,18 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # we need to work in unbinned coords, since hot pixels and the
         # ND filter are referenced to the actual CCD
         offset = np.asarray((self.y_center_offset, 0))
-        unbinned_desired_center = (self.unbinned(super().desired_center)
+        unbinned_desired_center = (self.coord_unbinned(super().desired_center)
                                    + offset)
         y_center = unbinned_desired_center[0]
         x_center = np.average(self.ND_edges(y_center))
         desired_center = np.asarray((y_center, x_center))
         # Check to make sure desired center is close to the center of the image
         ims = np.asarray(self.shape)
-        bdc = self.binned(desired_center)
+        bdc = self.coord_binned(desired_center)
         low = bdc < ims*0.25
         high = bdc > ims*0.75
         if np.any(np.asarray((low, high))):
-            raise ValueError('Desired center is too far from center of image.  In original image coordinates:' + str(self.binned(desired_center)))
+            raise ValueError('Desired center is too far from center of image.  In original image coordinates:' + str(self.coord_binned(desired_center)))
         return desired_center
 
     def _card_write(self):
@@ -1341,19 +1360,22 @@ if __name__ == '__main__':
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S6.fit'
 
     # Good bright Jupiter on edge of ND filter
-    fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit'
     
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S8.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S9.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge1.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S10.fit'
-    #fname = '/data/IoIO/raw/2021-04_Astrometry/Gal_sat_on_ND.fit'
+    fname = '/data/IoIO/raw/2021-04_Astrometry/Gal_sat_on_ND.fit'
+
+    # Binned 2x2
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit'
+
     #fname = '/data/IoIO/raw/20210616/CK20R040-S001-R001-C001-R_dupe-6.fts'
     #fname = '/data/IoIO/raw/2021-05-18/Mercury-0007_R.fit'
     #fname = '/data/IoIO/raw/2021-05-18/Mercury-0006_Na-on.fit'
-    #fname = '/data/IoIO/raw/2021-05-18/Mercury-0006_Na_off.fit'
-    #fname = '/data/IoIO/raw/2021-05-18/Mercury-0003_R.fit'
+    #fname = '/data/IoIO/raw/2021-05-18/Mercury-0006_Na_off.fit' # good
+    #Xfname = '/data/IoIO/raw/2021-05-18/Mercury-0003_R.fit'
 
     #fname = '/data/IoIO/raw/2021-04_Astrometry/VegaOnND.fit'
 
@@ -1465,5 +1487,7 @@ if __name__ == '__main__':
 
 #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit'
 #ccd = CorData.read(fname, show=True)
+#patch = ccd[1000:2000, 800:2000]
+#print(patch.ND_params)
 #cpatch = CorData(ccd.data, meta=ccd.meta)
 #cpatch.ND_params[1,:] = ccd.ND_params[1,:] - 1100
