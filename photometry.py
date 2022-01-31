@@ -277,7 +277,7 @@ image
             else:
                 total_error = \
                     calc_total_error(self.ccd,
-                                     self.back_obj.background_rms.value,
+                                     self.back_obj.background_rms,
                                      effective_gain) 
         else:
             uncert = self.ccd.uncertainty.array*self.ccd.unit
