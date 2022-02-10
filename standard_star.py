@@ -297,8 +297,8 @@ def standard_star_process(ccd,
     ycentrd = tbl['ycentroid'][0]
     ccd.obj_center = (ycentrd, xcentrd)
     ccd.quality = 10
-    ND_edges = ccd.ND_edges(ycentrd)
-    min_ND_dist = min_ND_multiple * (ND_edges[1] - ND_edges[0])
+    ND_width = ccd.ND_params[1, 1] - ccd.ND_params[1, 0]
+    min_ND_dist = min_ND_multiple * ND_width
     if ccd.obj_to_ND < min_ND_dist:
         log.warning(f'Too close: ccd.obj_to_ND = {ccd.obj_to_ND} {in_name}')
         bmp_meta.clear()

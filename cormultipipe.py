@@ -3417,7 +3417,7 @@ if __name__ == "__main__":
 #    while rparent != ps:
 
 
-#print(reduced_dir2('/data/IoIO/raw/20201111', '/tmp'))
+#print(reduced_dir('/data/IoIO/raw/20201111', '/tmp'))
 #print(reduced_dir2('/data/IoIO/raw/T20201111', '/tmp'))
 #print(get_dirs_dates('/data/IoIO/raw', start='2018-02-20', stop='2018-03-01'))
 #print(reduced_dir('/data/IoIO/raw', '/tmp'))

@@ -498,6 +498,11 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         
     @pgproperty
     def default_ND_params(self):
+        """Returns default ND_params and set Y reference point, self.ND_ref_y
+
+        Values are queried from FITS header, with globals used as fall-back
+        """
+        
         # Define our array and default value all in one (a little
         # risky if FNPAR are partially broken in the FITS header)
         ND_params = np.asarray(RUN_LEVEL_DEFAULT_ND_PARAMS)
@@ -509,6 +514,8 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                 if fndpar is None:
                     break
                 ND_params[j][i] = fndpar
+        ND_ref_y = self.meta.get('ND_REF_Y')
+        self.ND_ref_y = ND_ref_y or self.ND_ref_y
         return ND_params
 
     @pgproperty
@@ -592,8 +599,6 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         sufficient contrast, to provide RUN_LEVEL_DEFAULT_ND_PARAMS.
 
         """
-        log.debug('ND_params getter running')
-
         # Biaes and darks don't have signal to spot ND filter and if
         # we don't want an obj_center, it is probably because the
         # image doesn't contain a bright enough central object to spot
@@ -1288,7 +1293,7 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
 
     @pgproperty
     def obj_to_ND(self):
-        """Returns perpendicular distance of obj center to center of ND filter
+        """Returns perpendicular distance of obj center to center of ND filter in binned coordinates
         """
         if self.quality == 0:
             # This quantity doesn't make sense if there is an invalid center
@@ -1297,17 +1302,21 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # http://mathworld.wolfram.com/Point-LineDistance2-Dimensional.html
         # has a better factor
         imshape = self.coord_unbinned(self.shape)
-        m = np.average(self.ND_params[0,:])
-        b = np.average(self.ND_params[1,:])
+        ND_params = self.ND_params_binned(self.ND_params)
+        ND_ref_y = self.y_binned(self.ND_ref_y)
+        m = np.average(ND_params[0,:])
+        b = np.average(ND_params[1,:])
+        # Random Xs (really Y, as per below) with which to calculate our line
         x1 = 1100; x2 = 1200
         # The line is actually going vertically, so X in is the C
         # convention of along a column.  Also remember our X coordinate
         # is relative to the center of the image
-        y1 = m * (x1 - imshape[0]/2)  + b
-        y2 = m * (x2 - imshape[0]/2)  + b
+        y1 = m * (x1 - ND_ref_y)  + b
+        y2 = m * (x2 - ND_ref_y)  + b
         x0 = self.obj_center[0]
         y0 = self.obj_center[1]
-        d = (np.abs((x2 - x1) * (y1 - y0) - (x1 - x0) * (y2 - y1))
+        d = (np.abs((x2 - x1) * (y1 - y0)
+                    - (x1 - x0) * (y2 - y1))
              / ((x2 - x1)**2 + (y2 - y1)**2)**0.5)
         return d
 
@@ -1347,13 +1356,15 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         self.meta['NDPAR00'] = (self.ND_params[0,0],
                                 'ND filt left side slope')
         self.meta['NDPAR01'] = (self.ND_params[1,0],
-                                'ND filt left side offset at Y cent. of im')
+                                'Full frame X dist of ND filt left side at ND_REF_Y')
         self.meta['NDPAR10'] = (self.ND_params[0,1],
                                 'ND filt right side slope')
         self.meta['NDPAR11'] = (self.ND_params[1,1],
-                                'ND filt right side offset at Y cent. of im')
+                                'Full frame X dist of ND filt right side at ND_REF_Y')
+        self.meta['ND_REF_Y'] = (self.ND_ref_y,
+                                'Full-frame Y reference point of ND_params')
         super()._card_write()
-        if self.obj_to_ND is not None:
+        if self.quality > 5:
             self.meta['HIERARCH OBJ_TO_ND_CENTER'] \
                 = (self.obj_to_ND,
                    'Obj perp dist to ND filt (pix)')

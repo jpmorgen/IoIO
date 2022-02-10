@@ -90,7 +90,6 @@ barycentric dynamic time (TDB) and insert it as the JDBARY FITS key"""
                after=True)
     return ccd
 
-
 if __name__ == "__main__":
     log.setLevel('DEBUG')
  

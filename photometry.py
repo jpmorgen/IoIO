@@ -211,8 +211,8 @@ class Photometry:
             return self._segm_image
         threshold = (self.back_obj.background +
                      (self.back_rms_scale * self.back_obj.background_rms))
-        segm = detect_sources(self.ccd.data*self.ccd.unit,
-                              threshold, npixels=self.n_connected_pixels,
+        segm = detect_sources(self.ccd.data,
+                              threshold.value, npixels=self.n_connected_pixels,
                               filter_kernel=self.kernel, mask=self.ccd.mask)
         self._segm_image = segm
         return self._segm_image
