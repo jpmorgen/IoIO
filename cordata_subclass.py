@@ -1,3 +1,31 @@
+from scipy.ndimage.measurements import center_of_mass
+
+from matplotlib.colors import LogNorm
+
+# Experiments with medfilt show:
+# /data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit and
+# friends for how high the peak in a 1D profile gets above the ND median
+# Jupiter = 1700
+# Vega = 600
+# Mercury = 70 on 90 off
+# Galsat = 38
+# Noisey sky = 18
+PROFILE_PEAK_THRESHOLD = 20
+
+# Definitive Jupiter good conditions 
+BRIGHT_SAT_THRESHOLD = 1000
+# 25 worked for a star, 250 should be conservative for Jupiter
+# when it is attenuated by clouds.  As noted below, only works
+# for one bright source
+MIN_SOURCE_THRESHOLD = 250
+
+def simple_show(im, **kwargs):
+    impl = plt.imshow(im.data, origin='lower',
+                      cmap=plt.cm.gray,
+                      filternorm=0, interpolation='none',
+                      **kwargs)
+    plt.show()
+
 class CorData(CorDataNDparams):
     def __init__(self, data,
                  y_center_offset=0, # *Unbinned* Was 70 for a while See desired_center
@@ -25,7 +53,7 @@ class CorData(CorDataNDparams):
         # Define y pixel value along ND filter where we want our
         # center --> This may change if we are able to track ND filter
         # sag in Y.
-        y_center_offset = data.y_center_offset
+        self.y_center_offset        	= y_center_offset
         self.show 			= show
         self.profile_peak_threshold = profile_peak_threshold
         self.bright_sat_threshold = bright_sat_threshold
@@ -50,8 +78,6 @@ class CorData(CorDataNDparams):
         # Check to see if we really want to calculate the center
         imagetyp = self.meta.get('IMAGETYP')
         if imagetyp.lower() in ['bias', 'dark', 'flat']:
-            self.no_obj_center = True
-        if self.no_obj_center:
             return NoCenterPGD(self).obj_center           
 
 
@@ -307,3 +333,52 @@ class CorData(CorDataNDparams):
         if np.any(np.asarray((low, high))):
             raise ValueError('Desired center is too far from center of image.  In original image coordinates:' + str(self.coord_binned(desired_center)))
         return desired_center
+
+if __name__ == "__main__":
+    log.setLevel('DEBUG')
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S1.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S2.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S3.fit'
+    fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S4.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S5.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S6.fit'
+
+    # Good bright Jupiter on edge of ND filter
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit'
+    
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S8.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S9.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge1.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S10.fit'
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Gal_sat_on_ND.fit'
+
+    # Binned 2x2
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit'
+
+    #fname = '/data/IoIO/raw/20210616/CK20R040-S001-R001-C001-R_dupe-6.fts'
+    #fname = '/data/IoIO/raw/2021-05-18/Mercury-0007_R.fit'
+    #fname = '/data/IoIO/raw/2021-05-18/Mercury-0006_Na-on.fit'
+    #fname = '/data/IoIO/raw/2021-05-18/Mercury-0006_Na_off.fit' # good
+    #Xfname = '/data/IoIO/raw/2021-05-18/Mercury-0003_R.fit'
+
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/VegaOnND.fit'
+
+    #fname = '/data/IoIO/raw/20210507/Na_off-band_001.fits'
+    #fname = '/data/IoIO/raw/20210507/Na_on-band_001.fits'
+    #fname = '/data/IoIO/raw/20210507/R_003.fits'
+
+    # Good satellite
+    #fname = '/data/IoIO/raw/20210507/SII_on-band_001.fits'
+    
+    #fname = '/data/IoIO/raw/20210507/Na_on-band_002.fits'
+    #fname = '/data/IoIO/raw/20210507/Na_off-band_002.fits'
+    #fname = '/data/IoIO/raw/20210507/SII_off-band_005.fits'    
+    #from IoIO import CorObsData
+    #ccd = CorObsData(fname)
+    #print(ccd.obj_center)
+    #print(ccd.quality)
+
+    ccd = CorData.read(fname, show=True)
+    print(ccd.obj_center)
+    print(ccd.quality)

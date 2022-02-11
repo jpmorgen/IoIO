@@ -1,6 +1,6 @@
-"""Module supporting data and calculations for real-time coronagraph
-observations.  More complicated data containers and calculations
-appropriate for reduction go in a separate module
+"""Base class and first two subclasses for the CorData system.
+CorDataBase is a subclass of PGData and provides properties and
+methods for manipulating an image recorded by the IoIO coronagraph.  
 
 """
 
@@ -8,49 +8,27 @@ from copy import deepcopy
 
 import numpy as np
 from scipy import signal
-from scipy.ndimage import gaussian_filter
 from scipy.ndimage.measurements import center_of_mass
+
 import matplotlib.pyplot as plt
 import matplotlib.transforms as transforms
 from matplotlib.colors import LogNorm
-
-#from ginga import toolkit
-#from ginga.qtw.QtHelp import QtGui, QtCore
-#from ginga.gw import Viewers
-#from ginga.misc import log
-#
-#toolkit.use('qt5')
-#logger = log.get_logger("viewer1", log_stderr=True, level=40)
-#app = QtGui.QApplication([])
-#w = QtGui.QMainWindow(logger)
-#w.show()
-#app.setActiveWindow(w)
-#w.raise_()
-#w.activateWindow()
-#
-##v = Viewers.CanvasView(logger=logger)
-
 
 from astropy import log
 from astropy import units as u
 from astropy.stats import biweight_location
 
-from astropy.nddata import CCDData
-
 from astropy_fits_key import FitsKeyArithmeticMixin
 
-from ccdmultipipe.utils import FilterWarningCCDData
-
 from precisionguide import pgproperty, pgcoordproperty
-from precisionguide import MaxImPGD, NoCenterPGD, CenterOfMassPGD
+from precisionguide import MaxImPGD, NoCenterPGD
 from precisionguide.utils import hist_of_im, iter_linfit
 
 import sx694
-from photometry import Photometry
 
-# All global values are referenced to the unbinned (and full-frame)
-# CCD.  Ideally, the system will be improved to use native binning to
-# minimize transformation of binned images
+# All global values are referenced to the unbinned, full-frame
+# CCD.  Calculations (should be) done such that binned & subframed
+# images are kept in their native formats
 
 
 # ND_params[0, :] represent the slope relative to the *Y-axis* of the
@@ -61,13 +39,6 @@ from photometry import Photometry
 # assuming square pixels, in which ND_params[0, :] is invariant, but
 # ND_params[1,:] changes.
 ND_REF_Y = sx694.naxis2 / 2
-
-# Ideally I make this a function that returns the proper
-# default_ND_params as a function of date.  However, there is no point
-# in doing this, since the only time this is used directly is when new
-# observations are taken.  Old observations are always processed
-# through the corprocess system, --> which uses appropriately timed
-# flats (have to tweak to ensure that) to get the ND_params.
 
 # 2018 end of run
 #RUN_LEVEL_DEFAULT_ND_PARAMS \
@@ -113,11 +84,30 @@ BRIGHT_SAT_THRESHOLD = 1000
 # for one bright source
 MIN_SOURCE_THRESHOLD = 250
 
+# https://stackoverflow.com/questions/27704490/interactive-pixel-information-of-an-image-in-python
+class CCDImageFormatter(object):
+    """Provides the x,y,z formatting I like for CCD images in the
+    interactive pyplot window"""
+    def __init__(self, im):
+        self.im = im
+    def __call__(self, x, y):
+        s = self.im.shape
+        col = int(x + 0.5)
+        row = int(y + 0.5)
+        if col >= 0 and col < s[1] and row >= 0 and row < s[0]:
+            z = self.im[row, col]
+            return 'x=%1.1f, y=%1.1f, z=%1.1f' % (x, y, z)
+        else:
+            return 'x=%1.1f, y=%1.1f' % (x, y)        
+
+
 def simple_show(im, **kwargs):
-    impl = plt.imshow(im.data, origin='lower',
-                      cmap=plt.cm.gray,
-                      filternorm=0, interpolation='none',
-                      **kwargs)
+    fig, ax = plt.subplots()
+    ax.imshow(im.data, origin='lower',
+              cmap=plt.cm.gray,
+              filternorm=0, interpolation='none',
+              **kwargs)
+    ax.format_coord = CCDImageFormatter(ccd.data)
     plt.show()
 
 def overscan_estimate(ccd_in, meta=None, master_bias=None,
@@ -164,9 +154,9 @@ def overscan_estimate(ccd_in, meta=None, master_bias=None,
         See min_width.  Default = 8
 
     box_size : int
-        Edge size of square box used to extract biweight median location
-        from the corners of the image for this method of  overscan
-        estimation.  Default = 100
+        Edge size of square box in *unbinned* coordinates used to
+        extract biweight median location from the corners of the image
+        for this method of overscan estimation.  Default = 100
 
     show : boolean
        Show image with min/max set to highlight overscan pixels and
@@ -219,16 +209,20 @@ def overscan_estimate(ccd_in, meta=None, master_bias=None,
             bias = bias.divide(gain*u.electron/u.adu)
         ccd = ccd.subtract(bias)
         ccd.meta['HIERARCH subtract_bias'] = True
-    if type(ccd) != CorData and ccd.meta.get('subtract_bias') is None:
-        # Don't gunk up logs when we are taking data, but subclasses
-        # of CorObs (e.g. RedCorObs) will produce message
-        log.warning('overscan_estimate: bias has not been subtracted, which can lead to inaccuracy of overscan estimate')
+
+    # Change to base class makes this difficult to implement, since
+    # CorData is the old RedCorData
+    #if type(ccd) != CorData and ccd.meta.get('subtract_bias') is None:
+    #    # Don't gunk up logs when we are taking data, but subclasses
+    #    # of CorObs (e.g. RedCorObs) will produce message
+    #    log.warning('overscan_estimate: bias has not been subtracted, which can lead to inaccuracy of overscan estimate')
+
     # The coronagraph creates a margin of un-illuminated pixels on the
     # CCD.  These are great for estimating the bias and scattered
     # light for spontanous subtraction.
     # Corners method
     s = ccd.shape
-    bs = box_size
+    bs = int(ccd.x_binned(box_size)) # yes, we have square pixels
     c00 = biweight_location(ccd.data[0:bs,0:bs])
     c10 = biweight_location(ccd.data[s[0]-bs:s[0],0:bs])
     c01 = biweight_location(ccd.data[0:bs,s[1]-bs:s[1]])
@@ -263,13 +257,14 @@ def overscan_estimate(ccd_in, meta=None, master_bias=None,
                                        'Method used for overscan estimation')
     if show:
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8.5, 9))
-        ccds = ccd.subtract(1000*u.adu)
+        #ccds = ccd.subtract(1000*u.adu)
         range = 5*readnoise/gain
-        vmin = overscan - range - 1000
-        vmax = overscan + range - 1000
-        ax1.imshow(ccds, origin='lower', cmap=plt.cm.gray, filternorm=0,
+        vmin = overscan - range# - 1000
+        vmax = overscan + range# - 1000
+        ax1.imshow(ccd, origin='lower', cmap=plt.cm.gray, filternorm=0,
                    interpolation='none', vmin=vmin, vmax=vmax)
-        ax1.set_title('Image minus 1000 ADU')
+        ax1.format_coord = CCDImageFormatter(ccd.data)
+        #ax1.set_title('Image minus 1000 ADU')
         ax2.plot(im_hist_centers, im_hist)
         ax2.set_yscale("log")
         ax2.set_xscale("log")
@@ -351,84 +346,24 @@ def keyword_arithmetic_image_handler(meta, operand1, operation, operand2,
 
     return o2
 
-class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
+class CorDataBase(FitsKeyArithmeticMixin, NoCenterPGD, MaxImPGD):
     def __init__(self, data,
                  default_ND_params=None,
                  ND_params=None, # for _slice
                  ND_ref_y=ND_REF_Y,
-                 y_center_offset=0, # *Unbinned* Was 70 for a while See desired_center
-                 n_y_steps=8, # was 15 (see adjustment in flat code)
-                 x_filt_width=25,
-                 edge_mask=(5, -15), # Absolute coords, ragged on right edge.  If one value, assumed equal from *each* edge (e.g., (5, -5)
-                 cwt_width_arange_flat=None, # flat ND_params edge find
-                 cwt_width_arange=None, # normal ND_params edge find
-                 cwt_min_snr=1, # Their default seems to work well
-                 search_margin=50, # on either side of nominal ND filter
-                 max_fit_delta_pix=25, # Thowing out point in 1 line fit
-                 max_parallel_delta_pix=50, # Find 2 lines inconsistent
-                 max_ND_width_range=(80,400), # jump-starting flats & sanity check others
-                 small_filt_crop=np.asarray(SMALL_FILT_CROP),
-                 plot_prof=False,
-                 plot_dprof=False,
-                 plot_ND_edges=False,
-                 show=False, # Show images
-                 no_obj_center=False, # set to True to save calc, BIAS, DARK, FLAT always set to True
-                 profile_peak_threshold=PROFILE_PEAK_THRESHOLD,
-                 bright_sat_threshold=BRIGHT_SAT_THRESHOLD,
-                 min_source_threshold=MIN_SOURCE_THRESHOLD,
                  copy=False,
                  **kwargs):
         # Pattern after NDData init but skip all the tests
-        if isinstance(data, CorData):
+        if isinstance(data, CorDataBase):
             # Sigh.  We have to undo the convenience of our pgproperty
             # lest we trigger the calculation of property, which leads
             # to recursion problems
             obj_dict = data.__dict__
             ND_params = obj_dict.get('ND_params')
             ND_ref_y = data.ND_ref_y
-            y_center_offset = data.y_center_offset
-            n_y_steps = data.n_y_steps
-            x_filt_width = data.x_filt_width
-            edge_mask = data.edge_mask
-            cwt_width_arange_flat = data.cwt_width_arange_flat
-            cwt_width_arange = data.cwt_width_arange
-            cwt_min_snr = data.cwt_min_snr
-            search_margin = data.search_margin
-            max_fit_delta_pix = data.max_fit_delta_pix
-            max_parallel_delta_pix = data.max_parallel_delta_pix
-            max_ND_width_range = data.max_ND_width_range
-            small_filt_crop = data.small_filt_crop
-            plot_prof = data.plot_prof
-            plot_dprof = data.plot_dprof
-            plot_ND_edges = data.plot_ND_edges
-            show = data.show
-            no_obj_center = data.no_obj_center
-            profile_peak_threshold = data.profile_peak_threshold
-            bright_sat_threshold = data.bright_sat_threshold
-            min_source_threshold = data.min_source_threshold
         if copy:
             ND_params = deepcopy(ND_params)
             ND_ref_y = deepcopy(ND_ref_y)
-            y_center_offset = deepcopy(y_center_offset)
-            n_y_steps = deepcopy(n_y_steps)
-            x_filt_width = deepcopy(x_filt_width)
-            edge_mask = deepcopy(edge_mask)
-            cwt_width_arange_flat = deepcopy(cwt_width_arange_flat)
-            cwt_width_arange = deepcopy(cwt_width_arange)
-            cwt_min_snr = deepcopy(cwt_min_snr)
-            search_margin = deepcopy(search_margin)
-            max_fit_delta_pix = deepcopy(max_fit_delta_pix)
-            max_parallel_delta_pix = deepcopy(max_parallel_delta_pix)
-            max_ND_width_range = deepcopy(max_ND_width_range)
-            small_filt_crop = deepcopy(small_filt_crop)
-            plot_prof = deepcopy(plot_prof)
-            plot_dprof = deepcopy(plot_dprof)
-            plot_ND_edges = deepcopy(plot_ND_edges)
-            show = deepcopy(show)
-            no_obj_center = deepcopy(no_obj_center)
-            profile_peak_threshold = deepcopy(profile_peak_threshold)
-            bright_sat_threshold = deepcopy(bright_sat_threshold)
-            min_source_threshold = deepcopy(min_source_threshold)
 
         super().__init__(data, copy=copy, **kwargs)
         # Define y pixel value along ND filter where we want our
@@ -439,31 +374,6 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         self.default_ND_params 		= default_ND_params
         self.ND_params = ND_params
         self.ND_ref_y        		= ND_ref_y
-        self.y_center_offset        	= y_center_offset
-        if cwt_width_arange_flat is None:
-            cwt_width_arange_flat 	= np.arange(2, 60)
-        self.cwt_width_arange_flat  	= cwt_width_arange_flat
-        if cwt_width_arange is None:
-            cwt_width_arange        	= np.arange(8, 80)
-        self.cwt_width_arange           = cwt_width_arange       
-        self.n_y_steps              	= n_y_steps              
-        self.x_filt_width           	= x_filt_width
-        self.edge_mask              	= edge_mask
-        self.cwt_min_snr            	= cwt_min_snr            
-        self.search_margin          	= search_margin           
-        self.max_fit_delta_pix      	= max_fit_delta_pix      
-        self.max_parallel_delta_pix 	= max_parallel_delta_pix
-        self.max_ND_width_range		= max_ND_width_range
-        self.small_filt_crop        	= np.asarray(small_filt_crop)
-        self.plot_prof			= plot_prof 
-        self.plot_dprof             	= plot_dprof
-        self.plot_ND_edges	    	= plot_ND_edges
-        self.show 			= show
-
-        self.no_obj_center          = no_obj_center
-        self.profile_peak_threshold = profile_peak_threshold
-        self.bright_sat_threshold = bright_sat_threshold
-        self.min_source_threshold = min_source_threshold
 
         self.arithmetic_keylist = ['satlevel', 'nonlin']
         self.handle_image = keyword_arithmetic_image_handler
@@ -474,26 +384,6 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         kwargs['ND_params'] = obj_dict.get('ND_params')
         kwargs['default_ND_params'] = self.default_ND_params
         kwargs['ND_ref_y'] = self.ND_ref_y
-        kwargs['y_center_offset'] = self.y_center_offset
-        kwargs['n_y_steps'] = self.n_y_steps
-        kwargs['x_filt_width'] = self.x_filt_width
-        kwargs['edge_mask'] = self.edge_mask
-        kwargs['cwt_width_arange_flat'] = self.cwt_width_arange_flat
-        kwargs['cwt_width_arange'] = self.cwt_width_arange
-        kwargs['cwt_min_snr'] = self.cwt_min_snr
-        kwargs['search_margin'] = self.search_margin
-        kwargs['max_fit_delta_pix'] = self.max_fit_delta_pix
-        kwargs['max_parallel_delta_pix'] = self.max_parallel_delta_pix
-        kwargs['max_ND_width_range'] = self.max_ND_width_range
-        kwargs['small_filt_crop'] = self.small_filt_crop
-        kwargs['plot_prof'] = self.plot_prof
-        kwargs['plot_dprof'] = self.plot_dprof
-        kwargs['plot_ND_edges'] = self.plot_ND_edges
-        kwargs['show'] = self.show
-        kwargs['no_obj_center'] = self.no_obj_center
-        kwargs['profile_peak_threshold'] = self.profile_peak_threshold
-        kwargs['bright_sat_threshold'] = self.bright_sat_threshold
-        kwargs['min_source_threshold'] = self.min_source_threshold
         return kwargs
         
     @pgproperty
@@ -503,17 +393,35 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         Values are queried from FITS header, with globals used as fall-back
         """
         
-        # Define our array and default value all in one (a little
-        # risky if FNPAR are partially broken in the FITS header)
-        ND_params = np.asarray(RUN_LEVEL_DEFAULT_ND_PARAMS)
-        # Code from flat correction part of cor_process to use the
-        # master flat ND params as default
+        run_level_default_ND_params = np.asarray(RUN_LEVEL_DEFAULT_ND_PARAMS)
+        # Get flat ND params from FITS header, if available
+        FND_params = np.full_like(run_level_default_ND_params, np.NAN)
         for i in range(2):
             for j in range(2):
                 fndpar = self.meta.get(f'fndpar{i}{j}')
                 if fndpar is None:
-                    break
-                ND_params[j][i] = fndpar
+                    continue
+                FND_params[j][i] = fndpar
+        if np.all(np.isnan(FND_params)):
+            # Nothing in FITS header.  Use our record of
+            # default_run_level_ND_params.  Note ifs don't quite
+            # bracket ND_params in a nice way, so pay attention when
+            # adding subsequent adjustments
+            date_obs = self.meta['DATE-OBS']
+            if date_obs > '2021-04-25T00:00:00':
+                ND_params = run_level_default_ND_params
+            elif date_obs > '2019-04-12T00:00:00':
+                ND_params = np.asarray([[1.40749551e-02, 2.36320869e-02],
+                                        [1.24240593e+03, 1.33789081e+03]])
+            elif date_obs > '2019-02-08T00:00:00':
+                ND_params = np.asarray([[  4.65269008e-03,   8.76050569e-03],
+                                        [  1.27189987e+03,   1.37717911e+03]])
+            else:
+                ND_params = np.asarray([[  3.63686271e-01,   3.68675375e-01],
+                                        [  1.28303305e+03,   1.39479846e+03]])
+        if np.any(np.isnan(ND_params)):
+            log.warning('malformed FITS header, some FNDPAR values missing!')
+            
         ND_ref_y = self.meta.get('ND_REF_Y')
         self.ND_ref_y = ND_ref_y or self.ND_ref_y
         return ND_params
@@ -589,6 +497,214 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
                          
     @pgproperty
     def ND_params(self):
+        """Returns default parameters which characterize the coronagraph ND
+        filter for the cases where precise correction for instrument
+        flexure is not needed.
+
+        """
+        return self.default_ND_params
+
+    @pgproperty
+    def ND_coords(self):
+        """Returns tuple of coordinates of ND filter referenced to the potentially binned and subframed image and including the edge mask.  Change the edge-maks property, set this to None and it will recalculate the next time you ask for it"""
+        xs = np.asarray((), dtype=int) ; ys = np.asarray((), dtype=int)
+        ND_params = self.ND_params_binned(self.ND_params)
+        ND_ref_y = self.y_binned(self.ND_ref_y)
+        edge_mask = self.edge_mask/self.binning[1]
+        for iy in np.arange(self.shape[0]):
+            ND_es, _ = self.ND_edges(iy, ND_params, ND_ref_y)
+            bounds = ND_es + edge_mask
+            if (np.all(bounds < 0)
+                or np.all(bounds > self.shape[1])):
+                continue
+            bounds = bounds.astype(int)
+            bounds[0] = np.max((0, bounds[0]))
+            bounds[1] = np.min((bounds[1], self.shape[1]))
+            more_xs = np.arange(bounds[0], bounds[1])
+            xs = np.append(xs, more_xs)
+            ys = np.append(ys, np.full_like(more_xs, iy))
+        ND_coords = np.asarray((ys, xs))
+        array_of_tuples = map(tuple, ND_coords)
+        tuple_of_tuples = tuple(array_of_tuples)
+        return tuple_of_tuples
+
+    def ND_coords_above(self, level):
+        """Returns tuple of coordinates of pixels with decent signal in ND filter"""
+        # Get the coordinates of the ND filter
+        NDc = self.ND_coords
+        im = self.data
+        abovec = np.where(im[NDc] > level)
+        if abovec is None:
+            return None
+        above_NDc0 = np.asarray(NDc[0])[abovec]
+        above_NDc1 = np.asarray(NDc[1])[abovec]
+        return (above_NDc0, above_NDc1)
+    
+        #print(f'abovec = {abovec}')
+        ##return(abovec)
+        ## Unwrap
+        #abovec = NDc[abovec]
+        #print(f'abovec = {abovec}')
+        #return abovec
+
+    # Turn ND_angle into a "getter"
+    @pgproperty
+    def ND_angle(self):
+        """Calculate ND angle from vertical.  Note this assumes square pixels
+        """
+        ND_angle = np.degrees(np.arctan(np.average(self.ND_params[0,:])))
+        return ND_angle
+
+    @pgproperty
+    def background(self):
+        """This might eventually get better, but for now just returns overscan"""
+        return overscan_estimate(self)
+
+    def get_metadata(self):
+        # Add our camera metadata.  Note, because there are many ways
+        # this object is instantiated (e.g. during arithmetic), makes
+        # sure we only do the FITS header manipulations when we are
+        # reasonably sure we have our camera.
+        instrument = self.meta.get('instrume')
+        if (instrument == 'SX-H694'
+            or instrument == 'IoIO Coronagraph'):
+            self.meta = sx694.metadata(self.meta)
+        # Other cameras would be added here...
+
+    @property
+    def readnoise(self):
+        """Returns CCD readnoise as value in same unit as primary array"""
+        self.get_metadata()
+        # --> This gets better with FITS header units
+        readnoise = self.meta.get('RDNOISE')
+        if self.unit == u.adu:
+            gain = self.meta.get('GAIN')
+            readnoise /= gain
+        return readnoise
+        
+    @property
+    def nonlin(self):
+        """Returns nonlinearity level in same unit as primary array"""
+        self.get_metadata()
+        return self.meta.get('NONLIN')# * self.unit
+        
+    def _card_write(self):
+        """Write FITS card unique to CorData"""
+        # Priorities ND_params as first-written, since they, together
+        # with the boundaries set up by the flats (which initialize
+        # the ND_params) provide critical context for all other views
+        # of the data
+        self.meta['NDPAR00'] = (self.ND_params[0,0],
+                                'ND filt left side slope')
+        self.meta['NDPAR01'] = (self.ND_params[1,0],
+                                'Full frame X dist of ND filt left side at ND_REF_Y')
+        self.meta['NDPAR10'] = (self.ND_params[0,1],
+                                'ND filt right side slope')
+        self.meta['NDPAR11'] = (self.ND_params[1,1],
+                                'Full frame X dist of ND filt right side at ND_REF_Y')
+        self.meta['ND_REF_Y'] = (self.ND_ref_y,
+                                'Full-frame Y reference point of ND_params')
+        super()._card_write()
+        if self.quality > 5:
+            self.meta['HIERARCH OBJ_TO_ND_CENTER'] \
+                = (self.obj_to_ND,
+                   'Obj perp dist to ND filt (pix)')
+
+########################################################
+class CorDataNDparams(CorDataBase):
+    def __init__(self, data,
+                 n_y_steps=8, # was 15 (see adjustment in flat code)
+                 x_filt_width=25,
+                 cwt_width_arange_flat=None, # flat ND_params edge find
+                 cwt_width_arange=None, # normal ND_params edge find
+                 cwt_min_snr=1, # Their default seems to work well
+                 search_margin=50, # on either side of nominal ND filter
+                 max_fit_delta_pix=25, # Thowing out point in 1 line fit
+                 max_parallel_delta_pix=50, # Find 2 lines inconsistent
+                 max_ND_width_range=(80,400), # jump-starting flats & sanity check others
+                 small_filt_crop=np.asarray(SMALL_FILT_CROP),
+                 plot_prof=False,
+                 plot_dprof=False,
+                 plot_ND_edges=False,
+                 show=False, # Show images
+                 copy=False,
+                 **kwargs):
+        # Pattern after NDData init but skip all the tests
+        if isinstance(data, CorDataNDparams):
+            n_y_steps = data.n_y_steps
+            x_filt_width = data.x_filt_width
+            cwt_width_arange_flat = data.cwt_width_arange_flat
+            cwt_width_arange = data.cwt_width_arange
+            cwt_min_snr = data.cwt_min_snr
+            search_margin = data.search_margin
+            max_fit_delta_pix = data.max_fit_delta_pix
+            max_parallel_delta_pix = data.max_parallel_delta_pix
+            max_ND_width_range = data.max_ND_width_range
+            small_filt_crop = data.small_filt_crop
+            plot_prof = data.plot_prof
+            plot_dprof = data.plot_dprof
+            plot_ND_edges = data.plot_ND_edges
+            show = data.show
+        if copy:
+            n_y_steps = deepcopy(n_y_steps)
+            x_filt_width = deepcopy(x_filt_width)
+            cwt_width_arange_flat = deepcopy(cwt_width_arange_flat)
+            cwt_width_arange = deepcopy(cwt_width_arange)
+            cwt_min_snr = deepcopy(cwt_min_snr)
+            search_margin = deepcopy(search_margin)
+            max_fit_delta_pix = deepcopy(max_fit_delta_pix)
+            max_parallel_delta_pix = deepcopy(max_parallel_delta_pix)
+            max_ND_width_range = deepcopy(max_ND_width_range)
+            small_filt_crop = deepcopy(small_filt_crop)
+            plot_prof = deepcopy(plot_prof)
+            plot_dprof = deepcopy(plot_dprof)
+            plot_ND_edges = deepcopy(plot_ND_edges)
+            show = deepcopy(show)
+
+        super().__init__(data, copy=copy, **kwargs)
+        if cwt_width_arange_flat is None:
+            cwt_width_arange_flat 	= np.arange(2, 60)
+        self.cwt_width_arange_flat  	= cwt_width_arange_flat
+        if cwt_width_arange is None:
+            cwt_width_arange        	= np.arange(8, 80)
+        self.cwt_width_arange           = cwt_width_arange       
+        self.n_y_steps              	= n_y_steps              
+        self.x_filt_width           	= x_filt_width
+        self.cwt_min_snr            	= cwt_min_snr            
+        self.search_margin          	= search_margin           
+        self.max_fit_delta_pix      	= max_fit_delta_pix      
+        self.max_parallel_delta_pix 	= max_parallel_delta_pix
+        self.max_ND_width_range		= max_ND_width_range
+        self.small_filt_crop        	= np.asarray(small_filt_crop)
+        self.plot_prof			= plot_prof 
+        self.plot_dprof             	= plot_dprof
+        self.plot_ND_edges	    	= plot_ND_edges
+        self.show 			= show
+
+        self.arithmetic_keylist = ['satlevel', 'nonlin']
+        self.handle_image = keyword_arithmetic_image_handler
+
+    def _init_args_copy(self, kwargs):
+        kwargs = super()._init_args_copy(kwargs)
+        obj_dict = self.__dict__
+        kwargs['n_y_steps'] = self.n_y_steps
+        kwargs['x_filt_width'] = self.x_filt_width
+        kwargs['cwt_width_arange_flat'] = self.cwt_width_arange_flat
+        kwargs['cwt_width_arange'] = self.cwt_width_arange
+        kwargs['cwt_min_snr'] = self.cwt_min_snr
+        kwargs['search_margin'] = self.search_margin
+        kwargs['max_fit_delta_pix'] = self.max_fit_delta_pix
+        kwargs['max_parallel_delta_pix'] = self.max_parallel_delta_pix
+        kwargs['max_ND_width_range'] = self.max_ND_width_range
+        kwargs['small_filt_crop'] = self.small_filt_crop
+        kwargs['plot_prof'] = self.plot_prof
+        kwargs['plot_dprof'] = self.plot_dprof
+        kwargs['plot_ND_edges'] = self.plot_ND_edges
+        kwargs['show'] = self.show
+        return kwargs
+        
+    @pgproperty
+    def ND_params(self):
         """Returns parameters which characterize the coronagraph ND filter.
         Parameters are relative to *unbinned image.* It is important
         this be calculated on a per-image bases, since flexure in the
@@ -599,15 +715,10 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         sufficient contrast, to provide RUN_LEVEL_DEFAULT_ND_PARAMS.
 
         """
-        # Biaes and darks don't have signal to spot ND filter and if
-        # we don't want an obj_center, it is probably because the
-        # image doesn't contain a bright enough central object to spot
-        # the ND filter.  In that case, self.default_ND_params should
-        # be close enough
+        # Biases and darks don't have signal to spot ND filter
         if (self.imagetyp == 'bias'
             or self.imagetyp == 'dark'):
-            return self.default_ND_params
-            #or self. no_obj_center):
+            return super().ND_params
 
         # Transform everything to our potentially binned and subframed
         # image to find the ND filter, but always return ND_params in
@@ -932,89 +1043,49 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
 
         return self.ND_params_unbinned(ND_params)
 
-    @pgproperty
-    def ND_coords(self):
-        """Returns tuple of coordinates of ND filter referenced to the potentially binned and subframed image and including the edge mask.  Change the edge-maks property, set this to None and it will recalculate the next time you ask for it"""
-        xs = np.asarray((), dtype=int) ; ys = np.asarray((), dtype=int)
-        ND_params = self.ND_params_binned(self.ND_params)
-        ND_ref_y = self.y_binned(self.ND_ref_y)
-        edge_mask = self.edge_mask/self.binning[1]
-        for iy in np.arange(self.shape[0]):
-            ND_es, _ = self.ND_edges(iy, ND_params, ND_ref_y)
-            bounds = ND_es + edge_mask
-            if (np.all(bounds < 0)
-                or np.all(bounds > self.shape[1])):
-                continue
-            bounds = bounds.astype(int)
-            bounds[0] = np.max((0, bounds[0]))
-            bounds[1] = np.min((bounds[1], self.shape[1]))
-            more_xs = np.arange(bounds[0], bounds[1])
-            xs = np.append(xs, more_xs)
-            ys = np.append(ys, np.full_like(more_xs, iy))
-        ND_coords = np.asarray((ys, xs))
-        array_of_tuples = map(tuple, ND_coords)
-        tuple_of_tuples = tuple(array_of_tuples)
-        return tuple_of_tuples
+########################################################
 
-    def ND_coords_above(self, level):
-        """Returns tuple of coordinates of pixels with decent signal in ND filter"""
-        # Get the coordinates of the ND filter
-        NDc = self.ND_coords
-        im = self.data
-        abovec = np.where(im[NDc] > level)
-        if abovec is None:
-            return None
-        above_NDc0 = np.asarray(NDc[0])[abovec]
-        above_NDc1 = np.asarray(NDc[1])[abovec]
-        return (above_NDc0, above_NDc1)
-    
-        #print(f'abovec = {abovec}')
-        ##return(abovec)
-        ## Unwrap
-        #abovec = NDc[abovec]
-        #print(f'abovec = {abovec}')
-        #return abovec
+class CorData(CorDataNDparams):
+    def __init__(self, data,
+                 y_center_offset=0, # *Unbinned* Was 70 for a while See desired_center
+                 show=False, # Show images
+                 profile_peak_threshold=PROFILE_PEAK_THRESHOLD,
+                 bright_sat_threshold=BRIGHT_SAT_THRESHOLD,
+                 min_source_threshold=MIN_SOURCE_THRESHOLD,
+                 copy=False,
+                 **kwargs):
+        # Pattern after NDData init but skip all the tests
+        if isinstance(data, CorData):
+            y_center_offset = data.y_center_offset
+            show = data.show
+            profile_peak_threshold = data.profile_peak_threshold
+            bright_sat_threshold = data.bright_sat_threshold
+            min_source_threshold = data.min_source_threshold
+        if copy:
+            y_center_offset = deepcopy(y_center_offset)
+            show = deepcopy(show)
+            profile_peak_threshold = deepcopy(profile_peak_threshold)
+            bright_sat_threshold = deepcopy(bright_sat_threshold)
+            min_source_threshold = deepcopy(min_source_threshold)
 
-    # Turn ND_angle into a "getter"
-    @pgproperty
-    def ND_angle(self):
-        """Calculate ND angle from vertical.  Note this assumes square pixels
-        """
-        ND_angle = np.degrees(np.arctan(np.average(self.ND_params[0,:])))
-        return ND_angle
+        super().__init__(data, copy=copy, **kwargs)
+        # Define y pixel value along ND filter where we want our
+        # center --> This may change if we are able to track ND filter
+        # sag in Y.
+        self.y_center_offset        	= y_center_offset
+        self.show 			= show
+        self.profile_peak_threshold = profile_peak_threshold
+        self.bright_sat_threshold = bright_sat_threshold
+        self.min_source_threshold = min_source_threshold
 
-    @pgproperty
-    def background(self):
-        """This might eventually get better, but for now just returns overscan"""
-        return overscan_estimate(self)
-
-    def get_metadata(self):
-        # Add our camera metadata.  Note, because there are many ways
-        # this object is instantiated (e.g. during arithmetic), makes
-        # sure we only do the FITS header manipulations when we are
-        # reasonably sure we have our camera.
-        instrument = self.meta.get('instrume')
-        if (instrument == 'SX-H694'
-            or instrument == 'IoIO Coronagraph'):
-            self.meta = sx694.metadata(self.meta)
-        # Other cameras would be added here...
-
-    @property
-    def readnoise(self):
-        """Returns CCD readnoise as value in same unit as primary array"""
-        self.get_metadata()
-        # --> This gets better with FITS header units
-        readnoise = self.meta.get('RDNOISE')
-        if self.unit == u.adu:
-            gain = self.meta.get('GAIN')
-            readnoise /= gain
-        return readnoise
-        
-    @property
-    def nonlin(self):
-        """Returns nonlinearity level in same unit as primary array"""
-        self.get_metadata()
-        return self.meta.get('NONLIN')# * self.unit
+    def _init_args_copy(self, kwargs):
+        kwargs = super()._init_args_copy(kwargs)
+        kwargs['y_center_offset'] = self.y_center_offset
+        kwargs['show'] = self.show
+        kwargs['profile_peak_threshold'] = self.profile_peak_threshold
+        kwargs['bright_sat_threshold'] = self.bright_sat_threshold
+        kwargs['min_source_threshold'] = self.min_source_threshold
+        return kwargs
         
     @pgcoordproperty
     def obj_center(self):
@@ -1026,8 +1097,6 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         # Check to see if we really want to calculate the center
         imagetyp = self.meta.get('IMAGETYP')
         if imagetyp.lower() in ['bias', 'dark', 'flat']:
-            self.no_obj_center = True
-        if self.no_obj_center:
             return NoCenterPGD(self).obj_center           
 
 
@@ -1257,69 +1326,6 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
         log.debug(f'Patch COM = {self.coord_binned(y_x)[::-1]} (X, Y; binned); Photometry brightest centroid {self.coord_binned(photometry_y_x)[::-1]}; quality = {self.quality}')        
         return photometry_y_x
 
-        ## First iteration COM
-        #pcenter = np.asarray(center_of_mass(patch))
-        #y_x = pcenter + ll
-        #log.debug(f'First iteration COM (X, Y; binned) = {self.coord_binned(y_x)[::-1]}')        
-        #
-        ##y_x = np.asarray(center_of_mass(im))
-        ##log.debug(f'First iteration COM (X, Y; binned) = {self.coord_binned(y_x)[::-1]}')        
-        ### Work with a patch of our (background-subtracted) image
-        ### centered on the first iteration COM.  
-        ##ND_width = self.ND_params[1,1] - self.ND_params[1,0]
-        ##patch_half_width = ND_width / 2
-        ##patch_half_width = patch_half_width.astype(int)
-        ##iy_x = y_x.astype(int)
-        ##ll = iy_x - patch_half_width
-        ##ur = iy_x + patch_half_width
-        ##patch = im[ll[0]:ur[0], ll[1]:ur[1]]
-        ##patch /= boost_factor
-        #
-        #log.debug(f'First iteration cpatch (X, Y) = {cpatch[::-1]}')        
-        #plt.imshow(patch)
-        #plt.show()
-        #
-        #
-        #
-        ### --> Experiment with a really big hammer.  Wasn't any
-        ### slower, but didn't give an different answer
-        ##patch = CorData(patch, meta=self.meta)
-        ##photometry = Photometry(ccd=patch)
-        ##sc = photometry.source_catalog
-        ##tbl = sc.to_table()
-        ##tbl.sort('segment_flux', reverse=True)
-        ##tbl.show_in_browser()
-
-
-    @pgproperty
-    def obj_to_ND(self):
-        """Returns perpendicular distance of obj center to center of ND filter in binned coordinates
-        """
-        if self.quality == 0:
-            # This quantity doesn't make sense if there is an invalid center
-            return None
-        # https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
-        # http://mathworld.wolfram.com/Point-LineDistance2-Dimensional.html
-        # has a better factor
-        imshape = self.coord_unbinned(self.shape)
-        ND_params = self.ND_params_binned(self.ND_params)
-        ND_ref_y = self.y_binned(self.ND_ref_y)
-        m = np.average(ND_params[0,:])
-        b = np.average(ND_params[1,:])
-        # Random Xs (really Y, as per below) with which to calculate our line
-        x1 = 1100; x2 = 1200
-        # The line is actually going vertically, so X in is the C
-        # convention of along a column.  Also remember our X coordinate
-        # is relative to the center of the image
-        y1 = m * (x1 - ND_ref_y)  + b
-        y2 = m * (x2 - ND_ref_y)  + b
-        x0 = self.obj_center[0]
-        y0 = self.obj_center[1]
-        d = (np.abs((x2 - x1) * (y1 - y0)
-                    - (x1 - x0) * (y2 - y1))
-             / ((x2 - x1)**2 + (y2 - y1)**2)**0.5)
-        return d
-
     @pgcoordproperty
     def desired_center(self):
         """Returns Y, X center of ND filter at Y position determined by
@@ -1347,182 +1353,31 @@ class CorData(FitsKeyArithmeticMixin, CenterOfMassPGD, NoCenterPGD, MaxImPGD):
             raise ValueError('Desired center is too far from center of image.  In original image coordinates:' + str(self.coord_binned(desired_center)))
         return desired_center
 
-    def _card_write(self):
-        """Write FITS card unique to CorData"""
-        # Priorities ND_params as first-written, since they, together
-        # with the boundaries set up by the flats (which initialize
-        # the ND_params) provide critical context for all other views
-        # of the data
-        self.meta['NDPAR00'] = (self.ND_params[0,0],
-                                'ND filt left side slope')
-        self.meta['NDPAR01'] = (self.ND_params[1,0],
-                                'Full frame X dist of ND filt left side at ND_REF_Y')
-        self.meta['NDPAR10'] = (self.ND_params[0,1],
-                                'ND filt right side slope')
-        self.meta['NDPAR11'] = (self.ND_params[1,1],
-                                'Full frame X dist of ND filt right side at ND_REF_Y')
-        self.meta['ND_REF_Y'] = (self.ND_ref_y,
-                                'Full-frame Y reference point of ND_params')
-        super()._card_write()
-        if self.quality > 5:
-            self.meta['HIERARCH OBJ_TO_ND_CENTER'] \
-                = (self.obj_to_ND,
-                   'Obj perp dist to ND filt (pix)')
 
-## This ended up being no better
-#class RedCorData(CorData):
-#    """This might end up going into the regular CorData if it is not too slow"""
-#
-#    @pgcoordproperty
-#    def obj_center(self):
-#        """Refines determination of Jupiter's center on ND filter (if appropriate)"""
-#        com_center = super().obj_center
-#        # Use ND width as measuring stick
-#        # --> This section of code could be a separate procedure.  See
-#        # comet_figure for motivation
-#        # --> There might already be something that does this in
-#        # astropy or elsewhere
-#        ND_width = self.ND_params[1,1] - self.ND_params[1,0]
-#        print('ND_width:', ND_width)
-#        print('obj_to_ND:', self.obj_to_ND)
-#        if (self.quality <= 6
-#            or (self.obj_to_ND
-#                > ND_width / 2)):
-#            # Poor quality or just too far out from ND center
-#            return com_center
-#        patch_half_width = ND_width / 2
-#        # --> Check to see what type patch_half_width really is at this point
-#        patch_half_width = patch_half_width.astype(int)
-#        icom_center = com_center.astype(int)
-#        print('icom_center:', icom_center)
-#        ll = icom_center - patch_half_width
-#        ur = icom_center + patch_half_width
-#
-#        # Boost what we hope is Jupiter
-#        im = np.double(self.self_unbinned.data.copy())
-#        # When Jupiter is near the edge of the ND filter, optical
-#        # effects result in bright pixels on the ND filter that
-#        # confuse the COM.  Try knocking down those bright pixels
-#        NDmed = np.median(self.self_unbinned.data[self.ND_coords])
-#        bad_ND_coords = self.ND_coords_above(self.nonlin)
-#        im[bad_ND_coords[0], bad_ND_coords[1]] = NDmed
-#        boost_ND_coords = self.ND_coords_above(NDmed + 6*self.readnoise)
-#        im[boost_ND_coords[0], boost_ND_coords[1]] *= 1000
-#        patch = im[ll[0]:ur[0], ll[1]:ur[1]]
-#        patch -= np.median(patch)
-#
-#        ## --> experimenting with jupiter-like convolution
-#        ##kernel = Gaussian2DKernel(50)
-#        #kernel = Gaussian2DKernel(4)
-#        #kernel.normalize()
-#        ##patch = convolve(patch, kernel)
-#        #cpatch = signal.correlate2d(patch, kernel)
-#
-#        print('patch.shape:', patch.shape)
-#        rpatch = np.rot90(patch)
-#        plt.imshow(patch)
-#        plt.show()
-#        plt.imshow(rpatch)
-#        plt.show()
-#
-#        cpatch = signal.correlate2d(patch, rpatch)
-#        ccenter = np.unravel_index(np.argmax(cpatch), cpatch.shape)
-#        ccenter = np.asarray(ccenter)
-#        ccenter = np.asarray(center_of_mass(cpatch))
-#        print(f'ccenter = {ccenter}')
-#        # Return array is twice the size of patch
-#        center = ccenter/2 + ll
-#        # --> consider check with com_center
-#        dcenter = center - com_center
-#        dcenter_threshold = 10
-#        if np.linalg.norm(dcenter) > dcenter_threshold:
-#            log.warning(f'correlated center more than '
-#                        f'{dcenter_threshold} pixels from COM threashold')
-#        print(dcenter)
-#       
-#        plt.imshow(cpatch)
-#        plt.show()
-#        from ccdmultipipe.utils.ccddata import FbuCCDData
-#        out = FbuCCDData(cpatch, unit='adu')
-#        out.write('/tmp/cpatch.fits', overwrite=True)
-#
-#        return center
-#
-    
+if __name__ == "__main__":
+    #log.setLevel('DEBUG')
+    #ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_1x1.fit')
+    #print(f'background = {ccd.background}')
+    #ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_2x2.fit')
+    #print(f'background = {ccd.background}')
+    #ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_4x4.fit')
+    #print(f'background = {ccd.background}')
+    #
+    #print(f'ND_params = {ccd.ND_params}')
+    #
+    #ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/IPT-0001_off-band.fit')
+    #print(f'background = {ccd.background}')
+    #print(f'ND_params = {ccd.ND_params}')
+    #
+    #print(overscan_estimate(ccd, show=True))
+    #
+    ## Binned 2x2
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit'
+    #ccd = CorDataBase.read(fname)
+    #
+    #print(overscan_estimate(ccd, show=True))
+    #print(f'ND_params = {ccd.ND_params}')
 
-        #
-        #print('ccenter:', ccenter)
-        #print('ccenter/2 + ll:', ccenter/2 + ll)
-        ##print(com_center)
-        #
-        #return com_center        
-        
-#class TestObs(CorData):
-#    pass
-#
-#bias_fname = '/data/IoIO/reduced/Calibration/2020-07-11_ccdT_-5.3_bias_combined.fits'
-#master_bias = CorData.read(bias_fname)
-#dfname = '/data/IoIO/raw/20200711/Dark-S005-R003-C010-B1.fts'
-#dark = CorData.read(dfname)
-##o = overscan_estimate(dark, meta=dark.meta, master_bias=bias_fname)
-#o = overscan_estimate(dark, meta=dark.meta, master_bias=master_bias)
-#print(o)
-#print(dark.meta)
-#
-#dark = TestObs.read(dfname)
-#o = overscan_estimate(dark, meta=dark.meta)
-#print(dark.meta)
-
-##from IoIO_working_corobsdata.IoIO import CorObsData
-#log.setLevel('DEBUG')
-#old_default_ND_params \
-#    = [[  3.63686271e-01,   3.68675375e-01],
-#       [  1.28303305e+03,   1.39479846e+03]]
-
-##fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
-##flat_fname = '/data/IoIO/raw/2021-04-25/Sky_Flat-0001_R.fit'
-##f = CorData.read(flat_fname)
-##print(f.ND_params)
-##c = CorData.read(fname)#, plot_ND_edges=True)
-##print(c.ND_params)
-##print(c.ND_angle)
-##print("print(c.obj_center, c.desired_center)")
-##print(c.obj_center, c.desired_center)
-
-
-#c = CorData.read(flat_fname, plot_ND_edges=True)
-#print(c.ND_params[1,1] - c.ND_params[1,0])
-#
-#
-#
-#print(c.ND_params)
-##[[-3.32707525e-01, -3.22880506e-01],
-## [ 1.23915169e+03,  1.40603931e+03]]
-#
-##cwt_width_arange_flat = np.arange(2, 60)
-##cwt_width_arange        = np.arange(8, 80)
-#
-#c.cwt_width_arange_flat = np.arange(2, 80)
-#c.ND_params = None
-#print(c.ND_params)
-##[[-3.32707525e-01 -3.14641399e-01]
-## [ 1.23915169e+03  1.40151592e+03]]
-#c.cwt_width_arange_flat = np.arange(8, 80)
-#c.ND_params = None
-#print(c.ND_params)
-##[[-3.32707525e-01 -3.17529953e-01]
-## [ 1.23915169e+03  1.40014752e+03]]
-#
-
-#oc = CorObsData(fname, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)
-#print(c.ND_params - oc.ND_params)
-#print(c.ND_angle - oc.ND_angle)
-#print(c.desired_center - oc.desired_center)
-#print(c.obj_center - oc.obj_center)
-#print(c.obj_center, c.desired_center)
-#c.write('/tmp/test.fits', overwrite=True)
-
-if __name__ == '__main__':
     log.setLevel('DEBUG')
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S1.fit'
@@ -1531,7 +1386,7 @@ if __name__ == '__main__':
     fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S4.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S5.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S6.fit'
-
+    
     # Good bright Jupiter on edge of ND filter
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit'
     
@@ -1540,22 +1395,22 @@ if __name__ == '__main__':
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge1.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S10.fit'
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Gal_sat_on_ND.fit'
-
+    
     # Binned 2x2
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit'
-
+    
     #fname = '/data/IoIO/raw/20210616/CK20R040-S001-R001-C001-R_dupe-6.fts'
     #fname = '/data/IoIO/raw/2021-05-18/Mercury-0007_R.fit'
     #fname = '/data/IoIO/raw/2021-05-18/Mercury-0006_Na-on.fit'
     #fname = '/data/IoIO/raw/2021-05-18/Mercury-0006_Na_off.fit' # good
     #Xfname = '/data/IoIO/raw/2021-05-18/Mercury-0003_R.fit'
-
+    
     #fname = '/data/IoIO/raw/2021-04_Astrometry/VegaOnND.fit'
-
+    
     #fname = '/data/IoIO/raw/20210507/Na_off-band_001.fits'
     #fname = '/data/IoIO/raw/20210507/Na_on-band_001.fits'
     #fname = '/data/IoIO/raw/20210507/R_003.fits'
-
+    
     # Good satellite
     #fname = '/data/IoIO/raw/20210507/SII_on-band_001.fits'
     
@@ -1566,128 +1421,7 @@ if __name__ == '__main__':
     #ccd = CorObsData(fname)
     #print(ccd.obj_center)
     #print(ccd.quality)
-
+    
     ccd = CorData.read(fname, show=True)
     print(ccd.obj_center)
     print(ccd.quality)
-
-    #ccd = RedCorData.read(fname)
-    ##print(ccd.obj_center)
-    ##ccd = CorData.read(fname)
-    #print(ccd.obj_center)
-    #print(ccd.quality)
-
-    #from IoIO_working_corobsdata.IoIO import CorObsData
-    #log.setLevel('DEBUG')
-    #old_default_ND_params \
-    #    = [[  3.63686271e-01,   3.68675375e-01],
-    #       [  1.28303305e+03,   1.39479846e+03]]
-    #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
-    ##fname = '/data/IoIO/raw/2021-04-25/Sky_Flat-0001_R.fit'
-    #c = CorData.read(fname)#, plot_ND_edges=True)
-    #oc = CorObsData(fname, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)
-    #print(c.ND_params - oc.ND_params)
-    #print(c.ND_angle - oc.ND_angle)
-    #print(c.desired_center - oc.desired_center)
-    #print(c.obj_center - oc.obj_center)
-    #print(c.obj_center, c.desired_center)
-    #c.write('/tmp/test.fits', overwrite=True)
-    
-
-    #log.setLevel('DEBUG')
-    #default_ND_params \
-    #    = [[  3.63686271e-01,   3.68675375e-01],
-    #       [  1.28303305e+03,   1.39479846e+03]]
-    #
-    #default_ND_params = True
-    #from IoIO import CorObsData
-    #fname = '/data/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit'
-    #c = CorData.read(fname, default_ND_params=default_ND_params)#,
-    #                 #plot_ND_edges=True)
-    #oc = CorObsData(fname, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)#,
-    #                #plot_ND_edges=True)
-    #print(c.ND_params - oc.ND_params)
-    #print(c.ND_angle - oc.ND_angle)
-    #print(c.desired_center - oc.desired_center)
-    #print(c.obj_center - oc.obj_center)
-    #print(c.obj_center, c.desired_center)
-    #c.write('/tmp/test.fits', overwrite=True)
-    #
-    ##t = c.self_unbinned
-    ##print(t)
-    ##s = t.divide(t, handle_meta='first_found')
-    ##print(s)
-    ##print(s.meta)
-    ##s = t.divide(3, handle_meta='first_found')
-    ##print(s)
-    ##print(s.meta)
-    ##print(s.arithmetic_keylist)
-    #
-    #off_filt_fname = '/data/IoIO/raw/2018-01-28/R-band_off_ND_filter.fit'
-    #bias_fname = '/data/IoIO/reduced/Calibration/2020-03-26_ccdT_-20.2_bias_combined.fits'
-    #dark_fname = '/data/IoIO/reduced/Calibration/2020-03-25_ccdT_-0.3_exptime_3.0s_dark_combined.fits'
-    #flat_fname = '/data/IoIO/reduced/Calibration/2020-03-30_Na_off_flat.fits'
-    #off = CorData.read(off_filt_fname)
-    #bias = CorData.read(bias_fname)
-    #dark = CorData.read(dark_fname)
-    #flat = CorData.read(flat_fname)
-    #
-    #lumpy = off.copy()
-    #lumpy.unit = u.electron
-    #
-    #t = lumpy.subtract(bias, handle_meta='first_found')
-    #print(f'substract SATLEVEL = {t.meta["satlevel"]} NONLIN = {t.meta["nonlin"]}, med = {np.median(t)}')
-    #
-    #t = lumpy.divide(flat, handle_meta='first_found')
-    #print(f'flat SATLEVEL = {t.meta["satlevel"]} NONLIN = {t.meta["nonlin"]}, med = {np.median(t)}')
-    #
-    #
-    #t = lumpy.subtract(t, handle_meta='first_found')
-    ##print(f'self-substract SATLEVEL = {t.meta["satlevel"]} NONLIN = {t.meta["nonlin"]}, med = {np.median(t)}')
-    #
-    #
-    #fname = '/data/IoIO/raw/20200522/SII_on-band_005.fits'
-    #c = CorData.read(fname)
-    #
-    #oc = CorObsData(fname)#, default_ND_params=RUN_LEVEL_DEFAULT_ND_PARAMS)#,
-    #                #plot_ND_edges=True)
-    #print(c.ND_params - oc.ND_params)
-    #print(c.ND_angle - oc.ND_angle)
-    #print(c.desired_center - oc.desired_center)
-    #print(c.obj_center - oc.obj_center)
-    #print(c.obj_center, c.desired_center)
-    #c.write('/tmp/test.fits', overwrite=True)
-
-#log.setLevel('DEBUG')
-#fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit'
-#ccd = CorData.read(fname, show=True)
-#ccc = ccd.copy()
-#print(f'ccc.default_ND_params {ccc.default_ND_params}')
-#print(f'ccc.ND_params {ccc.ND_params}')
-###cdd=ccc[0:100, 300:500]
-##
-#cdd=ccc[int(ccd.shape[0]/2)-200:int(ccd.shape[0]/2)+200,
-#        int(ccd.shape[1]/2)-200:int(ccd.shape[1]/2)+200]
-#print(f'cdd.ND_params {cdd.ND_params}')
-#print(f'cdd.ND_edges(100) {cdd.ND_edges(100)}')
-##print(f'cdd.ND_coords {cdd.ND_coords}')
-#
-#cdd.data[cdd.ND_coords]=5000
-#simple_show(cdd)
-
-#print(cdd.ND_params_binned(cdd.ND_params))
-##ccd.ND_params_binned(np.asarray(RUN_LEVEL_DEFAULT_ND_PARAMS))
-#print(ccd.coord_binned((3,4)))
-
-
-#patch = ccd[1000:2000, 800:2000]
-#print(patch.default_ND_params)
-#print(patch.ND_params)
-#cpatch = CorData(ccd.data, meta=ccd.meta)
-#cpatch.ND_params[1,:] = ccd.ND_params[1,:] - 1100
-
-#fname = '/data/IoIO/raw/2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit'
-##fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit'
-#ccd = CorData.read(fname, plot_ND_edges=True)
-#print(ccd.default_ND_params)
-#print(ccd.ND_params)

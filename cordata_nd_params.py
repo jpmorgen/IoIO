@@ -1,3 +1,13 @@
+"""This can be incorporated into cordata_base"""
+
+from precisionguide.utils import hist_of_im, iter_linfit
+
+# Unbinned coords --> Note, what with the poor filter wheel centering
+# after fall 2020, this might need to change into a function that
+# floats around, though for now it is just used to speed finding hot
+# pixels and so is OK
+SMALL_FILT_CROP = ((350, 550), (1900, 2100))
+
 class CorDataNDparams(CorDataBase):
     def __init__(self, data,
                  n_y_steps=8, # was 15 (see adjustment in flat code)
@@ -18,9 +28,6 @@ class CorDataNDparams(CorDataBase):
                  **kwargs):
         # Pattern after NDData init but skip all the tests
         if isinstance(data, CorDataNDparams):
-            # Sigh.  We have to undo the convenience of our pgproperty
-            # lest we trigger the calculation of property, which leads
-            # to recursion problems
             n_y_steps = data.n_y_steps
             x_filt_width = data.x_filt_width
             cwt_width_arange_flat = data.cwt_width_arange_flat
@@ -105,15 +112,10 @@ class CorDataNDparams(CorDataBase):
         sufficient contrast, to provide RUN_LEVEL_DEFAULT_ND_PARAMS.
 
         """
-        # Biaes and darks don't have signal to spot ND filter and if
-        # we don't want an obj_center, it is probably because the
-        # image doesn't contain a bright enough central object to spot
-        # the ND filter.  In that case, self.default_ND_params should
-        # be close enough
+        # Biases and darks don't have signal to spot ND filter
         if (self.imagetyp == 'bias'
             or self.imagetyp == 'dark'):
-            return self.default_ND_params
-            #or self. no_obj_center):
+            return super().ND_params
 
         # Transform everything to our potentially binned and subframed
         # image to find the ND filter, but always return ND_params in
@@ -437,4 +439,28 @@ class CorDataNDparams(CorDataBase):
             ND_params = default_ND_params
 
         return self.ND_params_unbinned(ND_params)
+
+if __name__ == "__main__":
+    log.setLevel('DEBUG')
+    ccd = CorDataNDparams.read('/data/IoIO/raw/2017-03-14/Bias-0001_1x1.fit')
+    print(f'background = {ccd.background}')
+    ccd = CorDataNDparams.read('/data/IoIO/raw/2017-03-14/Bias-0001_2x2.fit')
+    print(f'background = {ccd.background}')
+    ccd = CorDataNDparams.read('/data/IoIO/raw/2017-03-14/Bias-0001_4x4.fit')
+    print(f'background = {ccd.background}')
+
+    print(f'ND_params = {ccd.ND_params}')
+
+    ccd = CorDataNDparams.read('/data/IoIO/raw/2017-03-14/IPT-0001_off-band.fit')
+    print(f'background = {ccd.background}')
+    print(f'ND_params = {ccd.ND_params}')
+
+    print(overscan_estimate(ccd, show=True))
+
+    # Binned 2x2
+    fname = '/data/IoIO/raw/2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit'
+    ccd = CorDataNDparams.read(fname)
+
+    print(overscan_estimate(ccd, show=True))
+    print(f'ND_params = {ccd.ND_params}')
 
