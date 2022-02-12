@@ -151,7 +151,7 @@ def overscan_estimate(ccd_in, meta=None, master_bias=None,
         # Bias has not been subtracted and we have a bias around to be
         # able to do that subtraction
         if isinstance(master_bias, str):
-            bias = CorData.read(master_bias)
+            bias = CorDataBase.read(master_bias)
             meta['HIERARCH OVERSCAN_MASTER_BIAS'] = 'OSBIAS'
             meta['OSBIAS'] = master_bias
         else:
@@ -559,11 +559,11 @@ class CorDataBase(FitsKeyArithmeticMixin, NoCenterPGD, MaxImPGD):
         self.meta['NDPAR00'] = (self.ND_params[0,0],
                                 'ND filt left side slope')
         self.meta['NDPAR01'] = (self.ND_params[1,0],
-                                'Full frame X dist of ND filt left side at ND_REF_Y')
+                                'Full frame ND filt left side at ND_REF_Y')
         self.meta['NDPAR10'] = (self.ND_params[0,1],
                                 'ND filt right side slope')
         self.meta['NDPAR11'] = (self.ND_params[1,1],
-                                'Full frame X dist of ND filt right side at ND_REF_Y')
+                                'Full frame ND filt right side at ND_REF_Y')
         self.meta['ND_REF_Y'] = (self.ND_ref_y,
                                 'Full-frame Y reference point of ND_params')
         super()._card_write()
