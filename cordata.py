@@ -15,9 +15,9 @@ from astropy import units as u
 
 from precisionguide import pgproperty, pgcoordproperty, NoCenterPGD
 
-from utils import simple_show
-from photometry import Photometry
-from cordata_base import CorDataNDparams
+from IoIO.utils import simple_show
+from IoIO.cordata_base import CorDataNDparams
+from IoIO.photometry import Photometry
 
 # Experiments with medfilt show:
 # /data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit and
@@ -346,29 +346,6 @@ class CorData(CorDataNDparams, NoCenterPGD):
 
 
 if __name__ == "__main__":
-    #log.setLevel('DEBUG')
-    #ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_1x1.fit')
-    #print(f'background = {ccd.background}')
-    #ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_2x2.fit')
-    #print(f'background = {ccd.background}')
-    #ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_4x4.fit')
-    #print(f'background = {ccd.background}')
-    #
-    #print(f'ND_params = {ccd.ND_params}')
-    #
-    #ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/IPT-0001_off-band.fit')
-    #print(f'background = {ccd.background}')
-    #print(f'ND_params = {ccd.ND_params}')
-    #
-    #print(overscan_estimate(ccd, show=True))
-    #
-    ## Binned 2x2
-    #fname = '/data/IoIO/raw/2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit'
-    #ccd = CorDataBase.read(fname)
-    #
-    #print(overscan_estimate(ccd, show=True))
-    #print(f'ND_params = {ccd.ND_params}')
-
     log.setLevel('DEBUG')
     #fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_ND_centered.fit'
     fname = '/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S1.fit'

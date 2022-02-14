@@ -17,11 +17,11 @@ from bigmultipipe import multi_proc, multi_logging
 
 from ccdmultipipe import CCDMultiPipe
 
-import sx694
-from utils import assure_list, reduced_dir, get_dirs_dates, add_history
-from cordata_base import overscan_estimate, CorDataBase, CorDataNDparams
-from cordata import CorData
-from cor_process import cor_process
+import IoIO.sx694 as sx694
+from IoIO.utils import assure_list, reduced_dir, get_dirs_dates, add_history
+from IoIO.cordata_base import overscan_estimate, CorDataBase, CorDataNDparams
+from IoIO.cordata import CorData
+from IoIO.cor_process import cor_process
 
 # Processing global variables.  Since I avoid use of the global
 # statement and don't reassign these at global scope, they stick to
@@ -276,7 +276,7 @@ def nd_filter_mask(ccd_in, nd_edge_expand=ND_EDGE_EXPAND, **kwargs):
     mask = np.zeros(ccd.shape, bool)
     # Return a copy of ccd with the edge_mask property adjusted.  Do
     # it this way to keep ccd's ND filt parameters intact
-    emccd = RedCorData(ccd, edge_mask=-nd_edge_expand)
+    emccd = CorDataBase(ccd, edge_mask=-nd_edge_expand)
     mask[emccd.ND_coords] = True
     if ccd.mask is None:
         ccd.mask = mask

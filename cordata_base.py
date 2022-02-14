@@ -25,12 +25,18 @@ from precisionguide import pgproperty, pgcoordproperty
 from precisionguide import MaxImPGD, NoCenterPGD
 from precisionguide.utils import hist_of_im, iter_linfit
 
-import sx694
+import IoIO.sx694 as sx694
+from IoIO.utils import CCDImageFormatter
 
 # All global values are referenced to the unbinned, full-frame
 # CCD.  Calculations (should be) done such that binned & subframed
 # images are kept in their native formats
 
+# Unbinned coords --> Note, what with the poor filter wheel centering
+# after fall 2020, this might need to change into a function that
+# floats around, though for now it is just used to speed finding hot
+# pixels and so is OK
+SMALL_FILT_CROP = ((350, 550), (1900, 2100))
 
 # ND_params[0, :] represent the slope relative to the *Y-axis* of the
 # left and right sides of the ND filter.  ND_params[1,:] represents
@@ -61,12 +67,24 @@ RUN_LEVEL_DEFAULT_ND_PARAMS \
     = [[-3.32901729e-01, -3.21280155e-01],
        [ 1.26037690e+03,  1.38195602e+03]]
 
+def run_level_default_ND_params(hdr):
+    """Returns run_level_default_ND_params for the DATE-OBS in hdr"""
+    # Note ifs don't quite bracket ND_params in a nice way, so pay
+    # attention when adding subsequent adjustments
+    date_obs = hdr['DATE-OBS']
+    if date_obs > '2021-04-25T00:00:00':
+        ND_params = np.asarray(RUN_LEVEL_DEFAULT_ND_PARAMS)
+    elif date_obs > '2019-04-12T00:00:00':
+        ND_params = np.asarray([[1.40749551e-02, 2.36320869e-02],
+                                [1.24240593e+03, 1.33789081e+03]])
+    elif date_obs > '2019-02-08T00:00:00':
+        ND_params = np.asarray([[  4.65269008e-03,   8.76050569e-03],
+                                [  1.27189987e+03,   1.37717911e+03]])
+    else:
+        ND_params = np.asarray([[  3.63686271e-01,   3.68675375e-01],
+                                [  1.28303305e+03,   1.39479846e+03]])
+    return ND_params
 
-# Unbinned coords --> Note, what with the poor filter wheel centering
-# after fall 2020, this might need to change into a function that
-# floats around, though for now it is just used to speed finding hot
-# pixels and so is OK
-SMALL_FILT_CROP = ((350, 550), (1900, 2100))
 
 def overscan_estimate(ccd_in, meta=None, master_bias=None,
                       binsize=None, min_width=1, max_width=8, box_size=100,
@@ -331,9 +349,10 @@ class CorDataBase(FitsKeyArithmeticMixin, NoCenterPGD, MaxImPGD):
         # center --> This may change if we are able to track ND filter
         # sag in Y.
         if ND_params is not None:
-            default_ND_params 		= ND_params
-        self.default_ND_params 		= default_ND_params
-        self.ND_params = ND_params
+            self.default_ND_params	= ND_params
+        else:
+            self.default_ND_params	= default_ND_params
+        self.ND_params			= ND_params
         self.ND_ref_y        		= ND_ref_y
         self.edge_mask              	= edge_mask
 
@@ -354,10 +373,9 @@ class CorDataBase(FitsKeyArithmeticMixin, NoCenterPGD, MaxImPGD):
 
         Values are queried from FITS header, with globals used as fall-back
         """
-        
-        run_level_default_ND_params = np.asarray(RUN_LEVEL_DEFAULT_ND_PARAMS)
+        rld = run_level_default_ND_params(self.meta)
         # Get flat ND params from FITS header, if available
-        FND_params = np.full_like(run_level_default_ND_params, np.NAN)
+        FND_params = np.full_like(rld, np.NAN)
         for i in range(2):
             for j in range(2):
                 fndpar = self.meta.get(f'fndpar{i}{j}')
@@ -365,25 +383,13 @@ class CorDataBase(FitsKeyArithmeticMixin, NoCenterPGD, MaxImPGD):
                     continue
                 FND_params[j][i] = fndpar
         if np.all(np.isnan(FND_params)):
-            # Nothing in FITS header.  Use our record of
-            # default_run_level_ND_params.  Note ifs don't quite
-            # bracket ND_params in a nice way, so pay attention when
-            # adding subsequent adjustments
-            date_obs = self.meta['DATE-OBS']
-            if date_obs > '2021-04-25T00:00:00':
-                ND_params = run_level_default_ND_params
-            elif date_obs > '2019-04-12T00:00:00':
-                ND_params = np.asarray([[1.40749551e-02, 2.36320869e-02],
-                                        [1.24240593e+03, 1.33789081e+03]])
-            elif date_obs > '2019-02-08T00:00:00':
-                ND_params = np.asarray([[  4.65269008e-03,   8.76050569e-03],
-                                        [  1.27189987e+03,   1.37717911e+03]])
-            else:
-                ND_params = np.asarray([[  3.63686271e-01,   3.68675375e-01],
-                                        [  1.28303305e+03,   1.39479846e+03]])
-        if np.any(np.isnan(ND_params)):
-            log.warning('malformed FITS header, some FNDPAR values missing!')
-            
+            # Nothing in FITS header
+            ND_params = rld
+        elif np.any(np.isnan(FND_params)):
+            log.warning('malformed FITS header, some FNDPAR values missing!  Using run_level_default_ND_params')
+            ND_params = rld
+        else:
+            ND_params = FND_params
         ND_ref_y = self.meta.get('ND_REF_Y')
         self.ND_ref_y = ND_ref_y or self.ND_ref_y
         return ND_params
@@ -1004,4 +1010,29 @@ class CorDataNDparams(CorDataBase):
             ND_params = default_ND_params
 
         return self.ND_params_unbinned(ND_params)
+
+if __name__ == "__main__":
+    log.setLevel('DEBUG')
+    ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_1x1.fit')
+    print(f'background = {ccd.background}')
+    ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_2x2.fit')
+    print(f'background = {ccd.background}')
+    ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_4x4.fit')
+    print(f'background = {ccd.background}')
+    
+    print(f'ND_params = {ccd.ND_params}')
+    
+    ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/IPT-0001_off-band.fit')
+    print(f'background = {ccd.background}')
+    print(f'ND_params = {ccd.ND_params}')
+    
+    print(overscan_estimate(ccd, show=True))
+    
+    # Binned 2x2
+    fname = '/data/IoIO/raw/2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit'
+    ccd = CorDataBase.read(fname)
+    
+    print(overscan_estimate(ccd, show=True))
+    print(f'ND_params = {ccd.ND_params}')
+
 

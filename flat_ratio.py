@@ -1,3 +1,5 @@
+#!/usr/bin/python3
+
 """Get on-off ratios for [SII] and Na filters from flats"""
 
 import os
@@ -13,8 +15,9 @@ from astropy.io.fits import getheader
 from astropy.stats import mad_std, biweight_location
 from astropy.time import Time
 
-from cormultipipe import (CALIBRATION_ROOT, RedCorData,
-                          CorMultiPipe, Calibration)
+from cordata_base import CorDataBase
+from cormultipipe import CALIBRATION_ROOT
+from calibration import Calibration
 
 def flist_to_dict(flist):
     dlist = []

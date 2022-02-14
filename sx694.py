@@ -163,7 +163,7 @@ def exp_correct_value(date_obs):
     KEEP THE TABLE IN THIS CODE UP TO DATE
 """
 
-    if date_obs < '2020-11-01':
+    if date_obs < latency_change_dates[0]:
         exposure_correct = 2.00 # s
         exposure_correct_uncertainty = 0.22 # s 
     else:

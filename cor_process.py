@@ -10,8 +10,8 @@ from astropy.coordinates import Angle, EarthLocation, SkyCoord
 
 import ccdproc as ccdp
 
-import sx694
-from cordata_base import overscan_estimate, CorDataBase, CorDataNDparams
+import IoIO.sx694 as sx694
+from IoIO.cordata_base import overscan_estimate, CorDataBase, CorDataNDparams
 
 # See IoIO.notebk Tue Sep 28 08:54:57 2021 EDT  jpmorgen@snipe
 # I wasn't always consistent or correct with my naming or location
@@ -191,6 +191,7 @@ def obs_location_to_hdr(hdr_in, location=None):
         del hdr['SITELAT'] # MaxIm
     return hdr
 
+# --> This eventually can move up to the read method
 def fix_radecsys_in_hdr(hdr_in):
     """Change the depreciated RADECSYS keyword to RADESYS
 
@@ -808,5 +809,27 @@ def cor_process(ccd,
 
 if __name__ == "__main__":
     log.setLevel('DEBUG')
-    ccd = CorDataBase.read('/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S1.fit')
-    ccdp = cor_process(ccd)
+    #ccd = CorDataBase.read('/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S1.fit')
+    #cdproced = cor_process(ccd)
+
+    ccd = CorDataBase.read('/data/IoIO/raw/20220203/0009P-S001-R001-C001-R_dupe-1.fts')
+    ccd = CorDataNDparams.read('/data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S1.fit')
+
+    master_bias = '/data/IoIO/Calibration/2022-02-14_ccdT_-25.3_bias_combined.fits'
+    master_dark = '/data/IoIO/Calibration/2022-02-14_ccdT_-25.3_exptime_0.7s_dark_combined.fits'
+    master_flat = '/data/IoIO/Calibration/2022-02-10_R_flat.fits' 
+    ccdproced = cor_process(ccd,
+                            oscan=True,
+                            gain=True,
+                            error=True,
+                            min_value=True,
+                            master_bias=master_bias,
+                            dark_frame=master_dark,
+                            master_flat=master_flat)
+
+    new_ccd = CorDataNDparams(ccdproced)
+    print(new_ccd.ND_params)
+    print(new_ccd.ND_params-ccdproced.ND_params)
+    print(new_ccd.default_ND_params)
+    print(new_ccd.default_ND_params-ccdproced.default_ND_params)
+    print(new_ccd.ND_params-ccdproced.default_ND_params)

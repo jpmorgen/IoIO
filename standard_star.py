@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 from numpy.polynomial import Polynomial
 
-from scipy.interpolate import interp1d
+#from scipy.interpolate import interp1d
 
 import matplotlib.pyplot as plt
 from matplotlib.dates import datestr2num
@@ -26,11 +26,10 @@ from astropy import log
 from astropy import units as u
 from astropy.time import Time
 from astropy.stats import mad_std, biweight_location
-from astropy.coordinates import SkyCoord, Angle
+from astropy.coordinates import SkyCoord
 from astroquery.simbad import Simbad
 from astropy.modeling import models, fitting
 from astropy.visualization import quantity_support
-#from astropy.modeling.models import Exponential1D #, BlackBody
 
 from specutils import Spectrum1D, SpectralRegion
 from specutils.manipulation import (extract_region,
@@ -38,15 +37,18 @@ from specutils.manipulation import (extract_region,
 
 
 # bmp_cleanup can go away now that Photometry is an object
-from bigmultipipe import bmp_cleanup, no_outfile, prune_pout
+from bigmultipipe import no_outfile, prune_pout
 
-import sx694
-from cormultipipe import IoIO_ROOT, RAW_DATA_ROOT
-from cormultipipe import assure_list, reduced_dir, get_dirs_dates
-from cormultipipe import RedCorData, CorMultiPipe, Calibration
-from cormultipipe import nd_filter_mask, mask_nonlin_sat
-from photometry import Photometry, is_flux
 from burnashev import Burnashev
+
+import IoIO.sx694 as sx694
+from IoIO.utils import assure_list, reduced_dir, get_dirs_dates
+from IoIO.cordata_base import CorDataBase
+from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
+                               CorMultiPipeBase,
+                               nd_filter_mask, mask_nonlin_sat)
+from IoIO.calibration import Calibration
+from IoIO.photometry import Photometry, is_flux
 
 PHOTOMETRY_ROOT = os.path.join(IoIO_ROOT, 'StandardStar')
 FILT_ROOT = '/data/IoIO/observing'
@@ -457,16 +459,16 @@ def standard_star_pipeline(directory,
     if len(flist) == 0:
         return (directory, [])
 
-    cmp = CorMultiPipe(auto=True,
-                       calibration=calibration,
-                       photometry=photometry,
-                       post_process_list=[nd_filter_mask,
-                                          standard_star_process,
-                                          no_outfile],
-                       fits_fixed_ignore=fits_fixed_ignore, 
-                       num_processes=num_processes,
-                       process_expand_factor=15,
-                       **kwargs)
+    cmp = CorMultiPipeBase(auto=True,
+                           calibration=calibration,
+                           photometry=photometry,
+                           post_process_list=[nd_filter_mask,
+                                              standard_star_process,
+                                              no_outfile],
+                           fits_fixed_ignore=fits_fixed_ignore, 
+                           num_processes=num_processes,
+                           process_expand_factor=15,
+                           **kwargs)
     # Pipeline is set with no_outfile so it won't produce any files,
     # but get ready to write to reduced directory if necessary
     pout = cmp.pipeline(flist, outdir=rd, overwrite=True)
@@ -1047,7 +1049,7 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
                        photometry=None,
                        read_csvs=True,
                        show=False,
-                       ccddata_cls=RedCorData,
+                       ccddata_cls=CorDataBase,
                        outdir_root=PHOTOMETRY_ROOT,                       
                        **kwargs):
     dirs_dates = get_dirs_dates(data_root, start=start, stop=stop)
