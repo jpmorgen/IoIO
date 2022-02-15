@@ -680,6 +680,9 @@ def standard_star_directory(directory,
     # Collect extinction and exposure correction data  into arrays of dicts
     extinction_data = []
     exposure_correct_data = []
+    # Keep units straight
+    star_flux_unit = u.ph/u.cm**2/u.s
+
     # --> This assumes our OBJECT assignments are correct and the
     # telescope was really pointed at the named object
     for obj, simbad_entry in zip(objects, simbad_results):
@@ -698,6 +701,9 @@ def standard_star_directory(directory,
         row1 = objdf.index[0]
         ra = objdf['objctra'][row1]
         dec = objdf['objctdec'][row1]
+        detflux_units = objdf['detflux_units'][row1]
+        detflux_units = u.Unit(detflux_units)
+        print(f'detflux_units = {detflux_units}')
         obj_coords = SkyCoord(ra, dec)
         simbad_coords = SkyCoord(simbad_entry['RA'],
                                  simbad_entry['DEC'],
@@ -723,6 +729,8 @@ def standard_star_directory(directory,
         if burnashev_match:
             log.debug(f'Found {obj} in Burnashev catalog')
             burnashev_spec = burnashev.get_spec(bname)
+        else:
+            log.warning(f'Did not find {obj} in Burnashev catalog')
                                     
         # --> might want to move these in case there are some bad
         # --> measurements skewing the endpoints
@@ -860,7 +868,8 @@ def standard_star_directory(directory,
 
                 airmasses.append(np.mean(tdf['airmass']))
                 best_fluxes.append(best_flux)
-                instr_mag = u.Magnitude(best_flux*u.electron/u.s)
+                instr_mag = u.Magnitude(best_flux*detflux_units)
+                instr_mag_unit = instr_mag.unit
                 instr_mags.append(instr_mag.value)
 
 
@@ -930,26 +939,23 @@ def standard_star_directory(directory,
             poly = Polynomial.fit(airmasses, instr_mags, deg=1)
             xfit, yfit = poly.linspace()
             plt.plot(xfit, yfit)
-            instr_mag_am0 = poly(0)*u.mag(u.ph/u.cm**2/u.s)
-            #print(simbad_entry['FLUX_'+filt])
-            flux_col = 'FLUX_'+filt
-            zero_point = ''
-            calibration_str = np.NAN*u.dimensionless_unscaled
-            rayleigh_conversion = np.NAN*u.dimensionless_unscaled
 
-            # Get our Vega flux and mag reference
+            instr_mag_am0 = poly(0)*instr_mag_unit
+            flux_col = 'FLUX_'+filt
+
+            # Get our Vega flux in photons and mag reference
             vega_flux = pd_vega.loc[filt:filt,'filt_flux']
             vega_flux = vega_flux[0]
             vega_mag0 = pd_vega.loc[filt_name:filt_name,'filt_mag']
             vega_mag0 = vega_mag0.values[0]
-            vega_mag0 = vega_mag0*u.mag(u.ph/u.cm**2/u.s)
-            vega_flux_mag = u.Magnitude(vega_flux*u.ph/u.cm**2/u.s)
+            vega_mag0 = vega_mag0*u.mag(star_flux_unit)
+            vega_flux_mag = u.Magnitude(vega_flux*star_flux_unit)
             if (simbad_match
                 and flux_col in simbad_entry.colnames
                 and not np.ma.is_masked(simbad_entry[flux_col])):
                 # Prefer Simbad-listed mags for UBVRI
                 star_mag = simbad_entry[flux_col]
-                star_mag *= u.mag(u.ph/u.cm**2/u.s)
+                star_mag *= u.mag(star_flux_unit)
                 # Convert to physical flux using algebra and the
                 # forward derivation below
                 star_flux_mag = star_mag + (vega_flux_mag - vega_mag0)
@@ -963,13 +969,16 @@ def standard_star_directory(directory,
                                                    title=f'{obj} {filt_name}')
                 star_flux_mag = u.Magnitude(star_flux)
                 star_mag = star_flux_mag - (vega_flux_mag - vega_mag0)
-                # http://sirius.bu.edu/planetary/obstools/starflux/starcalib/starcalib.htm                
+            else:
+                star_mag = np.NAN*u.mag(star_flux_unit)
+                star_flux = np.NAN*star_flux_unit
+
+            # http://sirius.bu.edu/planetary/obstools/starflux/starcalib/starcalib.htm                
             star_sb = 4*np.pi * star_flux / pix_solid_angle
             star_sb = star_sb.to(u.R)
             # Convert our measurement back to flux units for
             # comparison to integral
             flux_am0 = u.Magnitude(instr_mag_am0).physical    
-            flux_am0 *= u.electron/u.s
             rayleigh_conversion = star_sb / flux_am0
             zero_point = star_mag - instr_mag_am0
             extinction = poly.deriv()
@@ -982,7 +991,7 @@ def standard_star_directory(directory,
                      ha='center', va='bottom', transform=ax.transAxes)
 
             plt.text(0.5, 0.5, 
-                     f'Airless instr mag = {instr_mag_am0:.2f} (electron/s)',
+                     f'Airless instr mag = {instr_mag_am0:.2f}',
                      ha='center', va='bottom', transform=ax.transAxes)
 
             plt.text(0.5, 0.1, 
