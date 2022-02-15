@@ -640,14 +640,42 @@ def standard_star_directory(directory,
         exposure_correct_outname = write_csvs[1]
         os.makedirs(os.path.dirname(extinction_outname), exist_ok=True)        
 
+    # Add Vega onto our objects.  Will take it off, below
     objects = list(set(df['object']))
+    objects.append('Vega')
     filters = list(set(df['filter']))
 
     s = Simbad()
+    burnashev = CorBurnashev()
     s.add_votable_fields('flux(U)', 'flux(B)', 'flux(V)', 'flux(R)',
                          'flux(I)')
     simbad_results = s.query_objects(objects)
-    burnashev = CorBurnashev()
+    vega_entry = simbad_results[-1]
+    simbad_results = simbad_results[0:-2]
+    vega_coords = SkyCoord(vega_entry['RA'],
+                           vega_entry['DEC'],
+                           unit=(u.hour, u.deg))
+    bname, bsep, _ = burnashev.closest_name_to(vega_coords)
+    assert bsep < POINTING_TOLERANCE, 'Vega must be found in Burnashevc catalog!'
+    vega_spec = burnashev.get_spec(bname)
+    vega_standard_list = []
+    for filt_name in filters:
+        filt = burnashev.get_filt(filt_name)
+        filt_flux = burnashev.flux_in_filt(vega_spec, filt,
+                                           plot=False,
+                                           title=f'Vega {filt_name}')
+        flux_col = 'FLUX_' + filt_name
+        if flux_col in vega_entry.colnames:
+            filt_mag = vega_entry[flux_col]
+        else:
+            # All our narrow-band filters are currently in R-band, so make
+            # that the logarithmic reference
+            filt_mag = vega_entry['FLUX_R']
+        vega_standard_list.append({'filt_name': filt_name,
+                                   'filt_flux': filt_flux.value,
+                                   'filt_mag': filt_mag})
+    pd_vega = pd.DataFrame(vega_standard_list, index=filters)
+
     
     # Collect extinction and exposure correction data  into arrays of dicts
     extinction_data = []
@@ -722,7 +750,6 @@ def standard_star_directory(directory,
                 log.warning(f'Not enough measurements ({n_meas}) in filter {filt} for object {obj} in {directory}')
                 continue
             max_frac_nonlin = np.max(filtdf['max_frac_nonlin'])
-            true_fluxes = []
             best_fluxes = []
             instr_mags = []
             airmasses = []
@@ -903,54 +930,65 @@ def standard_star_directory(directory,
             poly = Polynomial.fit(airmasses, instr_mags, deg=1)
             xfit, yfit = poly.linspace()
             plt.plot(xfit, yfit)
-            instr_mag_am0 = poly(0)
+            instr_mag_am0 = poly(0)*u.mag(u.ph/u.cm**2/u.s)
             #print(simbad_entry['FLUX_'+filt])
             flux_col = 'FLUX_'+filt
             zero_point = ''
             calibration_str = np.NAN*u.dimensionless_unscaled
             rayleigh_conversion = np.NAN*u.dimensionless_unscaled
-            # --> I now have the ability to do all of the filters in
-            # both Burnashev and formal UBVRI
+
+            # Get our Vega flux and mag reference
+            vega_flux = pd_vega.loc[filt:filt,'filt_flux']
+            vega_flux = vega_flux[0]
+            vega_mag0 = pd_vega.loc[filt_name:filt_name,'filt_mag']
+            vega_mag0 = vega_mag0.values[0]
+            vega_mag0 = vega_mag0*u.mag(u.ph/u.cm**2/u.s)
+            vega_flux_mag = u.Magnitude(vega_flux*u.ph/u.cm**2/u.s)
             if (simbad_match
                 and flux_col in simbad_entry.colnames
-                and not simbad_entry[flux_col].mask):
+                and not np.ma.is_masked(simbad_entry[flux_col])):
                 # Prefer Simbad-listed mags for UBVRI
-                zero_point = simbad_entry[flux_col] - instr_mag_am0
-                zero_point = zero_point.value
-                calibration_str = f'Zero point mag {zero_point:.2f}'
+                star_mag = simbad_entry[flux_col]
+                star_mag *= u.mag(u.ph/u.cm**2/u.s)
+                # Convert to physical flux using algebra and the
+                # forward derivation below
+                star_flux_mag = star_mag + (vega_flux_mag - vega_mag0)
+                star_flux = star_flux_mag.physical
             elif burnashev_match:
-                # We have to integrate the filter
-                
-                # Start with just narrow-band filters that like to
-                # read in rayleighs
-                # http://sirius.bu.edu/planetary/obstools/starflux/starcalib/starcalib.htm
+                # Integrating the Burnashev catalog flux over our
+                # filters gives pretty comparable results (see code in __main__)
                 filt_prof = burnashev.get_filt(filt)
-                star_flux = burnashev.flux_in_filt(burnashev_spec, filt_prof)
-                star_sb = 4*np.pi * star_flux / pix_solid_angle
-                star_sb = star_sb.to(u.R)
-                # Convert our measurement back to flux units for
-                # comparison to integral
-                flux_am0 = u.Magnitude(instr_mag_am0).physical    
-                flux_am0 *= u.electron/u.s
-                rayleigh_conversion = star_sb / flux_am0
-                calibration_str = f'{rayleigh_conversion:0.2e}'
+                star_flux = burnashev.flux_in_filt(burnashev_spec, filt_prof,
+                                                   plot=False,
+                                                   title=f'{obj} {filt_name}')
+                star_flux_mag = u.Magnitude(star_flux)
+                star_mag = star_flux_mag - (vega_flux_mag - vega_mag0)
+                # http://sirius.bu.edu/planetary/obstools/starflux/starcalib/starcalib.htm                
+            star_sb = 4*np.pi * star_flux / pix_solid_angle
+            star_sb = star_sb.to(u.R)
+            # Convert our measurement back to flux units for
+            # comparison to integral
+            flux_am0 = u.Magnitude(instr_mag_am0).physical    
+            flux_am0 *= u.electron/u.s
+            rayleigh_conversion = star_sb / flux_am0
+            zero_point = star_mag - instr_mag_am0
             extinction = poly.deriv()
             extinction = extinction(0)
             airmasses = np.asarray(airmasses)
             dof = num_airmass_points - 2
             red_chisq = np.sum((poly(airmasses) - instr_mags)**2) / dof
-            plt.text(0.5, 0.8, 
-                     f'Airless instr mag = {instr_mag_am0:.2f} (electron/s)',
+            plt.text(0.5, 0.75, 
+                     f'$M_0$ = {zero_point:.2f};   {rayleigh_conversion:0.2e}',
                      ha='center', va='bottom', transform=ax.transAxes)
 
-            plt.text(0.5, 0.65, 
-                     f'{calibration_str}',
+            plt.text(0.5, 0.5, 
+                     f'Airless instr mag = {instr_mag_am0:.2f} (electron/s)',
                      ha='center', va='bottom', transform=ax.transAxes)
 
             plt.text(0.5, 0.1, 
                      f'Extinction = {extinction:.3f} (mag/airmass)',
-                     ha='center', transform=ax.transAxes)
-            plt.text(0.13, 0.8, 
+                     ha='center', va='bottom', transform=ax.transAxes)
+            plt.text(0.13, 0.1, 
                      f'Red. Chisq = {red_chisq:.4f}',
                          ha='center', va='bottom', transform=ax.transAxes)
 
@@ -1037,7 +1075,7 @@ def standard_star_directory(directory,
     # https://mail.python.org/pipermail/tkinter-discuss/2019-December/004153.html
     # suggests might be solved by just GCing occationally
     # This might be because I didn't close plots properly when I
-    # didn't find any excintion data.  Well, that didn't take long to fail!
+    # didn't find any excintqion data.  Well, that didn't take long to fail!
     gc.collect()
 
     return (directory, extinction_data, exposure_correct_data)
@@ -1475,7 +1513,12 @@ if __name__ == '__main__':
 #    filt_flux = b.flux_in_filt(orig_spec, filt)
 #    print(f'{filt_name} flux = {filt_flux}')
 
-##b = CorBurnashev()
+
+####################################################################
+### Test showing integrating Burnashev flux over our filters gives
+### comparable results to cataloged filter mags
+####################################################################
+##burnashev = CorBurnashev()
 ##
 ##filt_names = ['U', 'B', 'V', 'R', 'I',
 ##              'SII_on', 'SII_off', 'Na_on', 'Na_off']
@@ -1508,22 +1551,75 @@ if __name__ == '__main__':
 ##             'HD 210459',
 ##             'HD 217782']
 ##
+##star_list.append('Vega')
 ##s = Simbad()
+##s.add_votable_fields('flux(U)', 'flux(B)', 'flux(V)', 'flux(R)',
+##                     'flux(I)')
 ##simbad_results = s.query_objects(star_list)
-##
+##vega_entry = simbad_results[-1]
+##simbad_results = simbad_results[0:-2]
+##vega_coords = SkyCoord(vega_entry['RA'],
+##                       vega_entry['DEC'],
+##                       unit=(u.hour, u.deg))
+##bname, bsep, _ = burnashev.closest_name_to(vega_coords)
+##assert bsep < POINTING_TOLERANCE, 'Vega must be found in Burnashev catalog!'
+##vega_spec = burnashev.get_spec(bname)
+##vega_standard_list = []
+##for filt_name in filt_names:
+##    filt = burnashev.get_filt(filt_name)
+##    filt_flux = burnashev.flux_in_filt(vega_spec, filt,
+##                                       plot=False,
+##                                       title=f'Vega {filt_name}')
+##    flux_col = 'FLUX_' + filt_name
+##    if flux_col in vega_entry.colnames:
+##        filt_mag = vega_entry[flux_col]
+##    else:
+##        # All our narrow-band filters are currently in R-band, so make
+##        # that the logarithmic reference
+##        filt_mag = vega_entry['FLUX_R']
+##    
+##    print(f'{filt_name} Vega {filt_flux} {filt_mag}')
+##    vega_standard_list.append({'filt_name': filt_name,
+##                               'filt_flux': filt_flux.value,
+##                               'filt_mag': filt_mag})
+##pd_vega = pd.DataFrame(vega_standard_list, index=filt_names)
+##    
 ##for obj, simbad_entry in zip(star_list, simbad_results):
 ##    simbad_coords = SkyCoord(simbad_entry['RA'],
 ##                             simbad_entry['DEC'],
 ##                             unit=(u.hour, u.deg))
-##    name, _, _ = b.closest_name_to(simbad_coords)
-##    spec = b.get_spec(name)#, plot=True, title=obj)
+##    name, _, _ = burnashev.closest_name_to(simbad_coords)
+##    burnashev_spec = burnashev.get_spec(name)#, plot=True, title=obj)
 ##    print(f'{obj}')
 ##    for filt_name in filt_names:
-##        filt = b.get_filt(filt_name)
-##        filt_flux = b.flux_in_filt(spec, filt,
-##                                   plot=True,
+##        flux_col = 'FLUX_' + filt_name
+##        filt_prof = burnashev.get_filt(filt_name)
+##        star_flux = burnashev.flux_in_filt(burnashev_spec, filt_prof,
+##                                   plot=False,
 ##                                   title=f'{obj} {filt_name}')
-##        print(f'{filt_name} {filt_flux}')
+##        #print(f'{filt_name} {star_flux}')
+##        #print(f'Vega {pd_vega.loc[filt_name:filt_name,"filt_flux"]}')
+##
+##        vega_flux = pd_vega.loc[filt_name:filt_name,'filt_flux']
+##        vega_flux = vega_flux[0]
+##        vega_mag0 = pd_vega.loc[filt_name:filt_name,'filt_mag']
+##        vega_mag0 = vega_mag0.values[0]
+##        vega_mag0 = vega_mag0*u.mag(u.ph/u.cm**2/u.s)
+##        vega_flux_mag = u.Magnitude(vega_flux*u.ph/u.cm**2/u.s)
+##        star_flux_mag = u.Magnitude(star_flux)
+##        filt_prof_star_mag = star_flux_mag - (vega_flux_mag - vega_mag0)
+##        #print(f'star_flux_mag = {star_flux_mag}')
+##        #print(f'vega_flux_mag = {vega_flux_mag}')
+##        #print(f'star relative mag = {star_flux_mag - vega_flux_mag}')
+##        #print(f'corrected for vega_mag0 = {filt_prof_star_mag}')
+##
+##        if (flux_col in simbad_entry.colnames
+##            and not np.ma.is_masked(simbad_entry[flux_col])):
+##            star_mag = simbad_entry[flux_col]
+##            star_mag *= u.mag(u.ph/u.cm**2/u.s)
+##            delta = filt_prof_star_mag-star_mag
+##            print(f'{filt_name} {star_mag:.2f}; delta = {delta:.2f}')
+##        
 ##        #f, ax = plt.subplots()
 ##        #ax.step(filt.spectral_axis, filt.flux)
 ##        #ax.set_title(f"{filt_name}")
@@ -1534,4 +1630,4 @@ if __name__ == '__main__':
 ##        #plt.show()
 ##        #break
 ##    break
-##
+

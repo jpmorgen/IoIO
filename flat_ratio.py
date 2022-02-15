@@ -15,9 +15,8 @@ from astropy.io.fits import getheader
 from astropy.stats import mad_std, biweight_location
 from astropy.time import Time
 
-from cordata_base import CorDataBase
-from cormultipipe import CALIBRATION_ROOT
-from calibration import Calibration
+from IoIO.cordata_base import CorDataBase
+from IoIO.calibration import CALIBRATION_ROOT, Calibration
 
 def flist_to_dict(flist):
     dlist = []
@@ -34,8 +33,8 @@ def flat_flux(fname_or_ccd):
     # because these classmethods read the whole file
     hdr = getheader(fname_or_ccd)
     #ccd = CCDData.read(fname_or_ccd)
-    ccd = RedCorData.read(fname_or_ccd)
-    hdr = ccd.meta
+    #ccd = CorDataBase.read(fname_or_ccd)
+    #hdr = ccd.meta
     maxval = hdr['FLATDIV']
     exptime = hdr['EXPTIME']
     flux = maxval/exptime
@@ -76,13 +75,20 @@ df = pd.DataFrame(ratio_dlist)
 
 f = plt.figure(figsize=[8.5, 11])
 plt.title('Sky flat ratios')
+print('Narrow-band sky flat ratios fit to >2020-01-01 data only')
+print('Day sky does have Na on-band emission, however, Greet 1988 PhD suggests')
+print('it is so hard to measure with a good Fabry-Perot, that we are')
+print('dominated by continuum')
+print('COPY THESE INTO cormultipipe.py globals')
 for ib, band in enumerate(['Na', 'SII']):
-    plt.title('Sky flat ratios')
+    plt.title('Sky flat ratios fit to >2020-01-01')
     this_band = df[df['band'] == band]
-    med_ratio = np.median(this_band['ratio'])
-    std_ratio = np.std(this_band['ratio'])
-    biweight_ratio = biweight_location(this_band['ratio'])
-    mad_std_ratio = mad_std(this_band['ratio'])
+    # Started taking flats in a more uniform way after 2020-01-01
+    good_dates = this_band[this_band['date'] > '2020-01-01']
+    med_ratio = np.median(good_dates['ratio'])
+    std_ratio = np.std(good_dates['ratio'])
+    biweight_ratio = biweight_location(good_dates['ratio'])
+    mad_std_ratio = mad_std(good_dates['ratio'])
     print(f'{band} med {med_ratio:.2f} +/- {std_ratio:.2f}')
     print(f'{band} biweight {biweight_ratio:.2f} +/- {mad_std_ratio:.2f}')
     ax = plt.subplot(2, 1, ib+1)

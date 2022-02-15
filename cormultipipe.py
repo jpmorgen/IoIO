@@ -63,10 +63,12 @@ OUTNAME_APPEND = "_p"
 # centering of object more reliable
 ND_EDGE_EXPAND = 40
 
-# Wed Mar 03 09:59:08 2021 EST  jpmorgen@snipe
-# 2020 -- early 2021
-NA_OFF_ON_RATIO = 4.74
-SII_OFF_ON_RATIO = 4.87
+# Mon Feb 14 15:31:31 2022 EST  jpmorgen@snipe
+# Keep up with periodic runs of flat_ratio.py
+NA_OFF_ON_RATIO = 4.75
+NA_OFF_ON_RATIO_ERR = 0.16
+SII_OFF_ON_RATIO = 4.88
+SII_OFF_ON_RATIO_ERR = 0.05
 
 ######### CorMultiPipe object
 

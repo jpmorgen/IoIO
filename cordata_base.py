@@ -473,6 +473,35 @@ class CorDataBase(FitsKeyArithmeticMixin, NoCenterPGD, MaxImPGD):
         return self.default_ND_params
 
     @pgproperty
+    def obj_to_ND(self):
+        """Returns perpendicular distance of obj center to center of ND filter in binned coordinates
+        """
+        if self.quality == 0:
+            # This quantity doesn't make sense if there is an invalid center
+            return None
+        # https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
+        # http://mathworld.wolfram.com/Point-LineDistance2-Dimensional.html
+        # has a better factor
+        imshape = self.coord_unbinned(self.shape)
+        ND_params = self.ND_params_binned(self.ND_params)
+        ND_ref_y = self.y_binned(self.ND_ref_y)
+        m = np.average(ND_params[0,:])
+        b = np.average(ND_params[1,:])
+        # Random Xs (really Y, as per below) with which to calculate our line
+        x1 = 1100; x2 = 1200
+        # The line is actually going vertically, so X in is the C
+        # convention of along a column.  Also remember our X coordinate
+        # is relative to the center of the image
+        y1 = m * (x1 - ND_ref_y)  + b
+        y2 = m * (x2 - ND_ref_y)  + b
+        x0 = self.obj_center[0]
+        y0 = self.obj_center[1]
+        d = (np.abs((x2 - x1) * (y1 - y0)
+                    - (x1 - x0) * (y2 - y1))
+             / ((x2 - x1)**2 + (y2 - y1)**2)**0.5)
+        return d
+
+    @pgproperty
     def ND_coords(self):
         """Returns tuple of coordinates of ND filter referenced to the potentially binned and subframed image and including the edge mask.  Change the edge-maks property, set this to None and it will recalculate the next time you ask for it"""
         xs = np.asarray((), dtype=int) ; ys = np.asarray((), dtype=int)
