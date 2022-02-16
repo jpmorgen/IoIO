@@ -703,7 +703,6 @@ def standard_star_directory(directory,
         dec = objdf['objctdec'][row1]
         detflux_units = objdf['detflux_units'][row1]
         detflux_units = u.Unit(detflux_units)
-        print(f'detflux_units = {detflux_units}')
         obj_coords = SkyCoord(ra, dec)
         simbad_coords = SkyCoord(simbad_entry['RA'],
                                  simbad_entry['DEC'],
@@ -1006,8 +1005,10 @@ def standard_star_directory(directory,
             extinction_dict = {'date': just_date,
                                'object': obj,
                                'filter': filt,
-                               'instr_mag_am0': instr_mag_am0,
-                               'zero_point': zero_point,
+                               'instr_mag_am0': instr_mag_am0.value,
+                               'instr_mag_unit': instr_mag_am0.unit.to_string(),
+                               'zero_point': zero_point.value,
+                               'zero_point_unit': zero_point.unit.to_string(),
                                'rayleigh_conversion': rayleigh_conversion.value,
                                'extinction_coef': extinction,
                                'min_am': min(airmasses),
