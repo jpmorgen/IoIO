@@ -7,8 +7,6 @@
 import gc
 import os
 import glob
-import pickle
-import csv
 import argparse
 from pathlib import Path
 
@@ -37,7 +35,7 @@ from specutils.manipulation import (extract_region,
 
 
 # bmp_cleanup can go away now that Photometry is an object
-from bigmultipipe import no_outfile, prune_pout
+from bigmultipipe import no_outfile, cached_pout, prune_pout
 
 from burnashev import Burnashev
 
@@ -50,7 +48,7 @@ from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
 from IoIO.calibration import Calibration
 from IoIO.photometry import Photometry, is_flux
 
-PHOTOMETRY_ROOT = os.path.join(IoIO_ROOT, 'StandardStar')
+STANDARD_STAR_ROOT = os.path.join(IoIO_ROOT, 'StandardStar')
 FILT_ROOT = '/data/IoIO/observing'
 # Small filters are 15 arcmin.  Could even fluf this out if I think I
 # haven't synced the telescope on some old observations
@@ -407,9 +405,6 @@ def standard_star_pipeline(directory,
                            calibration=None,
                            photometry=None,
                            num_processes=None,
-                           read_pout=False,
-                           write_pout=False,
-                           outdir_root=PHOTOMETRY_ROOT,
                            fits_fixed_ignore=False,
                            **kwargs): 
     """
@@ -420,29 +415,9 @@ def standard_star_pipeline(directory,
 
     glob_include : list of 
 
-    read_pout : str or bool
-        See write_pout.  If file read, simply return that without
-        running pipeline.  Default is ``False``
-
-    write_pout : str or bool
-        If str, full filename to write pickled pout to.  If True,
-        write to 'standard_star.pout' in `directory`.  Default is ``False``
-
     **kwargs passed on to Photometry and CorMultiPipe
 
     """
-
-    rd = reduced_dir(directory, outdir_root, create=False)
-    default_outname = os.path.join(rd, 'standard_star.pout')
-    if read_pout is True:
-        read_pout = default_outname
-    if isinstance(read_pout, str):
-        try:
-            pout = pickle.load(open(read_pout, "rb"))
-            return (directory, pout)
-        except:
-            log.debug(f'running code because file not found: {read_pout}')
-        
     if glob_include is None:
         glob_include = ['HD*']
     glob_include = assure_list(glob_include)
@@ -457,8 +432,10 @@ def standard_star_pipeline(directory,
         flist += glob.glob(os.path.join(directory, gi))
 
     if len(flist) == 0:
-        return (directory, [])
+        return []
 
+    # Pipeline is set with no_outfile so it won't produce any files,
+    # but outdir is set in calling code and passed as **kwarg just in case
     cmp = CorMultiPipeBase(auto=True,
                            calibration=calibration,
                            photometry=photometry,
@@ -469,16 +446,9 @@ def standard_star_pipeline(directory,
                            num_processes=num_processes,
                            process_expand_factor=15,
                            **kwargs)
-    # Pipeline is set with no_outfile so it won't produce any files,
-    # but get ready to write to reduced directory if necessary
-    pout = cmp.pipeline(flist, outdir=rd, overwrite=True)
+    pout = cmp.pipeline(flist, overwrite=True)
     pout, _ = prune_pout(pout, flist)
-    if write_pout is True:
-        write_pout = default_outname
-    if isinstance(write_pout, str):
-        os.makedirs(os.path.dirname(write_pout), exist_ok=True)
-        pickle.dump(pout, open(write_pout, "wb"))
-    return (directory, pout)
+    return pout
 
 def exposure_correct_plot(exposure_correct_data,
                           show=False,
@@ -539,18 +509,18 @@ def exposure_correct_plot(exposure_correct_data,
         plt.show()
     plt.close()
     
-
 def standard_star_directory(directory,
                             read_csvs=False,
                             write_csvs=True,
                             pout=None,
                             read_pout=True,
                             write_pout=True,
+                            create_outdir=True,
                             show=False,
                             photometry_time_window=1*u.min,
                             stability_factor=np.inf,
                             min_airmass_points=3,
-                            outdir_root=PHOTOMETRY_ROOT,
+                            outdir_root=STANDARD_STAR_ROOT,
                             **kwargs):
     """
     Parameters
@@ -568,8 +538,13 @@ def standard_star_directory(directory,
         tuple, the two input CSV filenames, in the order
         (extinction.csv, exposure_correction.csv)
 
-    read_pout, write_pout, see standard_star_process
-        Defaults here are ``True`` -- just reuse previous pipeline output
+    read_pout : str or bool
+        See write_pout.  If file read, simply return that without
+        running pipeline.  Default is ``True``
+
+    write_pout : str or bool
+        If str, full filename to write pickled pout to.  If True,
+        write to 'standard_star.pout' in `directory`.  Default is ``True``
 
     photometry_time_window: number 
 
@@ -616,13 +591,17 @@ def standard_star_directory(directory,
         except Exception as e:
             log.debug(f'running code because of exception {e}')
 
-    if pout is None:
-        directory, pout = standard_star_pipeline(directory,
-                                                 read_pout=read_pout,
-                                                 write_pout=write_pout,
-                                                 outdir_root=outdir_root,
-                                                 **kwargs)
-
+    # If we made it here, there is no csv
+    poutname = os.path.join(rd, 'standard_star.pout')
+    pout = pout or cached_pout(standard_star_pipeline,
+                               poutname=poutname,
+                               read_pout=read_pout,
+                               write_pout=write_pout,
+                               create_outdir=create_outdir,
+                               directory=directory,
+                               outdir=rd,
+                               **kwargs)
+        
     if len(pout) == 0:
         log.debug(f'no photometry measurements found in {directory}')
         return (directory, [], [])
@@ -1098,7 +1077,7 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
                        read_csvs=True,
                        show=False,
                        ccddata_cls=CorDataBase,
-                       outdir_root=PHOTOMETRY_ROOT,                       
+                       outdir_root=STANDARD_STAR_ROOT,                       
                        **kwargs):
     dirs_dates = get_dirs_dates(data_root, start=start, stop=stop)
     dirs, _ = zip(*dirs_dates)
@@ -1170,7 +1149,7 @@ if __name__ == '__main__':
         default=RAW_DATA_ROOT)
     parser.add_argument(
         '--outdir_root', help='photometry output root',
-        default=PHOTOMETRY_ROOT)
+        default=STANDARD_STAR_ROOT)
     parser.add_argument(
         '--calibration_start', help='calibration start date')
     parser.add_argument(
