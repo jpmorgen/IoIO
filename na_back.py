@@ -17,12 +17,16 @@ from astropy import units as u
 from astropy.time import Time
 from astropy.nddata import CCDData
 from astropy.stats import mad_std, biweight_location
+from astropy.coordinates import Angle, SkyCoord
+from astropy.coordinates import EarthLocation
+from astropy.coordinates import solar_system_ephemeris, get_body
 
 from ccdproc import ImageFileCollection
 
 from bigmultipipe import no_outfile
 from bigmultipipe import cached_pout, prune_pout
 
+# --> These need to be cleaned up
 from cormultipipe import RAW_DATA_ROOT, NA_OFF_ON_RATIO
 from cormultipipe import CorMultiPipe, FwRedCorData, Calibration
 from cormultipipe import reduced_dir, get_dirs_dates, valid_long_exposure
@@ -30,6 +34,7 @@ from cormultipipe import multi_row_selector, closest_in_time
 from cormultipipe import multi_filter_proc, combine_masks
 from cormultipipe import im_med_min_max, add_history
 
+from IoIO.utils import savefig_overwrite
 from photometry import Photometry
 
 # For Photometry -- number of boxes for background calculation
@@ -78,11 +83,40 @@ def na_back_process(data,
     # moving.  This uses the existing bias light/dark patch routine to
     # get uncontaminated part --> consider making this smarter
     best_back, _ = im_med_min_max(background)
-    
 
-    date_obs = ccd.meta['DATE-OBS']
+    # Note that we are using ccd, which at this point is the off-band
+    # image.  But the on and off metadata for these quantities should
+    # the same for both
+
+    # Put time and sun angle into bmp_meta
+    date_obs = ccd.meta.get('DATE-AVG') or ccd.meta.get('DATE-OBS')
     just_date, _ = date_obs.split('T')
+    objctra = ccd.meta['OBJCTRA']
+    objctdec = ccd.meta['OBJCTDEC']
     tm = Time(date_obs, format='fits')
+    lon = ccd.meta.get('LONG-OBS') or ccd.meta.get('SITELONG')
+    lat = ccd.meta.get('LAT-OBS') or ccd.meta.get('SITELAT')
+    alt = ccd.meta.get('ALT-OBS') or 1096.342 * u.m
+    loc = EarthLocation(lat=lat, lon=lon, height=alt)
+    with solar_system_ephemeris.set('builtin'):
+        sun = get_body('sun', tm, loc)
+    ra = Angle(objctra, unit=u.hour)
+    dec = Angle(objctdec, unit=u.deg)
+    # Beware the default frame of SkyCoord is ICRS, which is relative
+    # to the solar system Barycenter and jup [sun] is returned in GCRS,
+    # which is relative ot the earth's center-of-mass.  separation()
+    # is not commutative when the two different frames are used, when
+    # one includes a solar system object (e.g. Jupiter), since the 3D
+    # position of the point of reference and one of the objects is
+    # considered.  Specifying the GCRS frame of jup for our telescope
+    # RA and DEC SkyCoord does no harm for non-solar system objects
+    # (distance is too far to matter) but does set the observing time,
+    # which also does us no harm in this case, since it happens to be
+    # the actual observing time.
+    this_pointing = SkyCoord(frame=sun.frame, ra=ra, dec=dec)
+    sun_angle = this_pointing.separation(sun)
+
+
     # Mesosphere is above the stratosphere, where the density of the
     # atmosphere diminishes to very small values.  So all attenuation
     # has already happened by the time we get up to the mesospheric
@@ -95,11 +129,12 @@ def na_back_process(data,
              'jd': tm.jd,
              'raoff': raoff0,
              'decoff': decoff0,
-             'ra': data[0].meta.get('objctra'),
-             'dec': data[0].meta.get('objctdec'),
-             'alt': data[0].meta.get('objctalt'),
-             'az': data[0].meta.get('objctaz'),
-             'airmass': airmass}
+             'ra': objctra,
+             'dec': objctdec,
+             'alt': objctalt,
+             'az': objctaz,
+             'airmass': airmass,
+             'sun_angle': sun_angle.value}
     bmp_meta['Na_back'] = tmeta
 
     # In production, we don't plan to write the file, but prepare the
@@ -162,7 +197,7 @@ def na_back_pipeline(directory=None,
                                 n_back_boxes=n_back_boxes,
                                 **kwargs)
         
-    # Eventually put  back in
+    # Eventually put back in
     cmp = CorMultiPipe(
         auto=True,
         calibration=calibration,
@@ -280,7 +315,7 @@ def na_back_directory(directory,
     if write_plot is True:
         write_plot = os.path.join(rd, 'Na_back.png')
     if isinstance(write_plot, str):
-        plt.savefig(write_plot, transparent=True)
+        savefig_overwrite(write_plot, transparent=True)
     if show:
         plt.show()
     plt.close()

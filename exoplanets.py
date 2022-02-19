@@ -8,10 +8,11 @@ from astropy import log, time, coordinates as coord, units as u
 
 from ccdmultipipe import as_single
 
-from cormultipipe import (RAW_DATA_ROOT,
-                          get_dirs_dates, reduced_dir,
-                          Calibration, OffCorMultiPipe, 
-                          nd_filter_mask, mask_nonlin_sat)
+from IoIO.utils import reduced_dir, get_dirs_dates
+
+from IoIO.cormultipipe import (RAW_DATA_ROOT, CorMultiPipeBase,
+                               nd_filter_mask, mask_nonlin_sat)
+from IoIO.calibration import Calibration
 
 EXOPLANET_ROOT = '/data/exoplanets'
 GLOB_INCLUDE = ['TOI-*', 'WASP-*', 'GJ*']
@@ -117,12 +118,12 @@ if __name__ == "__main__":
 
     c = Calibration(reduce=True)
 
-    cmp = OffCorMultiPipe(auto=True, calibration=c,
-                          fits_fixed_ignore=True, outname_ext='.fits', 
-                          post_process_list=[barytime,
-                                             mask_nonlin_sat,
-                                             nd_filter_mask,
-                                             as_single])
+    cmp = CorMultiPipeBase(auto=True, calibration=c,
+                           fits_fixed_ignore=True, outname_ext='.fits', 
+                           post_process_list=[barytime,
+                                              mask_nonlin_sat,
+                                              nd_filter_mask,
+                                              as_single])
 
     for d in dirs:
         flist = []

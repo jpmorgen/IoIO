@@ -34,7 +34,8 @@ from bigmultipipe import WorkerWithKwargs, NestablePool
 from bigmultipipe import num_can_process, prune_pout
 
 import IoIO.sx694 as sx694
-from IoIO.utils import assure_list, get_dirs_dates, add_history
+from IoIO.utils import (assure_list, get_dirs_dates, add_history,
+                        savefig_overwrite)
 from IoIO.cordata_base import CorDataBase, CorDataNDparams
 from IoIO.cor_process import get_filt_name
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
@@ -459,7 +460,7 @@ def bias_combine_one_fdict(fdict,
     os.makedirs(outdir, exist_ok=True)
     outbase = os.path.join(outdir, this_dateb + '_ccdT_' + this_ccdt)
     out_fname = outbase + '_bias_combined.fits'
-    plt.savefig((outbase + '_bias_vs_time.png'), transparent=True)
+    savefig_overwrite((outbase + '_bias_vs_time.png'), transparent=True)
     if show:
         plt.show()
     plt.close()
@@ -546,7 +547,7 @@ def bias_combine_one_fdict(fdict,
                       filternorm=0, interpolation='none',
                       vmin=med-std, vmax=med+std)
     plt.title('CCDT = {} C on {} (electrons)'.format(this_ccdt, this_dateb))
-    plt.savefig((outbase + '_bias_combined.png'), transparent=True)
+    savefig_overwrite((outbase + '_bias_combined.png'), transparent=True)
     if show:
         plt.show()
     plt.close()

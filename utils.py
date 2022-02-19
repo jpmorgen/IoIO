@@ -3,7 +3,14 @@
 import inspect
 import os
 import datetime
+from pathlib import Path
 
+import csv
+
+import numpy as np
+from numpy.polynomial import Polynomial
+
+from astropy import log
 import matplotlib.pyplot as plt
 
 from astropy.time import Time
@@ -35,6 +42,11 @@ def simple_show(im, **kwargs):
               **kwargs)
     ax.format_coord = CCDImageFormatter(im.data)
     plt.show()
+
+def savefig_overwrite(fname, **kwargs):
+    if os.path.exists(fname):
+        os.remove(fname)
+    plt.savefig(fname, **kwargs)
 
 def assure_list(x):
     """Assures x is type `list`"""
@@ -357,3 +369,170 @@ def add_history(header, text='', caller=1):
     header['HISTORY'] = towrite
     return
 
+def cached_csv(dict_list_code,
+               csvnames=None,
+               read_csvs=False,
+               write_csvs=False,
+               create_outdir=False,
+               newline='',
+               quoting=csv.QUOTE_NONNUMERIC,
+               **kwargs):
+    """Write/read list(s) of dict to csv file(s)
+
+    Parameters
+    ----------
+    dict_list_code : function
+        Function that generates list(s) of dict(s)  if `read_csvs`
+        is ``False`` or `poutname` cannot be read
+
+    csvnames : str or list of str
+        Filename(s) to be read/written.  There must be on filename per
+        list of dict returned by dict_list_code
+
+    read_csvs : bool
+        If `True` read csv(s) from `csvnames`
+        Default is `False`
+
+    write_pout : bool
+        If `True` write csv(s) to filename(s) listed in `csvnames`
+        Default is `False`
+
+    create_outdir : bool, optional
+        If ``True``, create any needed parent directories.
+        Does not raise an error if outdir already exists.
+        Default is ``False``
+
+    newline : str
+        Default is ''
+
+    quoting : int
+        csv quoting type
+
+    **kwargs : keyword arguments to pass to `dict_list_code`
+
+    Returns
+    -------
+    dict_lists : list of dict
+        List of dictionaries read from csv file(s), one list per
+        filename in csvnames
+
+    """
+    
+    single_dictlist = isinstance(csvnames, str)
+    if single_dictlist:
+        csvnames = [csvnames]
+
+    if read_csvs:
+        try:
+            dict_lists = []
+            for csvname in csvnames:
+                dict_list = []
+                with open(csvname, newline=newline) as csvfile:
+                    csvr = csv.DictReader(csvfile, quoting=quoting)
+                    for row in csvr:
+                        dict_list.append(row)
+                dict_lists.append(dict_list)
+            if single_dictlist:
+                dict_lists = dict_lists[0]
+            return dict_lists
+        except Exception as e:
+            log.debug(f'Running code because received exception {e}')
+            pass
+
+    # If we made it here, we need to generate our list(s) of dicts
+    dict_lists = dict_list_code(**kwargs)
+
+    if write_csvs:
+        if single_dictlist:
+            dict_lists = [dict_lists]
+        for csvname, dict_list in zip(csvnames, dict_lists):
+            if create_outdir:
+                os.makedirs(os.path.dirname(csvname), exist_ok=True)
+            if len(dict_list) == 0:
+                # Signal we have been here and found nothing
+                Path(csvname).touch()
+            else:
+                fieldnames = list(dict_list[0].keys())
+                with open(csvname, 'w', newline=newline) as csvfile:
+                    csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
+                                           quoting=quoting)
+                    csvdw.writeheader()
+                    for d in dict_list:
+                        csvdw.writerow(d)
+
+    return dict_lists
+
+def iter_polyfit(x, y, poly_class=Polynomial, deg=1, max_resid=None,
+                 **kwargs):
+    """Performs least squares fit iteratively to discard bad points
+
+    If you actually know the statistical weights on the points,
+    just use poly_class.fit directly.
+
+    Parameters
+    ----------
+    x, y : array-like
+        points to be fit
+
+    poly_class : numpy.polynomial.polynomial series
+        Default: `~numpy.polynomial.polynomial.Polynomial`
+
+    deg : int
+       Degree of poly_class
+       Default is 1
+
+    max_resid : float or None
+        Points falling > max_resid from fit at any time are discarded.
+        If `None`, ignored
+        Default is `None`
+
+    **kwargs passed to poly_class.fit
+
+    returns : poly
+       Best fit `~numpy.polynomial.polynomial.Polynomial`
+
+    """
+    x = np.asarray(x)
+    y = np.asarray(y)
+    # Let polyfit report errors in x and y
+    poly = poly_class.fit(x, y, deg=deg, **kwargs)
+    # We are done if we have just two points
+    if len(x) == deg + 1:
+        return poly
+    
+    # Our first fit may be significantly pulled off by bad
+    # point(s), particularly if the number of points is small.
+    # Construct a repeat until loop the Python way with
+    # while... break to iterate to squeeze bad points out with
+    # low weights
+    last_redchi2 = None
+    iterations = 1
+    while True:
+        # Calculate weights roughly based on chi**2, but not going
+        # to infinity
+        yfit = poly(x)
+        resid = (y - yfit)
+        if resid.all == 0:
+            break
+        # Add 1 to avoid divide by zero error
+        resid2 = resid**2 + 1
+        # Use the residual as the variance + do the algebra
+        redchi2 = np.sum(1/(resid2))
+        # Converge to a reasonable epsilon
+        if last_redchi2 and last_redchi2 - redchi2 < np.finfo(float).eps*10:
+            break
+        poly = poly_class.fit(x, y, deg=deg, w=1/resid2, **kwargs)
+        last_redchi2 = redchi2
+        iterations += 1
+
+    if max_resid is not None:
+        # The next level of cleanliness is to exclude any points above
+        # max_resid from the fit.  But don't over-specify if too many
+        # points are thrown out
+        goodc = np.flatnonzero(np.abs(resid) < max_resid)
+        if len(goodc) >= deg + 1:
+            poly = iter_polyfit(x[goodc], y[goodc],
+                                poly_class=Polynomial,
+                                deg=deg, max_resid=None,
+                                **kwargs)
+    return poly

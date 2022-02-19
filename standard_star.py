@@ -8,10 +8,8 @@ import gc
 import os
 import glob
 import argparse
-from pathlib import Path
 
 import numpy as np
-from numpy.polynomial import Polynomial
 
 #from scipy.interpolate import interp1d
 
@@ -30,6 +28,7 @@ from astropy.modeling import models, fitting
 from astropy.visualization import quantity_support
 
 from specutils import Spectrum1D, SpectralRegion
+from specutils.analysis import line_flux
 from specutils.manipulation import (extract_region,
                                     LinearInterpolatedResampler)
 
@@ -39,8 +38,11 @@ from bigmultipipe import no_outfile, cached_pout, prune_pout
 
 from burnashev import Burnashev
 
+from precisionguide.utils import iter_linfit
+
 import IoIO.sx694 as sx694
-from IoIO.utils import assure_list, reduced_dir, get_dirs_dates
+from IoIO.utils import (assure_list, reduced_dir, get_dirs_dates,
+                        cached_csv, iter_polyfit, savefig_overwrite)
 from IoIO.cordata_base import CorDataBase
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                CorMultiPipeBase,
@@ -386,7 +388,7 @@ def standard_star_process(ccd,
              'odetflux_err': odetflux_err,
              # exptime will always be in s, but detflux may be in
              # photons or electrons or whatever
-             'detflux_units': detflux.unit.to_string(),
+             'detflux_unit': detflux.unit.to_string(),
              'xcentroid': xcentrd,
              'ycentroid': ycentrd,
              'max_frac_nonlin': max_frac_nonlin.value,
@@ -504,23 +506,21 @@ def exposure_correct_plot(exposure_correct_data,
     ax.set_ylim([0, 5])
     plt.gcf().autofmt_xdate()  # orient date labels at a slant
     if outname is not None:
-        plt.savefig(outname, transparent=True)
+        savefig_overwrite(outname, transparent=True)
     if show:
         plt.show()
     plt.close()
     
 def standard_star_directory(directory,
-                            read_csvs=False,
-                            write_csvs=True,
                             pout=None,
                             read_pout=True,
                             write_pout=True,
+                            outdir=None,
                             create_outdir=True,
                             show=False,
                             photometry_time_window=1*u.min,
                             stability_factor=np.inf,
                             min_airmass_points=3,
-                            outdir_root=STANDARD_STAR_ROOT,
                             **kwargs):
     """
     Parameters
@@ -528,15 +528,16 @@ def standard_star_directory(directory,
     directory : str
         Directory to process
 
+    outdir : str
+        Directory in which to write output files
+
+    create_outdir : bool
+        Default is ``True``
+
     pout : list 
         Output of previous pipeline run if available as a variable.
         Use `read_pout` keyword of underlying
         :func:`standard_star_pipeline` to read previous run off of disk
-
-    read_csvs : bool
-        If True and output CSVs exist, don't do calculations.  If
-        tuple, the two input CSV filenames, in the order
-        (extinction.csv, exposure_correction.csv)
 
     read_pout : str or bool
         See write_pout.  If file read, simply return that without
@@ -554,70 +555,27 @@ def standard_star_directory(directory,
     stability_factor : number
         Higher number accepts more data (see code)
 
+    returns: [extinction_data, exposure_correct_data]
+        Where extinction_data and exposure_correct_data are lists of type dict
     """
-    rd = reduced_dir(directory, outdir_root, create=False)
-    default_extinction_outname = os.path.join(rd, 'extinction.csv')
-    default_exposure_correction_outname = \
-        os.path.join(rd, 'exposure_correction.csv')
-    if read_csvs is True:
-        read_csvs = (default_extinction_outname,
-                     default_exposure_correction_outname)
-    if isinstance(read_csvs, tuple):
-        try:
-            extinction_outname = read_csvs[0]
-            exposure_correct_outname = read_csvs[1]
-            extinction_data = []
-            exposure_correct_data = []
-            # The getsize calls allows 0-size files to just pass
-            # through empty lists, so we don't have to re-run code to
-            # find we have no results
-            if os.path.getsize(extinction_outname) > 0:
-                with open(extinction_outname, newline='') as csvfile:
-                    csvr = csv.DictReader(csvfile, quoting=csv.QUOTE_NONNUMERIC)
-                    for row in csvr:
-                        extinction_data.append(row)
-            if os.path.getsize(exposure_correct_outname) > 0:
-                with open(exposure_correct_outname, newline='') as csvfile:
-                    csvr = csv.DictReader(csvfile, quoting=csv.QUOTE_NONNUMERIC)
-                    for row in csvr:
-                        exposure_correct_data.append(row)
-                if show:
-                    # extinction plot is too complicated to extract at
-                    # the moment
-                    exposure_correct_plot(exposure_correct_data,
-                                          show=show)
-            log.debug(f'returning csvs from {directory}')
-            return (directory, extinction_data, exposure_correct_data)
-        except Exception as e:
-            log.debug(f'running code because of exception {e}')
-
-    # If we made it here, there is no csv
-    poutname = os.path.join(rd, 'standard_star.pout')
+    poutname = os.path.join(outdir, 'standard_star.pout')
     pout = pout or cached_pout(standard_star_pipeline,
                                poutname=poutname,
                                read_pout=read_pout,
                                write_pout=write_pout,
-                               create_outdir=create_outdir,
                                directory=directory,
-                               outdir=rd,
+                               outdir=outdir,
+                               create_outdir=create_outdir,
                                **kwargs)
         
     if len(pout) == 0:
         log.debug(f'no photometry measurements found in {directory}')
-        return (directory, [], [])
+        return [[], []]
 
     _ , pipe_meta = zip(*pout)
     standard_star_list = [pm['standard_star'] for pm in pipe_meta]
     df = pd.DataFrame(standard_star_list)
     just_date = df['date'].iloc[0]
-
-    if write_csvs is True:
-        write_csvs = (default_extinction_outname,
-                      default_exposure_correction_outname)
-    if isinstance(write_csvs, tuple):
-        extinction_outname = write_csvs[0]
-        exposure_correct_outname = write_csvs[1]
-        os.makedirs(os.path.dirname(extinction_outname), exist_ok=True)        
 
     # Add Vega onto our objects.  Will take it off, below
     objects = list(set(df['object']))
@@ -655,12 +613,9 @@ def standard_star_directory(directory,
                                    'filt_mag': filt_mag})
     pd_vega = pd.DataFrame(vega_standard_list, index=filters)
 
-    
     # Collect extinction and exposure correction data  into arrays of dicts
     extinction_data = []
     exposure_correct_data = []
-    # Keep units straight
-    star_flux_unit = u.ph/u.cm**2/u.s
 
     # --> This assumes our OBJECT assignments are correct and the
     # telescope was really pointed at the named object
@@ -680,8 +635,8 @@ def standard_star_directory(directory,
         row1 = objdf.index[0]
         ra = objdf['objctra'][row1]
         dec = objdf['objctdec'][row1]
-        detflux_units = objdf['detflux_units'][row1]
-        detflux_units = u.Unit(detflux_units)
+        detflux_unit = objdf['detflux_unit'][row1]
+        detflux_unit = u.Unit(detflux_unit)
         obj_coords = SkyCoord(ra, dec)
         simbad_coords = SkyCoord(simbad_entry['RA'],
                                  simbad_entry['DEC'],
@@ -716,8 +671,8 @@ def standard_star_directory(directory,
         max_airmass = np.amax(objdf['airmass'])
         min_tm = np.amin(objdf['date_obs'])
         max_tm = np.amax(objdf['date_obs'])
-        min_mjd = min_tm.mjd
-        max_mjd = max_tm.mjd
+        min_plot_date = min_tm.plot_date
+        max_plot_date = max_tm.plot_date
         min_date = min_tm.value
         max_date = max_tm.value
         _, min_time = min_date.split('T')
@@ -725,7 +680,7 @@ def standard_star_directory(directory,
         min_time, _ = min_time.split('.')
         max_time, _ = max_time.split('.')
         f = plt.figure(figsize=[8.5, 11])
-        plt.suptitle(f"{obj} {just_date} {min_time} -- {max_time} instrument mags")
+        plt.suptitle(f"{obj} {just_date} {min_time} -- {max_time} Extinction")
         valid_extinction_data = False
         for ifilt, filt in enumerate(filters):
             # Collect fluxes and airmasses measured throughout the night
@@ -846,7 +801,7 @@ def standard_star_directory(directory,
 
                 airmasses.append(np.mean(tdf['airmass']))
                 best_fluxes.append(best_flux)
-                instr_mag = u.Magnitude(best_flux*detflux_units)
+                instr_mag = u.Magnitude(best_flux*detflux_unit)
                 instr_mag_unit = instr_mag.unit
                 instr_mags.append(instr_mag.value)
 
@@ -910,11 +865,9 @@ def standard_star_directory(directory,
 
             valid_extinction_data = True
             # Fit a line to airmass vs. instr_mags
-            # --> This might be a good place for iter_linfit?
-            # In any case, throwing out bad points would be good
             # --> I will eventually want to extract uncertainties for
             # the fit quantities
-            poly = Polynomial.fit(airmasses, instr_mags, deg=1)
+            poly = iter_polyfit(airmasses, instr_mags, deg=1, max_resid=1)
             xfit, yfit = poly.linspace()
             plt.plot(xfit, yfit)
 
@@ -926,14 +879,14 @@ def standard_star_directory(directory,
             vega_flux = vega_flux[0]
             vega_mag0 = pd_vega.loc[filt_name:filt_name,'filt_mag']
             vega_mag0 = vega_mag0.values[0]
-            vega_mag0 = vega_mag0*u.mag(star_flux_unit)
-            vega_flux_mag = u.Magnitude(vega_flux*star_flux_unit)
+            vega_mag0 = vega_mag0*u.mag(filt_flux.unit)
+            vega_flux_mag = u.Magnitude(vega_flux*filt_flux.unit)
             if (simbad_match
                 and flux_col in simbad_entry.colnames
                 and not np.ma.is_masked(simbad_entry[flux_col])):
                 # Prefer Simbad-listed mags for UBVRI
                 star_mag = simbad_entry[flux_col]
-                star_mag *= u.mag(star_flux_unit)
+                star_mag *= u.mag(filt_flux.unit)
                 # Convert to physical flux using algebra and the
                 # forward derivation below
                 star_flux_mag = star_mag + (vega_flux_mag - vega_mag0)
@@ -948,8 +901,8 @@ def standard_star_directory(directory,
                 star_flux_mag = u.Magnitude(star_flux)
                 star_mag = star_flux_mag - (vega_flux_mag - vega_mag0)
             else:
-                star_mag = np.NAN*u.mag(star_flux_unit)
-                star_flux = np.NAN*star_flux_unit
+                star_mag = np.NAN*u.mag(filt_flux.unit)
+                star_flux = np.NAN*filt_flux.unit
 
             # http://sirius.bu.edu/planetary/obstools/starflux/starcalib/starcalib.htm                
             star_sb = 4*np.pi * star_flux / pix_solid_angle
@@ -981,22 +934,25 @@ def standard_star_directory(directory,
 
             # --> Min and Max JD or MJD would probably be better
             # --> Needs uncertainties
-            extinction_dict = {'date': just_date,
-                               'object': obj,
-                               'filter': filt,
-                               'instr_mag_am0': instr_mag_am0.value,
-                               'instr_mag_unit': instr_mag_am0.unit.to_string(),
-                               'zero_point': zero_point.value,
-                               'zero_point_unit': zero_point.unit.to_string(),
-                               'rayleigh_conversion': rayleigh_conversion.value,
-                               'extinction_coef': extinction,
-                               'min_am': min(airmasses),
-                               'max_am': max(airmasses),
-                               'num_airmass_points ': num_airmass_points,
-                               'red_chisq': red_chisq,
-                               'max_frac_nonlin': max_frac_nonlin,
-                               'min_mjd': min_mjd,
-                               'max_mjd': max_mjd}
+            extinction_dict = \
+                {'date': just_date,
+                 'object': obj,
+                 'filter': filt,
+                 'instr_mag_am0': instr_mag_am0.value,
+                 'instr_mag_unit': instr_mag_am0.unit.to_string(),
+                 'zero_point': zero_point.value,
+                 'zero_point_unit': zero_point.unit.to_string(),
+                 'rayleigh_conversion': rayleigh_conversion.value,
+                 'rayleigh_conversion_unit': 
+                 rayleigh_conversion.unit.to_string(), 
+                 'extinction_coef': extinction,
+                 'min_am': min(airmasses),
+                 'max_am': max(airmasses),
+                 'num_airmass_points ': num_airmass_points,
+                 'red_chisq': red_chisq,
+                 'max_frac_nonlin': max_frac_nonlin,
+                 'min_plot_date': min_plot_date,
+                 'max_plot_date': max_plot_date}
 
             extinction_data.append(extinction_dict)
 
@@ -1011,44 +967,19 @@ def standard_star_directory(directory,
                        bottom=True, top=True, left=True, right=True)
         plt.xlabel('airmass')
         fname = f"{just_date}_{obj}_extinction.png"
-        outname = os.path.join(rd, fname)
-        os.makedirs(rd, exist_ok=True)
-        plt.savefig(outname, transparent=True)
+        outname = os.path.join(outdir, fname)
+        if create_outdir:
+            os.makedirs(outdir, exist_ok=True)
+        savefig_overwrite(outname, transparent=True)
         if show:
             plt.show()
         plt.close()
 
-    if len(extinction_data) == 0:
-        log.warning(f'No good extinction measurements in {directory}')
-        # Signal that we were here and found nothing
-        Path(extinction_outname).touch()
-    else:
-        # Write our extinction CSV
-        fieldnames = list(extinction_dict.keys())
-        with open(extinction_outname, 'w', newline='') as csvfile:
-            csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
-                                   quoting=csv.QUOTE_NONNUMERIC)
-            csvdw.writeheader()
-            for ed in extinction_data:
-                csvdw.writerow(ed)
-
-    if len(exposure_correct_data) == 0:
-        log.warning(f'No exposure correction measurements in {directory}')
-        # Signal that we were here and found nothing
-        Path(exposure_correct_outname).touch()
-    else:
-        outname = os.path.join(rd, "exposure_correction.png")
+    if len(exposure_correct_data) > 0:
+        outname = os.path.join(outdir, "exposure_correction.png")
         exposure_correct_plot(exposure_correct_data,
                               show=show,
                               outname=outname)
-        # Write our exposure correction CSV file
-        with open(exposure_correct_outname, 'w', newline='') as csvfile:
-            fieldnames = list(exposure_correct_data[0].keys())
-            csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
-                                   quoting=csv.QUOTE_NONNUMERIC)
-            csvdw.writeheader()
-            for ecd in exposure_correct_data:
-                csvdw.writerow(ecd)
 
     # Running into problems after several directories have run, but it
     # is not a specific file, since they all run OK when re-run.
@@ -1067,7 +998,44 @@ def standard_star_directory(directory,
     # didn't find any excintqion data.  Well, that didn't take long to fail!
     gc.collect()
 
-    return (directory, extinction_data, exposure_correct_data)
+    return [extinction_data, exposure_correct_data]
+
+def filter_stripchart(df,
+                      title=None,
+                      column=None):
+    plot_date_range = [np.min(df['min_plot_date']),
+                       np.max(df['max_plot_date'])]
+    filters = list(set(df['filter']))
+    filters.sort()
+    filters.reverse()
+    nfilt = len(filters)
+    f = plt.figure(figsize=[8.5, 11])
+    plt.suptitle(f"{title}")
+    print(title)
+    for ifilt, filt in enumerate(filters):
+        filtdf = df[df['filter'] == filt]
+        to_plot = filtdf[column]
+        biweight_loc = biweight_location(to_plot, ignore_nan=True)
+        mads = mad_std(to_plot, ignore_nan=True)
+        col_unit = df.iloc[0][f'{column}_unit']
+        print(f'{filt} {biweight_loc:.4g} +/- {mads:.2g} {col_unit}')
+        ax = plt.subplot(nfilt, 1, ifilt+1)
+        ax.tick_params(which='both', direction='inout',
+                       bottom=True, top=True, left=True, right=True)
+        plt.plot_date(filtdf['min_plot_date'], filtdf[column], 'k.')
+        plt.plot_date(plot_date_range, [biweight_loc + mads]*2, 'k--')
+        plt.plot_date(plot_date_range, [biweight_loc]*2, 'r-')
+        plt.plot_date(plot_date_range, [biweight_loc - mads]*2, 'k--')
+        
+        ax.set_xlim(plot_date_range)
+        ax.set_ylim([biweight_loc - 5*mads,
+                     biweight_loc + 5*mads])
+        plt.ylabel(filt)
+        plt.text(0.5, 0.8, 
+                 f' {biweight_loc:.4g} +/- {mads:.2g}',
+                 ha='center', va='bottom', transform=ax.transAxes)
+    plt.gcf().autofmt_xdate()
+    plt.show()
 
 def standard_star_tree(data_root=RAW_DATA_ROOT,
                        start=None,
@@ -1075,6 +1043,8 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
                        calibration=None,
                        photometry=None,
                        read_csvs=True,
+                       write_csvs=True,
+                       create_outdir=True,                       
                        show=False,
                        ccddata_cls=CorDataBase,
                        outdir_root=STANDARD_STAR_ROOT,                       
@@ -1091,18 +1061,26 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
 
     extinction_data = []
     exposure_correct_data = []
-    for d in dirs:
-        _, extinct, expo = \
-            standard_star_directory(d,
-                                    calibration=calibration,
-                                    photometry=photometry,
-                                    read_csvs=read_csvs,
-                                    ccddata_cls=ccddata_cls,
-                                    outdir_root=outdir_root,
-                                    **kwargs)
+    for directory in dirs:
+        rd = reduced_dir(directory, outdir_root, create=False)
+        extinct_csv = os.path.join(rd, 'extinction.csv')
+        expo_cor_csv = os.path.join(rd, 'exposure_correction.csv')
+        csvnames = (extinct_csv, expo_cor_csv)
+        extinct, expo = cached_csv(standard_star_directory,
+                                   csvnames=csvnames,
+                                   read_csvs=read_csvs,
+                                   write_csvs=write_csvs,
+                                   outdir=rd,
+                                   create_outdir=create_outdir,
+                                   directory=directory,
+                                   calibration=calibration,
+                                   photometry=photometry,
+                                   ccddata_cls=ccddata_cls,
+                                   **kwargs)
         extinction_data.extend(extinct)
         exposure_correct_data.extend(expo)
 
+    # Create summary plots
     rd = reduced_dir(data_root, outdir_root, create=True)
     # This is fast enough so that I don't need to save the plots.
     # Easier to just run with show=True and manipilate the plot by hand
@@ -1120,7 +1098,18 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
                           outname=outname,
                           latency_change_dates=sx694.latency_change_dates,
                           show=show)
-    return dirs, extinction_data, exposure_correct_data
+
+    df = pd.DataFrame(extinction_data)
+    zero_point_unit = df.iloc[0]['zero_point_unit']
+    filter_stripchart(df,
+                      title=f'Vega zero point magnitiudes {zero_point_unit}',
+                      column='zero_point')
+    rayleigh_conversion_unit = df.iloc[0]['rayleigh_conversion_unit']
+    filter_stripchart(df,
+                      title=f'Rayleigh Conversion {rayleigh_conversion_unit}',
+                      column='rayleigh_conversion')
+
+    return [extinction_data, exposure_correct_data]
 
 def standard_star_cmd(args):
     calibration_start = args.calibration_start
@@ -1620,3 +1609,70 @@ if __name__ == '__main__':
 ##        #break
 ##    break
 
+### log.setLevel('DEBUG')
+### 
+### #extinction_data, exposure_correct_data = standard_star_tree(read_csvs=False,
+### #                                                            start='2019-06-02')
+### #extinction_data, exposure_correct_data = standard_star_tree(read_csvs=False,
+### #                                                            start='2019-07-03',
+### #                                                            stop='2019-07-03')
+### #extinction_data, exposure_correct_data = standard_star_tree(read_csvs=False)
+### extinction_data, exposure_correct_data = standard_star_tree()
+### df = pd.DataFrame(extinction_data)
+### plot_date_range = [np.min(df['min_plot_date']),
+###                    np.max(df['max_plot_date'])]
+### filters = list(set(df['filter']))
+### filters.sort()
+### filters.reverse()
+### nfilt = len(filters)
+### 
+### f = plt.figure(figsize=[8.5, 11])
+### plt.suptitle(f"Vega zero point magnitiudes {df.iloc[0]['zero_point_unit']}")
+### for ifilt, filt in enumerate(filters):
+###     filtdf = df[df['filter'] == filt]
+###     zero_points = filtdf['zero_point']
+###     zp_biweight_loc = biweight_location(zero_points, ignore_nan=True)
+###     zp_mad_std = mad_std(zero_points, ignore_nan=True)
+###     ax = plt.subplot(nfilt, 1, ifilt+1)
+###     ax.tick_params(which='both', direction='inout',
+###                    bottom=True, top=True, left=True, right=True)
+###     plt.plot_date(filtdf['min_plot_date'], filtdf['zero_point'], 'k.')
+###     plt.plot_date(plot_date_range, [zp_biweight_loc + zp_mad_std]*2, 'k--')
+###     plt.plot_date(plot_date_range, [zp_biweight_loc]*2, 'r-')
+###     plt.plot_date(plot_date_range, [zp_biweight_loc - zp_mad_std]*2, 'k--')
+###     
+###     ax.set_xlim(plot_date_range)
+###     ax.set_ylim([zp_biweight_loc - 5*zp_mad_std,
+###                  zp_biweight_loc + 5*zp_mad_std])
+###     plt.ylabel(filt)
+###     plt.text(0.5, 0.8, 
+###              f' {zp_biweight_loc:.2f} +/- {zp_mad_std:.2f}',
+###              ha='center', va='bottom', transform=ax.transAxes)
+### plt.gcf().autofmt_xdate()
+### plt.show()
+### 
+### f = plt.figure(figsize=[8.5, 11])
+### plt.suptitle(f"Rayleigh Conversion {df.iloc[0]['zero_point_unit']}")
+### for ifilt, filt in enumerate(filters):
+###     filtdf = df[df['filter'] == filt]
+###     zero_points = filtdf['rayleigh_conversion']
+###     zp_biweight_loc = biweight_location(zero_points, ignore_nan=True)
+###     zp_mad_std = mad_std(zero_points, ignore_nan=True)
+###     ax = plt.subplot(nfilt, 1, ifilt+1)
+###     ax.tick_params(which='both', direction='inout',
+###                    bottom=True, top=True, left=True, right=True)
+###     plt.plot_date(filtdf['min_plot_date'], filtdf['rayleigh_conversion'], 'k.')
+###     plt.plot_date(plot_date_range, [zp_biweight_loc + zp_mad_std]*2, 'k--')
+###     plt.plot_date(plot_date_range, [zp_biweight_loc]*2, 'r-')
+###     plt.plot_date(plot_date_range, [zp_biweight_loc - zp_mad_std]*2, 'k--')
+###     
+###     ax.set_xlim(plot_date_range)
+###     ax.set_ylim([zp_biweight_loc - 5*zp_mad_std,
+###                  zp_biweight_loc + 5*zp_mad_std])
+###     plt.ylabel(filt)
+###     plt.text(0.5, 0.8, 
+###              f' {zp_biweight_loc:.2e} +/- {zp_mad_std:.2e}',
+###              ha='center', va='bottom', transform=ax.transAxes)
+### plt.gcf().autofmt_xdate()
+### plt.show()
+### 

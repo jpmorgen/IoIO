@@ -19,6 +19,7 @@ from ccdmultipipe import FbuCCDData
 from cormultipipe import (CorMultiPipe, Calibration, 
                           nd_filter_mask, mask_nonlin_sat, detflux)
 
+from IoIO.utils import savefig_overwrite
 from IoIO import CorObsData
 from ReduceCorObs import plate_scale
 
@@ -181,7 +182,7 @@ plt.axis('scaled')
 #cbar = plt.colorbar(orientation='horizontal', fraction=0.08)
 cbar = plt.colorbar(shrink=0.6)
 cbar.ax.set_xlabel(bsub.unit.to_string())
-plt.savefig(f'/data/Mercury/analysis/2020-05-27/IoIO_{just_date}.png', transparent=True)
+savefig_overwrite(f'/data/Mercury/analysis/2020-05-27/IoIO_{just_date}.png', transparent=True)
 plt.show()
 
 yaxis = (np.arange(nr) - 20*Rmpix) / Rmpix
@@ -200,7 +201,7 @@ p3 = np.sum(bsub[:, round((110+20)*Rmpix):round((150+20)*Rmpix)], 1)
 ax3.plot(p3/((150-110)*Rmpix), yaxis)
 ax3.set_ylim(-17, 17)
 ax3.set_xlim(100, 250)
-plt.savefig(f'/data/Mercury/analysis/2020-05-27/IoIO_{just_date}_cross-tail_profiles.png', transparent=True)
+savefig_overwrite(f'/data/Mercury/analysis/2020-05-27/IoIO_{just_date}_cross-tail_profiles.png', transparent=True)
 plt.show()
 
 subim_corners = np.asarray(((round(center[0]-2*Rmpix), round(center[1]-20*Rmpix)),
@@ -228,7 +229,7 @@ plt.xlabel('Rm')
 plt.ylabel('R')
 plt.xscale("log")
 plt.yscale("log")
-plt.savefig(f'/data/Mercury/analysis/2020-05-27/IoIO_{just_date}_profile.png', transparent=True)
+savefig_overwrite(f'/data/Mercury/analysis/2020-05-27/IoIO_{just_date}_profile.png', transparent=True)
 plt.show()
 
 
