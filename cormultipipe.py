@@ -5,6 +5,7 @@ pipeline using ccdmultipipe/bigmultipipe as its base
 
 import os
 import psutil
+import argparse
 
 import numpy as np
 
@@ -15,10 +16,11 @@ from astropy.time import Time
 
 from bigmultipipe import multi_proc, multi_logging
 
-from ccdmultipipe import CCDMultiPipe
+from ccdmultipipe import CCDMultiPipe, CCDArgparseHandler
 
 import IoIO.sx694 as sx694
-from IoIO.utils import assure_list, reduced_dir, get_dirs_dates, add_history
+from IoIO.utils import (assure_list, reduced_dir, get_dirs_dates,
+                        im_med_min_max, add_history)
 from IoIO.cordata_base import overscan_estimate, CorDataBase, CorDataNDparams
 from IoIO.cordata import CorData
 from IoIO.cor_process import cor_process
@@ -41,7 +43,7 @@ from IoIO.cor_process import cor_process
 # wait times are minimized.  Rather than try to milk the asymptote for
 # speed, just max out on physical processors to get the steepest gains
 # and leave the asymptote for other jobs
-MAX_NUM_PROCESSES = 0.8 * psutil.cpu_count(logical=False)
+MAX_NUM_PROCESSES = int(0.8 * psutil.cpu_count(logical=False))
 # Was 0.85 for 64Gb
 MAX_MEM_FRAC = 0.92
 
@@ -62,13 +64,6 @@ OUTNAME_APPEND = "_p"
 # that is designed to mask pixels inside the ND filter to make
 # centering of object more reliable
 ND_EDGE_EXPAND = 40
-
-# Mon Feb 14 15:31:31 2022 EST  jpmorgen@snipe
-# Keep up with periodic runs of flat_ratio.py
-NA_OFF_ON_RATIO = 4.75
-NA_OFF_ON_RATIO_ERR = 0.16
-SII_OFF_ON_RATIO = 4.88
-SII_OFF_ON_RATIO_ERR = 0.05
 
 ######### CorMultiPipe object
 
@@ -127,6 +122,13 @@ obj_center calculations by using CorDataBase as CCDData
                                   **kwargs)
                 for d in data]
 
+    def outname_create(self, *args,
+                       **kwargs):
+        """Fix inconsistent Na_on filenames"""
+        outname = super().outname_create(*args, **kwargs)
+        outname = outname.replace('Na-on', 'Na_on')
+        return outname
+
 class CorMultiPipeNDparams(CorMultiPipeBase):
     """Uses CorDataNDparams to ensure ND_params calculations locate the ND
     filter to high precision.  Requires a decent amount of skylight
@@ -141,13 +143,59 @@ class CorMultiPipe(CorMultiPipeNDparams):
     
     ccddata_cls = CorData
 
-class FixFnameCorMultipipe(CorMultiPipe):
-    def outname_create(self, *args,
-                       **kwargs):
-        outname = super().outname_create(*args, **kwargs)
-        outname = outname.replace('Na-on', 'Na_on')
-        return outname
+class CorArgparseHandler(CCDArgparseHandler):
+    """Adds basic argparse options relevant to cormultipipe system""" 
+    def add_log_level(self, 
+                      default='DEBUG',
+                      help=None,
+                      **kwargs):
+        option = 'log_level'
+        if help is None:
+            help = f'astropy.log level (default: {default})'
+        self.parser.add_argument('--' + option, 
+                            default=default, help=help, **kwargs)
 
+    def add_raw_data_root(self, 
+                          default=RAW_DATA_ROOT,
+                          help=None,
+                          **kwargs):
+        option = 'raw_data_root'
+        if help is None:
+            help = f'raw data root (default: {default})'
+        self.parser.add_argument('--' + option, 
+                            default=default, help=help, **kwargs)
+        
+    def add_read_csvs(self, 
+                      default=False,
+                      help=None,
+                      **kwargs):
+        option = 'read_csvs'
+        if help is None:
+            help = (f'Read CSV files')
+        self.parser.add_argument('--' + option,
+                                 action=argparse.BooleanOptionalAction,
+                                 default=default,
+                                 help=help, **kwargs)
+
+    def add_write_csvs(self, 
+                      default=False,
+                      help=None,
+                      **kwargs):
+        option = 'write_csvs'
+        if help is None:
+            help = (f'Write CSV files')
+        self.parser.add_argument('--' + option,
+                                 action=argparse.BooleanOptionalAction,
+                                 default=default,
+                                 help=help, **kwargs)
+
+    def add_all(self):
+        """Add options used in cmd"""
+        self.add_log_level()
+        self.add_fits_fixed_ignore(default=True)
+
+    def cmd(self, args):
+        log.setLevel(args.log_level)
 
 ######### CorMultiPipe prepossessing routines
 def full_frame(data,
@@ -175,22 +223,6 @@ def full_frame(data,
             return None
     return data
 
-def im_med_min_max(im):
-    """Returns median values of representative dark and light patches
-    of images recorded by the IoIO coronagraph"""
-    s = np.asarray(im.shape)
-    m = s/2 # Middle of CCD
-    q = s/4 # 1/4 point
-    m = m.astype(int)
-    q = q.astype(int)
-    # Note Y, X.  Use the left middle to avoid any first and last row
-    # issues in biases
-    dark_patch = im[m[0]-50:m[0]+50, 0:100]
-    light_patch = im[m[0]-50:m[0]+50, q[1]:q[1]+100]
-    mdp = np.median(dark_patch)
-    mlp = np.median(light_patch)
-    return (mdp, mlp)
-
 def light_image(im, light_tolerance=3, **kwargs):
     """CorMultiPipe pre-processing routine to reject light-contaminated bias & dark images
     """
@@ -203,7 +235,12 @@ def light_image(im, light_tolerance=3, **kwargs):
 ######### CorMultiPipe post-processing routines
 def add_raw_fname(ccd_in, in_name=None, **kwargs):
     ccd = ccd_in.copy()
-    ccd.meta['RAWFNAME'] = in_name
+    if isinstance(in_name, str):
+        ccd.meta['RAWFNAME'] = in_name
+    elif isinstance(in_name, list):
+        ccd.meta['RAWFNAME'] = in_name[0]
+    else:
+        raise ValueError(f'cannot convert to RAWFNAME in_name {in_name}')
     return ccd
 
 def mask_above_key(ccd_in, bmp_meta=None, key=None, margin=0.1, **kwargs):

@@ -4,7 +4,6 @@
 
 import os
 import re
-import time
 import psutil
 import datetime
 import glob
@@ -34,16 +33,16 @@ from bigmultipipe import WorkerWithKwargs, NestablePool
 from bigmultipipe import num_can_process, prune_pout
 
 import IoIO.sx694 as sx694
-from IoIO.utils import (assure_list, get_dirs_dates, add_history,
-                        savefig_overwrite)
+from IoIO.utils import (Lockfile, assure_list, get_dirs_dates, add_history,
+                        im_med_min_max, savefig_overwrite)
 from IoIO.cordata_base import CorDataBase, CorDataNDparams
 from IoIO.cor_process import get_filt_name
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
                                MAX_MEM_FRAC, COR_PROCESS_EXPAND_FACTOR,
-                               ND_EDGE_EXPAND,
-                               CorMultiPipeBase, CorMultiPipeNDparams,
-                               im_med_min_max, light_image, mask_above_key)
+                               ND_EDGE_EXPAND, CorMultiPipeBase,
+                               CorMultiPipeNDparams, CorArgparseHandler,
+                               light_image, mask_above_key)
 
 
 # These are MaxIm and ACP day-level raw data directories, respectively
@@ -92,10 +91,29 @@ NUM_DARK_EXPTIMES = 8
 NUM_FILTS = 9
 NUM_CALIBRATION_FILES = 11
 
+# Date after which flats were taken in a uniform manner (~60 degrees
+# from Sun, ~2 hr after sunrise), leading to more stable results
+STABLE_FLAT_DATE = '2020-01-01'
+
+# Tue Mar 01 07:59:13 2022 EST  jpmorgen@snipe
+# Value on the date above for sanity checks
+FLAT_RATIO_CHECK_LIST = \
+    [{'band': 'Na',
+      'biweight_ratio': 4.752328783054392,
+      'mad_std_ratio': 0.1590846222357597,
+      'med_ratio': 4.716620841458621,
+      'std_ratio': 0.15049131587890988},
+     {'band': 'SII',
+      'biweight_ratio': 4.879239156541213,
+      'mad_std_ratio': 0.04906457267060454,
+      'med_ratio': 4.879915705039635,
+      'std_ratio': 0.06540676680077083}]
+
 def jd_meta(ccd, bmp_meta=None, **kwargs):
     """CorMultiPipe post-processing routine to return JD
     """
-    tm = Time(ccd.meta['DATE-OBS'], format='fits')
+    date_obs = ccd.meta.get('DATE-AVG') or ccd.meta.get('DATE-OBS')
+    tm = Time(date_obs, format='fits')
     if bmp_meta is not None:
         bmp_meta['jd'] = tm.jd
     return ccd
@@ -1135,6 +1153,28 @@ def flat_combine(directory=None,
         with NestablePool(processes=our_num_processes) as p:
             p.map(wwk.worker, fdict_list)
 
+def flist_to_dict(flist):
+    """Flat-specific dictionary creator"""
+    dlist = []
+    for f in flist:
+        bname = os.path.basename(f)
+        s = bname.split('_')
+        d = {'fname': f, 'date': s[0], 'band': s[1], 'onoff': s[2]}
+        dlist.append(d)
+    return dlist
+    
+def flat_flux(fname_or_ccd):
+    # getheader is much faster than CCDData.read or [Red]CordData.read
+    # because these classmethods read the whole file
+    if isinstance(fname_or_ccd, str):
+        hdr = getheader(fname_or_ccd)
+    else:
+        hdr = ccd.meta
+    maxval = hdr['FLATDIV']
+    exptime = hdr['EXPTIME']
+    flux = maxval/exptime
+    return flux
+
 ######### Calibration object
 
 def dir_has_calibration(directory, glob_include, subdirs=None):
@@ -1156,36 +1196,6 @@ in glob_include.  Optionally checks subdirs"""
         if len(flist) > 0:
             return True
     return False
-
-class Lockfile():
-    def __init__(self,
-                 fname=None,
-                 check_every=10):
-        assert fname is not None
-        self._fname = fname
-        self.check_every = check_every
-
-    @property
-    def is_set(self):
-        return os.path.isfile(self._fname)
-
-    # --> could add a timeout and a user-specified optional message
-    def wait(self):
-        if not self.is_set:
-            return
-        while self.is_set:
-            with open(self._fname, "r") as f:
-                log.error(f'lockfile {self._fname} detected for {f.read()}')
-            time.sleep(self.check_every)
-        log.error(f'(error cleared) lockfile {self._fname} removed')
-
-    def create(self):
-        self.wait()
-        with open(self._fname, "w") as f:
-            f.write('PID: ' + str(os.getpid()))
-
-    def clear(self):
-        os.remove(self._fname)
 
 class Calibration():
     """Class for conducting CCD calibrations"""
@@ -1218,6 +1228,7 @@ class Calibration():
                  flat_glob=FLAT_GLOB,
                  flat_cut=FLAT_CUT,
                  nd_edge_expand=ND_EDGE_EXPAND,
+                 stable_flat_date=STABLE_FLAT_DATE,
                  lockfile=LOCKFILE):
         self._raw_data_root = raw_data_root
         self._calibration_root = calibration_root
@@ -1228,6 +1239,7 @@ class Calibration():
         self._bias_table = None
         self._dark_table = None
         self._flat_table = None
+        self._flat_ratio_list = None
         # gain_correct is set only in the biases and propagated
         # through the rest of the pipeline in cor_process
         self._gain_correct = gain_correct
@@ -1237,6 +1249,7 @@ class Calibration():
         self._lockfile = lockfile
         self.flat_cut = flat_cut
         self.nd_edge_expand = nd_edge_expand
+        self.stable_flat_date = stable_flat_date
         self.num_processes = num_processes
         self.mem_frac = mem_frac
         self.num_ccdts = num_ccdts
@@ -1251,14 +1264,16 @@ class Calibration():
         if start_date is None:
             self._start_date = datetime.datetime(1,1,1)
         else:
-            self._start_date = datetime.datetime.strptime(start_date,
+            self._start_date = datetime.datetime.strptime(calibration_start,
                                                           "%Y-%m-%d")
         if stop_date is None:
             # Make stop time tomorrow in case we are analyzing on the
             # UT boundary
-            self._stop_date = datetime.datetime.today() + datetime.timedelta(days=1)
+            self._stop_date = (datetime.datetime.today()
+                               + datetime.timedelta(days=1))
         else:
-            self._stop_date = datetime.datetime.strptime(stop_date, "%Y-%m-%d")
+            self._stop_date = datetime.datetime.strptime(calibration_stop,
+                                                         "%Y-%m-%d")
         assert self._start_date <= self._stop_date
         # These need to be on a per-instantiation basis, since they
         # depend on our particular start-stop range.  These are also
@@ -1756,42 +1771,191 @@ class Calibration():
         best_filt_date_idx = good_filt_idx[best_filt_date_idx]
         return self._flat_table['fnames'][best_filt_date_idx]
 
-##########################
-# Command line functions
-##########################
-def calibrate_cmd(args):
-    c = Calibration(raw_data_root=args.raw_data_root,
-                    calibration_root=args.calibration_root,
-                    start_date=args.start,
-                    stop_date=args.stop,
-                    reduce=True,
-                    num_processes=args.num_processes)
+    @property
+    def flat_ratio_list(self):
+        if self._flat_ratio_list is not None:
+            return self._flat_ratio_list
+        
+        on_list = glob.glob(os.path.join(self._calibration_root,
+                                         '*on_flat.fits'))
+        off_list = glob.glob(os.path.join(self._calibration_root,
+                                          '*off_flat.fits'))
 
+        on_dlist = flist_to_dict(on_list)
+        off_dlist = flist_to_dict(off_list)
+
+        ratio_dlist = []
+        for on_dict in on_dlist:
+            date = on_dict['date']
+            tm = Time(date, format='fits')
+            band = on_dict['band']
+            for off_dict in off_dlist:
+                if off_dict['date'] != date:
+                    continue
+                if off_dict['band'] != band:
+                    continue
+                off_flux = flat_flux(off_dict['fname'])
+                on_flux = flat_flux(on_dict['fname'])
+                ratio = off_flux / on_flux
+                ratio_dict = {'band': band,
+                              'date': date,
+                              'time': tm.tt.datetime,
+                              'ratio': ratio}
+                ratio_dlist.append(ratio_dict)
+        df = pd.DataFrame(ratio_dlist)
+            
+        flat_ratio_list = []
+        f = plt.figure(figsize=[8.5, 11])
+        plt.title('Sky flat ratios')
+        print('Narrow-band sky flat ratios fit to >2020-01-01 data only')
+        print('Day sky does have Na on-band emission, however, Greet 1988 PhD suggests')
+        print('it is so hard to measure with a good Fabry-Perot, that we are')
+        print('dominated by continuum')
+        print('COPY THESE INTO cormultipipe.py globals')
+        for ib, band in enumerate(['Na', 'SII']):
+            plt.title(f'Sky flat ratios fit to > {self.stable_flat_date}')
+            this_band = df[df['band'] == band]
+            # Started taking flats in a more uniform way after 2020-01-01
+            good_dates = this_band[this_band['date']
+                                   > self.stable_flat_date]
+            med_ratio = np.median(good_dates['ratio'])
+            std_ratio = np.std(good_dates['ratio'])
+            biweight_ratio = biweight_location(good_dates['ratio'])
+            mad_std_ratio = mad_std(good_dates['ratio'])
+            t_flat_ratio = {'band': band,
+                            'biweight_ratio': biweight_ratio,
+                            'mad_std_ratio': mad_std_ratio,
+                            'med_ratio': med_ratio,
+                            'std_ratio': std_ratio}
+            print(f'{band} med {med_ratio:.2f} +/- {std_ratio:.2f}')
+            print(f'{band} biweight {biweight_ratio:.2f} +/- {mad_std_ratio:.2f}')
+            ax = plt.subplot(2, 1, ib+1)
+            ax.yaxis.set_minor_locator(AutoMinorLocator())
+            ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
+            #plt.plot(df['time'], df['ratio'], 'k.')
+            plt.plot(this_band['time'], this_band['ratio'], 'k.')
+            plt.ylabel(f'{band} off/on ratio')
+            plt.axhline(y=biweight_ratio, color='red')
+            plt.text(0.5, biweight_ratio + 0.1*mad_std_ratio, 
+                     f'{biweight_ratio:.2f} +/- {mad_std_ratio:.2f}',
+                     ha='center', transform=ax.get_yaxis_transform())
+            plt.axhline(y=biweight_ratio+mad_std_ratio,
+                        linestyle='--', color='k', linewidth=1)
+            plt.axhline(y=biweight_ratio-mad_std_ratio,
+                        linestyle='--', color='k', linewidth=1)
+            plt.ylim([biweight_ratio-3*mad_std_ratio, biweight_ratio+3*mad_std_ratio])
+            plt.gcf().autofmt_xdate()
+            flat_ratio_list.append(t_flat_ratio)
+
+        outname = os.path.join(self._calibration_root,
+                               'flat__ratio_vs_time.png')
+        savefig_overwrite(outname, transparent=True)
+        plt.close()
+        self._flat_ratio_list = flat_ratio_list
+        return self._flat_ratio_list
+
+    def flat_ratio(self, band):
+        tflat_ratio = [d for d in self.flat_ratio_list
+                       if d['band'] == band]
+        tflat_ratio = tflat_ratio[0]
+        cflat_ratio = [d for d in FLAT_RATIO_CHECK_LIST
+                       if d['band'] == band]
+        cflat_ratio = cflat_ratio[0]
+        dflat_ratio = (np.abs(tflat_ratio['biweight_ratio']
+                              - cflat_ratio['biweight_ratio']))
+        if (dflat_ratio > cflat_ratio['mad_std_ratio']
+            or dflat_ratio> tflat_ratio['mad_std_ratio']):
+            raise ValueError(f'Derived {band} flat_ratio '
+                             f'{tflat_ratio["biweight_ratio"]:.2f} '
+                             f'out of range '
+                             f'{cflat_ratio["biweight_ratio"]:.2f} +/-'
+                             f'{cflat_ratio["mad_std_ratio"]:.2f}')
+        
+        return tflat_ratio['biweight_ratio'], tflat_ratio['mad_std_ratio']
+            
+class CalArgparseHandler(CorArgparseHandler):
+    def add_calibration_root(self, 
+                             default=CALIBRATION_ROOT,
+                             help=None,
+                             **kwargs):
+        option = 'calibration_root'
+        if help is None:
+            help = f'calibration root (default: {default})'
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
+
+    def add_calibration_start(self, 
+                              default=None,
+                              help=None,
+                              **kwargs):
+        option = 'calibration_start'
+        if help is None:
+            help = 'start directory/date (default: earliest)'
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
+
+    def add_calibration_stop(self, 
+                             default=None,
+                             help=None,
+                             **kwargs):
+        option = 'calibration_stop'
+        if help is None:
+            help = 'stop directory/date (default: latest)'
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
+
+    def add_all(self):
+        """Add options used in cmd"""
+        super().add_all()
+        self.add_raw_data_root()
+        self.add_calibration_root()
+        self.add_calibration_start()
+        self.add_calibration_stop()
+        self.add_num_processes(default=MAX_NUM_PROCESSES)
+        self.add_mem_frac(default=MAX_MEM_FRAC)
+
+    def cmd(self, args):
+        super().cmd(args)
+        c = Calibration(reduce=True,
+                        raw_data_root=args.raw_data_root,
+                        calibration_root=args.calibration_root,
+                        start_date=args.calibration_start,
+                        stop_date=args.calibration_stop,
+                        num_processes=args.num_processes,
+                        mem_frac=args.mem_frac)
+        return c
+            
 if __name__ == "__main__":
-    log.setLevel('DEBUG')
     parser = argparse.ArgumentParser(
         description='Run calibration to generate bias, dark, flat frames')
-    parser.add_argument(
-        '--raw_data_root', help=f'raw data root (default: {RAW_DATA_ROOT})',
-        default=RAW_DATA_ROOT)
-    parser.add_argument(
-        '--calibration_root',
-        help=f'calibration root (default: {CALIBRATION_ROOT})',
-        default=CALIBRATION_ROOT)
-    parser.add_argument(
-        '--start', help='start directory/date (default: earliest -- dangerous!)')
-    parser.add_argument(
-        '--stop', help='stop directory/date (default: latest)')
-    parser.add_argument(
-        '--num_processes', type=float, default=0,
-        help='number of subprocesses for parallelization; 0=all cores, <1 = fraction of total cores')
-    parser.set_defaults(func=calibrate_cmd)
-
-    # Final set of commands that makes argparse work
+    aph = CalArgparseHandler(parser)
+    aph.add_all()
     args = parser.parse_args()
-    # This check for func is not needed if I make subparsers.required = True
-    if hasattr(args, 'func'):
-        args.func(args)
+    aph.cmd(args)
+
+
+
+    #parser.add_argument(
+    #    '--raw_data_root', help=f'raw data root (default: {RAW_DATA_ROOT})',
+    #    default=RAW_DATA_ROOT)
+    #parser.add_argument(
+    #    '--calibration_root',
+    #    help=f'calibration root (default: {CALIBRATION_ROOT})',
+    #    default=CALIBRATION_ROOT)
+    #parser.add_argument(
+    #    '--calibration_start', help='start directory/date (default: earliest)')
+    #parser.add_argument(
+    #    '--calibration_stop', help='stop directory/date (default: latest)')
+    #parser.add_argument(
+    #    '--num_processes', type=float, default=0,
+    #    help='number of subprocesses for parallelization; 0=all cores, <1 = fraction of total cores')
+    #parser.set_defaults(func=calibrate_cmd)
+    #
+    ## Final set of commands that makes argparse work
+    #args = parser.parse_args()
+    ## This check for func is not needed if I make subparsers.required = True
+    #if hasattr(args, 'func'):
+    #    args.func(args)
 
 
 
@@ -1820,48 +1984,52 @@ if __name__ == "__main__":
     #                   post_process_list=[flat_process])
     #pout = cmp.pipeline([flat], outdir='/tmp', overwrite=True)
 
-##fname1 = '/data/IoIO/raw/20210310/HD 132052-S001-R001-C002-R.fts'
-#fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
-#pgd = RedCorData.read(fname1)
-#pgd.meta = sx694.metadata(pgd.meta)
-#pgd.meta = sx694.exp_correct(pgd.meta)
-#pgd.meta = sx694.date_beg_avg(pgd.meta)
-#print(pgd.meta)
-##
-#pgd = detflux(pgd)
-#print(pgd.meta)
+    ##fname1 = '/data/IoIO/raw/20210310/HD 132052-S001-R001-C002-R.fts'
+    #fname1 = '/data/Mercury/raw/2020-05-27/Mercury-0005_Na-on.fit'
+    #pgd = RedCorData.read(fname1)
+    #pgd.meta = sx694.metadata(pgd.meta)
+    #pgd.meta = sx694.exp_correct(pgd.meta)
+    #pgd.meta = sx694.date_beg_avg(pgd.meta)
+    #print(pgd.meta)
+    ##
+    #pgd = detflux(pgd)
+    #print(pgd.meta)
 
-##print(reduced_dir('/data/IoIO/raw/20210513'))
-##print(reduced_dir('/data/IoIO/raw/20210513', create=True))
-##print(reduced_dir('/data/IoIO/raw'))
+    ##print(reduced_dir('/data/IoIO/raw/20210513'))
+    ##print(reduced_dir('/data/IoIO/raw/20210513', create=True))
+    ##print(reduced_dir('/data/IoIO/raw'))
 
-#c = Calibration(start_date='2019-02-18', stop_date='2021-12-31', reduce=True)
-#c = Calibration(start_date='2019-02-12', stop_date='2019-02-12', reduce=True)
+    #c = Calibration(start_date='2019-02-18', stop_date='2021-12-31', reduce=True)
+    #c = Calibration(start_date='2019-02-12', stop_date='2019-02-12', reduce=True)
 
-#c = Calibration(reduce=True)
-
-
-#f = fdict_list_collector(flat_fdict_creator, directory='/data/IoIO/raw/2019-08-25', imagetyp='flat', subdirs=CALIBRATION_SUBDIRS, glob_include=FLAT_GLOB)
-
-#print(f[0])
-
-#c = Calibration(start_date='2017-03-15', stop_date='2017-03-15', reduce=True)
-#c = Calibration(stop_date='2017-05-10', reduce=True)
-#c = Calibration(stop_date='2017-05-10')
-#c.reduce_bias()
-
-#c = Calibration(start_date='2020-07-11', stop_date='2020-07-11', reduce=True)
-#c = Calibration(reduce=True)
-
-#na_back_on = '/data/IoIO/raw/20210525/Jupiter-S007-R001-C001-Na_off.fts'
-#ccd = CorData.read(na_back_on)
-#nd_filter_mask(ccd)
-
-#    while rparent != ps:
+    #c = Calibration(reduce=True)
 
 
-#print(reduced_dir('/data/IoIO/raw/20201111', '/tmp'))
-#print(reduced_dir2('/data/IoIO/raw/T20201111', '/tmp'))
-#print(get_dirs_dates('/data/IoIO/raw', start='2018-02-20', stop='2018-03-01'))
-#print(reduced_dir('/data/IoIO/raw', '/tmp'))
+    #f = fdict_list_collector(flat_fdict_creator, directory='/data/IoIO/raw/2019-08-25', imagetyp='flat', subdirs=CALIBRATION_SUBDIRS, glob_include=FLAT_GLOB)
 
+    #print(f[0])
+
+    #c = Calibration(start_date='2017-03-15', stop_date='2017-03-15', reduce=True)
+    #c = Calibration(stop_date='2017-05-10', reduce=True)
+    #c = Calibration(stop_date='2017-05-10')
+    #c.reduce_bias()
+
+    #c = Calibration(start_date='2020-07-11', stop_date='2020-07-11', reduce=True)
+    #c = Calibration(reduce=True)
+
+    #na_back_on = '/data/IoIO/raw/20210525/Jupiter-S007-R001-C001-Na_off.fts'
+    #ccd = CorData.read(na_back_on)
+    #nd_filter_mask(ccd)
+
+    #    while rparent != ps:
+
+
+    #print(reduced_dir('/data/IoIO/raw/20201111', '/tmp'))
+    #print(reduced_dir2('/data/IoIO/raw/T20201111', '/tmp'))
+    #print(get_dirs_dates('/data/IoIO/raw', start='2018-02-20', stop='2018-03-01'))
+    #print(reduced_dir('/data/IoIO/raw', '/tmp'))
+
+    #c = Calibration(reduce=True)
+    #print(c.flat_ratio('Na'))
+    ##print(c.flat_ratio('pdq'))
+            

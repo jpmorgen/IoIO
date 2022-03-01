@@ -2,6 +2,7 @@
 
 import inspect
 import os
+import time
 import datetime
 from pathlib import Path
 
@@ -18,35 +19,35 @@ from astropy.time import Time
 # These are MaxIm and ACP day-level raw data directories, respectively
 DATE_FORMATS = ["%Y-%m-%d", "%Y%m%d"]
 
-# https://stackoverflow.com/questions/27704490/interactive-pixel-information-of-an-image-in-python
-class CCDImageFormatter(object):
-    """Provides the x,y,z formatting I like for CCD images in the
-    interactive pyplot window"""
-    def __init__(self, im):
-        self.im = im
-    def __call__(self, x, y):
-        s = self.im.shape
-        col = int(x + 0.5)
-        row = int(y + 0.5)
-        if col >= 0 and col < s[1] and row >= 0 and row < s[0]:
-            z = self.im[row, col]
-            return 'x=%1.1f, y=%1.1f, z=%1.1f' % (x, y, z)
-        else:
-            return 'x=%1.1f, y=%1.1f' % (x, y)        
+class Lockfile():
+    def __init__(self,
+                 fname=None,
+                 check_every=10):
+        assert fname is not None
+        self._fname = fname
+        self.check_every = check_every
 
-def simple_show(im, **kwargs):
-    fig, ax = plt.subplots()
-    ax.imshow(im.data, origin='lower',
-              cmap=plt.cm.gray,
-              filternorm=0, interpolation='none',
-              **kwargs)
-    ax.format_coord = CCDImageFormatter(im.data)
-    plt.show()
+    @property
+    def is_set(self):
+        return os.path.isfile(self._fname)
 
-def savefig_overwrite(fname, **kwargs):
-    if os.path.exists(fname):
-        os.remove(fname)
-    plt.savefig(fname, **kwargs)
+    # --> could add a timeout and a user-specified optional message
+    def wait(self):
+        if not self.is_set:
+            return
+        while self.is_set:
+            with open(self._fname, "r") as f:
+                log.error(f'lockfile {self._fname} detected for {f.read()}')
+            time.sleep(self.check_every)
+        log.error(f'(error cleared) lockfile {self._fname} removed')
+
+    def create(self):
+        self.wait()
+        with open(self._fname, "w") as f:
+            f.write('PID: ' + str(os.getpid()))
+
+    def clear(self):
+        os.remove(self._fname)
 
 def assure_list(x):
     """Assures x is type `list`"""
@@ -319,6 +320,97 @@ def valid_long_exposure(r):
             and r['ybinning'] == 1
             and r['exptime'] > 10)
 
+def im_med_min_max(im):
+    """Returns median values of representative dark and light patches
+    of images recorded by the IoIO coronagraph"""
+    s = np.asarray(im.shape)
+    m = s/2 # Middle of CCD
+    q = s/4 # 1/4 point
+    m = m.astype(int)
+    q = q.astype(int)
+    # Note Y, X.  Use the left middle to avoid any first and last row
+    # issues in biases
+    dark_patch = im[m[0]-50:m[0]+50, 0:100]
+    light_patch = im[m[0]-50:m[0]+50, q[1]:q[1]+100]
+    mdp = np.median(dark_patch)
+    mlp = np.median(light_patch)
+    return (mdp, mlp)
+
+def iter_polyfit(x, y, poly_class=Polynomial, deg=1, max_resid=None,
+                 **kwargs):
+    """Performs least squares fit iteratively to discard bad points
+
+    If you actually know the statistical weights on the points,
+    just use poly_class.fit directly.
+
+    Parameters
+    ----------
+    x, y : array-like
+        points to be fit
+
+    poly_class : numpy.polynomial.polynomial series
+        Default: `~numpy.polynomial.polynomial.Polynomial`
+
+    deg : int
+       Degree of poly_class
+       Default is 1
+
+    max_resid : float or None
+        Points falling > max_resid from fit at any time are discarded.
+        If `None`, ignored
+        Default is `None`
+
+    **kwargs passed to poly_class.fit
+
+    returns : poly
+       Best fit `~numpy.polynomial.polynomial.Polynomial`
+
+    """
+    x = np.asarray(x)
+    y = np.asarray(y)
+    # Let polyfit report errors in x and y
+    poly = poly_class.fit(x, y, deg=deg, **kwargs)
+    # We are done if we have just two points
+    if len(x) == deg + 1:
+        return poly
+    
+    # Our first fit may be significantly pulled off by bad
+    # point(s), particularly if the number of points is small.
+    # Construct a repeat until loop the Python way with
+    # while... break to iterate to squeeze bad points out with
+    # low weights
+    last_redchi2 = None
+    iterations = 1
+    while True:
+        # Calculate weights roughly based on chi**2, but not going
+        # to infinity
+        yfit = poly(x)
+        resid = (y - yfit)
+        if resid.all == 0:
+            break
+        # Add 1 to avoid divide by zero error
+        resid2 = resid**2 + 1
+        # Use the residual as the variance + do the algebra
+        redchi2 = np.sum(1/(resid2))
+        # Converge to a reasonable epsilon
+        if last_redchi2 and last_redchi2 - redchi2 < np.finfo(float).eps*10:
+            break
+        poly = poly_class.fit(x, y, deg=deg, w=1/resid2, **kwargs)
+        last_redchi2 = redchi2
+        iterations += 1
+
+    if max_resid is not None:
+        # The next level of cleanliness is to exclude any points above
+        # max_resid from the fit.  But don't over-specify if too many
+        # points are thrown out
+        goodc = np.flatnonzero(np.abs(resid) < max_resid)
+        if len(goodc) >= deg + 1:
+            poly = iter_polyfit(x[goodc], y[goodc],
+                                poly_class=Polynomial,
+                                deg=deg, max_resid=None,
+                                **kwargs)
+    return poly
+
 def add_history(header, text='', caller=1):
     """Add a HISTORY card to a FITS header with the caller's name inserted 
 
@@ -459,80 +551,36 @@ def cached_csv(dict_list_code,
                     csvdw.writeheader()
                     for d in dict_list:
                         csvdw.writerow(d)
+    return dict_lists    
 
-    return dict_lists
+# https://stackoverflow.com/questions/27704490/interactive-pixel-information-of-an-image-in-python
+class CCDImageFormatter(object):
+    """Provides the x,y,z formatting I like for CCD images in the
+    interactive pyplot window"""
+    def __init__(self, im):
+        self.im = im
+    def __call__(self, x, y):
+        s = self.im.shape
+        col = int(x + 0.5)
+        row = int(y + 0.5)
+        if col >= 0 and col < s[1] and row >= 0 and row < s[0]:
+            z = self.im[row, col]
+            return 'x=%1.1f, y=%1.1f, z=%1.1f' % (x, y, z)
+        else:
+            return 'x=%1.1f, y=%1.1f' % (x, y)        
 
-def iter_polyfit(x, y, poly_class=Polynomial, deg=1, max_resid=None,
-                 **kwargs):
-    """Performs least squares fit iteratively to discard bad points
+def simple_show(im, **kwargs):
+    fig, ax = plt.subplots()
+    ax.imshow(im.data, origin='lower',
+              cmap=plt.cm.gray,
+              filternorm=0, interpolation='none',
+              **kwargs)
+    ax.format_coord = CCDImageFormatter(im.data)
+    plt.show()
 
-    If you actually know the statistical weights on the points,
-    just use poly_class.fit directly.
+def savefig_overwrite(fname, **kwargs):
+    if os.path.exists(fname):
+        os.remove(fname)
+    plt.savefig(fname, **kwargs)
 
-    Parameters
-    ----------
-    x, y : array-like
-        points to be fit
 
-    poly_class : numpy.polynomial.polynomial series
-        Default: `~numpy.polynomial.polynomial.Polynomial`
-
-    deg : int
-       Degree of poly_class
-       Default is 1
-
-    max_resid : float or None
-        Points falling > max_resid from fit at any time are discarded.
-        If `None`, ignored
-        Default is `None`
-
-    **kwargs passed to poly_class.fit
-
-    returns : poly
-       Best fit `~numpy.polynomial.polynomial.Polynomial`
-
-    """
-    x = np.asarray(x)
-    y = np.asarray(y)
-    # Let polyfit report errors in x and y
-    poly = poly_class.fit(x, y, deg=deg, **kwargs)
-    # We are done if we have just two points
-    if len(x) == deg + 1:
-        return poly
-    
-    # Our first fit may be significantly pulled off by bad
-    # point(s), particularly if the number of points is small.
-    # Construct a repeat until loop the Python way with
-    # while... break to iterate to squeeze bad points out with
-    # low weights
-    last_redchi2 = None
-    iterations = 1
-    while True:
-        # Calculate weights roughly based on chi**2, but not going
-        # to infinity
-        yfit = poly(x)
-        resid = (y - yfit)
-        if resid.all == 0:
-            break
-        # Add 1 to avoid divide by zero error
-        resid2 = resid**2 + 1
-        # Use the residual as the variance + do the algebra
-        redchi2 = np.sum(1/(resid2))
-        # Converge to a reasonable epsilon
-        if last_redchi2 and last_redchi2 - redchi2 < np.finfo(float).eps*10:
-            break
-        poly = poly_class.fit(x, y, deg=deg, w=1/resid2, **kwargs)
-        last_redchi2 = redchi2
-        iterations += 1
-
-    if max_resid is not None:
-        # The next level of cleanliness is to exclude any points above
-        # max_resid from the fit.  But don't over-specify if too many
-        # points are thrown out
-        goodc = np.flatnonzero(np.abs(resid) < max_resid)
-        if len(goodc) >= deg + 1:
-            poly = iter_polyfit(x[goodc], y[goodc],
-                                poly_class=Polynomial,
-                                deg=deg, max_resid=None,
-                                **kwargs)
-    return poly
