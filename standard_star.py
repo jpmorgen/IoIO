@@ -11,8 +11,6 @@ import argparse
 
 import numpy as np
 
-#from scipy.interpolate import interp1d
-
 import matplotlib.pyplot as plt
 from matplotlib.dates import datestr2num
 
@@ -32,26 +30,25 @@ from specutils.analysis import line_flux
 from specutils.manipulation import (extract_region,
                                     LinearInterpolatedResampler)
 
-
-# bmp_cleanup can go away now that Photometry is an object
 from bigmultipipe import no_outfile, cached_pout, prune_pout
 
 from burnashev import Burnashev
 
-from precisionguide.utils import iter_linfit
-
 import IoIO.sx694 as sx694
-from IoIO.utils import (assure_list, reduced_dir, get_dirs_dates,
+from IoIO.utils import (Lockfile, assure_list, reduced_dir, get_dirs_dates,
                         cached_csv, iter_polyfit, savefig_overwrite)
 from IoIO.cordata_base import CorDataBase
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                CorMultiPipeBase,
                                nd_filter_mask, mask_nonlin_sat)
-from IoIO.calibration import Calibration
+from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.photometry import Photometry, is_flux
 
 STANDARD_STAR_ROOT = os.path.join(IoIO_ROOT, 'StandardStar')
-FILT_ROOT = '/data/IoIO/observing'
+FILT_ROOT = os.path.join(IoIO_ROOT, 'observing')
+
+LOCKFILE = '/tmp/standard_star_reduce.lock'
+
 # Small filters are 15 arcmin.  Could even fluf this out if I think I
 # haven't synced the telescope on some old observations
 POINTING_TOLERANCE = 15*u.arcmin
@@ -150,6 +147,27 @@ class CorBurnashev(Burnashev):
     def flux_in_filt(self, spec, filt,
                      resampler=None, energy=False,
                      plot=False, title=''):
+        """Returns star flux passing through filt
+
+        Parameters
+        ----------
+        spec : specutils.Spectrum1D
+            Star spectrum read from Burnashev catalog
+
+        filt : specutils.Spectrum1D
+            Filter response curve
+
+        resampler : specutils.manipulation or None
+            Resampler to translate between filter and star spectrum.
+           If ``None``
+           `~specutils.manipulation.LinearInterpolatedResampler()` is used
+            Default is ``None``
+
+        energy : bool
+            Return flux in energy units.  Otherwise photon flux is returned
+            Default is ``False``
+        
+"""
         # Make filter spectral axis unit consistent with star spectrum.
         # Need to make a new filter spectrum as a result
         filt_spectral_axis = filt.spectral_axis.to(spec.spectral_axis.unit)
@@ -270,6 +288,8 @@ def standard_star_process(ccd,
     nonlin = ccd.meta['NONLIN']*ccd.unit
     max_val = tbl['max_value'][0]
     if max_val >= nonlin:
+        # --> Consider returning these anyway so I can do stripchart
+        # of brightness values
         log.warning(f'Too bright: {in_name}')
         # Don't forget to clear out the meta
         bmp_meta.clear()
@@ -302,6 +322,8 @@ def standard_star_process(ccd,
     ND_width = ccd.ND_params[1, 1] - ccd.ND_params[1, 0]
     min_ND_dist = min_ND_multiple * ND_width
     if ccd.obj_to_ND < min_ND_dist:
+        # --> Consider returning these stars anyway so I can play with
+        # limits at the directory level
         log.warning(f'Too close: ccd.obj_to_ND = {ccd.obj_to_ND} {in_name}')
         bmp_meta.clear()
         return None
@@ -504,7 +526,7 @@ def exposure_correct_plot(exposure_correct_data,
 
     plt.ylabel('Exposure correction (s)')
     ax.set_ylim([0, 5])
-    plt.gcf().autofmt_xdate()  # orient date labels at a slant
+    f.autofmt_xdate()  # orient date labels at a slant
     if outname is not None:
         savefig_overwrite(outname, transparent=True)
     if show:
@@ -644,12 +666,12 @@ def standard_star_directory(directory,
         pix_solid_angle = objdf['pix_solid_angle'][row1]
         pix_solid_angle *= u.arcsec**2
 
-        print(f"{obj}, simbad {simbad_coords.to_string(style='hmsdms')}, "
-              f"commanded {obj_coords.to_string(style='hmsdms')}")
+        #print(f"{obj}, simbad {simbad_coords.to_string(style='hmsdms')}, "
+        #      f"commanded {obj_coords.to_string(style='hmsdms')}")
         #print(simbad_coords.to_string(style='hmsdms'))
         #print(obj_coords.to_string(style='hmsdms'))
         sep = obj_coords.separation(simbad_coords)
-        print(sep)
+        #print(sep)
         simbad_match = sep < POINTING_TOLERANCE
         if simbad_match:
             log.debug(f'Pointed to within {POINTING_TOLERANCE} of {obj}')
@@ -1000,9 +1022,11 @@ def standard_star_directory(directory,
 
     return [extinction_data, exposure_correct_data]
 
-def filter_stripchart(df,
+def filter_stripchart(df=None,
                       title=None,
-                      column=None):
+                      column=None,
+                      outname=None,
+                      show=False):
     plot_date_range = [np.min(df['min_plot_date']),
                        np.max(df['max_plot_date'])]
     filters = list(set(df['filter']))
@@ -1011,14 +1035,18 @@ def filter_stripchart(df,
     nfilt = len(filters)
     f = plt.figure(figsize=[8.5, 11])
     plt.suptitle(f"{title}")
-    print(title)
+    summary_list = []
+    #print(title)
     for ifilt, filt in enumerate(filters):
         filtdf = df[df['filter'] == filt]
         to_plot = filtdf[column]
         biweight_loc = biweight_location(to_plot, ignore_nan=True)
         mads = mad_std(to_plot, ignore_nan=True)
-        col_unit = df.iloc[0][f'{column}_unit']
-        print(f'{filt} {biweight_loc:.4g} +/- {mads:.2g} {col_unit}')
+        if f'{column}_unit' in df.columns:
+            col_unit = df.iloc[0][f'{column}_unit']
+        else:
+            col_unit = ''
+        #print(f'{filt} {biweight_loc:.4g} +/- {mads:.2g} {col_unit}')
         ax = plt.subplot(nfilt, 1, ifilt+1)
         ax.tick_params(which='both', direction='inout',
                        bottom=True, top=True, left=True, right=True)
@@ -1034,10 +1062,20 @@ def filter_stripchart(df,
         plt.text(0.5, 0.8, 
                  f' {biweight_loc:.4g} +/- {mads:.2g}',
                  ha='center', va='bottom', transform=ax.transAxes)
-    plt.gcf().autofmt_xdate()
-    plt.show()
+        summary_dict = {'filt': filt,
+                        'biweight_loc': biweight_loc,
+                        'mad_std': mads,
+                        'unit': col_unit}
+        summary_list.append(summary_dict)
+    # Put slanted date axis on bottom plot
+    f.autofmt_xdate()
+    if outname:
+        savefig_overwrite(outname, transparent=True)
+    if show:
+        plt.show()
+    return summary_list
 
-def standard_star_tree(data_root=RAW_DATA_ROOT,
+def standard_star_tree(raw_data_root=RAW_DATA_ROOT,
                        start=None,
                        stop=None,
                        calibration=None,
@@ -1049,7 +1087,7 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
                        ccddata_cls=CorDataBase,
                        outdir_root=STANDARD_STAR_ROOT,                       
                        **kwargs):
-    dirs_dates = get_dirs_dates(data_root, start=start, stop=stop)
+    dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
     dirs, _ = zip(*dirs_dates)
     if len(dirs) == 0:
         log.warning('No directories found')
@@ -1080,8 +1118,88 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
         extinction_data.extend(extinct)
         exposure_correct_data.extend(expo)
 
+    return extinction_data, exposure_correct_data
+
+class StandardStar():
+    def __init__(self,
+                 raw_data_root=RAW_DATA_ROOT,
+                 start=None,
+                 stop=None,
+                 calibration=None,
+                 photometry=None,
+                 read_csvs=True,
+                 write_csvs=True,
+                 read_pout=True,
+                 write_pout=True,
+                 create_outdir=True,                       
+                 show=False,
+                 ccddata_cls=CorDataBase,
+                 outdir_root=STANDARD_STAR_ROOT,                       
+                 **kwargs):
+        self.raw_data_root = raw_data_roo
+        self.start = start
+        self.stop = stop
+        self.calibration = calibration
+        self.photometry = photometry
+        self.read_csvs = read_csvs
+        self.write_csvs = write_csvs
+        self.read_pout = read_pout
+        self.write_pout = write_pout
+        self.create_outdir = create_outdir
+        self.show = show
+        self.ccddata_cls = ccddata_cls
+        self.outdir_root = outdir_root
+        self._kwargs = kwargs
+        self._reduction_products = None
+        self._extinction_data = None
+        self._exposure_correct_data = None
+    # The standard_star_tree code uses IoIO.utils.cached_csv, which
+    # returns a list of dictionary lists, one per CSV/file reduction
+    # product.  Unfortunately, you have to know based on the code,
+    # rather than a dictionary, which reduction product is which.
+    # Thus, all of the property, below and standard_star_tree are
+    # closely linked
+    @property
+    def reduction_products(self):
+        if self._reduction_products is not None:
+            return self._reduction_products
+        rp = standard_star_tree(raw_data_root=self.raw_data_root,
+                                start=self.start,
+                                stop=self.stop,
+                                calibration=self.calibration,
+                                photometry=self.photometry,
+                                read_csvs=self.read_csvs,
+                                write_csvs=self.write_csvs,
+                                read_pout=self.read_pout,
+                                write_pout=self.write_pout,
+                                create_outdir=self.create_outdir,
+                                show=self.show,
+                                ccddata_cls=self.ccddata_cls,
+                                outdir_root=self.outdir_root,
+                                **self._kwargs)
+        self._reduction_products = rp
+        return self._reduction_products        
+
+    @property
+    def extinction_data(self):
+        if self._extinction_data is not None:
+            return self._extinction_data
+        self._extinction_data = self.reduction_products[0]
+        return self._extinction_data
+        
+    @property
+    def exposure_correct_data(self):
+        if self._exposure_correct_data is not None:
+            return self._exposure_correct_data
+        self._exposure_correct_data = self.reduction_products[1]
+        return self._exposure_correct_data
+        
+    def zero_points(self):
+        
+        
+
     # Create summary plots
-    rd = reduced_dir(data_root, outdir_root, create=True)
+    rd = reduced_dir(raw_data_root, outdir_root, create=True)
     # This is fast enough so that I don't need to save the plots.
     # Easier to just run with show=True and manipilate the plot by hand
     if start is None:
@@ -1100,73 +1218,164 @@ def standard_star_tree(data_root=RAW_DATA_ROOT,
                           show=show)
 
     df = pd.DataFrame(extinction_data)
+    # Filter out bogus extinction_coef.  Might have an upper limit as well
+    df = df[df['extinction_coef'] > 0]
     zero_point_unit = df.iloc[0]['zero_point_unit']
-    filter_stripchart(df,
-                      title=f'Vega zero point magnitiudes {zero_point_unit}',
-                      column='zero_point')
+    outbase = os.path.join(rd,
+                           f"{start_str}{stop_str}zero_point")
+    zero_points = cached_csv(filter_stripchart, outbase+'.csv',
+                             read_csvs=False, write_csvs=True, show=show,
+                             df=df,
+                             title=(f'Vega zero point magnitiudes '
+                                    f'{zero_point_unit}'),
+                             column='zero_point',
+                             outname=outbase+'.png')
     rayleigh_conversion_unit = df.iloc[0]['rayleigh_conversion_unit']
-    filter_stripchart(df,
-                      title=f'Rayleigh Conversion {rayleigh_conversion_unit}',
-                      column='rayleigh_conversion')
+    outbase = os.path.join(rd,
+                           f"{start_str}{stop_str}rayleigh_conversion")
+    rayleigh_conversions = cached_csv(filter_stripchart, outbase+'.csv',
+                                      read_csvs=False,
+                                      write_csvs=True,
+                                      show=show,
+                                      df=df,
+                                      title=(f'Rayleigh Conversion '
+                                             f'{rayleigh_conversion_unit}'),
+                                      column='rayleigh_conversion',
+                                      outname=outbase+'.png')
+    outbase = os.path.join(rd,
+                           f"{start_str}{stop_str}extinction_coefs")
+    extinction_coefs = cached_csv(filter_stripchart, outbase+'.csv',
+                                  read_csvs=False, write_csvs=True,
+                                  show=show, df=df,
+                                  title=f'Extinction coefficients',
+                                  column='extinction_coef',
+                                  outname=outbase+'.png')
+               
+    return [zero_points, rayleigh_conversions, extinction_coefs]
 
-    return [extinction_data, exposure_correct_data]
 
-def standard_star_cmd(args):
-    calibration_start = args.calibration_start
-    calibration_stop = args.calibration_stop
-    c = Calibration(start_date=calibration_start,
-                    stop_date=calibration_stop,
-                    reduce=True,
-                    num_processes=args.num_processes)
-    standard_star_tree(data_root=args.data_root,
-                       outdir_root=args.outdir_root,
-                       start=args.start,
-                       stop=args.stop,
-                       calibration=c,
-                       read_csvs=args.read_csvs,
-                       read_pout=args.read_pout,
-                       show=args.show,
-                       num_processes=args.num_processes,
-                       fits_fixed_ignore=args.fits_fixed_ignore)
+class SSArgparseHandler(CalArgparseHandler):
+    def add_standard_star_root(self, 
+                             default=STANDARD_STAR_ROOT,
+                             help=None,
+                             **kwargs):
+        option = 'standard_star_root'
+        if help is None:
+            help = f'standard star root (default: {default})'
+        self.parser.add_argument('--' + option, 
+                            default=default, help=help, **kwargs)
+    
+    def add_standard_star_start(self, 
+                                default=None,
+                                help=None,
+                                **kwargs):
+        option = 'standard_star_start'
+        if help is None:
+            help = 'start directory/date (default: earliest)'
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
+
+    def add_standard_star_stop(self, 
+                               default=None,
+                               help=None,
+                               **kwargs):
+        option = 'standard_star_stop'
+        if help is None:
+            help = 'stop directory/date (default: latest)'
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
+
+    def add_show(self, 
+                 default=False,
+                 help=None,
+                 **kwargs):
+        option = 'show'
+        if help is None:
+            help = (f'Show plots interactively')
+        self.parser.add_argument('--' + option,
+                                 action=argparse.BooleanOptionalAction,
+                                 default=default,
+                                 help=help, **kwargs)
+
+    def add_all(self):
+        """Add options used in cmd"""
+        super().add_all()
+        self.add_standard_star_root()
+        self.add_standard_star_start()
+        self.add_standard_star_stop()
+        self.add_read_pout(default=True)
+        self.add_write_pout(default=True)        
+        self.add_read_csvs(default=True)
+        self.add_write_csvs(default=True)
+        self.add_show()
+
+    def cmd(self, args):
+        c = super().cmd(args)
+        standard_star_tree(raw_data_root=args.raw_data_root,
+                           outdir_root=args.standard_star_root,
+                           start=args.standard_star_start,
+                           stop=args.standard_star_stop,
+                           calibration=c,
+                           read_csvs=args.read_csvs,
+                           write_csvs=args.write_csvs,
+                           read_pout=args.read_pout,
+                           write_pout=args.write_pout,
+                           show=args.show,
+                           num_processes=args.num_processes,
+                           fits_fixed_ignore=args.fits_fixed_ignore)
     
 if __name__ == '__main__':
-    log.setLevel('DEBUG')
     parser = argparse.ArgumentParser(
-        description='IoIO standard star photometric reduction')
-    parser.add_argument(
-        '--data_root', help='raw data root',
-        default=RAW_DATA_ROOT)
-    parser.add_argument(
-        '--outdir_root', help='photometry output root',
-        default=STANDARD_STAR_ROOT)
-    parser.add_argument(
-        '--calibration_start', help='calibration start date')
-    parser.add_argument(
-        '--calibration_stop', help='calibration stop date')
-    parser.add_argument(
-        '--start', help='start directory/date (default: earliest)')
-    parser.add_argument(
-        '--stop', help='stop directory/date (default: latest)')
-    parser.add_argument(
-        '--num_processes', type=float, default=0,
-        help='number of subprocesses for parallelization; 0=all cores, <1 = fraction of total cores')
-    parser.add_argument(
-        '--read_csvs', action=argparse.BooleanOptionalAction, default=True,
-        help='re-read previous results from CSV files in each subdirectory')
-    parser.add_argument(
-        '--read_pout', action=argparse.BooleanOptionalAction, default=True,
-        help='re-read previous pipeline output in each subdirectory')
-    parser.add_argument(
-        '--show', action=argparse.BooleanOptionalAction,
-        help='show PyPlot of top-level results (pauses terminal)',
-        default=False)
-    parser.add_argument(
-        '--fits_fixed_ignore', action=argparse.BooleanOptionalAction,
-        help='turn off WCS warning messages',
-        default=False)
-    
+        description='Run standard star reduction')
+    aph = SSArgparseHandler(parser)
+    aph.add_all()
     args = parser.parse_args()
-    standard_star_cmd(args)
+    aph.cmd(args)
+
+    
+    #log.setLevel('DEBUG')
+    #parser = argparse.ArgumentParser(
+    #    description='IoIO standard star photometric reduction')
+    #parser.add_argument(
+    #    '--outdir_root', help='root of output file directory tree.  '
+    #    'Subdirectories organized by date',
+    #    default=STANDARD_STAR_ROOT)
+    #parser.add_argument(
+    #    '--raw_data_root', help='raw data root (default: {RAW_DATA_ROOT})',
+    #    default=RAW_DATA_ROOT)
+    #parser.add_argument(
+    #    '--calibration_root',
+    #    help=f'calibration root (default: {CALIBRATION_ROOT})',
+    #    default=CALIBRATION_ROOT)
+    #parser.add_argument(
+    #    '--calibration_start',
+    #    help='calibration start date (default: earliest)')
+    #parser.add_argument(
+    #    '--calibration_stop', help='calibration stop date (default: latest)')
+    #parser.add_argument(
+    #    '--start', help='start directory/date (default: earliest)')
+    #parser.add_argument(
+    #    '--stop', help='stop directory/date (default: latest)')
+    #parser.add_argument(
+    #    '--num_processes', type=float, default=0,
+    #    help='number of subprocesses for parallelization; 0=all cores, <1 = fraction of total cores')
+    #parser.add_argument(
+    #    '--read_csvs', action=argparse.BooleanOptionalAction, default=True,
+    #    help='re-read previous results from CSV files in each subdirectory')
+    #parser.add_argument(
+    #    '--read_pout', action=argparse.BooleanOptionalAction, default=True,
+    #    help='re-read previous pipeline output in each subdirectory')
+    #parser.add_argument(
+    #    '--show', action=argparse.BooleanOptionalAction,
+    #    help='show PyPlot of top-level results (pauses terminal)',
+    #    default=False)
+    #parser.add_argument(
+    #    '--fits_fixed_ignore', action=argparse.BooleanOptionalAction,
+    #    help='turn off WCS warning messages',
+    #    default=False)
+    #
+    #args = parser.parse_args()
+    #standard_star_cmd(args)
 
 
 ## Pythonic way of checking for a non-assigned variable
