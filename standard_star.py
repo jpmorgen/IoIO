@@ -1022,21 +1022,22 @@ def standard_star_directory(directory,
 
     return [extinction_data, exposure_correct_data]
 
+# --> This is not necessarily the best name
 def filter_stripchart(df=None,
                       title=None,
                       column=None,
                       outname=None,
                       show=False):
-    plot_date_range = [np.min(df['min_plot_date']),
-                       np.max(df['max_plot_date'])]
     filters = list(set(df['filter']))
     filters.sort()
     filters.reverse()
     nfilt = len(filters)
-    f = plt.figure(figsize=[8.5, 11])
-    plt.suptitle(f"{title}")
+    if outname or show:
+        f = plt.figure(figsize=[8.5, 11])
+        plt.suptitle(f"{title}")
+        plot_date_range = [np.min(df['min_plot_date']),
+                           np.max(df['max_plot_date'])]
     summary_list = []
-    #print(title)
     for ifilt, filt in enumerate(filters):
         filtdf = df[df['filter'] == filt]
         to_plot = filtdf[column]
@@ -1046,7 +1047,15 @@ def filter_stripchart(df=None,
             col_unit = df.iloc[0][f'{column}_unit']
         else:
             col_unit = ''
-        #print(f'{filt} {biweight_loc:.4g} +/- {mads:.2g} {col_unit}')
+        summary_dict = {'filt': filt,
+                        'biweight_loc': biweight_loc,
+                        'mad_std': mads,
+                        'unit': col_unit}
+        summary_list.append(summary_dict)
+        if not(outname or show):
+            continue
+
+        # If we made it here, we want to include a plot as output
         ax = plt.subplot(nfilt, 1, ifilt+1)
         ax.tick_params(which='both', direction='inout',
                        bottom=True, top=True, left=True, right=True)
@@ -1062,18 +1071,24 @@ def filter_stripchart(df=None,
         plt.text(0.5, 0.8, 
                  f' {biweight_loc:.4g} +/- {mads:.2g}',
                  ha='center', va='bottom', transform=ax.transAxes)
-        summary_dict = {'filt': filt,
-                        'biweight_loc': biweight_loc,
-                        'mad_std': mads,
-                        'unit': col_unit}
-        summary_list.append(summary_dict)
-    # Put slanted date axis on bottom plot
-    f.autofmt_xdate()
+
+    if outname or show:
+        # Put slanted date axis on bottom plot
+        f.autofmt_xdate()
     if outname:
         savefig_overwrite(outname, transparent=True)
     if show:
         plt.show()
+
     return summary_list
+
+def filt_quantity(filt, data):
+    """Returns tuple of Quantity: biweight_loc and mad_std for a particular filter in a list of dictionaries containing the appropriate tags"""
+    filt_data = [r for r in data if r['filt'] == filt]
+    filt_data = filt_data[0]
+    unit = u.Unit(filt_data['unit'])
+    return (filt_data['biweight_loc']*unit,
+            filt_data['mad_std']*unit)
 
 def standard_star_tree(raw_data_root=RAW_DATA_ROOT,
                        start=None,
@@ -1122,6 +1137,7 @@ def standard_star_tree(raw_data_root=RAW_DATA_ROOT,
 
 class StandardStar():
     def __init__(self,
+                 reduce=False,
                  raw_data_root=RAW_DATA_ROOT,
                  start=None,
                  stop=None,
@@ -1134,9 +1150,10 @@ class StandardStar():
                  create_outdir=True,                       
                  show=False,
                  ccddata_cls=CorDataBase,
-                 outdir_root=STANDARD_STAR_ROOT,                       
+                 outdir_root=STANDARD_STAR_ROOT,
+                 write_summary_plots=False,
                  **kwargs):
-        self.raw_data_root = raw_data_roo
+        self.raw_data_root = raw_data_root
         self.start = start
         self.stop = stop
         self.calibration = calibration
@@ -1153,6 +1170,22 @@ class StandardStar():
         self._reduction_products = None
         self._extinction_data = None
         self._exposure_correct_data = None
+        self._extinction_data_frame = None
+        self.write_summary_plots = write_summary_plots
+        self._rd = None
+        self._zero_points = None
+        self._rayleigh_conversions = None
+        self._extinction_coefs = None
+        if reduce:
+            # This will reduce all the data with standard_star_tree
+            # and write the following three plots, if desired
+            self.zero_points
+            self.rayleigh_conversions
+            self.extinction_coefs
+            # This plot is separate
+            if self.write_summary_plots:
+                self.exposure_correct_plot()
+        
     # The standard_star_tree code uses IoIO.utils.cached_csv, which
     # returns a list of dictionary lists, one per CSV/file reduction
     # product.  Unfortunately, you have to know based on the code,
@@ -1193,65 +1226,186 @@ class StandardStar():
             return self._exposure_correct_data
         self._exposure_correct_data = self.reduction_products[1]
         return self._exposure_correct_data
-        
+
+    # This no longer depends on order-specific output of standard_star_tree
+    @property
+    def extinction_data_frame(self):
+        if self._extinction_data_frame is not None:
+            return self._extinction_data_frame
+        # --> I tried filtering like this and it didn't really change
+        # the result
+        # -->     df = df[df['extinction_coef'] > 0]
+        self._extinction_data_frame = pd.DataFrame(self.extinction_data)
+        return self._extinction_data_frame
+
+    @property
+    def start_str(self):
+        if self.start is None:
+            return ''
+        return self.start + '--'
+
+    @property
+    def stop_str(self):
+        if self.stop is None:
+            return ''
+        return self.stop + '_'
+
+    @property
+    def rd(self):
+        if self._rd is not None:
+            return self._rd
+        self._rd = reduced_dir(self.raw_data_root, self.outdir_root,
+                               create=self.write_summary_plots)
+        return self._rd
+    
+    def exposure_correct_plot(self):
+        if self.write_summary_plots:
+            outname = os.path.join(self.rd,
+                                   f'{self.start_str}{self.stop_str}'
+                                   f'exposure_correction.png')
+        else:
+            outname = None
+        exposure_correct_plot(self.exposure_correct_data,
+                              outname=outname,
+                              latency_change_dates=sx694.latency_change_dates,
+                              show=self.show)
+
+    @property
     def zero_points(self):
-        
-        
+        if self._zero_points is not None and not self.write_summary_plots:
+            return self._zero_points
 
-    # Create summary plots
-    rd = reduced_dir(raw_data_root, outdir_root, create=True)
-    # This is fast enough so that I don't need to save the plots.
-    # Easier to just run with show=True and manipilate the plot by hand
-    if start is None:
-        start_str = ''
-    else:
-        start_str = start + '--'
-    if stop is None:
-        stop_str = ''
-    else:
-        stop_str = stop + '_'
-    outname = os.path.join(rd,
-                           f"{start_str}{stop_str}exposure_correction.png")
-    exposure_correct_plot(exposure_correct_data,
-                          outname=outname,
-                          latency_change_dates=sx694.latency_change_dates,
-                          show=show)
+        zero_point_unit = self.extinction_data_frame.iloc[0]['zero_point_unit']
+        outbase = os.path.join(self.rd,
+                               f'{self.start_str}{self.stop_str}zero_point')
+        if self.write_summary_plots:
+            outname = outbase+'.png'
+        else:
+            outname = None
+        self._zero_points = cached_csv(filter_stripchart, outbase+'.csv',
+                                       read_csvs=False, write_csvs=True,
+                                       show=self.show,
+                                       df=self.extinction_data_frame,
+                                       title=(f'Vega zero point magnitiudes '
+                                              f'{zero_point_unit}'),
+                                       column='zero_point',
+                                       outname=outname)
+        return self._zero_points
 
-    df = pd.DataFrame(extinction_data)
-    # Filter out bogus extinction_coef.  Might have an upper limit as well
-    df = df[df['extinction_coef'] > 0]
-    zero_point_unit = df.iloc[0]['zero_point_unit']
-    outbase = os.path.join(rd,
-                           f"{start_str}{stop_str}zero_point")
-    zero_points = cached_csv(filter_stripchart, outbase+'.csv',
-                             read_csvs=False, write_csvs=True, show=show,
-                             df=df,
-                             title=(f'Vega zero point magnitiudes '
-                                    f'{zero_point_unit}'),
-                             column='zero_point',
-                             outname=outbase+'.png')
-    rayleigh_conversion_unit = df.iloc[0]['rayleigh_conversion_unit']
-    outbase = os.path.join(rd,
-                           f"{start_str}{stop_str}rayleigh_conversion")
-    rayleigh_conversions = cached_csv(filter_stripchart, outbase+'.csv',
-                                      read_csvs=False,
-                                      write_csvs=True,
-                                      show=show,
-                                      df=df,
-                                      title=(f'Rayleigh Conversion '
-                                             f'{rayleigh_conversion_unit}'),
-                                      column='rayleigh_conversion',
-                                      outname=outbase+'.png')
-    outbase = os.path.join(rd,
-                           f"{start_str}{stop_str}extinction_coefs")
-    extinction_coefs = cached_csv(filter_stripchart, outbase+'.csv',
-                                  read_csvs=False, write_csvs=True,
-                                  show=show, df=df,
-                                  title=f'Extinction coefficients',
-                                  column='extinction_coef',
-                                  outname=outbase+'.png')
-               
-    return [zero_points, rayleigh_conversions, extinction_coefs]
+    @property
+    def rayleigh_conversions(self):
+        if (self._rayleigh_conversions is not None
+            and not self.write_summary_plots):
+            return self._rayleigh_conversions
+
+        outbase = os.path.join(self.rd,
+                               f'{self.start_str}{self.stop_str}'
+                               f'rayleigh_conversion')
+        if self.write_summary_plots:
+            outname = outbase+'.png'
+        else:
+            outname = None
+        rayleigh_conversion_unit = \
+            self.extinction_data_frame.iloc[0]['rayleigh_conversion_unit']
+        self._rayleigh_conversions = \
+            cached_csv(filter_stripchart, outbase+'.csv',
+                       read_csvs=False,
+                       write_csvs=True,
+                       show=self.show,
+                       df=self.extinction_data_frame,
+                       title=(f'Rayleigh Conversion '
+                              f'{rayleigh_conversion_unit}'),
+                       column='rayleigh_conversion',
+                       outname=outname)
+        return self._rayleigh_conversions
+
+    @property
+    def extinction_coefs(self):
+        if (self._extinction_coefs is not None
+            and not self.write_summary_plots):
+            return self._extinction_coefs
+
+        outbase = os.path.join(self.rd,
+                               f'{self.start_str}{self.stop_str}'
+                               f'extinction_coefs')
+        if self.write_summary_plots:
+            outname = outbase+'.png'
+        else:
+            outname = None
+        self._extinction_coefs = \
+            cached_csv(filter_stripchart, outbase+'.csv',
+                       read_csvs=False,
+                       write_csvs=True,
+                       show=self.show,
+                       df=self.extinction_data_frame,
+                       title=f'Extinction coefficients',
+                       column='extinction_coef',
+                       outname=outname)
+        return self._extinction_coefs
+
+    def zero_point(self, filt):
+        return filt_quantity(filt, self.zero_points)
+
+    def rayleigh_conversion(self, filt):
+        return filt_quantity(filt, self.rayleigh_conversions)
+                             
+    def extinction_coef(self, filt):
+        return filt_quantity(filt, self.extinction_coefs)
+
+    #### Create summary plots
+    ###rd = reduced_dir(raw_data_root, outdir_root, create=True)
+    #### This is fast enough so that I don't need to save the plots.
+    #### Easier to just run with show=True and manipilate the plot by hand
+    ###if start is None:
+    ###    start_str = ''
+    ###else:
+    ###    start_str = start + '--'
+    ###if stop is None:
+    ###    stop_str = ''
+    ###else:
+    ###    stop_str = stop + '_'
+    ###outname = os.path.join(rd,
+    ###                       f"{start_str}{stop_str}exposure_correction.png")
+    ###exposure_correct_plot(exposure_correct_data,
+    ###                      outname=outname,
+    ###                      latency_change_dates=sx694.latency_change_dates,
+    ###                      show=show)
+    ###
+    ###df = pd.DataFrame(extinction_data)
+    #### Filter out bogus extinction_coef.  Might have an upper limit as well
+    ###df = df[df['extinction_coef'] > 0]
+    ###zero_point_unit = df.iloc[0]['zero_point_unit']
+    ###outbase = os.path.join(rd,
+    ###                       f"{start_str}{stop_str}zero_point")
+    ###zero_points = cached_csv(filter_stripchart, outbase+'.csv',
+    ###                         read_csvs=False, write_csvs=True, show=show,
+    ###                         df=df,
+    ###                         title=(f'Vega zero point magnitiudes '
+    ###                                f'{zero_point_unit}'),
+    ###                         column='zero_point',
+    ###                         outname=outbase+'.png')
+    ###rayleigh_conversion_unit = df.iloc[0]['rayleigh_conversion_unit']
+    ###outbase = os.path.join(rd,
+    ###                       f"{start_str}{stop_str}rayleigh_conversion")
+    ###rayleigh_conversions = cached_csv(filter_stripchart, outbase+'.csv',
+    ###                                  read_csvs=False,
+    ###                                  write_csvs=True,
+    ###                                  show=show,
+    ###                                  df=df,
+    ###                                  title=(f'Rayleigh Conversion '
+    ###                                         f'{rayleigh_conversion_unit}'),
+    ###                                  column='rayleigh_conversion',
+    ###                                  outname=outbase+'.png')
+    ###outbase = os.path.join(rd,
+    ###                       f"{start_str}{stop_str}extinction_coefs")
+    ###extinction_coefs = cached_csv(filter_stripchart, outbase+'.csv',
+    ###                              read_csvs=False, write_csvs=True,
+    ###                              show=show, df=df,
+    ###                              title=f'Extinction coefficients',
+    ###                              column='extinction_coef',
+    ###                              outname=outbase+'.png')
+    ###           
+    ###return [zero_points, rayleigh_conversions, extinction_coefs]
 
 
 class SSArgparseHandler(CalArgparseHandler):
@@ -1297,6 +1451,18 @@ class SSArgparseHandler(CalArgparseHandler):
                                  default=default,
                                  help=help, **kwargs)
 
+    def add_write_summary_plots(self, 
+                 default=False,
+                 help=None,
+                 **kwargs):
+        option = 'write_summary_plots'
+        if help is None:
+            help = (f'Write summary plots to standard_star_root')
+        self.parser.add_argument('--' + option,
+                                 action=argparse.BooleanOptionalAction,
+                                 default=default,
+                                 help=help, **kwargs)
+
     def add_all(self):
         """Add options used in cmd"""
         super().add_all()
@@ -1308,21 +1474,25 @@ class SSArgparseHandler(CalArgparseHandler):
         self.add_read_csvs(default=True)
         self.add_write_csvs(default=True)
         self.add_show()
+        self.add_write_summary_plots()
 
     def cmd(self, args):
-        c = super().cmd(args)
-        standard_star_tree(raw_data_root=args.raw_data_root,
-                           outdir_root=args.standard_star_root,
-                           start=args.standard_star_start,
-                           stop=args.standard_star_stop,
-                           calibration=c,
-                           read_csvs=args.read_csvs,
-                           write_csvs=args.write_csvs,
-                           read_pout=args.read_pout,
-                           write_pout=args.write_pout,
-                           show=args.show,
-                           num_processes=args.num_processes,
-                           fits_fixed_ignore=args.fits_fixed_ignore)
+        c = CalArgparseHandler.cmd(self, args)
+        ss = StandardStar(reduce=True,
+                          raw_data_root=args.raw_data_root,
+                          outdir_root=args.standard_star_root,
+                          start=args.standard_star_start,
+                          stop=args.standard_star_stop,
+                          calibration=c,
+                          read_csvs=args.read_csvs,
+                          write_csvs=args.write_csvs,
+                          read_pout=args.read_pout,
+                          write_pout=args.write_pout,
+                          show=args.show,
+                          write_summary_plots=args.write_summary_plots,
+                          num_processes=args.num_processes,
+                          fits_fixed_ignore=args.fits_fixed_ignore)
+        return c, ss
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -1885,3 +2055,8 @@ if __name__ == '__main__':
 ### plt.gcf().autofmt_xdate()
 ### plt.show()
 ### 
+
+#ss = StandardStar()
+#print(ss.extinction_coefs)
+#
+#print(ss.extinction_coef('Na_on'))
