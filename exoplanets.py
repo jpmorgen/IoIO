@@ -91,6 +91,14 @@ barycentric dynamic time (TDB) and insert it as the JDBARY FITS key"""
                after=True)
     return ccd
 
+def expo_calc(vmag):
+    # TOI-2109 was nice reference
+    vmag = vmag*u.mag(u.ct/u.s)
+    toi_mag = 10*u.mag(u.ct/u.s)
+    toi_expo = 20*u.s
+    dmag = toi_mag - vmag
+    return toi_expo * dmag.physical
+
 if __name__ == "__main__":
     log.setLevel('DEBUG')
  

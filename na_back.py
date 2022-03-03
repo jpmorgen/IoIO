@@ -2,13 +2,12 @@
 
 import gc
 import os
-import pickle
 from cycler import cycler
 
 import numpy as np
 
 import matplotlib.pyplot as plt
-from matplotlib.dates import julian2num#, datestr2num
+from matplotlib.dates import julian2num
 
 import pandas as pd
 
@@ -23,41 +22,91 @@ from astropy.coordinates import solar_system_ephemeris, get_body
 
 from ccdproc import ImageFileCollection
 
-from bigmultipipe import no_outfile
-from bigmultipipe import cached_pout, prune_pout
+from bigmultipipe import no_outfile, cached_pout, prune_pout
 
-# --> These need to be cleaned up
-from cormultipipe import RAW_DATA_ROOT, NA_OFF_ON_RATIO
-from cormultipipe import CorMultiPipe, FwRedCorData, Calibration
-from cormultipipe import reduced_dir, get_dirs_dates, valid_long_exposure
-from cormultipipe import multi_row_selector, closest_in_time
-from cormultipipe import multi_filter_proc, combine_masks
-from cormultipipe import im_med_min_max, add_history
+from IoIO.utils import (reduced_dir, get_dirs_dates, closest_in_time,
+                        valid_long_exposure, im_med_min_max,
+                        add_history, cached_csv, iter_polyfit, 
+                        simple_show, savefig_overwrite)
+from IoIO.cordata_base import CorDataBase
+from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
+                               CorMultiPipeBase, 
+                               nd_filter_mask,
+                               multi_filter_proc, combine_masks)
+from IoIO.calibration import Calibration, CalArgparseHandler
+from IoIO.standard_star import (extinction_correct,
+                                StandardStar, SSArgparseHandler)
+from IoIO.photometry import Photometry
 
-from IoIO.utils import savefig_overwrite
-from photometry import Photometry
+NA_BACK_ROOT = os.path.join(IoIO_ROOT, 'Na_back')
 
 # For Photometry -- number of boxes for background calculation
 N_BACK_BOXES = 20
 
+def sun_angle(ccd,
+              bmp_meta=None,
+              **kwargs):
+    # Put time and sun angle into bmp_meta
+    date_obs = ccd.meta.get('DATE-AVG') or ccd.meta.get('DATE-OBS')
+    objctra = ccd.meta['OBJCTRA']
+    objctdec = ccd.meta['OBJCTDEC']
+    tm = Time(date_obs, format='fits')
+    lon = ccd.meta.get('LONG-OBS') or ccd.meta.get('SITELONG')
+    lat = ccd.meta.get('LAT-OBS') or ccd.meta.get('SITELAT')
+    alt = ccd.meta.get('ALT-OBS') or 1096.342 * u.m
+    loc = EarthLocation(lat=lat, lon=lon, height=alt)
+    with solar_system_ephemeris.set('builtin'):
+        sun = get_body('sun', tm, loc)
+    ra = Angle(objctra, unit=u.hour)
+    dec = Angle(objctdec, unit=u.deg)
+    # Beware the default frame of SkyCoord is ICRS, which is relative
+    # to the solar system Barycenter and jup [sun] is returned in GCRS,
+    # which is relative ot the earth's center-of-mass.  separation()
+    # is not commutative when the two different frames are used, when
+    # one includes a solar system object (e.g. Jupiter), since the 3D
+    # position of the point of reference and one of the objects is
+    # considered.  Specifying the GCRS frame of jup for our telescope
+    # RA and DEC SkyCoord does no harm for non-solar system objects
+    # (distance is too far to matter) but does set the observing time,
+    # which also does us no harm in this case, since it happens to be
+    # the actual observing time.
+    this_pointing = SkyCoord(frame=sun.frame, ra=ra, dec=dec)
+    sun_angle = this_pointing.separation(sun)
+    bmp_meta['sun_angle'] = sun_angle.value
+    bmp_meta['sun_angle_unit'] = sun_angle.unit
+    return ccd
+
 def na_back_process(data,
                     in_name=None,
                     bmp_meta=None,
+                    calibration=None,
                     photometry=None,
                     n_back_boxes=N_BACK_BOXES,
                     show=False,
-                    off_on_ratio=NA_OFF_ON_RATIO,
+                    off_on_ratio=None,
                     **kwargs):
     """post-processing routine that processes a *pair* of ccd images
     in the order on-band, off-band"""
     if bmp_meta is None:
         bmp_meta = {}
+    if off_on_ratio is None and calibration is None:
+        calibration = Calibration(reduce=True)
     if photometry is None:
         photometry = Photometry(precalc=True,
                                 n_back_boxes=n_back_boxes,
                                 **kwargs)
-    raoff0 = data[0].meta.get('RAOFF') or 0
-    decoff0 = data[0].meta.get('DECOFF') or 0
+    if off_on_ratio is None:
+        off_on_ratio, _ = calibration.flat_ratio('Na')
+    ccd = data[0]
+    date_obs = ccd.meta.get('DATE-AVG') or ccd.meta.get('DATE-OBS')
+    tm = Time(date_obs, format='fits')
+    just_date, _ = date_obs.split('T')
+    objctra = Angle(ccd.meta['OBJCTRA'])
+    objctdec = Angle(ccd.meta['OBJCTDEC'])
+    objctalt = ccd.meta['OBJCTALT']
+    objctaz = ccd.meta['OBJCTAZ']
+    raoff0 = ccd.meta.get('RAOFF') or 0
+    decoff0 = ccd.meta.get('DECOFF') or 0
     fluxes = []
     for ccd in data:
         raoff = ccd.meta.get('RAOFF') or 0
@@ -83,39 +132,7 @@ def na_back_process(data,
     # moving.  This uses the existing bias light/dark patch routine to
     # get uncontaminated part --> consider making this smarter
     best_back, _ = im_med_min_max(background)
-
-    # Note that we are using ccd, which at this point is the off-band
-    # image.  But the on and off metadata for these quantities should
-    # the same for both
-
-    # Put time and sun angle into bmp_meta
-    date_obs = ccd.meta.get('DATE-AVG') or ccd.meta.get('DATE-OBS')
-    just_date, _ = date_obs.split('T')
-    objctra = ccd.meta['OBJCTRA']
-    objctdec = ccd.meta['OBJCTDEC']
-    tm = Time(date_obs, format='fits')
-    lon = ccd.meta.get('LONG-OBS') or ccd.meta.get('SITELONG')
-    lat = ccd.meta.get('LAT-OBS') or ccd.meta.get('SITELAT')
-    alt = ccd.meta.get('ALT-OBS') or 1096.342 * u.m
-    loc = EarthLocation(lat=lat, lon=lon, height=alt)
-    with solar_system_ephemeris.set('builtin'):
-        sun = get_body('sun', tm, loc)
-    ra = Angle(objctra, unit=u.hour)
-    dec = Angle(objctdec, unit=u.deg)
-    # Beware the default frame of SkyCoord is ICRS, which is relative
-    # to the solar system Barycenter and jup [sun] is returned in GCRS,
-    # which is relative ot the earth's center-of-mass.  separation()
-    # is not commutative when the two different frames are used, when
-    # one includes a solar system object (e.g. Jupiter), since the 3D
-    # position of the point of reference and one of the objects is
-    # considered.  Specifying the GCRS frame of jup for our telescope
-    # RA and DEC SkyCoord does no harm for non-solar system objects
-    # (distance is too far to matter) but does set the observing time,
-    # which also does us no harm in this case, since it happens to be
-    # the actual observing time.
-    this_pointing = SkyCoord(frame=sun.frame, ra=ra, dec=dec)
-    sun_angle = this_pointing.separation(sun)
-
+    best_back_std = np.std(background)
 
     # Mesosphere is above the stratosphere, where the density of the
     # atmosphere diminishes to very small values.  So all attenuation
@@ -123,18 +140,24 @@ def na_back_process(data,
     # sodium layer
     # https://en.wikipedia.org/wiki/Atmosphere_of_Earth#/media/File:Comparison_US_standard_atmosphere_1962.svg
     airmass = data[0].meta.get('AIRMASS')
+
+    # We are going to turn this into a Pandas dataframe, which does
+    # not do well with units, so just return everything
     tmeta = {'best_back': best_back.value,
+             'best_back_std': best_back_std.value,
+             'back_unit': best_back.unit.to_string(),
              'date': just_date,
-             'date_obs': tm,
-             'jd': tm.jd,
+             'date_obs': date_obs,
+             'plot_date': tm.plot_date,
              'raoff': raoff0,
              'decoff': decoff0,
-             'ra': objctra,
-             'dec': objctdec,
+             'ra': objctra.value,
+             'dec': objctdec.value,
              'alt': objctalt,
              'az': objctaz,
-             'airmass': airmass,
-             'sun_angle': sun_angle.value}
+             'airmass': airmass}
+    # Add sun angle
+    _ = sun_angle(data[0], bmp_meta=tmeta, **kwargs)
     bmp_meta['Na_back'] = tmeta
 
     # In production, we don't plan to write the file, but prepare the
@@ -150,17 +173,18 @@ def na_back_process(data,
                 'Subtracted OFFBAND, smoothed over N_BACK_BOXES')
     return data
 
-def na_back_pipeline(directory=None,
+def na_back_pipeline(directory=None, # raw directory
                      glob_include='Jupiter*',
                      calibration=None,
                      photometry=None,
                      n_back_boxes=N_BACK_BOXES,
                      num_processes=None,
                      outdir=None,
+                     outdir_root=NA_BACK_ROOT,
                      create_outdir=True,
                      **kwargs):
 
-    outdir = outdir or reduced_dir(directory, create=False)
+    outdir = outdir or reduced_dir(directory, outdir_root, create=False)
     collection = ImageFileCollection(directory,
                                      glob_include=glob_include)
     if collection is None:
@@ -198,7 +222,7 @@ def na_back_pipeline(directory=None,
                                 **kwargs)
         
     # Eventually put back in
-    cmp = CorMultiPipe(
+    cmp = CorMultiPipeBase(
         auto=True,
         calibration=calibration,
         photometry=photometry,
@@ -218,33 +242,43 @@ def na_back_pipeline(directory=None,
     return pout
 
 def na_back_directory(directory,
-                      calibration=True,
+                      pout=None,
                       read_pout=True,
                       write_pout=True,
                       write_plot=True,
+                      outdir=None,
                       create_outdir=True,
                       show=False,
                       **kwargs):
-    rd = reduced_dir(directory, create=False)
-    poutname = os.path.join(rd, 'Na_back.pout')
-    pout = cached_pout(na_back_pipeline,
-                       poutname=poutname,
-                       read_pout=read_pout,
-                       write_pout=write_pout,
-                       create_outdir=create_outdir,
-                       directory=directory,                       
-                       **kwargs)
+    
+    poutname = os.path.join(outdir, 'Na_back.pout')
+    pout = pout or cached_pout(na_back_pipeline,
+                               poutname=poutname,
+                               read_pout=read_pout,
+                               write_pout=write_pout,
+                               directory=directory,
+                               outdir=outdir,
+                               create_outdir=create_outdir,
+                               **kwargs)
     if len(pout) == 0:
-        log.debug(f'no Na background measurements found in {directory}')
+        #log.debug(f'no Na background measurements found in {directory}')
         return {}
+
     _ , pipe_meta = zip(*pout)
     na_back_list = [pm['Na_back'] for pm in pipe_meta]
     df = pd.DataFrame(na_back_list)
-    df.sort_values('jd')
     just_date = df['date'].iloc[0]
 
-    instr_mag = u.Magnitude(df['best_back']*u.electron/u.s/u.pix**2)
-    df['instr_mag'] = instr_mag
+    bunit = u.Unit(df['back_unit'].iloc[0])
+    instr_mag = u.Magnitude(df['best_back']*bunit/u.pix**2)
+    sun_angle = df['sun_angle']
+    
+    #df.sort_values('sun_angle')
+    #plt.errorbar(df['sun_angle'], df['best_back'],
+    #             yerr=df['best_back_std'], fmt='k.')
+    #plt.show()
+
+    return na_back_list
 
     #tdf = df.loc[df['airmass'] < 2.0]
     tdf = df.loc[df['airmass'] < 2.5]
@@ -334,8 +368,12 @@ def na_back_tree(data_root=RAW_DATA_ROOT,
                  stop=None,
                  calibration=None,
                  photometry=None,
+                 read_csvs=True,
+                 write_csvs=True,
+                 create_outdir=True,                       
                  show=False,
-                 ccddata_cls=FwRedCorData, # less verbose
+                 ccddata_cls=CorDataBase,
+                 outdir_root=NA_BACK_ROOT,                 
                  **kwargs):
     dirs_dates = get_dirs_dates(data_root, start=start, stop=stop)
     dirs, _ = zip(*dirs_dates)
@@ -347,19 +385,27 @@ def na_back_tree(data_root=RAW_DATA_ROOT,
     if photometry is None:
         photometry = Photometry(precalc=True, **kwargs)
 
-    to_plot_list = []
+    #to_plot_list = []
     na_back_list = []
-    for d in dirs:
-        nb = na_back_directory(d,
+    for directory in dirs:
+        rd = reduced_dir(directory, outdir_root, create=False)
+        nb = na_back_directory(directory,
+                               outdir=rd,
+                               create_outdir=create_outdir,
                                calibration=calibration,
                                photometry=photometry,
                                ccddata_cls=ccddata_cls,
                                **kwargs)
         if nb == {}:
             continue
-        na_back_list.extend(nb['na_back_list'])
-        del nb['na_back_list']
-        to_plot_list.append(nb)
+        #na_back_list.extend(nb['na_back_list'])
+        na_back_list.extend(nb)
+        #del nb['na_back_list']
+        #to_plot_list.append(nb)
+
+    # --> Change me!
+    return na_back_list
+
 
     # --> write to_plot_list
     df = pd.DataFrame(to_plot_list)
@@ -379,11 +425,166 @@ def na_back_tree(data_root=RAW_DATA_ROOT,
 
 log.setLevel('DEBUG')
 
-#pout = na_back_test_cache('/data/io/IoIO/raw/20210617')
-#pout = na_back_pipeline('/data/io/IoIO/raw/20210617')#, show=True)
-#pout = na_back_directory('/data/io/IoIO/raw/20210617')#, show=True)
-#pout = na_back_tree(start='2021-06-17', stop='2021-06-18', show=True)
-#pout = na_back_tree(start='2021-01-01', show=True)
-pout = na_back_tree(show=True)
-print(pout)
-#print(pair_list)
+
+#on_fname = '/data/IoIO/raw/20210617/Jupiter-S007-R001-C001-Na_on.fts'
+#off_fname = '/data/IoIO/raw/20210617/Jupiter-S007-R001-C001-Na_off.fts'
+#on = CorDataBase.read(on_fname)
+#off = CorDataBase.read(off_fname)
+#bmp_meta = {}
+#ccd = na_back_process([on, off], in_name=[on_fname, off_fname],
+#                      bmp_meta=bmp_meta)#, show=True)
+#pout = na_back_pipeline('/data/IoIO/raw/20210617')
+#pout = na_back_directory('/data/IoIO/raw/20210617', outdir='/tmp', read_pout=True, fits_fixed_ignore=True)#, show=True)
+na_back_list = na_back_tree(fits_fixed_ignore=True)#, read_pout=False)
+
+df = pd.DataFrame(na_back_list)
+df.sort_values('sun_angle')
+
+angle_unit = df['sun_angle_unit'].iloc[0]
+back_unit = df['back_unit'].iloc[0]
+instr_mag = u.Magnitude(df['best_back']*u.Unit(back_unit))
+instr_mag_err = u.Magnitude(df['best_back_std']*u.Unit(back_unit))
+
+ss = StandardStar()
+ext_coef, ext_coef_err = ss.extinction_coef('Na_on')
+airmass = df['airmass'].to_numpy()
+#ext_corrected_mag = instr_mag - (ext_coef.value*airmass)*ext_coef.unit
+ext_corrected_mag = ss.extinction_correct(instr_mag, airmass, 'Na_on')
+airmass_poly = iter_polyfit(df['airmass'],
+                            ext_corrected_mag, deg=1, max_resid=1)
+na_column_poly = airmass_poly.deriv()
+na_column = na_column_poly(0)*ext_corrected_mag.unit
+#volumetric_mag = extinction_correct(ext_corrected_mag, df['airmass'], na_column)
+volumetric_mag = extinction_correct(ext_corrected_mag.value,
+                                    df['airmass'], na_column.value)
+
+sun_angle_poly = iter_polyfit(np.sin(np.radians(df['sun_angle'])),
+                              volumetric_mag, deg=1, max_resid=1)
+sun_stimulation_poly = sun_angle_poly.deriv()
+sun_stimulation = sun_stimulation_poly(0)
+sun_stim_mag =  extinction_correct(volumetric_mag,
+                                   np.sin(np.radians(df['sun_angle'])),
+                                   sun_stimulation)
+
+
+chemilum_delay = 90 # deg
+chemilum_rad = np.radians(df['sun_angle'] - chemilum_delay)
+chemilum_poly = iter_polyfit(np.sin(chemilum_rad),
+                             sun_stim_mag, deg=1, max_resid=2)
+chemilum_poly_deriv = chemilum_poly.deriv()
+chemilum_deriv = chemilum_poly_deriv(0)
+chemilum_mag =  extinction_correct(sun_stim_mag,
+                                   np.sin(chemilum_rad),
+                                   chemilum_deriv)
+
+## # Shows that we take data on both sides of the sky relative to the
+## # sun, but most away from the sun
+## ax = plt.subplot()
+## plt.plot(df['sun_angle'], df['airmass'], 'k.')
+## plt.xlabel(f'sun_angle ({angle_unit})')
+## plt.ylabel(f'airmass')
+## plt.show()
+## 
+## ax = plt.subplot()
+## plt.errorbar(df['sun_angle'], df['best_back'],
+##              yerr=df['best_back_std'], fmt='k.')
+## plt.xlabel(f'sun_angle ({angle_unit})')
+## plt.ylabel(f'best_back ({back_unit})')
+## ax.set_ylim([0, 0.15])
+## plt.show()
+## 
+## # Shows correlation that high airmasses make *more* background.  Must
+## # be higher column through emission region
+## ax = plt.subplot()
+## plt.errorbar(df['airmass'], df['best_back'],
+##              yerr=df['best_back_std'], fmt='k.')
+## plt.xlabel(f'airmass')
+## plt.ylabel(f'best_back ({back_unit})')
+## ax.set_ylim([0, 0.15])
+## plt.show()
+## 
+## ax = plt.subplot()
+## #plt.errorbar(df['airmass'], instr_mag.value,
+## #             yerr=instr_mag_err.value, fmt='k.')
+## plt.plot(df['airmass'], instr_mag, 'k.')
+## plt.xlabel(f'airmass')
+## plt.ylabel(f'best_back ({back_unit})')
+## plt.gca().invert_yaxis()
+## #ax.set_ylim([0, 0.15])
+## plt.show()
+## 
+## ax = plt.subplot()
+## #plt.errorbar(df['airmass'], instr_mag.value,
+## #             yerr=instr_mag_err.value, fmt='k.')
+## plt.plot(df['airmass'], ext_corrected_mag, 'k.')
+## plt.plot(df['airmass'], airmass_poly(df['airmass']), 'r-')
+## plt.xlabel(f'airmass')
+## plt.ylabel(f'extinction corrected best_back ({ext_corrected_mag.unit})')
+## plt.gca().invert_yaxis()
+## #ax.set_ylim([0, 0.15])
+## plt.show()
+## 
+## ax = plt.subplot()
+## #plt.errorbar(df['airmass'], instr_mag.value,
+## #             yerr=instr_mag_err.value, fmt='k.')
+## plt.plot(df['airmass'], volumetric_mag, 'k.')
+## plt.xlabel(f'airmass')
+## plt.ylabel(f'volumetric Na emission')
+## plt.gca().invert_yaxis()
+## #ax.set_ylim([0, 0.15])
+## plt.show()
+
+ax = plt.subplot()
+#plt.errorbar(df['airmass'], instr_mag.value,
+#             yerr=instr_mag_err.value, fmt='k.')
+plt.plot(df['sun_angle'], volumetric_mag, 'k.')
+plt.plot(df['sun_angle'],
+         sun_angle_poly(np.sin(np.radians(df['sun_angle']))), 'r.')
+plt.xlabel(f'sun angle')
+plt.ylabel(f'volumetric Na emission')
+plt.gca().invert_yaxis()
+#ax.set_ylim([0, 0.15])
+plt.show()
+
+#ax = plt.subplot()
+##plt.errorbar(df['airmass'], instr_mag.value,
+##             yerr=instr_mag_err.value, fmt='k.')
+#plt.plot(np.sin(np.radians(df['sun_angle'])), sun_stim_mag, 'k.')
+#plt.xlabel(f'sin(sun_angle)')
+#plt.ylabel(f'volumetric Na emission corrected for sun stimulation')
+#plt.gca().invert_yaxis()
+##ax.set_ylim([0, 0.15])
+#plt.show()
+
+ax = plt.subplot()
+#plt.errorbar(df['airmass'], instr_mag.value,
+#             yerr=instr_mag_err.value, fmt='k.')
+plt.plot(df['sun_angle'], sun_stim_mag, 'k.')
+plt.plot(df['sun_angle'],
+         chemilum_poly(np.sin(chemilum_rad)), 'r.')
+plt.xlabel(f'sun_angle')
+plt.ylabel(f'volumetric Na emission corrected for sun stimulation')
+plt.gca().invert_yaxis()
+#ax.set_ylim([0, 0.15])
+plt.show()
+
+ax = plt.subplot()
+#plt.errorbar(df['airmass'], instr_mag.value,
+#             yerr=instr_mag_err.value, fmt='k.')
+plt.plot(df['sun_angle'], chemilum_mag, 'k.')
+plt.xlabel(f'sun_angle')
+plt.ylabel(f'volumetric Na emission corrected for sun stimulation and chemiluminescence')
+plt.gca().invert_yaxis()
+#ax.set_ylim([0, 0.15])
+plt.show()
+
+ax = plt.subplot()
+#plt.errorbar(df['airmass'], instr_mag.value,
+#             yerr=instr_mag_err.value, fmt='k.')
+plt.plot(df['airmass'], chemilum_mag, 'k.')
+plt.xlabel(f'airmass')
+plt.ylabel(f'volumetric Na emission corrected for sun stimulation')
+plt.gca().invert_yaxis()
+#ax.set_ylim([0, 0.15])
+plt.show()
+

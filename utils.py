@@ -366,8 +366,10 @@ def iter_polyfit(x, y, poly_class=Polynomial, deg=1, max_resid=None,
        Best fit `~numpy.polynomial.polynomial.Polynomial`
 
     """
-    x = np.asarray(x)
-    y = np.asarray(y)
+    x = np.asarray(x); y = np.asarray(y)
+    # https://stackoverflow.com/questions/28647172/numpy-polyfit-doesnt-handle-nan-values
+    idx = np.isfinite(x) & np.isfinite(y)
+    x = x[idx]; y = y[idx]
     # Let polyfit report errors in x and y
     poly = poly_class.fit(x, y, deg=deg, **kwargs)
     # We are done if we have just two points
@@ -551,6 +553,8 @@ def cached_csv(dict_list_code,
                     csvdw.writeheader()
                     for d in dict_list:
                         csvdw.writerow(d)
+    if single_dictlist:
+        dict_lists = dict_lists[0]
     return dict_lists    
 
 # https://stackoverflow.com/questions/27704490/interactive-pixel-information-of-an-image-in-python

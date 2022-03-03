@@ -934,8 +934,8 @@ def standard_star_directory(directory,
             flux_am0 = u.Magnitude(instr_mag_am0).physical    
             rayleigh_conversion = star_sb / flux_am0
             zero_point = star_mag - instr_mag_am0
-            extinction = poly.deriv()
-            extinction = extinction(0)
+            extinction_poly = poly.deriv()
+            extinction = extinction_poly(0)*instr_mag_am0.unit
             airmasses = np.asarray(airmasses)
             dof = num_airmass_points - 2
             red_chisq = np.sum((poly(airmasses) - instr_mags)**2) / dof
@@ -948,7 +948,7 @@ def standard_star_directory(directory,
                      ha='center', va='bottom', transform=ax.transAxes)
 
             plt.text(0.5, 0.1, 
-                     f'Extinction = {extinction:.3f} (mag/airmass)',
+                     f'Extinction = {extinction:.3f} / airmass',
                      ha='center', va='bottom', transform=ax.transAxes)
             plt.text(0.13, 0.1, 
                      f'Red. Chisq = {red_chisq:.4f}',
@@ -967,7 +967,8 @@ def standard_star_directory(directory,
                  'rayleigh_conversion': rayleigh_conversion.value,
                  'rayleigh_conversion_unit': 
                  rayleigh_conversion.unit.to_string(), 
-                 'extinction_coef': extinction,
+                 'extinction_coef': extinction.value,
+                 'extinction_coef_unit': extinction.unit.to_string(),
                  'min_am': min(airmasses),
                  'max_am': max(airmasses),
                  'num_airmass_points ': num_airmass_points,
@@ -1090,6 +1091,35 @@ def filt_quantity(filt, data):
     return (filt_data['biweight_loc']*unit,
             filt_data['mad_std']*unit)
 
+def extinction_correct(instr_mag, airmass, ext_coef):
+    """Returns atmospheric extinction corrected instr_mag
+
+    Parameters
+    ----------
+    instr_mag : `~astropy.unit.Quantity` or float
+        Measured instrument magnitude(s) to be corrected, one per 
+        airmass
+
+    airmass : float or numpy.array
+        Airmass(es) at which correction is to be applied, one per 
+        instr_mag
+
+    ext_coef : `~astropy.unit.Quantity` or float
+        Extinction coef in units of instr_mag (per airmass)
+
+    Returns
+    -------
+    airmass corrected instrument magnitude as `~astropy.unit.Quantity`
+    or `float` depending on input
+
+    """
+    if (isinstance(instr_mag, u.Quantity)
+        and isinstance(ext_coef, u.Quantity)):
+        # Avoid error: "Cannot multiply function quantities which are not
+        # dimensionless with anything" but stay in units
+        return instr_mag - (ext_coef.value*airmass)*ext_coef.unit        
+    return instr_mag - ext_coef*airmass
+
 def standard_star_tree(raw_data_root=RAW_DATA_ROOT,
                        start=None,
                        stop=None,
@@ -1135,6 +1165,7 @@ def standard_star_tree(raw_data_root=RAW_DATA_ROOT,
 
     return extinction_data, exposure_correct_data
 
+# --> Eventually add avability to get extinction for individual night 
 class StandardStar():
     def __init__(self,
                  reduce=False,
@@ -1152,6 +1183,7 @@ class StandardStar():
                  ccddata_cls=CorDataBase,
                  outdir_root=STANDARD_STAR_ROOT,
                  write_summary_plots=False,
+                 lockfile=LOCKFILE,
                  **kwargs):
         self.raw_data_root = raw_data_root
         self.start = start
@@ -1166,12 +1198,13 @@ class StandardStar():
         self.show = show
         self.ccddata_cls = ccddata_cls
         self.outdir_root = outdir_root
+        self.write_summary_plots = write_summary_plots
+        self._lockfile = lockfile
         self._kwargs = kwargs
         self._reduction_products = None
         self._extinction_data = None
         self._exposure_correct_data = None
         self._extinction_data_frame = None
-        self.write_summary_plots = write_summary_plots
         self._rd = None
         self._zero_points = None
         self._rayleigh_conversions = None
@@ -1196,6 +1229,12 @@ class StandardStar():
     def reduction_products(self):
         if self._reduction_products is not None:
             return self._reduction_products
+
+        # If we made it here, we have some real work to do
+        # Set a simple lockfile so we don't have multiple processes reducing
+        lock = Lockfile(self._lockfile)
+        lock.create()
+        
         rp = standard_star_tree(raw_data_root=self.raw_data_root,
                                 start=self.start,
                                 stop=self.stop,
@@ -1211,6 +1250,7 @@ class StandardStar():
                                 outdir_root=self.outdir_root,
                                 **self._kwargs)
         self._reduction_products = rp
+        lock.clear()
         return self._reduction_products        
 
     @property
@@ -1352,61 +1392,31 @@ class StandardStar():
     def extinction_coef(self, filt):
         return filt_quantity(filt, self.extinction_coefs)
 
-    #### Create summary plots
-    ###rd = reduced_dir(raw_data_root, outdir_root, create=True)
-    #### This is fast enough so that I don't need to save the plots.
-    #### Easier to just run with show=True and manipilate the plot by hand
-    ###if start is None:
-    ###    start_str = ''
-    ###else:
-    ###    start_str = start + '--'
-    ###if stop is None:
-    ###    stop_str = ''
-    ###else:
-    ###    stop_str = stop + '_'
-    ###outname = os.path.join(rd,
-    ###                       f"{start_str}{stop_str}exposure_correction.png")
-    ###exposure_correct_plot(exposure_correct_data,
-    ###                      outname=outname,
-    ###                      latency_change_dates=sx694.latency_change_dates,
-    ###                      show=show)
-    ###
-    ###df = pd.DataFrame(extinction_data)
-    #### Filter out bogus extinction_coef.  Might have an upper limit as well
-    ###df = df[df['extinction_coef'] > 0]
-    ###zero_point_unit = df.iloc[0]['zero_point_unit']
-    ###outbase = os.path.join(rd,
-    ###                       f"{start_str}{stop_str}zero_point")
-    ###zero_points = cached_csv(filter_stripchart, outbase+'.csv',
-    ###                         read_csvs=False, write_csvs=True, show=show,
-    ###                         df=df,
-    ###                         title=(f'Vega zero point magnitiudes '
-    ###                                f'{zero_point_unit}'),
-    ###                         column='zero_point',
-    ###                         outname=outbase+'.png')
-    ###rayleigh_conversion_unit = df.iloc[0]['rayleigh_conversion_unit']
-    ###outbase = os.path.join(rd,
-    ###                       f"{start_str}{stop_str}rayleigh_conversion")
-    ###rayleigh_conversions = cached_csv(filter_stripchart, outbase+'.csv',
-    ###                                  read_csvs=False,
-    ###                                  write_csvs=True,
-    ###                                  show=show,
-    ###                                  df=df,
-    ###                                  title=(f'Rayleigh Conversion '
-    ###                                         f'{rayleigh_conversion_unit}'),
-    ###                                  column='rayleigh_conversion',
-    ###                                  outname=outbase+'.png')
-    ###outbase = os.path.join(rd,
-    ###                       f"{start_str}{stop_str}extinction_coefs")
-    ###extinction_coefs = cached_csv(filter_stripchart, outbase+'.csv',
-    ###                              read_csvs=False, write_csvs=True,
-    ###                              show=show, df=df,
-    ###                              title=f'Extinction coefficients',
-    ###                              column='extinction_coef',
-    ###                              outname=outbase+'.png')
-    ###           
-    ###return [zero_points, rayleigh_conversions, extinction_coefs]
+    def extinction_correct(self, instr_mag, airmass, filt):
+        """Returns atmospheric extinction corrected instr_mag
 
+        Parameters
+        ----------
+        instr_mag : `~astropy.unit.Quantity`
+            Measured instrument magnitude(s) to be corrected, one per 
+            airmass
+
+        airmass : float or numpy.array
+            Airmass(es) at which correction is to be applied, one per 
+            instr_mag
+
+        filt : str
+            Filter for which extinction correction has been derived
+            by `~standard_star.StandarStar` object
+
+        Returns
+        -------
+        atmospheric extinction corrected instrument magnitude as
+        `~astropy.unit.Quantity` 
+
+        """
+        ext_coef, _ = self.extinction_coef(filt)
+        return extinction_correct(instr_mag, airmass, ext_coef)
 
 class SSArgparseHandler(CalArgparseHandler):
     def add_standard_star_root(self, 
