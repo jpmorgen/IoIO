@@ -32,6 +32,8 @@ from specutils.manipulation import (extract_region,
 
 from bigmultipipe import no_outfile, cached_pout, prune_pout
 
+from precisionguide import pgproperty
+
 from burnashev import Burnashev
 
 import IoIO.sx694 as sx694
@@ -280,7 +282,6 @@ def standard_star_process(ccd,
         return None
     
     tbl = sc.to_table()
-    
     tbl.sort('segment_flux', reverse=True)
 
     # Reject sources with saturated pixels
@@ -294,7 +295,7 @@ def standard_star_process(ccd,
         # Don't forget to clear out the meta
         bmp_meta.clear()
         return None
-    
+
     # tbl['xcentroid'].info.format = '.2f'  # optional format
     # tbl['ycentroid'].info.format = '.2f'
     # tbl['cxx'].info.format = '.2f'
@@ -422,6 +423,7 @@ def standard_star_process(ccd,
              #'background_mean': tbl['background_mean'][0]}
 
     bmp_meta['standard_star'] = tmeta
+    log.debug(f'returning {detflux:.2e} +/- {detflux_err:.2e}')
     return ccd
     
 def standard_star_pipeline(directory,
@@ -1091,14 +1093,14 @@ def filt_quantity(filt, data):
     return (filt_data['biweight_loc']*unit,
             filt_data['mad_std']*unit)
 
-def extinction_correct(instr_mag, airmass, ext_coef):
+def extinction_correct(instr_mag, airmass, ext_coef, inverse=False):
     """Returns atmospheric extinction corrected instr_mag
 
     Parameters
     ----------
     instr_mag : `~astropy.unit.Quantity` or float
         Measured instrument magnitude(s) to be corrected, one per 
-        airmass
+        airmass.
 
     airmass : float or numpy.array
         Airmass(es) at which correction is to be applied, one per 
@@ -1107,18 +1109,41 @@ def extinction_correct(instr_mag, airmass, ext_coef):
     ext_coef : `~astropy.unit.Quantity` or float
         Extinction coef in units of instr_mag (per airmass)
 
+    inverse : bool
+        Invert the extinction correction, where instr_mag is the
+        extinction-corrected value and the raw instr_mag is returned
+        Default is `False`
+
     Returns
     -------
-    airmass corrected instrument magnitude as `~astropy.unit.Quantity`
-    or `float` depending on input
+    Extinction-corrected instrument magnitude as `~astropy.unit.Quantity`
+    or `float` depending on input.  See ``inverse`` keyword
 
     """
     if (isinstance(instr_mag, u.Quantity)
         and isinstance(ext_coef, u.Quantity)):
-        # Avoid error: "Cannot multiply function quantities which are not
-        # dimensionless with anything" but stay in units
-        return instr_mag - (ext_coef.value*airmass)*ext_coef.unit        
-    return instr_mag - ext_coef*airmass
+        assert instr_mag.unit == ext_coef.unit
+        # Units get a little sticky when extinction correcting.  In
+        # log space, we have a simple linear relationship where the
+        # extinction coef is the slope in units of instr_mag/airmass,
+        # where airmass is dimensionless.  Were we to convert to
+        # non-logarithmic units, we would be doing an exponentiation
+        # of the airmass by the extinction coefficient and the result
+        # multiplies the measured instrument magnitude in a
+        # non-dimensional way.  This is what is confusing to astropy,
+        # since, if we were to work with exponentiating mag(electron /
+        # s)[/airmass], the units would be weird.  So astropy just
+        # fails.  Thus, just work in value space and multiply by
+        # proper unit after the fact
+        unit = instr_mag.unit
+        instr_mag = instr_mag.value
+        ext_coef = ext_coef.value
+    else:
+        unit = 1
+    if inverse:
+        ext_coef *= -1
+    ac = instr_mag - ext_coef*airmass
+    return ac*unit
 
 def standard_star_tree(raw_data_root=RAW_DATA_ROOT,
                        start=None,
@@ -1165,7 +1190,9 @@ def standard_star_tree(raw_data_root=RAW_DATA_ROOT,
 
     return extinction_data, exposure_correct_data
 
-# --> Eventually add avability to get extinction for individual night 
+# --> Eventually add avability to get extinction for individual night
+# I am sensing it would be nice to have a base class that handles the
+# start and stop, etc. keyword transfers to property.  Maybe IoIOReduction
 class StandardStar():
     def __init__(self,
                  reduce=False,
@@ -1201,11 +1228,8 @@ class StandardStar():
         self.write_summary_plots = write_summary_plots
         self._lockfile = lockfile
         self._kwargs = kwargs
-        self._reduction_products = None
-        self._extinction_data = None
-        self._exposure_correct_data = None
-        self._extinction_data_frame = None
-        self._rd = None
+        # These can't be handled by pgproperty becaues they are
+        # entangled with the plots via filter_stripchart
         self._zero_points = None
         self._rayleigh_conversions = None
         self._extinction_coefs = None
@@ -1218,20 +1242,23 @@ class StandardStar():
             # This plot is separate
             if self.write_summary_plots:
                 self.exposure_correct_plot()
-        
+
+    @pgproperty
+    def calibration(self):
+        # If the user has opinions about the time range over which
+        # calibration should be done, they should be expressed by
+        # creating the calibration object externally and passing it in
+        # at instantiation time
+        return Calibration(reduce=True)
+
     # The standard_star_tree code uses IoIO.utils.cached_csv, which
     # returns a list of dictionary lists, one per CSV/file reduction
     # product.  Unfortunately, you have to know based on the code,
     # rather than a dictionary, which reduction product is which.
     # Thus, all of the property, below and standard_star_tree are
     # closely linked
-    @property
+    @pgproperty
     def reduction_products(self):
-        if self._reduction_products is not None:
-            return self._reduction_products
-
-        # If we made it here, we have some real work to do
-        # Set a simple lockfile so we don't have multiple processes reducing
         lock = Lockfile(self._lockfile)
         lock.create()
         
@@ -1249,34 +1276,24 @@ class StandardStar():
                                 ccddata_cls=self.ccddata_cls,
                                 outdir_root=self.outdir_root,
                                 **self._kwargs)
-        self._reduction_products = rp
         lock.clear()
-        return self._reduction_products        
+        return rp
 
-    @property
+    @pgproperty
     def extinction_data(self):
-        if self._extinction_data is not None:
-            return self._extinction_data
-        self._extinction_data = self.reduction_products[0]
-        return self._extinction_data
+        return self.reduction_products[0]
         
-    @property
+    @pgproperty
     def exposure_correct_data(self):
-        if self._exposure_correct_data is not None:
-            return self._exposure_correct_data
-        self._exposure_correct_data = self.reduction_products[1]
-        return self._exposure_correct_data
+        return self.reduction_products[1]
 
     # This no longer depends on order-specific output of standard_star_tree
-    @property
+    @pgproperty
     def extinction_data_frame(self):
-        if self._extinction_data_frame is not None:
-            return self._extinction_data_frame
         # --> I tried filtering like this and it didn't really change
         # the result
         # -->     df = df[df['extinction_coef'] > 0]
-        self._extinction_data_frame = pd.DataFrame(self.extinction_data)
-        return self._extinction_data_frame
+        return pd.DataFrame(self.extinction_data)
 
     @property
     def start_str(self):
@@ -1290,17 +1307,14 @@ class StandardStar():
             return ''
         return self.stop + '_'
 
-    @property
-    def rd(self):
-        if self._rd is not None:
-            return self._rd
-        self._rd = reduced_dir(self.raw_data_root, self.outdir_root,
-                               create=self.write_summary_plots)
-        return self._rd
+    @pgproperty
+    def created_outdir_root(self):
+        return reduced_dir(self.raw_data_root, self.outdir_root,
+                           create=self.write_summary_plots)
     
     def exposure_correct_plot(self):
         if self.write_summary_plots:
-            outname = os.path.join(self.rd,
+            outname = os.path.join(self.created_outdir_root,
                                    f'{self.start_str}{self.stop_str}'
                                    f'exposure_correction.png')
         else:
@@ -1316,7 +1330,7 @@ class StandardStar():
             return self._zero_points
 
         zero_point_unit = self.extinction_data_frame.iloc[0]['zero_point_unit']
-        outbase = os.path.join(self.rd,
+        outbase = os.path.join(self.created_outdir_root,
                                f'{self.start_str}{self.stop_str}zero_point')
         if self.write_summary_plots:
             outname = outbase+'.png'
@@ -1338,7 +1352,7 @@ class StandardStar():
             and not self.write_summary_plots):
             return self._rayleigh_conversions
 
-        outbase = os.path.join(self.rd,
+        outbase = os.path.join(self.created_outdir_root,
                                f'{self.start_str}{self.stop_str}'
                                f'rayleigh_conversion')
         if self.write_summary_plots:
@@ -1365,7 +1379,7 @@ class StandardStar():
             and not self.write_summary_plots):
             return self._extinction_coefs
 
-        outbase = os.path.join(self.rd,
+        outbase = os.path.join(self.created_outdir_root,
                                f'{self.start_str}{self.stop_str}'
                                f'extinction_coefs')
         if self.write_summary_plots:
