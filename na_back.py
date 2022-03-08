@@ -1,4 +1,4 @@
-"""Find telluric component for Na image"""
+"""Construct model of telluric Na emission.  See `NaBack.best_back`"""
 
 import gc
 import os
@@ -154,6 +154,8 @@ def na_back_process(data,
 
     # We are going to turn this into a Pandas dataframe, which does
     # not do well with units, so just return everything
+    # --> I am eventually going to return a dictionary that can be
+    # transformed into a QTable(rows==list_of_dict)
     dmeta = {'best_back': best_back.value,
              'best_back_std': best_back_std.value,
              'back_unit': best_back.unit.to_string(),
@@ -167,21 +169,20 @@ def na_back_process(data,
              'alt': objctalt,
              'az': objctaz,
              'airmass': airmass}
-    tmeta = {'best_back': best_back,
-             'best_back_std': best_back_std,
-             'date': just_date,
-             'date_obs': tm,
-             'raoff': raoff0*u.arcmin,
-             'decoff': decoff0*u.arcmin,
-             'ra': objctra,
-             'dec': objctdec,
-             'alt': objctalt*u.deg,
-             'az': objctaz*u.deg,
-             'airmass': airmass}
+    #tmeta = {'best_back': best_back,
+    #         'best_back_std': best_back_std,
+    #         'date_obs': tm,
+    #         'raoff': raoff0*u.arcmin,
+    #         'decoff': decoff0*u.arcmin,
+    #         'ra': objctra,
+    #         'dec': objctdec,
+    #         'alt': objctalt*u.deg,
+    #         'az': objctaz*u.deg,
+    #         'airmass': airmass}
     # Add sun angle
-    _ = sun_angle(data[0], bmp_meta=tmeta, **kwargs)
+    _ = sun_angle(data[0], bmp_meta=dmeta, **kwargs)
     bmp_meta['Na_back'] = dmeta
-    bmp_meta['Na_back_table'] = tmeta
+    #bmp_meta['Na_back_table'] = tmeta
 
     # In production, we don't plan to write the file, but prepare the
     # name just in case
@@ -463,7 +464,7 @@ class NaBack():
                  show=False,
                  ccddata_cls=CorDataBase,
                  outdir_root=NA_BACK_ROOT,
-                 chemilum_delay=270,
+                 chemilum_delay=150, # minimized biweight of daily mad_stds
                  write_summary_plots=False,
                  lockfile=LOCKFILE,
                  **kwargs):
@@ -745,14 +746,34 @@ class NaBack():
             self.all_sun_angle)
 
     @pgproperty
-    def meso_vol_corrected_sin(self):
+    # NO NOT USE THIS ONE
+    def meso_vol_corrected_sin_mag(self):
         # This doesn't do any fit.  I have just tweaked the parameters
         # by hand
         fit = fitting.LevMarLSQFitter()
-        sin_init = (models.Sine1D(amplitude=0.0025,
+        sin_init = (models.Sine1D(amplitude=1,
                                   frequency=1/u.year,
-                                  phase=(182*u.deg).to(u.rad))
-                    + models.Const1D(amplitude=0.003))
+                                  phase=(94*u.deg).to(u.rad))
+                    + models.Const1D(amplitude=6))
+        # So this fit is actually bogus and the units are not really
+        # right.  They should be .value and then magically the
+        # evaluated function should be converted back into a Magnitude
+        return fit(sin_init,
+                   to_numpy(self.df['plot_date'])*u.day,
+                   self.all_meso_vol_sun_stim_chemilum_corrected.physical)
+
+    @pgproperty
+    def meso_vol_corrected_sin_physical(self):
+        # nominally better-looking fits were achieved with the mag. version
+        # This doesn't do any fit.  I have just tweaked the parameters
+        # by hand
+        # --! Aim for the low side to see if that helps make sure
+        # background is not over-estimated.  Const1D=0.004 might be better
+        fit = fitting.LevMarLSQFitter()
+        sin_init = (models.Sine1D(amplitude=0.0030,
+                                  frequency=1/u.year,
+                                  phase=(181*u.deg).to(u.rad))
+                    + models.Const1D(amplitude=0.0035))
         return fit(sin_init,
                    to_numpy(self.df['plot_date'])*u.day,
                    self.all_meso_vol_sun_stim_chemilum_corrected.physical)
@@ -782,9 +803,98 @@ class NaBack():
         instr_mag = self.instr_mag_to_meso(meso_mag, airmass, inverse=True)
         return instr_mag.physical 
 
+    @pgproperty
+    def meso_vol_corrected_table(self):
+        self.df['iplot_date'] = to_numpy(self.df['plot_date']).astype(int)
+        uidays = list(set(self.df['iplot_date']))
+        iday_plot_dates = np.full(len(uidays), np.NAN)
+        vol_corrected_biweight = np.full(len(uidays), np.NAN)*self.back_unit
+        vol_corrected_mad_std = vol_corrected_biweight.copy()
+        #self.df['vol_corrected_biweight'] = np.NAN
+        #self.df['vol_corrected_mad_std'] = np.NAN
+        for i, iday in enumerate(uidays):
+            idx = np.flatnonzero(self.df['iplot_date'] == iday)
+            tcorrected_vol = self.all_meso_vol_sun_stim_chemilum_corrected[idx]
+            tcorrected_vol = tcorrected_vol.physical
+            tbiweight = biweight_location(tcorrected_vol)
+            tstd = mad_std(tcorrected_vol)
+            iday_plot_dates[i] = iday
+            vol_corrected_biweight[i] = tbiweight
+            vol_corrected_mad_std[i] = tstd
+            #self.df.iloc[idx, 'vol_corrected_biweight'] = tbiweight
+            #self.df.iloc[idx, 'vol_corrected_mad_std'] = tstd
+        qt = QTable([iday_plot_dates,
+                     vol_corrected_biweight,
+                     vol_corrected_mad_std],
+                    names = ('iplot_date',
+                             'vol_corrected_biweight',
+                             'vol_corrected_mad_std'))
+        return qt.group_by('iplot_date')
+
+    @pgproperty
+    def meso_vol_corrected_err(self):
+        """Biweight location of measured meso_vol_corrected mad_stds
+
+        """
+        return biweight_location(
+            self.meso_vol_corrected_table['vol_corrected_mad_std'],
+            ignore_nan=True)
+
+    def best_back(self, date_obs, airmass, sun_angle):
+        """Returns the best-estimate Na background for a given observation
+
+        Uses all Na background meausrements (--> need to add
+        long-duration comet exposures as well) to construct an
+        empirical, time-dependent model of the volumetric emission of
+        Na in the mesosphere.  The effects of resonant scattering and
+        chemiluminescence have been considered, as well as a simple
+        sin-wave seasonal dependence.  This routine first looks to see
+        if background observations were recorded on the date of
+        observation and uses the biweight distribution of those 
+
+        Parameters
+        ----------
+        date_obs : str or `~astropy.time.Time`
+            Time of observation
+
+        airmass : float
+            Airmass of observation look direction
+
+        sun angle : float or Quantity
+            Angle between observation look direction and sun.  If
+            float, assumed to be in degrees
+
+        Returns
+        -------
+        best_back : Quantity
+            best-estimate Na background rate in electron/s
+
+        """
+        if isinstance(date_obs, Time):
+            tm = date_obs
+        else:
+            tm = Time(date_obs, format='fits')
+        iplot_date = int(tm.plot_date)
+        t = self.meso_vol_corrected_table
+        mask = t.groups.keys['iplot_date'] == iplot_date
+        meso_vol_corrected = \
+            self.meso_vol_corrected_table['vol_corrected_biweight'][mask]
+        meso_vol_corrected_err = \
+            self.meso_vol_corrected_table['vol_corrected_mad_std'][mask]
+        if (len(meso_vol_corrected) == 0
+            or not np.isfinite(meso_vol_corrected)):
+            # --> Not sure where the missing entries are coming from 
+            meso_vol_corrected = \
+                self.meso_vol_corrected_sin_physical(iplot_date*u.day)
+            meso_vol_corrected_err = self.meso_vol_corrected_err
+
+        print(f'meso_vol_corrected {meso_vol_corrected}')
+        bb = self.corrected_meso_vol_to_back_rate(
+            u.Magnitude(meso_vol_corrected), airmass, sun_angle)
+        return bb, meso_vol_corrected_err
 
     def plots(self):
-        f = plt.figure(figsize=[8.5, 11])
+        f = plt.figure(figsize=[11, 8.5])
         ax = plt.subplot(3, 3, 1)
         plt.plot(self.df['sun_angle'], self.df['airmass'], 'k.')
         plt.xlabel(f'sun_angle ({self.angle_unit})')
@@ -816,16 +926,16 @@ class NaBack():
         plt.ylabel(f'extinction corrected back ({self.back_unit})')
         plt.gca().invert_yaxis()
         
-        ax = plt.subplot(3, 3, 5)
-        #plt.errorbar(df['airmass'], instr_mag.value,
-        #             yerr=instr_mag_err.value, fmt='k.')
-        plt.plot(self.df['airmass'], self.all_meso_vol, 'k.')
-        plt.xlabel(f'airmass')
-        plt.ylabel(f'volumetric Na emission')
-        plt.gca().invert_yaxis()
-        #ax.set_ylim([0, 0.15])
+        #ax = plt.subplot(3, 3, 5)
+        ##plt.errorbar(df['airmass'], instr_mag.value,
+        ##             yerr=instr_mag_err.value, fmt='k.')
+        #plt.plot(self.df['airmass'], self.all_meso_vol, 'k.')
+        #plt.xlabel(f'airmass')
+        #plt.ylabel(f'volumetric Na emission')
+        #plt.gca().invert_yaxis()
+        ##ax.set_ylim([0, 0.15])
 
-        ax = plt.subplot(3, 3, 6)
+        ax = plt.subplot(3, 3, 5)
         #plt.errorbar(df['airmass'], instr_mag.value,
         #             yerr=instr_mag_err.value, fmt='k.')
         plt.plot(self.df['sun_angle'], self.all_meso_vol, 'k.')
@@ -836,7 +946,7 @@ class NaBack():
         plt.gca().invert_yaxis()
         #ax.set_ylim([0, 0.15])
 
-        ax = plt.subplot(3, 3, 7)
+        ax = plt.subplot(3, 3, 6)
         #plt.errorbar(df['airmass'], instr_mag.value,
         #             yerr=instr_mag_err.value, fmt='k.')
         plt.plot(self.all_sun_angle, self.all_sun_stim_corrected, 'k.')
@@ -847,15 +957,31 @@ class NaBack():
         plt.gca().invert_yaxis()
         #ax.set_ylim([0, 0.15])
 
-        ax = plt.subplot(3, 3, 8)
+        ax = plt.subplot(3, 3, 7)
         plt.plot_date(self.df['plot_date'],
                       self.all_meso_vol_sun_stim_chemilum_corrected.physical,
                       'k.')
         days = np.arange(np.min(self.df['plot_date']),
                          np.max(self.df['plot_date']))
+        plt.xlabel(f'Date')
+        plt.ylabel(f'best_back ({self.back_unit})')
         plt.plot_date(days,
-                      self.meso_vol_corrected_sin(days*u.day), 'r.')
+                      self.meso_vol_corrected_sin_physical(days*u.day), 'r.')
         ax.set_ylim([0, 0.02])
+        ax.tick_params(axis='x', labelrotation = 45)
+        
+        ax = plt.subplot(3, 3, 8)
+        plt.plot_date(self.df['plot_date'],
+                      self.all_meso_vol_sun_stim_chemilum_corrected,
+                      'k.')
+        days = np.arange(np.min(self.df['plot_date']),
+                         np.max(self.df['plot_date']))
+        plt.xlabel(f'Date')
+        plt.ylabel(f'best_back ({self.back_unit})')
+        plt.plot_date(days,
+                      self.meso_vol_corrected_sin_mag(days*u.day), 'r.')
+        plt.gca().invert_yaxis()
+        #ax.set_ylim([0, 0.02])
         ax.tick_params(axis='x', labelrotation = 45)
         
         #ax = plt.subplot(3, 3, 8)
@@ -878,6 +1004,21 @@ class NaBack():
         #plt.gca().invert_yaxis()
         ##ax.set_ylim([0, 0.15])
 
+        ax = plt.subplot(3, 3, 9)
+        plt.plot_date(self.df['plot_date'],
+                      self.all_meso_vol_sun_stim_chemilum_corrected.physical,
+                      'k.')
+        t = self.meso_vol_corrected_table
+        plt.plot_date(t['iplot_date']+0.5,
+                      t['vol_corrected_biweight'], 'r.')
+        plt.errorbar(t['iplot_date']+0.5,
+                     t['vol_corrected_biweight'].value,
+                     yerr=t['vol_corrected_mad_std'].value,
+                     fmt='r.')
+        plt.xlabel(f'Date')
+        plt.ylabel(f'best_back daily ({self.back_unit})')
+        ax.set_ylim([0, 0.02])
+        ax.tick_params(axis='x', labelrotation = 45)
         plt.tight_layout()
         plt.show()
 
@@ -922,10 +1063,10 @@ class NaBack():
    #    plt.show()
 
     
-log.setLevel('DEBUG')
+#log.setLevel('DEBUG')
 
 ## We can close the loop!
-nab = NaBack()
+#nab = NaBack()
 #observed = nab.corrected_meso_vol_to_back_rate(
 #    nab.all_meso_vol_sun_stim_chemilum_corrected,
 #    nab.df['airmass'],
@@ -940,40 +1081,42 @@ nab = NaBack()
 #
 #print(observed / to_numpy(nab.df['best_back'])*nab.back_unit)
 
+#print(nab.best_back('2020-01-01', 3, 90))
+#print(nab.best_back('2020-06-16', 3, 90))
 #nab.plots()
 
 
-######
-# TIME DEPENDENT STUFF
-#######
-nab.df['iplot_date'] = to_numpy(nab.df['plot_date']).astype(int)
-uidays = list(set(nab.df['iplot_date']))
-iday_plot_dates = np.full(len(uidays), np.NAN)
-vol_corrected_biweight = np.full(len(uidays), np.NAN)*nab.back_unit
-vol_corrected_mad_std = vol_corrected_biweight.copy()
-#nab.df['vol_corrected_biweight'] = np.NAN
-#nab.df['vol_corrected_mad_std'] = np.NAN
-for i, iday in enumerate(uidays):
-    idx = np.flatnonzero(nab.df['iplot_date'] == iday)
-    tcorrected_vol = nab.all_meso_vol_sun_stim_chemilum_corrected[idx]
-    tcorrected_vol = tcorrected_vol.physical
-    tbiweight = biweight_location(tcorrected_vol)
-    tstd = mad_std(tcorrected_vol)
-    iday_plot_dates[i] = iday
-    vol_corrected_biweight[i] = tbiweight
-    vol_corrected_mad_std[i] = tstd
-    #nab.df.iloc[idx, 'vol_corrected_biweight'] = tbiweight
-    #nab.df.iloc[idx, 'vol_corrected_mad_std'] = tstd
-
-ax = plt.subplot()
-plt.plot_date(nab.df['plot_date'],
-              nab.all_meso_vol_sun_stim_chemilum_corrected.physical, 'k.')
-plt.plot_date(iday_plot_dates+0.5, vol_corrected_biweight, 'r.')
-plt.errorbar(iday_plot_dates+0.5, vol_corrected_biweight.value,
-             yerr=vol_corrected_mad_std.value, fmt='r.')
-ax.set_ylim([0, 0.02])
-ax.tick_params(axis='x', labelrotation = 45)
-plt.show()
+#### ######
+#### # TIME DEPENDENT STUFF
+#### #######
+#### nab.df['iplot_date'] = to_numpy(nab.df['plot_date']).astype(int)
+#### uidays = list(set(nab.df['iplot_date']))
+#### iday_plot_dates = np.full(len(uidays), np.NAN)
+#### vol_corrected_biweight = np.full(len(uidays), np.NAN)*nab.back_unit
+#### vol_corrected_mad_std = vol_corrected_biweight.copy()
+#### #nab.df['vol_corrected_biweight'] = np.NAN
+#### #nab.df['vol_corrected_mad_std'] = np.NAN
+#### for i, iday in enumerate(uidays):
+####     idx = np.flatnonzero(nab.df['iplot_date'] == iday)
+####     tcorrected_vol = nab.all_meso_vol_sun_stim_chemilum_corrected[idx]
+####     tcorrected_vol = tcorrected_vol.physical
+####     tbiweight = biweight_location(tcorrected_vol)
+####     tstd = mad_std(tcorrected_vol)
+####     iday_plot_dates[i] = iday
+####     vol_corrected_biweight[i] = tbiweight
+####     vol_corrected_mad_std[i] = tstd
+####     #nab.df.iloc[idx, 'vol_corrected_biweight'] = tbiweight
+####     #nab.df.iloc[idx, 'vol_corrected_mad_std'] = tstd
+#### 
+#### ax = plt.subplot()
+#### plt.plot_date(nab.df['plot_date'],
+####               nab.all_meso_vol_sun_stim_chemilum_corrected.physical, 'k.')
+#### plt.plot_date(iday_plot_dates+0.5, vol_corrected_biweight, 'r.')
+#### plt.errorbar(iday_plot_dates+0.5, vol_corrected_biweight.value,
+####              yerr=vol_corrected_mad_std.value, fmt='r.')
+#### ax.set_ylim([0, 0.02])
+#### ax.tick_params(axis='x', labelrotation = 45)
+#### plt.show()
 
 #a = nab.vs_time()
 
