@@ -138,7 +138,8 @@ def metadata(hdr_in,
     hdr['NONLIN'] = (nonlin, nonlin_comment)
     hdr['RDNOISE'] = (readnoise, readnoise_comment)
     # MaxIm records [XY]PIXSZ if available from camera and FOCALLEN if
-    # provided by user
+    # (correctly) provided by user.  Note [XY]PIXSZ are corrected for
+    # binning, so we don't need to do that here
     xpixsz = hdr.get('XPIXSZ')
     ypixsz = hdr.get('YPIXSZ')
     focal_length = hdr.get('FOCALLEN')

@@ -1,6 +1,7 @@
 """Utilities for the IoIO data collection and reduction system"""
 
 import inspect
+import glob
 import os
 import time
 import datetime
@@ -11,9 +12,12 @@ import csv
 import numpy as np
 from numpy.polynomial import Polynomial
 
-from astropy import log
 import matplotlib.pyplot as plt
 
+from astropy import log
+from astropy.coordinates import Angle, solar_system_ephemeris, get_body
+
+import astropy.units as u
 from astropy.time import Time
 
 # These are MaxIm and ACP day-level raw data directories, respectively
@@ -56,6 +60,40 @@ def assure_list(x):
     if not isinstance(x, list):
         x = [x]
     return x
+
+def multi_glob(directory, glob_list=None):
+    """Returns list of files matching one or more regexp
+
+    Parameters
+    ----------
+    directory : str
+        Directory in which to search for files
+
+    glob_list : str or list
+        (list of) regexp to pass to `glob.glob` used to construct flist
+
+    Returns
+    -------
+    flist : list
+        List of filenames
+    """
+    glob_list = assure_list(glob_list)
+    flist = []
+    for gi in glob_list:
+        flist += glob.glob(os.path.join(directory, gi))
+    return flist
+    
+def is_flux(unit):
+    """Determine if we are in flux units or not"""
+    unit = unit.decompose()
+    if isinstance(unit, u.IrreducibleUnit):
+        return False
+    # numpy tests don't work with these objects, so do it by hand
+    spower = [p for un, p in zip(unit.bases, unit.powers)
+              if un == u.s]
+    if len(spower) == 0 or spower[0] != -1:
+        return False
+    return True
 
 def datetime_dir(directory,
                  date_formats=DATE_FORMATS):
@@ -130,6 +168,9 @@ def reduced_dir(rawdir, reddir_top,
     # List all elements of the path to the raw directory
     rawlist = []
     rparent = rawdir
+    if rparent[-1] == ps:
+        # Remove trailing path sep, which causes loop problems
+        rparent = rparent[0:-1]
     d = True
     while d:
         rparent, d = os.path.split(rparent)
@@ -247,7 +288,7 @@ def multi_row_selector(table, keyword, value_list,
         Default is `None`
     """
     if row_selector is None:
-        row_selector = True
+        row_selector = (lambda x : True)
     retval = {}
     for value in value_list:
         idx = [i for i, r in enumerate(table)
@@ -290,16 +331,14 @@ def closest_in_time(collection, value_pair,
     directory = collection.location or directory
     if directory is None:
         raise ValueError('Collection does not have a location.  Specify directory')
-    summary_table = collection.summary
-    row_dict = multi_row_selector(summary_table,
-                                  keyword, value_pair,
-                                  row_selector)
+    st = collection.summary
+    row_dict = multi_row_selector(st, keyword, value_pair, row_selector)
 
     pair_list = []
     for i_on in row_dict[value_pair[0]]:
-        t_on = Time(summary_table[i_on]['date-obs'], format='fits')
+        t_on = Time(st[i_on]['date-obs'], format='fits')
         # Seach all second values
-        t_offs = Time(summary_table[row_dict[value_pair[1]]]['date-obs'],
+        t_offs = Time(st[row_dict[value_pair[1]]]['date-obs'],
                       format='fits')
         if len(t_offs) == 0:
             continue
@@ -308,7 +347,7 @@ def closest_in_time(collection, value_pair,
         # Unwrap
         i_off = row_dict[value_pair[1]][idx_best1]
         pair = [os.path.join(directory,
-                             summary_table[i]['file'])
+                             st[i]['file'])
                              for i in (i_on, i_off)]
         pair_list.append(pair)
     return pair_list
@@ -575,7 +614,7 @@ class CCDImageFormatter(object):
 
 def simple_show(im, **kwargs):
     fig, ax = plt.subplots()
-    ax.imshow(im.data, origin='lower',
+    ax.imshow(im, origin='lower',
               cmap=plt.cm.gray,
               filternorm=0, interpolation='none',
               **kwargs)
@@ -587,4 +626,57 @@ def savefig_overwrite(fname, **kwargs):
         os.remove(fname)
     plt.savefig(fname, **kwargs)
 
+def best_fits_time(hdr):
+    # This could get fancier
+    date_obs = hdr.get('DATE-AVG') or hdr.get('DATE-OBS')
+    return Time(date_obs, format='fits')
 
+def angle_to_major_body(hdr, body):
+    """Returns angle between pointing direction and solar system major
+    body
+
+    Build-in astropy ephemeris is used, so results are not as accurate
+    as possible, but more than good enough for rough calculations
+
+    Parameters
+    ----------
+    meta : dict-like
+        Observation metadata keys are fairly MaxIm/ACP/CorData-specific
+
+    body : str
+        solar system major body name
+
+    Returns
+    -------
+    angle : astropy.units.Quantity
+        angle between pointing direction and major body 
+    """
+    
+    objctra = ccd.meta['OBJCTRA']
+    objctdec = ccd.meta['OBJCTDEC']
+    tm = best_fits_time(ccd.meta)
+    location = obs_location_from_hdr(ccd.meta)
+    with solar_system_ephemeris.set('builtin'):
+        body_coord = get_body(body_str, tm, loc)
+    ra = Angle(objctra, unit=u.hour)
+    dec = Angle(objctdec, unit=u.deg)
+    # Beware the default frame of SkyCoord is ICRS, which is relative
+    # to the solar system Barycenter.  body_coord is returned in GCRS,
+    # which is relative to the earth's center-of-mass.  separation()
+    # is not commutative when the two different frames are used, when
+    # one includes a solar system object (e.g. Jupiter), since the 3D
+    # position of the point of reference (earth) and the body
+    # (e.g. Jupiter) is considered.  Here we use the GCRS frame of our
+    # body in place of constructing a telescope frame since when we
+    # constructed the body_coord, we used the actual time of
+    # observation (what you want) and for anything outside the solar
+    # system, the whole solar system resolves into at point (so angles
+    # are not affected).
+    this_pointing = SkyCoord(frame=body_coord.frame, ra=ra, dec=dec)
+    return this_pointing.separation(body_coord)
+
+def location_to_dict(loc):
+    """Useful for JPL horizons"""
+    return {'lon': loc.lon.value,
+            'lat': loc.lat.value,
+            'elevation': loc.height.to(u.km).value}

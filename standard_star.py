@@ -21,6 +21,8 @@ from astropy import units as u
 from astropy.time import Time
 from astropy.stats import mad_std, biweight_location
 from astropy.coordinates import SkyCoord
+# Rainy day project to get rid of pandas
+#from astropy.table import QTable
 from astroquery.simbad import Simbad
 from astropy.modeling import models, fitting
 from astropy.visualization import quantity_support
@@ -42,7 +44,7 @@ from IoIO.utils import (Lockfile, assure_list, reduced_dir, get_dirs_dates,
 from IoIO.cordata_base import CorDataBase
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                CorMultiPipeBase,
-                               nd_filter_mask, mask_nonlin_sat)
+                               nd_filter_mask)
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.photometry import Photometry, is_flux
 
@@ -319,7 +321,7 @@ def standard_star_process(ccd,
     xcentrd = tbl['xcentroid'][0]
     ycentrd = tbl['ycentroid'][0]
     ccd.obj_center = (ycentrd, xcentrd)
-    ccd.quality = 10
+    ccd.center_quality = 10
     ND_width = ccd.ND_params[1, 1] - ccd.ND_params[1, 0]
     min_ND_dist = min_ND_multiple * ND_width
     if ccd.obj_to_ND < min_ND_dist:
@@ -423,7 +425,7 @@ def standard_star_process(ccd,
              #'background_mean': tbl['background_mean'][0]}
 
     bmp_meta['standard_star'] = tmeta
-    log.debug(f'returning {detflux:.2e} +/- {detflux_err:.2e}')
+    #log.debug(f'returning {detflux:.2e} +/- {detflux_err:.2e}')
     return ccd
     
 def standard_star_pipeline(directory,
@@ -598,6 +600,7 @@ def standard_star_directory(directory,
 
     _ , pipe_meta = zip(*pout)
     standard_star_list = [pm['standard_star'] for pm in pipe_meta]
+    #df = pd.DataFrame(standard_star_list)
     df = pd.DataFrame(standard_star_list)
     just_date = df['date'].iloc[0]
 

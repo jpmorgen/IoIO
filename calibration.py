@@ -16,8 +16,6 @@ from scipy import interpolate
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 
-import pandas as pd
-
 from astropy import log
 from astropy import units as u
 from astropy.io.fits import Header, getheader
@@ -36,12 +34,12 @@ import IoIO.sx694 as sx694
 from IoIO.utils import (Lockfile, assure_list, get_dirs_dates, add_history,
                         im_med_min_max, savefig_overwrite)
 from IoIO.cordata_base import CorDataBase, CorDataNDparams
-from IoIO.cor_process import get_filt_name
+from IoIO.cor_process import standardize_filt_name
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
                                MAX_MEM_FRAC, COR_PROCESS_EXPAND_FACTOR,
                                ND_EDGE_EXPAND, CorMultiPipeBase,
-                               CorMultiPipeNDparams, CorArgparseHandler,
+                               CorArgparseHandler,
                                light_image, mask_above_key)
 
 
@@ -93,20 +91,37 @@ NUM_CALIBRATION_FILES = 11
 
 # Date after which flats were taken in a uniform manner (~60 degrees
 # from Sun, ~2 hr after sunrise), leading to more stable results
-STABLE_FLAT_DATE = '2020-01-01'
+# --> I am less convinced this is true, after looking at the early Na
+# data
+#STABLE_FLAT_DATE = '2020-01-01'
+STABLE_FLAT_DATE = '1000-01-01'
 
 # Tue Mar 01 07:59:13 2022 EST  jpmorgen@snipe
 # Value on the date above for sanity checks
+#FLAT_RATIO_CHECK_LIST = \
+#    [{'band': 'Na',
+#      'biweight_ratio': 4.752328783054392,
+#      'mad_std_ratio': 0.1590846222357597,
+#      'med_ratio': 4.716620841458621,
+#      'std_ratio': 0.15049131587890988},
+#     {'band': 'SII',
+#      'biweight_ratio': 4.879239156541213,
+#      'mad_std_ratio': 0.04906457267060454,
+#      'med_ratio': 4.879915705039635,
+#      'std_ratio': 0.06540676680077083}]
+
+# Decide not to limit to just later data because earlier data is
+# clearly higher.  May have a time dependence
 FLAT_RATIO_CHECK_LIST = \
     [{'band': 'Na',
-      'biweight_ratio': 4.752328783054392,
-      'mad_std_ratio': 0.1590846222357597,
-      'med_ratio': 4.716620841458621,
+      'biweight_ratio': 4.81,
+      'mad_std_ratio': 0.31,
+      'med_ratio': 4.716620841458621, # Didn't bother with these
       'std_ratio': 0.15049131587890988},
      {'band': 'SII',
-      'biweight_ratio': 4.879239156541213,
-      'mad_std_ratio': 0.04906457267060454,
-      'med_ratio': 4.879915705039635,
+      'biweight_ratio': 4.80,
+      'mad_std_ratio': 0.23,
+      'med_ratio': 4.879915705039635, # Didn't bother with these
       'std_ratio': 0.06540676680077083}]
 
 def jd_meta(ccd, bmp_meta=None, **kwargs):
@@ -407,7 +422,7 @@ def bias_combine_one_fdict(fdict,
     stats = [m['bias_stats'] for m in pipe_meta]
     jds = [m['jd'] for m in pipe_meta]
 
-    df = pd.DataFrame(stats)
+    tbl = QTable(rows=stats)
     tm = Time(np.mean(jds), format='jd')
     this_date = tm.fits
     this_dateb = this_date.split('T')[0]
@@ -419,27 +434,27 @@ def bias_combine_one_fdict(fdict,
 
     # In the absence of a formal overscan region, this is the best
     # I can do
-    medians = df['median']
+    medians = tbl['median']
     overscan = np.mean(medians)
 
     ax = plt.subplot(6, 1, 1)
     plt.title('CCDT = {} C on {}'.format(this_ccdt, this_dateb))
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-    plt.plot(df['time'], df['ccdt'], 'k.')
+    plt.plot(tbl['time'], tbl['ccdt'], 'k.')
     plt.ylabel('CCDT (C)')
 
     ax = plt.subplot(6, 1, 2)
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-    plt.plot(df['time'], df['max'], 'k.')
+    plt.plot(tbl['time'], tbl['max'], 'k.')
     plt.ylabel('max (adu)')
 
     ax = plt.subplot(6, 1, 3)
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.tick_params(which='both', bottom=True, top=True, left=True, right=False)
-    plt.plot(df['time'], df['median'], 'k.')
-    plt.plot(df['time'], df['mean'], 'r.')
+    plt.plot(tbl['time'], tbl['median'], 'k.')
+    plt.plot(tbl['time'], tbl['mean'], 'r.')
     plt.ylabel('median & mean (adu)')
     plt.legend(['median', 'mean'])
     secax = ax.secondary_yaxis \
@@ -451,25 +466,25 @@ def bias_combine_one_fdict(fdict,
     ax=plt.subplot(6, 1, 4)
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-    plt.plot(df['time'], df['min'], 'k.')
+    plt.plot(tbl['time'], tbl['min'], 'k.')
     plt.ylabel('min (adu)')
 
     ax=plt.subplot(6, 1, 5)
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-    plt.plot(df['time'], df['std'], 'k.')
+    plt.plot(tbl['time'], tbl['std'], 'k.')
     plt.ylabel('std (electron)')
 
     ax=plt.subplot(6, 1, 6)
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-    plt.plot(df['time'], df['rdnoise'], 'k.')
+    plt.plot(tbl['time'], tbl['rdnoise'], 'k.')
     plt.ylabel('rdnoise (electron)')
 
     plt.gcf().autofmt_xdate()
 
     # At the 0.5 deg level, there seems to be no correlation between T and bias level
-    #plt.plot(df['ccdt'], df['mean'], 'k.')
+    #plt.plot(tbl['ccdt'], tbl['mean'], 'k.')
     #plt.xlabel('ccdt')
     #plt.ylabel('mean')
     #plt.show()
@@ -484,7 +499,7 @@ def bias_combine_one_fdict(fdict,
     plt.close()
 
     # Do a sanity check of readnoise
-    av_rdnoise = np.mean(df['rdnoise'])            
+    av_rdnoise = np.mean(tbl['rdnoise'])            
     if (np.abs(av_rdnoise/sx694.example_readnoise - 1)
         > readnoise_tolerance):
         log.warning('High readnoise {}, skipping {}'.format(av_rdnoise, out_fname))
@@ -886,30 +901,14 @@ def flat_fdict_creator(collection,
         log.error(f'filter not found in any {imagetyp} files in {directory}')
         return []
     # Keep in mind filters will have our old names
-    ofilters = collection.values('filter', unique=True)
+    standardize_filt_name(collection)
+    filters = collection.values('filter', unique=True)
     fdict_list = []
-    for ofilt in ofilters:
-        # The collection.filter stuff causes problems with my old
-        # filter names but the regexp stuff used to get around that
-        # gets R125 and R confused.  So handle things in the same
-        # date-dependent way that get_filt_name does
-        date_obs = collection.values('date-obs')[0]
-        if date_obs > '2020-03-01':
-            # Latest filter names don't confuse collection.filter
-            fcollection = collection.filter(filter=ofilt)
-        else:
-            # The regexp_match=True is necessary for the H2O+ for some
-            # reason.  re.escape is used for the [] stuff in some of the
-            # older filters, though I am not positive if it is necessary.
-            fcollection = collection.filter(filter=re.escape(ofilt),
-                                            regex_match=True)
+    for filt in filters:
+        fcollection = collection.filter(filter=filt)
         fnames = fcollection.files_filtered(include_path=True)
-        # This is where we associated the old file names with the new
-        # filter designations 
-        filt = get_filt_name(ofilt, date_obs)
         fdict_list.append({'directory': directory,
                            'filter': filt,
-                           'ofilter': ofilt,
                            'fnames': fnames})
     return fdict_list
 
@@ -996,17 +995,18 @@ def flat_combine_one_fdict(fdict,
     # Not as fancy as the biases, but, hey, it is a scratch directory
     sdir = os.path.join(calibration_scratch, this_dateb1)
 
-    cmp = CorMultiPipeNDparams(num_processes=num_processes,
-                               mem_frac=mem_frac,
-                               naxis1=naxis1,
-                               naxis2=naxis2,
-                               bitpix=bitpix,
-                               outdir=sdir,
-                               create_outdir=True,
-                               overwrite=True,
-                               fits_fixed_ignore=True, 
-                               post_process_list=[flat_process, jd_meta],
-                               **kwargs)
+    cmp = CorMultiPipeBase(ccddata_cls=CorDataNDparams,
+                           num_processes=num_processes,
+                           mem_frac=mem_frac,
+                           naxis1=naxis1,
+                           naxis2=naxis2,
+                           bitpix=bitpix,
+                           outdir=sdir,
+                           create_outdir=True,
+                           overwrite=True,
+                           fits_fixed_ignore=True, 
+                           post_process_list=[flat_process, jd_meta],
+                           **kwargs)
     pout = cmp.pipeline(fnames, **kwargs)
     pout, fnames = prune_pout(pout, fnames)
     if len(pout) == 0:
@@ -1802,19 +1802,19 @@ class Calibration():
                               'time': tm.tt.datetime,
                               'ratio': ratio}
                 ratio_dlist.append(ratio_dict)
-        df = pd.DataFrame(ratio_dlist)
+        tbl = Qtable(rows=ratio_dlist)
             
         flat_ratio_list = []
         f = plt.figure(figsize=[8.5, 11])
         plt.title('Sky flat ratios')
-        print('Narrow-band sky flat ratios fit to >2020-01-01 data only')
-        print('Day sky does have Na on-band emission, however, Greet 1988 PhD suggests')
-        print('it is so hard to measure with a good Fabry-Perot, that we are')
-        print('dominated by continuum')
-        print('COPY THESE INTO cormultipipe.py globals')
+        #print('Narrow-band sky flat ratios fit to >2020-01-01 data only')
+        #print('Day sky does have Na on-band emission, however, Greet 1988 PhD suggests')
+        #print('it is so hard to measure with a good Fabry-Perot, that we are')
+        #print('dominated by continuum')
+        #print('COPY THESE INTO cormultipipe.py globals')
         for ib, band in enumerate(['Na', 'SII']):
             plt.title(f'Sky flat ratios fit to > {self.stable_flat_date}')
-            this_band = df[df['band'] == band]
+            this_band = tbl[tbl['band'] == band]
             # Started taking flats in a more uniform way after 2020-01-01
             good_dates = this_band[this_band['date']
                                    > self.stable_flat_date]
@@ -1827,12 +1827,12 @@ class Calibration():
                             'mad_std_ratio': mad_std_ratio,
                             'med_ratio': med_ratio,
                             'std_ratio': std_ratio}
-            print(f'{band} med {med_ratio:.2f} +/- {std_ratio:.2f}')
-            print(f'{band} biweight {biweight_ratio:.2f} +/- {mad_std_ratio:.2f}')
+            #print(f'{band} med {med_ratio:.2f} +/- {std_ratio:.2f}')
+            #print(f'{band} biweight {biweight_ratio:.2f} +/- {mad_std_ratio:.2f}')
             ax = plt.subplot(2, 1, ib+1)
             ax.yaxis.set_minor_locator(AutoMinorLocator())
             ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-            #plt.plot(df['time'], df['ratio'], 'k.')
+            #plt.plot(tbl['time'], tbl['ratio'], 'k.')
             plt.plot(this_band['time'], this_band['ratio'], 'k.')
             plt.ylabel(f'{band} off/on ratio')
             plt.axhline(y=biweight_ratio, color='red')
@@ -1857,6 +1857,8 @@ class Calibration():
     def flat_ratio(self, band):
         tflat_ratio = [d for d in self.flat_ratio_list
                        if d['band'] == band]
+        if len(tflat_ratio) == 0:
+            raise ValueError(f'Not a valid band: {band} ')
         tflat_ratio = tflat_ratio[0]
         cflat_ratio = [d for d in FLAT_RATIO_CHECK_LIST
                        if d['band'] == band]
