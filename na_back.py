@@ -31,7 +31,7 @@ from precisionguide import pgproperty
 from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates,
                         closest_in_time, valid_long_exposure, im_med_min_max,
                         add_history, cached_csv, iter_polyfit, 
-                        simple_show, savefig_overwrite)
+                        simple_show, savefig_overwrite, angle_to_major_body)
 from IoIO.cordata_base import CorDataBase
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                CorMultiPipeBase, 
@@ -57,34 +57,11 @@ def to_numpy(series_or_numpy):
 def sun_angle(ccd,
               bmp_meta=None,
               **kwargs):
-    # Put time and sun angle into bmp_meta
-    date_obs = ccd.meta.get('DATE-AVG') or ccd.meta.get('DATE-OBS')
-    objctra = ccd.meta['OBJCTRA']
-    objctdec = ccd.meta['OBJCTDEC']
-    tm = Time(date_obs, format='fits')
-    lon = ccd.meta.get('LONG-OBS') or ccd.meta.get('SITELONG')
-    lat = ccd.meta.get('LAT-OBS') or ccd.meta.get('SITELAT')
-    alt = ccd.meta.get('ALT-OBS') or 1096.342 * u.m
-    loc = EarthLocation(lat=lat, lon=lon, height=alt)
-    with solar_system_ephemeris.set('builtin'):
-        sun = get_body('sun', tm, loc)
-    ra = Angle(objctra, unit=u.hour)
-    dec = Angle(objctdec, unit=u.deg)
-    # Beware the default frame of SkyCoord is ICRS, which is relative
-    # to the solar system Barycenter and jup [sun] is returned in GCRS,
-    # which is relative ot the earth's center-of-mass.  separation()
-    # is not commutative when the two different frames are used, when
-    # one includes a solar system object (e.g. Jupiter), since the 3D
-    # position of the point of reference and one of the objects is
-    # considered.  Specifying the GCRS frame of jup for our telescope
-    # RA and DEC SkyCoord does no harm for non-solar system objects
-    # (distance is too far to matter) but does set the observing time,
-    # which also does us no harm in this case, since it happens to be
-    # the actual observing time.
-    this_pointing = SkyCoord(frame=sun.frame, ra=ra, dec=dec)
-    sun_angle = this_pointing.separation(sun)
-    bmp_meta['sun_angle'] = sun_angle.value
-    bmp_meta['sun_angle_unit'] = sun_angle.unit
+    """cormultipipe post-processing routine that inserts angle between
+    pointing direction and sun"""
+    sa = angle_to_major_body(ccd.meta, 'sun')
+    bmp_meta['sun_angle'] = sa.value
+    bmp_meta['sun_angle_unit'] = sa.unit
     return ccd
 
 def na_back_process(data,
@@ -178,7 +155,8 @@ def na_back_process(data,
     #         'dec': objctdec,
     #         'alt': objctalt*u.deg,
     #         'az': objctaz*u.deg,
-    #         'airmass': airmass}
+    #         'airmass': airmass,
+    #         'sun_angle': angle_to_major_body(ccd.meta, 'sun')}
     # Add sun angle
     _ = sun_angle(data[0], bmp_meta=dmeta, **kwargs)
     bmp_meta['Na_back'] = dmeta
@@ -213,8 +191,6 @@ def na_back_pipeline(directory=None, # raw directory
                                      glob_include=glob_include)
     if collection is None:
         return []
-    summary_table = collection.summary
-    #print(summary_table['raoff'])
     try:
         raoffs = collection.values('raoff', unique=True)
         decoffs = collection.values('decoff', unique=True)
@@ -245,7 +221,6 @@ def na_back_pipeline(directory=None, # raw directory
                                 n_back_boxes=n_back_boxes,
                                 **kwargs)
         
-    # Eventually put back in
     cmp = CorMultiPipeBase(
         auto=True,
         calibration=calibration,
@@ -304,88 +279,91 @@ def na_back_directory(directory,
 
     return na_back_list
 
-    #tdf = df.loc[df['airmass'] < 2.0]
-    tdf = df.loc[df['airmass'] < 2.5]
-    mean_back = np.mean(tdf['best_back'])
-    std_back = np.std(tdf['best_back'])
-    biweight_back = biweight_location(tdf['best_back'])
-    mad_std_back = mad_std(tdf['best_back'])
+# Keep this stuff around just in case I want to do individual day
+# stuff, though I have the dataset as a whole in NaBack to play with
 
-
-    # https://stackoverflow.com/questions/20664980/pandas-iterate-over-unique-values-of-a-column-that-is-already-in-sorted-order
-    # and
-    # https://pandas.pydata.org/pandas-docs/stable/user_guide/groupby.html
-
-    #https://matplotlib.org/stable/tutorials/intermediate/color_cycle.html
-    offset_cycler = cycler(color=['r', 'g', 'b', 'y'])
-    plt.rc('axes', prop_cycle=offset_cycler)
-
-    f = plt.figure(figsize=[8.5, 11])
-    plt.suptitle(f"Na background {just_date}")
-    offset_groups = df.groupby(['raoff', 'decoff']).groups
-    ax = plt.subplot(3, 1, 1)
-    for offset_idx in offset_groups:
-        gidx = offset_groups[offset_idx]
-        gdf = df.iloc[gidx]
-        plot_dates = julian2num(gdf['jd'])
-        plt.plot_date(plot_dates, gdf['best_back'],
-                      label=f"dRA {gdf.iloc[0]['raoff']} "
-                      f"dDEC {gdf.iloc[0]['decoff']} armin")
-        plt.axhline(y=biweight_back, color='red')
-        plt.axhline(y=biweight_back+mad_std_back,
-                    linestyle='--', color='k', linewidth=1)
-        plt.axhline(y=biweight_back-mad_std_back,
-                    linestyle='--', color='k', linewidth=1)
-        plt.text(0.5, biweight_back + 0.1*mad_std_back, 
-                 f'{biweight_back:.4f} +/- {mad_std_back:.4f}',
-                 ha='center', transform=ax.get_yaxis_transform())
-        plt.xlabel('date')
-        plt.ylabel('electron/s')
-    ax.legend()
-
-    ax = plt.subplot(3, 1, 2)
-    for offset_idx in offset_groups:
-        gidx = offset_groups[offset_idx]
-        gdf = df.iloc[gidx]
-        plt.plot(gdf['airmass'], gdf['instr_mag'], '.')
-        #plt.axhline(y=biweight_back, color='red')
-        #plt.axhline(y=biweight_back+mad_std_back,
-        #            linestyle='--', color='k', linewidth=1)
-        #plt.axhline(y=biweight_back-mad_std_back,
-        #            linestyle='--', color='k', linewidth=1)
-        plt.xlabel('Airmass')
-        plt.ylabel('mag (electron/s/pix^2')
-
-    ax = plt.subplot(3, 1, 3)
-    for offset_idx in offset_groups:
-        gidx = offset_groups[offset_idx]
-        gdf = df.iloc[gidx]
-        plt.plot(gdf['alt'], gdf['best_back'], '.')
-        plt.axhline(y=biweight_back, color='red')
-        plt.axhline(y=biweight_back+mad_std_back,
-                    linestyle='--', color='k', linewidth=1)
-        plt.axhline(y=biweight_back-mad_std_back,
-                    linestyle='--', color='k', linewidth=1)
-        plt.xlabel('Alt')
-        plt.ylabel('electron/s')
-
-    f.subplots_adjust(hspace=0.3)
-    if write_plot is True:
-        write_plot = os.path.join(rd, 'Na_back.png')
-    if isinstance(write_plot, str):
-        savefig_overwrite(write_plot, transparent=True)
-    if show:
-        plt.show()
-    plt.close()
-
-    # Problem discussed in  https://mail.python.org/pipermail/tkinter-discuss/2019-December/004153.html
-    gc.collect()
-
-    return {'date': just_date,
-            'jd': np.floor(df['jd'].iloc[0]),
-            'biweight_back': biweight_back,
-            'mad_std_back': mad_std_back,
-            'na_back_list': na_back_list}
+#    #tdf = df.loc[df['airmass'] < 2.0]
+#    tdf = df.loc[df['airmass'] < 2.5]
+#    mean_back = np.mean(tdf['best_back'])
+#    std_back = np.std(tdf['best_back'])
+#    biweight_back = biweight_location(tdf['best_back'])
+#    mad_std_back = mad_std(tdf['best_back'])
+#
+#
+#    # https://stackoverflow.com/questions/20664980/pandas-iterate-over-unique-values-of-a-column-that-is-already-in-sorted-order
+#    # and
+#    # https://pandas.pydata.org/pandas-docs/stable/user_guide/groupby.html
+#
+#    #https://matplotlib.org/stable/tutorials/intermediate/color_cycle.html
+#    offset_cycler = cycler(color=['r', 'g', 'b', 'y'])
+#    plt.rc('axes', prop_cycle=offset_cycler)
+#
+#    f = plt.figure(figsize=[8.5, 11])
+#    plt.suptitle(f"Na background {just_date}")
+#    offset_groups = df.groupby(['raoff', 'decoff']).groups
+#    ax = plt.subplot(3, 1, 1)
+#    for offset_idx in offset_groups:
+#        gidx = offset_groups[offset_idx]
+#        gdf = df.iloc[gidx]
+#        plot_dates = julian2num(gdf['jd'])
+#        plt.plot_date(plot_dates, gdf['best_back'],
+#                      label=f"dRA {gdf.iloc[0]['raoff']} "
+#                      f"dDEC {gdf.iloc[0]['decoff']} armin")
+#        plt.axhline(y=biweight_back, color='red')
+#        plt.axhline(y=biweight_back+mad_std_back,
+#                    linestyle='--', color='k', linewidth=1)
+#        plt.axhline(y=biweight_back-mad_std_back,
+#                    linestyle='--', color='k', linewidth=1)
+#        plt.text(0.5, biweight_back + 0.1*mad_std_back, 
+#                 f'{biweight_back:.4f} +/- {mad_std_back:.4f}',
+#                 ha='center', transform=ax.get_yaxis_transform())
+#        plt.xlabel('date')
+#        plt.ylabel('electron/s')
+#    ax.legend()
+#
+#    ax = plt.subplot(3, 1, 2)
+#    for offset_idx in offset_groups:
+#        gidx = offset_groups[offset_idx]
+#        gdf = df.iloc[gidx]
+#        plt.plot(gdf['airmass'], gdf['instr_mag'], '.')
+#        #plt.axhline(y=biweight_back, color='red')
+#        #plt.axhline(y=biweight_back+mad_std_back,
+#        #            linestyle='--', color='k', linewidth=1)
+#        #plt.axhline(y=biweight_back-mad_std_back,
+#        #            linestyle='--', color='k', linewidth=1)
+#        plt.xlabel('Airmass')
+#        plt.ylabel('mag (electron/s/pix^2')
+#
+#    ax = plt.subplot(3, 1, 3)
+#    for offset_idx in offset_groups:
+#        gidx = offset_groups[offset_idx]
+#        gdf = df.iloc[gidx]
+#        plt.plot(gdf['alt'], gdf['best_back'], '.')
+#        plt.axhline(y=biweight_back, color='red')
+#        plt.axhline(y=biweight_back+mad_std_back,
+#                    linestyle='--', color='k', linewidth=1)
+#        plt.axhline(y=biweight_back-mad_std_back,
+#                    linestyle='--', color='k', linewidth=1)
+#        plt.xlabel('Alt')
+#        plt.ylabel('electron/s')
+#
+#    f.subplots_adjust(hspace=0.3)
+#    if write_plot is True:
+#        write_plot = os.path.join(rd, 'Na_back.png')
+#    if isinstance(write_plot, str):
+#        savefig_overwrite(write_plot, transparent=True)
+#    if show:
+#        plt.show()
+#    plt.close()
+#
+#    # Problem discussed in  https://mail.python.org/pipermail/tkinter-discuss/2019-December/004153.html
+#    gc.collect()
+#
+#    return {'date': just_date,
+#            'jd': np.floor(df['jd'].iloc[0]),
+#            'biweight_back': biweight_back,
+#            'mad_std_back': mad_std_back,
+#            'na_back_list': na_back_list}
 
 def na_back_tree(data_root=RAW_DATA_ROOT,
                  start=None,
@@ -877,10 +855,8 @@ class NaBack():
         iplot_date = int(tm.plot_date)
         t = self.meso_vol_corrected_table
         mask = t.groups.keys['iplot_date'] == iplot_date
-        meso_vol_corrected = \
-            self.meso_vol_corrected_table['vol_corrected_biweight'][mask]
-        meso_vol_corrected_err = \
-            self.meso_vol_corrected_table['vol_corrected_mad_std'][mask]
+        meso_vol_corrected = t['vol_corrected_biweight'][mask]
+        meso_vol_corrected_err = t['vol_corrected_mad_std'][mask]
         if (len(meso_vol_corrected) == 0
             or not np.isfinite(meso_vol_corrected)):
             # --> Not sure where the missing entries are coming from 
