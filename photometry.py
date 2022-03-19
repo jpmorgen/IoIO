@@ -16,15 +16,7 @@ from photutils.utils import calc_total_error
 
 from precisionguide import pgproperty
 
-def is_flux(unit):
-    """Determine if we are in flux units or not"""
-    unit = unit.decompose()
-    if isinstance(unit, u.IrreducibleUnit):
-        return False
-    sidx = np.flatnonzero(unit.bases == u.s)
-    if len(sidx) == 0 or unit.powers[sidx] != -1:
-        return False
-    return True
+from IoIO.utils import is_flux
 
 class control_property(pgproperty):
     """Decorator for Photometry.  
@@ -46,12 +38,13 @@ class control_property(pgproperty):
             return
         if old_val is not None:
             # This is our initial set or changing from nothing to something
-            log.debug(f'resetting {self._key} requires re-initialization of calculated quantities')
+            #log.debug(f'resetting {self._key} requires re-initialization of calculated quantities')
             obj.init_calc()
         obj_dict[self._key] = val
 
 class Photometry:
     def __init__(self,
+                 ccd=None,
                  seeing=5, # pixels
                  n_connected_pixels=5,
                  source_mask_dilate=11, # pixels
@@ -61,9 +54,8 @@ class Photometry:
                  no_deblend=False,
                  deblend_nlevels=32,
                  deblend_contrast=0.001,
-                 ccd=None,
-                 precalc=False,
                  **kwargs):
+        self.ccd = ccd
         self.seeing = seeing
         self.n_connected_pixels = n_connected_pixels
         self.source_mask_dilate = source_mask_dilate
@@ -73,7 +65,6 @@ class Photometry:
         self._no_deblend = no_deblend
         self.deblend_nlevels = deblend_nlevels
         self.deblend_contrast = deblend_contrast
-        self.ccd = ccd
         self.init_calc()
 
     def init_calc(self):
@@ -95,7 +86,6 @@ class Photometry:
             return
         self.source_catalog
         
-
     @control_property
     def seeing(self):
         pass
@@ -302,3 +292,12 @@ image
                            background=back)
         self._source_catalog = sc
         return self._source_catalog
+
+    def astrometry(self):
+        """Determine the ccd image astrometry based on the source catalog
+
+        """
+        # The could use astroquery.astrometry_net
+        if self.source_catalog is None:
+            return None
+        
