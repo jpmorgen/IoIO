@@ -221,7 +221,7 @@ class CorData(CorDataNDparams, NoCenterPGD):
             ccd.data[rr > 200] = 0
             y_x = np.asarray(center_of_mass(ccd.data))
             log.debug(f'Second iteration COM (X, Y; binned) = {self.coord_binned(y_x)[::-1]}')
-            self.quality = 6
+            self.center_quality = 6
             return y_x
 
         # If we made it here, we are reasonably sure Jupiter or a
@@ -246,8 +246,8 @@ class CorData(CorDataNDparams, NoCenterPGD):
         # Zero out all pixels that (1) are not on the ND filter and
         # (2) do not have decent signal
         NDmed = np.median(patch.data[patch.ND_coords])
-        print(f'self.ND_params {self.ND_params}')
-        print(f'patch ND_params = {patch.ND_params}')
+        #print(f'self.ND_params {self.ND_params}')
+        #print(f'patch ND_params = {patch.ND_params}')
         #print(f'patch ND_coords = {patch.ND_coords}')
         NDstd = np.std(patch.data[patch.ND_coords])
         log.debug(f'ND median, std {NDmed}, {NDstd}, 6*self.readnoise= {6*self.readnoise}')
@@ -275,7 +275,6 @@ class CorData(CorDataNDparams, NoCenterPGD):
             # the plateau.  Use gaussian filter to fuzz out our saturated pixels
             log.debug(f'Setting excessive bright pixels to ND median value')
             bad_patch = np.zeros_like(patch.data)
-            print(f'nonlin = {nonlin}')
             bad_patch[bad_ND_coords] = nonlin
             if self.show:
                 simple_show(bad_patch)
@@ -285,13 +284,13 @@ class CorData(CorDataNDparams, NoCenterPGD):
             patch.data[bad_patch > 0.1*np.max(bad_patch)] = NDmed
             if self.show:
                 simple_show(patch, norm=LogNorm())
-            self.quality = 6
+            self.center_quality = 6
         else:
             log.debug(f'ND filter is clean')
-            self.quality = 8
+            self.center_quality = 8
         pcenter = np.asarray(center_of_mass(patch.data))
         y_x = pcenter + ll
-        log.debug(f'Object COM from clean patch (X, Y; binned) = {self.coord_binned(y_x)[::-1]}, quality = {self.quality}')
+        log.debug(f'Object COM from clean patch (X, Y; binned) = {self.coord_binned(y_x)[::-1]}, center_quality = {self.center_quality}')
         #return y_x
 
         # --> Experiment with a really big hammer.  Does offer some improvement
@@ -307,14 +306,14 @@ class CorData(CorDataNDparams, NoCenterPGD):
             
         tbl = sc.to_table()
         tbl.sort('segment_flux', reverse=True)
-        tbl.show_in_browser()
+        #tbl.show_in_browser()
         xpcentrd = tbl['xcentroid'][0]
         ypcentrd = tbl['ycentroid'][0]
         #print(ll[::-1])
         #print(pcenter[::-1])
         #print(xpcentrd, ypcentrd)
         photometry_y_x = np.asarray((ypcentrd, xpcentrd)) + ll
-        log.debug(f'Patch COM = {self.coord_binned(y_x)[::-1]} (X, Y; binned); Photometry brightest centroid {self.coord_binned(photometry_y_x)[::-1]}; quality = {self.quality}')        
+        log.debug(f'Patch COM = {self.coord_binned(y_x)[::-1]} (X, Y; binned); Photometry brightest centroid {self.coord_binned(photometry_y_x)[::-1]}; center_quality = {self.center_quality}')        
         return photometry_y_x
 
     @pgcoordproperty
@@ -333,7 +332,8 @@ class CorData(CorDataNDparams, NoCenterPGD):
         unbinned_desired_center = (self.coord_unbinned(super().desired_center)
                                    + offset)
         y_center = unbinned_desired_center[0]
-        x_center = np.average(self.ND_edges(y_center, self.ND_params))
+        edges, _ = self.ND_edges(y_center, self.ND_params, self.ND_ref_y)
+        x_center = np.average(edges)
         desired_center = np.asarray((y_center, x_center))
         # Check to make sure desired center is close to the center of the image
         ims = np.asarray(self.shape)
@@ -388,8 +388,8 @@ if __name__ == "__main__":
     #from IoIO import CorObsData
     #ccd = CorObsData(fname)
     #print(ccd.obj_center)
-    #print(ccd.quality)
+    #print(ccd.center_quality)
     
     ccd = CorData.read(fname, show=True)
     print(ccd.obj_center)
-    print(ccd.quality)
+    print(ccd.center_quality)

@@ -183,8 +183,13 @@ def overscan_estimate(ccd_in, meta=None, master_bias=None,
         if bias.unit is u.electron:
             # Convert bias back to ADU for subtraction
             bias = bias.divide(gain*u.electron/u.adu)
-        ccd = ccd.subtract(bias)
-        ccd.meta['HIERARCH subtract_bias'] = True
+        try:
+            bsccd = ccd.subtract(bias)
+            bsccd.meta['HIERARCH subtract_bias'] = True
+            ccd = bsccd
+        except Exception as e:
+            log.warning(f'Problem subtracting bias: {e}')
+            ccd.meta['HIERARCH subtract_bias'] = False
 
     # Change to base class makes this difficult to implement, since
     # CorData is the old RedCorData
@@ -476,7 +481,7 @@ class CorDataBase(FitsKeyArithmeticMixin, NoCenterPGD, MaxImPGD):
     def obj_to_ND(self):
         """Returns perpendicular distance of obj center to center of ND filter in binned coordinates
         """
-        if self.quality == 0:
+        if self.center_quality == 0:
             # This quantity doesn't make sense if there is an invalid center
             return None
         # https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line
@@ -568,22 +573,22 @@ class CorDataBase(FitsKeyArithmeticMixin, NoCenterPGD, MaxImPGD):
             self.meta = sx694.metadata(self.meta)
         # Other cameras would be added here...
 
-    @property
+    @pgproperty
     def readnoise(self):
         """Returns CCD readnoise as value in same unit as primary array"""
         self.get_metadata()
         # --> This gets better with FITS header units
-        readnoise = self.meta.get('RDNOISE')
+        readnoise = self.meta.get('rdnoise')
         if self.unit == u.adu:
-            gain = self.meta.get('GAIN')
+            gain = self.meta.get('gain')
             readnoise /= gain
         return readnoise
         
-    @property
+    @pgproperty
     def nonlin(self):
         """Returns nonlinearity level in same unit as primary array"""
         self.get_metadata()
-        return self.meta.get('NONLIN')# * self.unit
+        return self.meta.get('nonlin')# * self.unit
         
     def _card_write(self):
         """Write FITS card unique to CorData"""
@@ -602,7 +607,7 @@ class CorDataBase(FitsKeyArithmeticMixin, NoCenterPGD, MaxImPGD):
         self.meta['ND_REF_Y'] = (self.ND_ref_y,
                                 'Full-frame Y reference point of ND_params')
         super()._card_write()
-        if self.quality > 5:
+        if self.center_quality and self.center_quality > 5:
             self.meta['HIERARCH OBJ_TO_ND_CENTER'] \
                 = (self.obj_to_ND,
                    'Obj perp dist to ND filt (pix)')
@@ -975,7 +980,6 @@ class CorDataNDparams(CorDataBase):
                 # Accumulate in tuples
                 ND_edges.append(edge_idx)
                 ypts.append(ycent)
-                
 
             if self.plot_prof:
                 plt.plot(profile)
@@ -994,20 +998,24 @@ class CorDataNDparams(CorDataBase):
         ypts = np.asarray(ypts)
         
         if self.plot_ND_edges:
-            plt.plot(ypts, ND_edges)
+            plt.plot(ND_edges, ypts)
             plt.show()
 
-        if default_ND_params is not None:
-            # Unmorph our measured ND_edges so they are in the
-            # reference frame of the original ref_ND_centers.  note,
-            # they were measured in a subim with x origin subim_hw
-            # away from the ref_ND_centers
+        if default_ND_params is None:
+            # In the flat case, we have been calculating our ND_edges
+            # relative to the cropped FOV, so add the crop margin back in
+            ND_edges += bounds[0]
+        else:
+            # In the low S/N case, unmorph our measured ND_edges so
+            # they are in the reference frame of the original
+            # ref_ND_centers.  note, they were measured in a subim
+            # with x origin subim_hw away from the ref_ND_centers
             _, ref_ND_centers = self.ND_edges(ypts, default_ND_params, ND_ref_y)
             ref_ND_centers -= subim_hw
             for iy in np.arange(len(ypts)):
                 ND_edges[iy, :] = ND_edges[iy, :] + ref_ND_centers[iy]
         if self.plot_ND_edges:
-            plt.plot(ypts, ND_edges)
+            plt.plot(ND_edges, ypts)
             plt.show()
             
 
@@ -1042,26 +1050,40 @@ class CorDataNDparams(CorDataBase):
 
 if __name__ == "__main__":
     log.setLevel('DEBUG')
-    ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_1x1.fit')
-    print(f'background = {ccd.background}')
-    ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_2x2.fit')
-    print(f'background = {ccd.background}')
-    ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_4x4.fit')
-    print(f'background = {ccd.background}')
-    
-    print(f'ND_params = {ccd.ND_params}')
-    
-    ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/IPT-0001_off-band.fit')
-    print(f'background = {ccd.background}')
-    print(f'ND_params = {ccd.ND_params}')
-    
-    print(overscan_estimate(ccd, show=True))
-    
-    # Binned 2x2
-    fname = '/data/IoIO/raw/2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit'
-    ccd = CorDataBase.read(fname)
-    
-    print(overscan_estimate(ccd, show=True))
-    print(f'ND_params = {ccd.ND_params}')
+    #ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_1x1.fit')
+    #print(f'background = {ccd.background}')
+    #ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_2x2.fit')
+    #print(f'background = {ccd.background}')
+    #ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/Bias-0001_4x4.fit')
+    #print(f'background = {ccd.background}')
+    #
+    #print(f'ND_params = {ccd.ND_params}')
+    #
+    #ccd = CorDataBase.read('/data/IoIO/raw/2017-03-14/IPT-0001_off-band.fit')
+    #print(f'background = {ccd.background}')
+    #print(f'ND_params = {ccd.ND_params}')
+    #
+    #print(overscan_estimate(ccd, show=True))
+    #
+    ## Binned 2x2
+    #fname = '/data/IoIO/raw/2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit'
+    #ccd = CorDataBase.read(fname)
+    #
+    #print(overscan_estimate(ccd, show=True))
+    #print(f'ND_params = {ccd.ND_params}')
 
+    # Flat
+    fname = '/data/IoIO/raw/2021-10-21/Sky_Flat-0002_R.fit'
+    #ccd = CorDataNDparams.read(fname, plot_prof=True) # Profiles look beautiful
+    #ccd = CorDataNDparams.read(fname, plot_dprof=True)
+
+    # Ha H!  The dprof peaks fall much lower than I would expect.  Same
+    # with the profile.
+
+    # --> Basically the problem is I have been sub-imaged and have not
+    # --> added that back again.  That is the X part of the crop
+
+    ccd = CorDataNDparams.read(fname, plot_ND_edges=True)
+    print(ccd.ND_params)
+    # Fixed!
 
