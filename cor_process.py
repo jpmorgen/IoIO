@@ -11,16 +11,25 @@ from astropy.coordinates import Angle, EarthLocation, SkyCoord
 import ccdproc as ccdp
 
 import IoIO.sx694 as sx694
+from IoIO.utils import best_fits_time
 from IoIO.cordata_base import overscan_estimate, CorDataBase, CorDataNDparams
 
-# See IoIO.notebk Tue Sep 28 08:54:57 2021 EDT  jpmorgen@snipe
-# I wasn't always consistent or correct with my naming or location
+# Got IoIO alt from a combination of Google Earth and USGS top
+# maps.  See IoIO.notebk Sun Apr 28 12:50:37 2019 EDT.  My
+# conclusion was that the altitude was compatible with WGS84,
+# though Google Maps apparently uses EGM96 elipsoid for heights
+# and WGS84 for lat-lon.  But EarthLocation does not support
+# EGM96, so use WGS84, which is a best-fit ellipsoid
 IOIO_1_LOCATION = EarthLocation.from_geodetic(
     '110 15 25.18 W', '31 56 21.27 N', 1096.342, 'WGS84')
 IOIO_1_LOCATION.info.name = 'IoIO_1'
 
 IOIO_1_LOCATION.info.meta = {
     'longname': 'Io Input/Output observatory Benson AZ USA'}
+
+# These come from the early MaxIm autosave observations and need to be
+# properly renamed
+JUPITER_SYNONYMS = ['IPT', 'Na', 'Na_IPT', 'Na_IPT_R']
 
 def get_filt_name(f, date_obs):
     """Used in standardize_filt_name.  Returns standarized filter name
@@ -29,11 +38,17 @@ def get_filt_name(f, date_obs):
     Parameters
     ----------
     f : str
-        filter name
+        Original filter name
 
     date_obs : str
         FITS format DATE-OBS keyword representing the date on which
         filter f was recorded into the FITS header
+
+    Returns
+    -------
+    f : str
+        Standardized filter name
+
     """
     # Dates and documentation from IoIO.notebk
     if date_obs > '2020-03-01':
@@ -127,19 +142,31 @@ def get_filt_name(f, date_obs):
         raise ValueError(f'unknown filter {f}')
     return f'{line}_{on_off}'
 
-def standardize_filt_name(hdr_in):
+def standardize_filt_name(hdr_or_collection):
     """Standardize FILTER keyword across all IoIO data
 
     Parameters
     ----------
-    hdr_in : `~astropy.fits.io.Header`
-        input FITS header
+    hdr_or_collection : `~astropy.fits.io.Header` or 
+        `~ccdproc.ImageFileCollection'
+
+        input FITS header or ImageFileCollection
 
     Returns
     -------
-    `~astropy.fits.io.Header` with FILTER card updated to standard
-        form and OFILTER card (original FILTER) added, if appropriate
+    `~astropy.fits.io.Header` or `~ccdproc.ImageFileCollection' with
+    FILTER card/column  updated to standard form and OFILTER card (original
+    FILTER) added, if appropriate
     """
+    if isinstance(hdr_or_collection, ccdp.ImageFileCollection):
+        st = hdr_or_collection.summary
+        st['ofilter'] = st['filter']
+        for row in st:
+            row['filter'] = get_filt_name(row['ofilter'],
+                                          row['date-obs'])
+        return hdr_or_collection
+
+    hdr_in = hdr_or_collection
     if hdr_in.get('ofilter') is not None:
         # We have been here before, so exit quietly
         return hdr_in
@@ -191,6 +218,29 @@ def obs_location_to_hdr(hdr_in, location=None):
         del hdr['SITELAT'] # MaxIm
     return hdr
 
+def obs_location_from_hdr(hdr, ellipsoid=None):
+    """Return `~astropy.coordinates.EarthLocation` of observatory given
+       standard ACP and MaxIm keywords.  Note WGS84 ellipsoid is assumed.
+
+    Parameters
+    ----------
+    hdr : FITS header object
+
+    ellipsoid : str or None
+        If None, `astropy.coord.EarthLocation` default is used
+    """
+    telescop = hdr.get('telescop')
+    if telescop is not None and telescope == 'IoIO_1':
+        # Save some time
+        return IOIO_1_LOCATION
+    lon = hdr.get('LONG-OBS') or hdr.get('SITELONG')
+    lat = hdr.get('LAT-OBS') or hdr.get('SITELAT')
+    # Just use an average elevation is none is available
+    # https://www.quora.com/What-is-the-average-elevation-of-Earth-above-the-ocean-including-land-area-below-sea-level-What-is-the-atmospheric-pressure-at-that-elevation
+    alt = hdr.get('ALT-OBS') or 800 * u.m
+    return coord.EarthLocation.from_geodetic(lon, lat, alt,
+                                             ellipsoid=ellipsoid)
+
 # --> This eventually can move up to the read method
 def fix_radecsys_in_hdr(hdr_in):
     """Change the depreciated RADECSYS keyword to RADESYS
@@ -213,6 +263,54 @@ def fix_radecsys_in_hdr(hdr_in):
     del hdr['RADECSYS']
     return hdr    
 
+def fix_obj_and_coord(hdr_in, **kwargs):
+    """Fixes missing/incorrect OBJECT and coordinate keywords in hdr
+
+    """
+    imagetyp = hdr_in.get('imagetyp') 
+    if (imagetyp is not None
+        and imagetyp.lower() != 'light'):
+        # bias, dark, etc, don't have object names
+        return hdr_in
+    hdr = hdr_in.copy()
+    if hdr.get('objctra') is None:
+        # IoIO.py ACP_IPT_Na_R was run from an ACP plan as a shell-out
+        # and usually didn't have a MaxIm telescope connection.  This
+        # is pretty much the only case where OBJCTRA and OBJCTDEC are
+        # not defined since Bob defines these in ACP and MaxIm sets
+        # them whenever the telescope is connected (any time it is
+        # pointed to the sky!).  Unless I was doing debugging, this
+        # shell-out was only called when the telescope was pointed at
+        # Jupiter.  Call that close enough.
+        hdr['OBJECT'] = 'Jupiter'
+        tm = best_fits_time(hdr)
+        location = obs_location_from_hdr(hdr)
+        with solar_system_ephemeris.set('builtin'):
+            target = get_body('Jupiter', tm, location)
+        target_ra_dec = target.to_string(style='hmsdms').split()
+        hdr['OBJCTRA'] = (target_ra_dec[0],
+                          '[hms J2000] Target right assention')
+        hdr['OBJCTDEC'] = (target_ra_dec[1],
+                           '[dms J2000] Target declination')
+        hdr['RA'] = (target_ra_dec[0],
+                     '[hms J2000] Center commanded right ascension')
+        hdr['DEC'] = (target_ra_dec[1],
+                      '[dms J2000] Center commanded declination')
+    if hdr.get('object') is None:
+        # Took some Mercury observations with MaxIm without specifying object
+        # Check for all just for the heck of it
+        for body in solar_system_ephemeris.bodies:
+            a = angle_to_major_body(hdr, body)
+            # This should be accurate enough for our pointing
+            if a < 1*arcdeg:
+                hdr['object'] = body
+                break
+    if hdr.get('object') in JUPITER_SYNONYMS:
+        # I named MaxIm autosave sequences after the filters rather
+        # than the object
+        hdr['OBJECT'] = 'Jupiter'
+    return hdr
+    
 def kasten_young_airmass(hdr_in):
     """Record airmass considering curvature of Earth
 
@@ -272,13 +370,14 @@ def cor_process(ccd,
                 auto=False,
                 imagetyp=None,
                 ccd_meta=True,
+                fix_radecsys=True,
+                obs_location=True,
                 fix_filt_name=True,
                 exp_correct=True,
                 date_beg_avg_add=True,
                 remove_raw_jd=True,
+                correct_obj_and_coord=True,
                 correct_obj_offset=True,
-                obs_location=True,
-                fix_radecsys=True,
                 airmass_correct=True,
                 oscan=None,
                 trim=None,
@@ -323,14 +422,8 @@ def cor_process(ccd,
 
     Parameters
     ----------
-    fname_or_ccd : str or `~astropy.nddata.CCDData`
-        Filename or CCDData of image to be reduced.
-
-    multi : bool
-
-        Internal flat signaling that this call is being used as part
-        of a multi-process run.  If True, assures input and output of
-        CCDData are via files rather than CCDData objects
+    ccd : `~astropy.nddata.CCDData`
+        CCDData of image to be processed
 
     calibration : `~Calibration` or None, optional
         Calibration object to be used to find best bias, dark, and
@@ -356,6 +449,15 @@ def cor_process(ccd,
         Add CCD metadata
         Default is ``True``
 
+    fix_radecsys : bool
+        Change RADECSYS to RADESYS as per latest FITS standard
+        Default is ``True``
+
+    obs_location : bool
+        Standardize FITS header keys for observatory location and
+        name.  Also deletes inaccurate/non-standard keywords
+        Default is ``True``
+
     fix_filt_name : bool
         Put all filters into namoing convention used starting when the
         9-position SX Maxi filter wheel was installed in late Feb 2020.
@@ -376,6 +478,10 @@ def cor_process(ccd,
         Remove *JD* keywords not calculated from DATE-BEG and DATE-AVG
         Default is ``True``
 
+    correct_obj_and_coord : bool
+        Correct missing/incorrect OBJECT and coordinate keywords in hdr 
+        Default is ``True``
+
     correct_obj_offset : bool
         Recognizing standard observations are recorded offset from the
         coronagraph, use RAOFF and DECOFF keywords to correct OBJCTRA
@@ -383,15 +489,6 @@ def cor_process(ccd,
         are set to the previous values of OBJCTRA and OBJCTDEC, which
         is the nominal center of the FOV, subject to telescope
         pointing errors. 
-        Default is ``True``
-
-    obs_location : bool
-        Standardize FITS header keys for observatory location and
-        name.  Also deletes inaccurate/non-standard keywords
-        Default is ``True``
-
-    fix_radecsys : bool
-        Change RADECSYS to RADESYS as per latest FITS standard
         Default is ``True``
 
     airmass_correct : bool
@@ -554,6 +651,13 @@ def cor_process(ccd,
         # Put in our SX694 camera metadata
         nccd.meta = sx694.metadata(nccd.meta, *args, **kwargs)
 
+    if fix_radecsys:
+        nccd.meta = fix_radecsys_in_hdr(nccd.meta)
+
+    if obs_location:
+        nccd.meta = obs_location_to_hdr(nccd.meta,
+                                        location=IOIO_1_LOCATION)
+
     if fix_filt_name:
         # Fix my indecision about filter names!
         nccd.meta = standardize_filt_name(nccd.meta)
@@ -574,7 +678,12 @@ def cor_process(ccd,
             del nccd.meta['HJD-OBS']
         if nccd.meta.get('BJD-OBS'):
             del nccd.meta['BJD-OBS']
-        
+
+    if correct_obj_and_coord:
+        # Add in Jupiter and missing coordinates when ACP shell-out
+        # to IoIO.py was used
+        fix_obj_and_coord(nccd.meta)
+    
     if correct_obj_offset:
         # These are in files written by both MaxIm and ACP *when the
         # telescope is connected*.  The ACP shell out version of the
@@ -600,13 +709,6 @@ def cor_process(ccd,
             nccd.meta['DEC'] = (cent_ra_dec[1],
                                 '[dms J2000] Center commanded declination')
         
-    if obs_location:
-        nccd.meta = obs_location_to_hdr(nccd.meta,
-                                        location=IOIO_1_LOCATION)
-
-    if fix_radecsys:
-        nccd.meta = fix_radecsys_in_hdr(nccd.meta)
-
     if airmass_correct:
         # I think this is better at large airmass than what ACP uses,
         # plus it standardizes everything for times I didn't use ACP
@@ -743,8 +845,11 @@ def cor_process(ccd,
     # Subtract master bias, adding metadata that refers to bias
     # filename, if supplied
     if isinstance(master_bias, CCDData):
-        nccd = ccdp.subtract_bias(nccd, master_bias,
-                                  add_keyword=subtract_bias_keyword)
+        try:
+            nccd = ccdp.subtract_bias(nccd, master_bias,
+                                      add_keyword=subtract_bias_keyword)
+        except Exception as e:
+            log.warning(f'Problem subtracting bias, probably early data: {e}')
     elif master_bias is None:
         pass
     else:
@@ -767,13 +872,17 @@ def cor_process(ccd,
     # Subtract the dark frame.  Generally this will just use the
     # default exposure_key we create in our parameters to ccd_process
     if isinstance(dark_frame, CCDData):
-        nccd = ccdp.subtract_dark(nccd, dark_frame,
-                                  dark_exposure=dark_exposure,
-                                  data_exposure=data_exposure,
-                                  exposure_time=exposure_key,
-                                  exposure_unit=exposure_unit,
-                                  scale=dark_scale,
-                                  add_keyword=subtract_dark_keyword)
+        try:
+            nccd = ccdp.subtract_dark(nccd, dark_frame,
+                                      dark_exposure=dark_exposure,
+                                      data_exposure=data_exposure,
+                                      exposure_time=exposure_key,
+                                      exposure_unit=exposure_unit,
+                                      scale=dark_scale,
+                                      add_keyword=subtract_dark_keyword)
+        except Exception as e:
+            log.warning(f'Problem subtracting dark, probably early data: {e}')
+            
     elif dark_frame is None:
         pass
     else:
@@ -787,10 +896,14 @@ def cor_process(ccd,
             min_value = min_value_key.value_from(master_flat.meta)
             flat_correct_keyword['FLATCOR'] += f', min_value={min_value}'
         flat_correct_keyword['FLATCOR'] += f', norm_value={flat_norm_value}'
-        nccd = ccdp.flat_correct(nccd, master_flat,
-                                 min_value=min_value,
-                                 norm_value=flat_norm_value,
-                                 add_keyword=flat_correct_keyword)
+        try:
+            nccd = ccdp.flat_correct(nccd, master_flat,
+                                     min_value=min_value,
+                                     norm_value=flat_norm_value,
+                                     add_keyword=flat_correct_keyword)
+        except Exception as e:
+            log.warning(f'Problem flatfielding, probably early data: {e}')
+            
         for i in range(2):
             for j in range(2):
                 ndpar = master_flat.meta.get(f'ndpar{i}{j}')

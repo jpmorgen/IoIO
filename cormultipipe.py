@@ -3,6 +3,7 @@ The cormultipipe module implements the IoIO coronagraph data reduction
 pipeline using ccdmultipipe/bigmultipipe as its base
 """
 
+import inspect
 import os
 import psutil
 import argparse
@@ -20,7 +21,7 @@ from ccdmultipipe import CCDMultiPipe, CCDArgparseHandler
 
 import IoIO.sx694 as sx694
 from IoIO.utils import (assure_list, reduced_dir, get_dirs_dates,
-                        im_med_min_max, add_history)
+                        im_med_min_max, add_history, is_flux)
 from IoIO.cordata_base import overscan_estimate, CorDataBase, CorDataNDparams
 from IoIO.cordata import CorData
 from IoIO.cor_process import cor_process
@@ -129,19 +130,20 @@ obj_center calculations by using CorDataBase as CCDData
         outname = outname.replace('Na-on', 'Na_on')
         return outname
 
-class CorMultiPipeNDparams(CorMultiPipeBase):
-    """Uses CorDataNDparams to ensure ND_params calculations locate the ND
-    filter to high precision.  Requires a decent amount of skylight
-
-    """
-    ccddata_cls = CorDataNDparams
-
-class CorMultiPipe(CorMultiPipeNDparams):
-    """Full CorMultiPipe system intended for coronagraphic observations
-
-    """
-    
-    ccddata_cls = CorData
+# Just use ccddata_cls as argument to CorMultiPipeBase
+#class CorMultiPipeNDparams(CorMultiPipeBase):
+#    """Uses CorDataNDparams to ensure ND_params calculations locate the ND
+#    filter to high precision.  Requires a decent amount of skylight
+#
+#    """
+#    ccddata_cls = CorDataNDparams
+#
+#class CorMultiPipe(CorMultiPipeNDparams):
+#    """Full CorMultiPipe system intended for coronagraphic observations
+#
+#    """
+#    
+#    ccddata_cls = CorData
 
 class CorArgparseHandler(CCDArgparseHandler):
     """Adds basic argparse options relevant to cormultipipe system""" 
@@ -208,12 +210,21 @@ def full_frame(data,
         frame, the entire list fails.  Currently permanently installed
         into CorMultiPipe.pre_process.
 
+    NOTE: The ND filter is slightly off-center.  Early data were
+    recorded a slightly less than full-frame in the X-direction in an
+    attempty to have robotic software automatically center on Jupiter.
+    It didn't work, but be liberal in what we accept for processing
+    purposes.
+
     """
     if isinstance(data, CCDData):
         s = data.shape
         # Note Pythonic C index ordering
-        if s != (naxis2, naxis1):
+        full = np.asarray((sx694.naxis2, sx694.naxis1))
+        if np.any(s < 0.8*full):
             return None
+        #if s != (naxis2, naxis1):
+        #    return None
         return data
     for ccd in data:
         ff = full_frame(ccd, naxis1=naxis1,
@@ -246,6 +257,10 @@ def add_raw_fname(ccd_in, in_name=None, **kwargs):
 def mask_above_key(ccd_in, bmp_meta=None, key=None, margin=0.1, **kwargs):
     """CorMultiPipe post-processing routine to mask pixels > input key
     """
+    if isinstance(ccd_in, list):
+        return [mask_above_key(ccd, bmp_meta=bmp_meta, key=key,
+                               margin=margin, **kwargs)
+                for ccd in ccd_in]
     if key is None:
         raise ValueError('key must be specified')
     masklevel = ccd_in.meta.get(key.lower())
@@ -275,9 +290,16 @@ def mask_above_key(ccd_in, bmp_meta=None, key=None, margin=0.1, **kwargs):
         bmp_meta[n_masked_key] = n_masked
     return ccd
 
-def mask_nonlin_sat(ccd, bmp_meta=None, margin=0.1, **kwargs):
-    """CorMultiPipe post-processing routine to mask pixels > NONLIN and SATLEVEL
+def mask_nonlin_sat(ccd_in, bmp_meta=None, margin=0.1, **kwargs):
+    """CorMultiPipe post-processing routine to mask pixels > NONLIN
+    and SATLEVEL.  Convenient for calling without needing to provide a keyword
+
     """
+    if isinstance(ccd_in, list):
+        return [mask_nonlin_sat(ccd, bmp_meta=bmp_meta, 
+                               margin=margin, **kwargs)
+                for ccd in ccd_in]
+    ccd = ccd_in.copy()
     ccd = mask_above_key(ccd, bmp_meta=bmp_meta, key='SATLEVEL')
     ccd = mask_above_key(ccd, bmp_meta=bmp_meta, key='NONLIN')
     return ccd
@@ -300,22 +322,20 @@ def combine_masks(data, **kwargs):
     for ccd in data:
         ccd.mask = newmask
         newdata.append(ccd)
-    return data
-
-def multi_filter_proc(data, **kwargs):
-    #return multi_proc(nd_filter_mask, **kwargs)(data)
-    return multi_proc(nd_filter_mask,
-                      element_type=CCDData,
-                      **kwargs)(data)
+    return newdata
 
 def nd_filter_mask(ccd_in, nd_edge_expand=ND_EDGE_EXPAND, **kwargs):
-    """CorMultiPipe post-processing routine to mask ND filter
+    """CorMultiPipe post-processing routine to mask ND filter.  Does
+    so individually in the case of a list of ccds
     """
+    if isinstance(ccd_in, list):
+        return [nd_filter_mask(ccd, nd_edge_expand=ND_EDGE_EXPAND, **kwargs)
+                for ccd in ccd_in]
     ccd = ccd_in.copy()
     mask = np.zeros(ccd.shape, bool)
     # Return a copy of ccd with the edge_mask property adjusted.  Do
     # it this way to keep ccd's ND filt parameters intact
-    emccd = CorDataBase(ccd, edge_mask=-nd_edge_expand)
+    emccd = CorDataBase(ccd_in, edge_mask=-nd_edge_expand)
     mask[emccd.ND_coords] = True
     if ccd.mask is None:
         ccd.mask = mask
@@ -323,8 +343,25 @@ def nd_filter_mask(ccd_in, nd_edge_expand=ND_EDGE_EXPAND, **kwargs):
         ccd.mask = ccd.mask + mask
     return ccd
 
+#def multi_filter_proc(data, **kwargs):
+#    """CorMultiPipe post-processing routine to mask ND filter when a list
+#    of files is being processed for each datum (e.g. na_back)
+#
+#    """
+#    # As per documentation in multi_proc, I have to have a separate
+#    # top-level function for each call to multi_proc
+#    #return multi_proc(nd_filter_mask, **kwargs)(data)
+#    return multi_proc(nd_filter_mask,
+#                      element_type=CCDData,
+#                      **kwargs)(data)
+
 def detflux(ccd_in, exptime_unit=None, **kwargs):
-    # --> put in a check for flux units
+    if isinstance(ccd_in, list):
+        return [detflux(ccd, exptime_unit=None, **kwargs)
+                for ccd in ccd_in]
+    if is_flux(ccd_in.unit):
+        log.warning('Already in flux units.  Doing nothing.  Double-call?')
+        return ccd_in
     ccd = ccd_in.copy()
     # The exptime_unit stuff may become obsolete with Card Quantities
     exptime_unit = exptime_unit or u.s
