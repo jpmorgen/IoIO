@@ -31,12 +31,12 @@ from precisionguide import pgproperty
 from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates,
                         closest_in_time, valid_long_exposure, im_med_min_max,
                         add_history, cached_csv, iter_polyfit, 
-                        simple_show, savefig_overwrite, angle_to_major_body)
+                        simple_show, savefig_overwrite)
+from IoIO.cor_process import angle_to_major_body
 from IoIO.cordata_base import CorDataBase
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
-                               CorMultiPipeBase, 
-                               nd_filter_mask,
-                               multi_filter_proc, combine_masks)
+                               CorMultiPipeBase, nd_filter_mask,
+                               combine_masks)
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.standard_star import (extinction_correct,
                                 StandardStar, SSArgparseHandler)
@@ -62,6 +62,7 @@ def sun_angle(ccd,
     sa = angle_to_major_body(ccd.meta, 'sun')
     bmp_meta['sun_angle'] = sa.value
     bmp_meta['sun_angle_unit'] = sa.unit
+    ccd.meta['HIERARCH SUN_ANGLE'] = (sa.value, f'[{sa.unit}]')
     return ccd
 
 def na_back_process(data,
@@ -226,7 +227,7 @@ def na_back_pipeline(directory=None, # raw directory
         calibration=calibration,
         photometry=photometry,
         create_outdir=create_outdir,
-        post_process_list=[multi_filter_proc,
+        post_process_list=[nd_filter_mask,
                            combine_masks,
                            na_back_process,
                            no_outfile],                           
@@ -466,7 +467,7 @@ class NaBack():
         self._kwargs = kwargs
         if reduce:
             # --> This may need improvement
-            reduction_products()
+            self.reduction_products
 
     @pgproperty
     def calibration(self):
@@ -833,7 +834,7 @@ class NaBack():
         Parameters
         ----------
         date_obs : str or `~astropy.time.Time`
-            Time of observation
+            Time of observation (DATE-AVG prefered in cor_processed data)
 
         airmass : float
             Airmass of observation look direction
@@ -844,7 +845,7 @@ class NaBack():
 
         Returns
         -------
-        best_back : Quantity
+        best_back, best_back_err : tuple of Quantity
             best-estimate Na background rate in electron/s
 
         """
@@ -859,7 +860,9 @@ class NaBack():
         meso_vol_corrected_err = t['vol_corrected_mad_std'][mask]
         if (len(meso_vol_corrected) == 0
             or not np.isfinite(meso_vol_corrected)):
-            # --> Not sure where the missing entries are coming from 
+            # --> Not sure where the missing entries are coming from
+            # --> Might want to separate this so I can capture the
+            # method used to get the rate
             meso_vol_corrected = \
                 self.meso_vol_corrected_sin_physical(iplot_date*u.day)
             meso_vol_corrected_err = self.meso_vol_corrected_err
@@ -980,6 +983,7 @@ class NaBack():
         #plt.gca().invert_yaxis()
         ##ax.set_ylim([0, 0.15])
 
+        # In vol units
         ax = plt.subplot(3, 3, 9)
         plt.plot_date(self.df['plot_date'],
                       self.all_meso_vol_sun_stim_chemilum_corrected.physical,
@@ -997,6 +1001,28 @@ class NaBack():
         ax.tick_params(axis='x', labelrotation = 45)
         plt.tight_layout()
         plt.show()
+
+        #t = self.meso_vol_corrected_table
+        #obs_rate = self.corrected_meso_vol_to_back_rate(
+        #    self.all_meso_vol_sun_stim_chemilum_corrected.physical)
+        #day_rate = self.corrected_meso_vol_to_back_rate(
+        #    t['vol_corrected_biweight'])
+        #day_err =  self.corrected_meso_vol_to_back_rate(
+        #    t['vol_corrected_mad_std'])
+        #ax = plt.subplot(3, 3, 9)
+        #plt.plot_date(self.df['plot_date'], rate, 'k.')
+        #plt.plot_date(t['iplot_date']+0.5,
+        #              day_rate, 'r.')
+        #plt.errorbar(t['iplot_date']+0.5,
+        #             day_rate.value,
+        #             yerr=day_err.value,
+        #             fmt='r.')
+        #plt.xlabel(f'Date')
+        #plt.ylabel(f'best_back daily ({self.back_unit})')
+        #ax.set_ylim([0, 0.02])
+        #ax.tick_params(axis='x', labelrotation = 45)
+        #plt.tight_layout()
+        #plt.show()
 
    #def vs_time(self):
    #    fit = fitting.LevMarLSQFitter()
@@ -1039,6 +1065,36 @@ class NaBack():
    #    plt.show()
 
     
+def na_meso_sub(ccd_in, bmp_meta=None, na_meso_obj=None, **kwargs):
+    """cormultipipe post-processing routine to subtract mesospheric
+    emission
+
+    Parameters
+    ----------
+    na_meso_obj : NaBack object
+    """
+    filt = ccd_in.meta['FILTER'] 
+    if filt != 'Na_on':
+        log.warning(f'na_meso_sub called {filt} not Na_on')
+        return ccd_in
+    bmp_meta = {}
+    ccd = ccd_in.copy()
+    meso, meso_err = na_meso_obj.best_back(ccd.meta['DATE-AVG'],
+                                           ccd.meta['AIRMASS'],
+                                           ccd.meta['SUN_ANGLE'])
+    ccd = ccd.subtract(meso, handle_meta='first_found')
+    ccd.meta['MESO'] = (
+        meso.value,
+        f'model mesospheric Na emission ({meso.unit.to_string()})')
+    ccd.meta['MESO_ERR'] = (
+        meso_err.value,
+        f'model mesospheric error ({meso_err.unit.to_string()})')
+    
+    bmp_meta['meso'] = meso
+    bmp_meta['meso_err'] = meso_err
+    add_history(ccd.meta, 'Subtracted MESO')
+    return ccd
+
 #log.setLevel('DEBUG')
 
 ## We can close the loop!

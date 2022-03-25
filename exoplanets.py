@@ -8,13 +8,14 @@ from astropy import log, time, coordinates as coord, units as u
 
 from ccdmultipipe import as_single
 
-from IoIO.utils import reduced_dir, get_dirs_dates
-
+from IoIO.utils import reduced_dir, get_dirs_dates, multi_glob
+from IoIO.cor_process import obs_location_from_hdr
 from IoIO.cormultipipe import (RAW_DATA_ROOT, CorMultiPipeBase,
                                nd_filter_mask, mask_nonlin_sat)
 from IoIO.calibration import Calibration
+from IoIO.cor_photometry import CorPhotometry, add_astrometry
 
-EXOPLANET_ROOT = '/data/exoplanets'
+EXOPLANET_ROOT = '/data/Exoplanets'
 GLOB_INCLUDE = ['TOI-*', 'WASP-*', 'GJ*']
 
 # General FITS WCS reference:
@@ -29,17 +30,8 @@ def barytime(ccd_in, bmp_meta=None, **kwargs):
 barycentric dynamic time (TDB) and insert it as the JDBARY FITS key"""
     ccd = ccd_in.copy()
 
-    # Location where photons are detected    
-    lon = ccd.meta.get('LONG-OBS') or ccd.meta.get('SITELONG')
-    lat = ccd.meta.get('LAT-OBS') or ccd.meta.get('SITELAT')
-    alt = ccd.meta.get('ALT-OBS') or 1096.342 * u.m
-    # Got IoIO alt from a combination of Google Earth and USGS top
-    # maps.  See IoIO.notebk Sun Apr 28 12:50:37 2019 EDT.  My
-    # conclusion was that the altitude was compatible with WGS84,
-    # though Google Maps apparently uses EGM96 elipsoid for heights
-    # and WGS84 for lat-lon.  But EarthLocation does not support
-    # EGM96m so use WGS84, which is a best-fit ellipsoid
-    location = coord.EarthLocation.from_geodetic(lon, lat, alt, 'WGS84')
+    # Location where photons are detected
+    location = obs_location_from_hdr(ccd.meta)
 
     # Local time at observatory
     timesys = ccd.meta.get('TIMESYS') or 'UTC'
@@ -91,13 +83,64 @@ barycentric dynamic time (TDB) and insert it as the JDBARY FITS key"""
                after=True)
     return ccd
 
+class ExoMultiPipe(CorMultiPipeBase):
+    def file_write(self, ccd, outname,
+                   photometry=None,
+                   overwrite=False,
+                   **kwargs):
+        if photometry is not None:
+            photometry.sky_coords_to_source_table()
+            photometry.obj_to_source_table()
+            source_table = photometry.source_table
+            source_table['DATE-AVG'] = ccd.meta['DATE-AVG']
+            source_table['JDBARY'] = ccd.meta['JDBARY']
+            source_table['EXPTIME'] = ccd.meta['EXPTIME']
+            source_table['AIRMASS'] = ccd.meta['AIRMASS']
+            source_table['filename'] = outname
+            outroot, _ = os.path.splitext(outname)
+            tname = outroot + '.ecsv'
+            source_table.write(tname, delimiter=',', overwrite=overwrite)
+        super().file_write(ccd, outname, overwrite=overwrite, **kwargs)
+
 def expo_calc(vmag):
-    # TOI-2109 was nice reference
+    # TOI-2109b was nice reference
+    expo_correct = 2*u.s
     vmag = vmag*u.mag(u.ct/u.s)
     toi_mag = 10*u.mag(u.ct/u.s)
-    toi_expo = 20*u.s
+    toi_expo = 20*u.s + expo_correct
     dmag = toi_mag - vmag
-    return toi_expo * dmag.physical
+    return toi_expo * dmag.physical - expo_correct
+
+# This is eventually going to be something like exo_pipeline
+#directory = '/data/IoIO/raw/20210921'
+directory = '/data/IoIO/raw/20220319/'
+glob_include=GLOB_INCLUDE
+calibration=None
+photometry=None
+cpulimit=None
+outdir_root=EXOPLANET_ROOT
+create_outdir=True
+kwargs={}
+
+rd = reduced_dir(directory, outdir_root, create=False)
+if calibration is None:
+    calibration = Calibration(reduce=True)
+if photometry is None:
+    photometry = CorPhotometry(cpulimit=cpulimit)
+flist = multi_glob(directory, glob_list=glob_include)
+cmp = ExoMultiPipe(auto=True,
+                   calibration=calibration,
+                   photometry=photometry, 
+                   fits_fixed_ignore=True, outname_ext='.fits', 
+                   post_process_list=[barytime,
+                                      mask_nonlin_sat,
+                                      nd_filter_mask,
+                                      add_astrometry,
+                                      as_single],
+                   create_outdir=create_outdir,
+                   **kwargs)
+pout = cmp.pipeline([flist[0]], outdir='/tmp', overwrite=True)
+#pout = cmp.pipeline(flist, outdir=rd, overwrite=True)
 
 if __name__ == "__main__":
     log.setLevel('DEBUG')
@@ -116,23 +159,29 @@ if __name__ == "__main__":
     #### #ccd = barytime(ccd)
     #### #print((ccd.meta['JDBARY'] - ccd.meta['BJD-OBS']) * 24*3600)
 
-    ##directory = '/data/io/IoIO/raw/20210823'
-    #directory = '/data/io/IoIO/raw/20210921'
+    ##directory = '/data/IoIO/raw/20210823'
+    #directory = '/data/IoIO/raw/20210921'
     #rd = reduced_dir(directory, create=True)
     #glob_include = ['TOI*']
 
     dirs, _ = zip(*dirs_dates)
     assert len(dirs) > 0
 
-    c = Calibration(reduce=True)
+    calibration=None
+    photometry=None
+    cpulimit=None
+    if calibration is None:
+        calibration = Calibration(reduce=True)
+    if photometry is None:
+        photometry = CorPhotometry(cpulimit=cpulimit)
 
     cmp = CorMultiPipeBase(auto=True, calibration=c,
                            fits_fixed_ignore=True, outname_ext='.fits', 
                            post_process_list=[barytime,
                                               mask_nonlin_sat,
                                               nd_filter_mask,
+                                              add_astrometry,
                                               as_single])
-
     for d in dirs:
         flist = []
         for gi in GLOB_INCLUDE:

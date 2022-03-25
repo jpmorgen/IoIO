@@ -28,10 +28,10 @@ from photutils import Background2D, MedianBackground
 import ccdproc as ccdp
 
 from bigmultipipe import WorkerWithKwargs, NestablePool
-from bigmultipipe import num_can_process, prune_pout
+from bigmultipipe import assure_list, num_can_process, prune_pout
 
 import IoIO.sx694 as sx694
-from IoIO.utils import (Lockfile, assure_list, get_dirs_dates, add_history,
+from IoIO.utils import (Lockfile, get_dirs_dates, add_history,
                         im_med_min_max, savefig_overwrite)
 from IoIO.cordata_base import CorDataBase, CorDataNDparams
 from IoIO.cor_process import standardize_filt_name
@@ -1802,7 +1802,7 @@ class Calibration():
                               'time': tm.tt.datetime,
                               'ratio': ratio}
                 ratio_dlist.append(ratio_dict)
-        tbl = Qtable(rows=ratio_dlist)
+        tbl = QTable(rows=ratio_dlist)
             
         flat_ratio_list = []
         f = plt.figure(figsize=[8.5, 11])

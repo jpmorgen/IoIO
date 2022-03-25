@@ -15,13 +15,13 @@ from astropy import units as u
 from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.time import Time
 
-from bigmultipipe import multi_proc, multi_logging
+from bigmultipipe import assure_list, multi_proc, multi_logging
 
 from ccdmultipipe import CCDMultiPipe, CCDArgparseHandler
 
 import IoIO.sx694 as sx694
-from IoIO.utils import (assure_list, reduced_dir, get_dirs_dates,
-                        im_med_min_max, add_history, is_flux)
+from IoIO.utils import (reduced_dir, get_dirs_dates, im_med_min_max,
+                        add_history, is_flux)
 from IoIO.cordata_base import overscan_estimate, CorDataBase, CorDataNDparams
 from IoIO.cordata import CorData
 from IoIO.cor_process import cor_process

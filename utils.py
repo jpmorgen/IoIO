@@ -15,10 +15,11 @@ from numpy.polynomial import Polynomial
 import matplotlib.pyplot as plt
 
 from astropy import log
-from astropy.coordinates import Angle, solar_system_ephemeris, get_body
 
 import astropy.units as u
 from astropy.time import Time
+
+from bigmultipipe import assure_list
 
 # These are MaxIm and ACP day-level raw data directories, respectively
 DATE_FORMATS = ["%Y-%m-%d", "%Y%m%d"]
@@ -52,14 +53,6 @@ class Lockfile():
 
     def clear(self):
         os.remove(self._fname)
-
-def assure_list(x):
-    """Assures x is type `list`"""
-    if x is None:
-        x = []
-    if not isinstance(x, list):
-        x = [x]
-    return x
 
 def multi_glob(directory, glob_list=None):
     """Returns list of files matching one or more regexp
@@ -630,50 +623,6 @@ def best_fits_time(hdr):
     # This could get fancier
     date_obs = hdr.get('DATE-AVG') or hdr.get('DATE-OBS')
     return Time(date_obs, format='fits')
-
-def angle_to_major_body(hdr, body):
-    """Returns angle between pointing direction and solar system major
-    body
-
-    Build-in astropy ephemeris is used, so results are not as accurate
-    as possible, but more than good enough for rough calculations
-
-    Parameters
-    ----------
-    meta : dict-like
-        Observation metadata keys are fairly MaxIm/ACP/CorData-specific
-
-    body : str
-        solar system major body name
-
-    Returns
-    -------
-    angle : astropy.units.Quantity
-        angle between pointing direction and major body 
-    """
-    
-    objctra = ccd.meta['OBJCTRA']
-    objctdec = ccd.meta['OBJCTDEC']
-    tm = best_fits_time(ccd.meta)
-    location = obs_location_from_hdr(ccd.meta)
-    with solar_system_ephemeris.set('builtin'):
-        body_coord = get_body(body_str, tm, loc)
-    ra = Angle(objctra, unit=u.hour)
-    dec = Angle(objctdec, unit=u.deg)
-    # Beware the default frame of SkyCoord is ICRS, which is relative
-    # to the solar system Barycenter.  body_coord is returned in GCRS,
-    # which is relative to the earth's center-of-mass.  separation()
-    # is not commutative when the two different frames are used, when
-    # one includes a solar system object (e.g. Jupiter), since the 3D
-    # position of the point of reference (earth) and the body
-    # (e.g. Jupiter) is considered.  Here we use the GCRS frame of our
-    # body in place of constructing a telescope frame since when we
-    # constructed the body_coord, we used the actual time of
-    # observation (what you want) and for anything outside the solar
-    # system, the whole solar system resolves into at point (so angles
-    # are not affected).
-    this_pointing = SkyCoord(frame=body_coord.frame, ra=ra, dec=dec)
-    return this_pointing.separation(body_coord)
 
 def location_to_dict(loc):
     """Useful for JPL horizons"""

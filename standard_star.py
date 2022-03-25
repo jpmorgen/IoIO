@@ -26,20 +26,22 @@ from astropy.coordinates import SkyCoord
 from astroquery.simbad import Simbad
 from astropy.modeling import models, fitting
 from astropy.visualization import quantity_support
+from astropy.nddata import CCDData
+from astropy.nddata.nduncertainty import StdDevUncertainty
 
 from specutils import Spectrum1D, SpectralRegion
 from specutils.analysis import line_flux
 from specutils.manipulation import (extract_region,
                                     LinearInterpolatedResampler)
 
-from bigmultipipe import no_outfile, cached_pout, prune_pout
+from bigmultipipe import assure_list, no_outfile, cached_pout, prune_pout
 
 from precisionguide import pgproperty
 
 from burnashev import Burnashev
 
 import IoIO.sx694 as sx694
-from IoIO.utils import (Lockfile, assure_list, reduced_dir, get_dirs_dates,
+from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates,
                         cached_csv, iter_polyfit, savefig_overwrite)
 from IoIO.cordata_base import CorDataBase
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
@@ -1096,33 +1098,97 @@ def filt_quantity(filt, data):
     return (filt_data['biweight_loc']*unit,
             filt_data['mad_std']*unit)
 
-def extinction_correct(instr_mag, airmass, ext_coef, inverse=False):
+def extinction_correct(flex_input, airmass=None, ext_coef=None,
+                       inverse=False, standard_star_obj=None,
+                       **kwargs):
     """Returns atmospheric extinction corrected instr_mag
 
     Parameters
     ----------
-    instr_mag : `~astropy.unit.Quantity` or float
-        Measured instrument magnitude(s) to be corrected, one per 
-        airmass.
+    flex_input : list, `~astropy.nddata.CCDData`, `~astropy.unit.Quantity` or float 
+        (1) list: routine will be run on each member, with the output
+        formed into a list (useful for list of `~astropy.nddata.CCDData`)
+
+        (2) `~astropy.nddata.CCDData`: data and uncertainty arrays
+        will be converted to magnitudes, excintion correction done on
+        that, and the results converted back into a non-magnitude
+        `~astropy.nddata.CCDData`.  This is necesesary because
+        functional `~astropy.unit.Quantity` like
+        `~astropy.units.Magnitude` cannot be stored into a
+        `~astropy.nddata.CCDData`
+
+        (3) `~astropy.unit.Quantity` or `float`:  Measured instrument
+        magnitude(s) 
 
     airmass : float or numpy.array
-        Airmass(es) at which correction is to be applied, one per 
-        instr_mag
+        Airmass(es) at which correction is to be applied.  See 
+        standard_star_obj
 
     ext_coef : `~astropy.unit.Quantity` or float
-        Extinction coef in units of instr_mag (per airmass)
+        Extinction coef in units of instr_mag (per airmass).  See
+        standard_star_obj
 
     inverse : bool
         Invert the extinction correction, where instr_mag is the
         extinction-corrected value and the raw instr_mag is returned
         Default is `False`
 
+    standard_star_obj : ~IoIO.standard_star.StandardStar
+        `~IoIO.standard_star.StandardStar` object used in the case
+        that flex_input is a `~astropy.nddata.CCDData` to produce
+        'airmass' (AIRMASS) and ext_coef (from FILTER).  If airmass
+        and ext_coef are supplied, they override values derived from ccddata
+
+    **kwargs : dict, optional
+        Allows routine to be used as cormultipipe post-processing routine
+
     Returns
     -------
-    Extinction-corrected instrument magnitude as `~astropy.unit.Quantity`
-    or `float` depending on input.  See ``inverse`` keyword
+    Extinction-corrected instrument magnitude as `list`,
+    `~astropy.unit.Quantity` or `float` depending on input.  If
+    ``inverse`` keyword ``True`` conversion run backward
 
     """
+    if isinstance(flex_input, list):
+        return [extinction_correct(fi, airmass=airmass,
+                                   ext_coef=ext_coef, inverse=inverse,
+                                   standard_star_obj=None,
+                                   **kwargs)
+                for fi in flex_input]
+    if (isinstance(flex_input, CCDData)):
+        if airmass is not None or ext_coef is not None:
+            raise ValueError('ERROR: airmass and/or ext_coef supplied.  '
+                             'CCDData metadata are used for these quantities')
+        ccd = flex_input
+        if inverse and ccd.meta.get('EXTINCTION_CORRECTED') != 1:
+            raise ValueError('Inversion requested, but data are not extinction corrected')
+        filt = ccd.meta['FILTER']
+        ext_coef, ext_coef_err = standard_star_obj.extinction_coef(filt)
+        airmass = ccd.meta['AIRMASS']
+        mecdata = standard_star_obj.extinction_correct(
+            u.Magnitude(ccd.data*ccd.unit),
+            airmass=airmass, filt=filt, inverse=inverse, **kwargs)
+        mecerr = standard_star_obj.extinction_correct(
+            u.Magnitude(ccd.uncertainty.array*ccd.unit),
+            airmass=airmass, filt=filt, inverse=inverse, **kwargs)
+        mecdata = mecdata.physical
+        mecerr = mecerr.physical
+        mccd = ccd.copy()
+        mccd.data = mecdata.value
+        mccd.uncertainty = StdDevUncertainty(mecerr.value)
+        mccd.meta['EXT_COEF'] = (
+            ext_coef.value,
+            f'extinction coefficient ({ext_coef.unit.to_string()})')
+        mccd.meta['HIERARCH EXT_COEF_ERR'] = (
+            ext_coef_err.value, f'[{ext_coef.unit.to_string()}]')
+        if inverse:
+            mccd.meta['HIERARCH EXTINCTION_CORRECTED'] = (
+                0, 'extinction correction reversed')
+        else:
+            mccd.meta['HIERARCH EXTINCTION_CORRECTED'] = (
+                1, 'extinction corrected')
+        return mccd
+    instr_mag = flex_input
     if (isinstance(instr_mag, u.Quantity)
         and isinstance(ext_coef, u.Quantity)):
         assert instr_mag.unit == ext_coef.unit
@@ -1147,7 +1213,31 @@ def extinction_correct(instr_mag, airmass, ext_coef, inverse=False):
         ext_coef *= -1
     ac = instr_mag - ext_coef*airmass
     return ac*unit
-
+        
+def rayleigh_convert(ccd_in, standard_star_obj=None, inverse=False, **kwargs):
+    """cormultipipe post-processing routine to convert to rayleighs"""
+    if isinstance(ccd_in, list):
+        return [to_rayleigh(ccd, inverse=inverse,
+                            standard_star_obj=None,
+                            **kwargs)
+                for ccd in ccd_in]
+    extinction_corrected = ccd_in.meta.get('extinction_corrected') or 0
+    if not inverse and extinction_corrected == 0:
+        raise ValueError('Extinction correction not done yet')
+    if inverse and extinction_corrected == 1:
+        raise ValueError('Extinction correction still applied.  Invert that first')
+    ccd = ccd_in.copy()
+    rc, rc_err = standard_star_obj.rayleigh_conversion(ccd.meta['FILTER'])
+    if inverse:
+        ccd = ccd.divide(rc, handle_meta='first_found')
+    else:
+        ccd = ccd.multiply(rc, handle_meta='first_found')
+    ccd.meta['HIERARCH RAYLEIGH_CONVERSION'] = (
+        rc.value, f'[{rc.unit.to_string()}]')
+    ccd.meta['HIERARCH RAYLEIGH_CONVERSION_ERR'] = (
+        rc_err.value, f'[{rc_err.unit.to_string()}]')
+    return ccd
+    
 def standard_star_tree(raw_data_root=RAW_DATA_ROOT,
                        start=None,
                        stop=None,
@@ -1264,7 +1354,6 @@ class StandardStar():
     def reduction_products(self):
         lock = Lockfile(self._lockfile)
         lock.create()
-        
         rp = standard_star_tree(raw_data_root=self.raw_data_root,
                                 start=self.start,
                                 stop=self.stop,
@@ -1285,7 +1374,7 @@ class StandardStar():
     @pgproperty
     def extinction_data(self):
         return self.reduction_products[0]
-        
+
     @pgproperty
     def exposure_correct_data(self):
         return self.reduction_products[1]
@@ -1314,7 +1403,7 @@ class StandardStar():
     def created_outdir_root(self):
         return reduced_dir(self.raw_data_root, self.outdir_root,
                            create=self.write_summary_plots)
-    
+
     def exposure_correct_plot(self):
         if self.write_summary_plots:
             outname = os.path.join(self.created_outdir_root,
@@ -1405,11 +1494,11 @@ class StandardStar():
 
     def rayleigh_conversion(self, filt):
         return filt_quantity(filt, self.rayleigh_conversions)
-                             
+
     def extinction_coef(self, filt):
         return filt_quantity(filt, self.extinction_coefs)
 
-    def extinction_correct(self, instr_mag, airmass, filt):
+    def extinction_correct(self, instr_mag, airmass, filt, **kwargs):
         """Returns atmospheric extinction corrected instr_mag
 
         Parameters
@@ -1430,22 +1519,22 @@ class StandardStar():
         -------
         atmospheric extinction corrected instrument magnitude as
         `~astropy.unit.Quantity` 
-
+        
         """
         ext_coef, _ = self.extinction_coef(filt)
-        return extinction_correct(instr_mag, airmass, ext_coef)
+        return extinction_correct(instr_mag, airmass, ext_coef, **kwargs)
 
 class SSArgparseHandler(CalArgparseHandler):
     def add_standard_star_root(self, 
-                             default=STANDARD_STAR_ROOT,
-                             help=None,
-                             **kwargs):
+                               default=STANDARD_STAR_ROOT,
+                               help=None,
+                               **kwargs):
         option = 'standard_star_root'
         if help is None:
             help = f'standard star root (default: {default})'
         self.parser.add_argument('--' + option, 
-                            default=default, help=help, **kwargs)
-    
+                                 default=default, help=help, **kwargs)
+
     def add_standard_star_start(self, 
                                 default=None,
                                 help=None,
@@ -1479,9 +1568,9 @@ class SSArgparseHandler(CalArgparseHandler):
                                  help=help, **kwargs)
 
     def add_write_summary_plots(self, 
-                 default=False,
-                 help=None,
-                 **kwargs):
+                                default=False,
+                                help=None,
+                                **kwargs):
         option = 'write_summary_plots'
         if help is None:
             help = (f'Write summary plots to standard_star_root')
@@ -1520,7 +1609,7 @@ class SSArgparseHandler(CalArgparseHandler):
                           num_processes=args.num_processes,
                           fits_fixed_ignore=args.fits_fixed_ignore)
         return c, ss
-    
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Run standard star reduction')
@@ -1529,7 +1618,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     aph.cmd(args)
 
-    
+
     #log.setLevel('DEBUG')
     #parser = argparse.ArgumentParser(
     #    description='IoIO standard star photometric reduction')
@@ -1755,7 +1844,7 @@ if __name__ == '__main__':
 #    nccd.meta.comments['DEC'] = '[dms J2000] Center nominal declination'
 #print(nccd.meta)
 
-      
+
 #my_star = SkyCoord(f'07 55 39.9', f'+19 53 02', unit=(u.hour, u.deg))
 #print(my_star.to_string(style='hmsdms'))
 #raoff = Angle(3*u.arcmin)
@@ -1769,7 +1858,7 @@ if __name__ == '__main__':
 #bmp_meta = {}
 #standard_star_process(nccd, bmp_meta=bmp_meta)
 
-                    
+
 #log.setLevel('DEBUG')
 #directory = '/data/IoIO/raw/2020-07-15'
 ##standard_star_pipeline(directory, read_pout=False, write_pout=True)
@@ -2087,3 +2176,4 @@ if __name__ == '__main__':
 #print(ss.extinction_coefs)
 #
 #print(ss.extinction_coef('Na_on'))
+

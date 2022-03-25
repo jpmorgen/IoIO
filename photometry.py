@@ -76,6 +76,9 @@ class Photometry:
         self._segm_image = None
         self._segm_deblend = None
         self._source_catalog = None
+        self._source_table = None
+        self._solved = None
+        self._sky_coords = None
 
     def precalc(self):
         if self.ccd is None:
@@ -293,11 +296,48 @@ image
         self._source_catalog = sc
         return self._source_catalog
 
+    @property
+    def source_table(self):
+        if self._source_table is not None:
+            return self._source_table
+        self._source_table = self.source_catalog.to_table()
+        self._source_table.sort('segment_flux', reverse=True)
+        return self._source_table
+
+    @property
+    def solved(self):
+        if self._solved is None:
+            self.astrometry
+        return self._solved
+
     def astrometry(self):
         """Determine the ccd image astrometry based on the source catalog
 
         """
-        # The could use astroquery.astrometry_net
+        if self._solved:
+            return self.ccd.wcs
         if self.source_catalog is None:
+            self._solved = False
             return None
+        # The could use astroquery.astrometry_net
         
+    @property
+    def sky_coords(self):
+        if self._sky_coords is not None:
+            return self._sky_coords
+        if not self.solved:
+            return None
+        skies = self.ccd.wcs.pixel_to_world(
+            self.source_table['xcentroid'],
+            self.source_table['ycentroid'])
+        self._sky_coords = skies
+        return self._sky_coords
+
+    def sky_coords_to_source_table(self):
+        """Add ra and dec columns to source_table"""
+        if self.sky_coords is None:
+            return
+        self.source_table['ra'] = self.sky_coords.ra
+        self.source_table['dec'] = self.sky_coords.dec
+
+

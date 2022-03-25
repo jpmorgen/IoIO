@@ -6,7 +6,8 @@ import numpy as np
 from astropy import log
 from astropy import units as u
 from astropy.nddata import CCDData, StdDevUncertainty
-from astropy.coordinates import Angle, EarthLocation, SkyCoord
+from astropy.coordinates import (Angle, EarthLocation, SkyCoord,
+                                 solar_system_ephemeris, get_body)
 
 import ccdproc as ccdp
 
@@ -230,7 +231,7 @@ def obs_location_from_hdr(hdr, ellipsoid=None):
         If None, `astropy.coord.EarthLocation` default is used
     """
     telescop = hdr.get('telescop')
-    if telescop is not None and telescope == 'IoIO_1':
+    if telescop is not None and telescop == 'IoIO_1':
         # Save some time
         return IOIO_1_LOCATION
     lon = hdr.get('LONG-OBS') or hdr.get('SITELONG')
@@ -262,6 +263,50 @@ def fix_radecsys_in_hdr(hdr_in):
                ('RADESYS', radecsys, 'Equatorial coordinate system'))
     del hdr['RADECSYS']
     return hdr    
+
+def angle_to_major_body(hdr, body_str):
+    """Returns angle between pointing direction and solar system major
+    body
+
+    Build-in astropy ephemeris is used, so results are not as accurate
+    as possible, but more than good enough for rough calculations
+
+    Parameters
+    ----------
+    meta : dict-like
+        Observation metadata keys are fairly MaxIm/ACP/CorData-specific
+
+    body : str
+        solar system major body name
+
+    Returns
+    -------
+    angle : astropy.units.Quantity
+        angle between pointing direction and major body 
+    """
+    
+    objctra = hdr['OBJCTRA']
+    objctdec = hdr['OBJCTDEC']
+    tm = best_fits_time(hdr)
+    location = obs_location_from_hdr(hdr)
+    with solar_system_ephemeris.set('builtin'):
+        body_coord = get_body(body_str, tm, location)
+    ra = Angle(objctra, unit=u.hour)
+    dec = Angle(objctdec, unit=u.deg)
+    # Beware the default frame of SkyCoord is ICRS, which is relative
+    # to the solar system Barycenter.  body_coord is returned in GCRS,
+    # which is relative to the earth's center-of-mass.  separation()
+    # is not commutative when the two different frames are used, when
+    # one includes a solar system object (e.g. Jupiter), since the 3D
+    # position of the point of reference (earth) and the body
+    # (e.g. Jupiter) is considered.  Here we use the GCRS frame of our
+    # body in place of constructing a telescope frame since when we
+    # constructed the body_coord, we used the actual time of
+    # observation (what you want) and for anything outside the solar
+    # system, the whole solar system resolves into at point (so angles
+    # are not affected).
+    this_pointing = SkyCoord(frame=body_coord.frame, ra=ra, dec=dec)
+    return this_pointing.separation(body_coord)
 
 def fix_obj_and_coord(hdr_in, **kwargs):
     """Fixes missing/incorrect OBJECT and coordinate keywords in hdr
@@ -296,14 +341,16 @@ def fix_obj_and_coord(hdr_in, **kwargs):
                      '[hms J2000] Center commanded right ascension')
         hdr['DEC'] = (target_ra_dec[1],
                       '[dms J2000] Center commanded declination')
-    if hdr.get('object') is None:
-        # Took some Mercury observations with MaxIm without specifying object
-        # Check for all just for the heck of it
+    obj = hdr.get('object') 
+    if obj is None or obj == '':
+        # OBJECT was not always set in the early Jupiter observations.
+        # Also took some Mercury observations with MaxIm without
+        # specifying object.  Check for all just for the heck of it
         for body in solar_system_ephemeris.bodies:
             a = angle_to_major_body(hdr, body)
             # This should be accurate enough for our pointing
-            if a < 1*arcdeg:
-                hdr['object'] = body
+            if a < 1*u.deg:
+                hdr['object'] = body.capitalize()
                 break
     if hdr.get('object') in JUPITER_SYNONYMS:
         # I named MaxIm autosave sequences after the filters rather
@@ -682,7 +729,7 @@ def cor_process(ccd,
     if correct_obj_and_coord:
         # Add in Jupiter and missing coordinates when ACP shell-out
         # to IoIO.py was used
-        fix_obj_and_coord(nccd.meta)
+        nccd.meta = fix_obj_and_coord(nccd.meta)
     
     if correct_obj_offset:
         # These are in files written by both MaxIm and ACP *when the
