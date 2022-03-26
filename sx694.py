@@ -340,9 +340,9 @@ def date_beg_avg(hdr_in,
         del hdr['UT']
     return hdr
 
-##########################################################################
-# --> These will all go away when IoIO.corobsdata system is commissioned #
-##########################################################################
+############################################################################
+# --> These will all go away when IoIO.corobsdata system is decommissioned #
+############################################################################
 
 # --> this is really more of a generic utility.  Also, this could be
 # incorporated with ObsData if the ObsData image + header property

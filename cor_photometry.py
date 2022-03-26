@@ -14,7 +14,7 @@ from astropy import log
 from astropy import units as u
 from astropy.coordinates import Angle, SkyCoord
 from astropy.io import fits
-from astropy.table import Table
+from astropy.table import Table, join_skycoord
 from astropy.wcs import WCS
 
 from IoIO.photometry import Photometry
@@ -24,9 +24,11 @@ class CorPhotometry(Photometry):
     def __init__(self,
                  ccd=None,
                  cpulimit=None,
+                 merge_rdls=True,
                  **kwargs):
         super().__init__(ccd=ccd, **kwargs)
         self.cpulimit = cpulimit
+        self.merge_rdls = merge_rdls
 
     def init_calc(self):
         super().init_calc()
@@ -70,6 +72,7 @@ class CorPhotometry(Photometry):
         Returns
         -------
         wcs : `~astropy.wcs.WCS` or None
+            ``None`` is returned if astrometry fails
 
         """
         if self._solved:
@@ -142,17 +145,16 @@ class CorPhotometry(Photometry):
                 with fits.open(outroot + '.wcs') as HDUL:
                     wcs = WCS(HDUL[0].header)
                 self.ccd.wcs = wcs
-                self._rdls = Table.read(outroot + '.rdls')
+                if self.merge_rdls:
+                    self.merge_rdls_table(
+                        Table.read(outroot + '.rdls'))
                 #self.source_table.show_in_browser()
                 return wcs
 
-    @property
-    def rdls(self):
-        if self._rdls is not None:
-            return self._rdls
-        if self.solved:
-            return self._rdls
-        return None
+    def merge_rdls_table(self, rdls):
+        rdls_coords = SkyCoord(rdls['ra'], rdls['dec'])
+        for row in rdls:
+            pass            
 
     def rdls_to_source_table(self):
         """Add rdls columns to source_table"""
@@ -186,37 +188,42 @@ class CorPhotometry(Photometry):
 
 def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
                    in_name=None, outdir=None, create_outdir=None,
-                   cpulimit=None, **kwargs):
+                   cpulimit=None, keep_intermediate=False, **kwargs):
     """cormultipipe post-processing routine to add wcs to ccd"""
     if isinstance(ccd_in, list):
         if isinstance(in_name, list):
-            return [add_astrometry(ccd, bmp_meta=bmp_meta, 
-                                   photometry=photometry,
-                                   in_name=fname, outdir=outdir,
-                                   create_outdir=create_outdir,
-                                   cpulimit=cpulimit, **kwargs)
+            return [add_astrometry(
+                ccd, bmp_meta=bmp_meta, photometry=photometry,
+                in_name=fname, outdir=outdir,
+                create_outdir=create_outdir,
+                cpulimit=cpulimit,  keep_intermediate=keep_intermediate,
+                **kwargs)
                     for ccd, fname in zip(ccd_in, in_name)]
         else:
-            return [add_astrometry(ccd, bmp_meta=bmp_meta, 
-                                   photometry=photometry,
-                                   in_name=in_name, outdir=outdir,
-                                   create_outdir=create_outdir,
-                                   cpulimit=cpulimit, **kwargs)
+            return [add_astrometry(
+                ccd, bmp_meta=bmp_meta, photometry=photometry,
+                in_name=in_name, outdir=outdir,
+                create_outdir=create_outdir,
+                cpulimit=cpulimit,  keep_intermediate=keep_intermediate,
+                **kwargs)
                     for ccd in ccd_in]            
     ccd = ccd_in.copy()
-    bmp_meta = bmp_meta or {}
     photometry = photometry or CorPhotometry()
     photometry.ccd = ccd
     photometry.cpulimit = photometry.cpulimit or cpulimit
-    if outdir is not None:
-        bname = os.path.basename(in_name)
-        outname = os.path.join(outdir, bname)
-        if create_outdir:
-            os.makedirs(outdir, exist_ok=True)
+    if keep_intermediate:
+        if outdir is not None:
+            bname = os.path.basename(in_name)
+            outname = os.path.join(outdir, bname)
+            if create_outdir:
+                os.makedirs(outdir, exist_ok=True)
+            else:
+                # This is safe because the astrometry stuff does not
+                # actually write to the input filename, just use it as
+                # a base
+                outname = in_name
     else:
-        # This is safe because the astrometry stuff does not actually
-        # write to the input filename, just use it as a base
-        outname = in_name
+        outname = None
     wcs = photometry.astrometry(outname=outname)
     # I am currently not putting the wcs into the metadata because I
     # don't need it -- it is available as ccd.wcs or realtively easily
@@ -225,3 +232,13 @@ def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
     # is still hanging around in the Photometry object.
     return ccd    
 
+rdls = Table.read('/tmp/WASP-36b-S001-R013-C002-R.rdls')
+#source_table = Table.read('/tmp/WASP-36b-S001-R013-C002-R.xyls')
+rdls_coords = SkyCoord(rdls['ra'], rdls['dec'], unit=u.deg)
+source_table.add_columns(rdls.colnames)
+for rdls in zip(rdls):
+    pass            
+
+source_table = Table.read('/tmp/WASP-36b-S001-R013-C002-R_p.ecsv')
+source_table['sky_coord'] = SkyCoord(
+    source_table['ra'], source_table['dec'], unit=u.deg)

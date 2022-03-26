@@ -338,9 +338,22 @@ def fix_obj_and_coord(hdr_in, **kwargs):
         hdr['OBJCTDEC'] = (target_ra_dec[1],
                            '[dms J2000] Target declination')
         hdr['RA'] = (target_ra_dec[0],
-                     '[hms J2000] Center commanded right ascension')
+                     '[hms J2000] Telescope right ascension')
         hdr['DEC'] = (target_ra_dec[1],
-                      '[dms J2000] Center commanded declination')
+                      '[dms J2000] Telescope declination')
+    else:
+        # Tweak metadata a little: These values are actually read from
+        # the telescope and are not the real RA and DEC of the target
+        # as implied by the raw metadata
+        hdr['OBJCTRA'] = (hdr['OBJCTRA'],
+                          '[hms J2000] Telescope right ascension')
+        hdr['OBJCTDEC'] = (hdr['OBJCTDEC'],
+                          '[hms J2000] Telescope declination')
+        hdr['RA'] = (hdr['RA'],
+                     '[hms J2000] Telescope right ascension')
+        hdr['DEC'] = (hdr['DEC'],
+                      '[hms J2000] Telescope declination')
+        
     obj = hdr.get('object') 
     if obj is None or obj == '':
         # OBJECT was not always set in the early Jupiter observations.
@@ -748,13 +761,13 @@ def cor_process(ccd,
             target_ra_dec = target.to_string(style='hmsdms').split()
             cent_ra_dec = cent.to_string(style='hmsdms').split()
             nccd.meta['OBJCTRA'] = (target_ra_dec[0],
-                                    '[hms J2000] Target right assention')
+                                    '[hms J2000] Target nominal right assention')
             nccd.meta['OBJCTDEC'] = (target_ra_dec[1],
-                                     '[dms J2000] Target declination')
+                                     '[dms J2000] Target nominal declination')
             nccd.meta['RA'] = (cent_ra_dec[0],
-                               '[hms J2000] Center commanded right ascension')
+                               '[hms J2000] Telescope right ascension')
             nccd.meta['DEC'] = (cent_ra_dec[1],
-                                '[dms J2000] Center commanded declination')
+                                '[dms J2000] Telescope declination')
         
     if airmass_correct:
         # I think this is better at large airmass than what ACP uses,

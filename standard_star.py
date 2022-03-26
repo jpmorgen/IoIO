@@ -20,7 +20,7 @@ from astropy import log
 from astropy import units as u
 from astropy.time import Time
 from astropy.stats import mad_std, biweight_location
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import Angle, SkyCoord
 # Rainy day project to get rid of pandas
 #from astropy.table import QTable
 from astroquery.simbad import Simbad
@@ -238,6 +238,20 @@ class CorBurnashev(Burnashev):
             av_bin_flux = (spec.photon_flux[1:] + spec.photon_flux[0:-1])/2
             filt_flux = np.nansum(spec_dlambda*av_bin_flux)
         return filt_flux
+
+def object_to_objctradec(ccd_in, **kwargs):
+    """cormultipipe post-processing routine to query Simbad for RA and DEC"""
+    ccd = ccd_in.copy()
+    s = Simbad()
+    simbad_results = s.query_object(ccd.meta['OBJECT'])
+    obj_entry = simbad_results[0]
+    ra = Angle(obj_entry['RA'], unit=u.hour)
+    dec = Angle(obj_entry['DEC'], unit=u.deg)
+    ccd.meta['OBJCTRA'] = (ra.to_string(),
+                      '[hms J2000] Target right assention')
+    ccd.meta['OBJCTDEC'] = (dec.to_string(),
+                       '[dms J2000] Target declination')
+    return ccd
 
 def standard_star_process(ccd,
                           bmp_meta=None,

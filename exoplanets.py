@@ -13,6 +13,7 @@ from IoIO.cor_process import obs_location_from_hdr
 from IoIO.cormultipipe import (RAW_DATA_ROOT, CorMultiPipeBase,
                                nd_filter_mask, mask_nonlin_sat)
 from IoIO.calibration import Calibration
+from IoIO.standard_star import object_to_objctradec
 from IoIO.cor_photometry import CorPhotometry, add_astrometry
 
 EXOPLANET_ROOT = '/data/Exoplanets'
@@ -111,6 +112,8 @@ def expo_calc(vmag):
     dmag = toi_mag - vmag
     return toi_expo * dmag.physical - expo_correct
 
+
+log.setLevel('DEBUG')
 # This is eventually going to be something like exo_pipeline
 #directory = '/data/IoIO/raw/20210921'
 directory = '/data/IoIO/raw/20220319/'
@@ -120,6 +123,7 @@ photometry=None
 cpulimit=None
 outdir_root=EXOPLANET_ROOT
 create_outdir=True
+keep_intermediate=False
 kwargs={}
 
 rd = reduced_dir(directory, outdir_root, create=False)
@@ -131,10 +135,12 @@ flist = multi_glob(directory, glob_list=glob_include)
 cmp = ExoMultiPipe(auto=True,
                    calibration=calibration,
                    photometry=photometry, 
-                   fits_fixed_ignore=True, outname_ext='.fits', 
+                   fits_fixed_ignore=True, outname_ext='.fits',
+                   keep_intermediate=keep_intermediate,
                    post_process_list=[barytime,
                                       mask_nonlin_sat,
                                       nd_filter_mask,
+                                      object_to_objctradec,
                                       add_astrometry,
                                       as_single],
                    create_outdir=create_outdir,
