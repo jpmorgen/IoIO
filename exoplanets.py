@@ -4,12 +4,18 @@
 import os
 import glob
 
-from astropy import log, time, coordinates as coord, units as u
+import numpy as np
+
+import matplotlib.pyplot as plt
+
+from astropy import log
+from astropy import units as u
+from astropy.coordinates import SkyCoord
 
 from ccdmultipipe import as_single
 
-from IoIO.utils import reduced_dir, get_dirs_dates, multi_glob
-from IoIO.cor_process import obs_location_from_hdr
+from IoIO.utils import (reduced_dir, get_dirs_dates, multi_glob,
+                        savefig_overwrite, simple_show)
 from IoIO.cormultipipe import (RAW_DATA_ROOT, CorMultiPipeBase,
                                nd_filter_mask, mask_nonlin_sat)
 from IoIO.calibration import Calibration
@@ -18,6 +24,11 @@ from IoIO.cor_photometry import CorPhotometry, add_astrometry
 
 EXOPLANET_ROOT = '/data/Exoplanets'
 GLOB_INCLUDE = ['TOI-*', 'WASP-*', 'GJ*']
+KEYS_TO_SOURCE_TABLE = ['DATE-AVG',
+                        ('DATE-AVG-UNCERTAINTY', u.s),
+                        ('MJDBARY', u.day),
+                        ('EXPTIME', u.s),
+                        'AIRMASS']
 
 # General FITS WCS reference:
 # https://fits.gsfc.nasa.gov/fits_wcs.html
@@ -27,31 +38,16 @@ GLOB_INCLUDE = ['TOI-*', 'WASP-*', 'GJ*']
 # https://docs.astropy.org/en/stable/time/index.html
 # https://www.aanda.org/articles/aa/pdf/2015/02/aa24653-14.pdf
 def barytime(ccd_in, bmp_meta=None, **kwargs):
-    """CorMultiPipe post-processing routine to calculate accurate
-barycentric dynamic time (TDB) and insert it as the JDBARY FITS key"""
+    """CorMultiPipe post-processing routine to calculate the barycentric
+    dynamic time (TDB) at the time of observation and record it in the
+    ccd metadata in units of MJD as the MJDBARY FITS key.  NOTE: the
+    internal astropy ephemerides are used, which are accurate to about
+    150 us.  The precision of MJD in the current epoch near
+    60000 is ~1 us.  The Starlight Xpress camera, as driven by MaxIm
+    DL is able to record shutter times to accuracies of ~100 ms.
+
+    """
     ccd = ccd_in.copy()
-
-    # Location where photons are detected
-    location = obs_location_from_hdr(ccd.meta)
-
-    # Local time at observatory
-    timesys = ccd.meta.get('TIMESYS') or 'UTC'
-    fits_date = ccd.meta.get('DATE-AVG')
-    if fits_date is None:
-        fits_date = ccd.meta.get('DATE-OBS')
-        # This could go on ad-infinitum in general, since there are so
-        # many standards to choose from for time.  With MaxIm and ACP,
-        # we can stop here
-        telescope = ccd.meta.get('TELESCOP')
-        if telescope == 'IoIO_1':
-            log.warning('Less accurate DATE-OBS keyword being used.  DATE-AVG was somehow not calculated')
-        after_key = 'DATE-OBS'
-        jdbary_comment = 'Obs. barycentric dynamic time (JD)'
-    else:
-        after_key = 'MJD-AVG'
-        jdbary_comment = 'Obs. midpoint barycentric dynamic time (JD)'
-    tm = time.Time(fits_date, format='fits',
-                   scale=timesys.lower(), location=location)
 
     # Fancy conversion to ICRS is likely not done anywhere in IoIO
     # system, so default to FK5 is safe
@@ -62,7 +58,7 @@ barycentric dynamic time (TDB) and insert it as the JDBARY FITS key"""
     if ctype1 and ctype2 and 'RA' in ctype1 and 'DEC' in ctype2:
         ra = ccd.meta.get('CRVAL1')
         dec = ccd.meta.get('CRVAL2')
-        units = (ccd.meta.get('CUNIT1') or u.deg,
+        unit = (ccd.meta.get('CUNIT1') or u.deg,
                  ccd.meta.get('CUNIT2') or u.deg)
     else:
         # ACP puts RA and DEC in as read from telescope and/or copied
@@ -71,18 +67,65 @@ barycentric dynamic time (TDB) and insert it as the JDBARY FITS key"""
         ra = ccd.meta.get('RA') or ccd.meta.get('OBJCTRA')
         dec = ccd.meta.get('DEC') or ccd.meta.get('OBJCTDEC')
         # These values are string sexagesimal with RA in hours
-        units = (u.hourangle, u.deg)
-    direction = coord.SkyCoord(ra, dec, unit=units, frame=radesys.lower())
-
+        unit = (u.hourangle, u.deg)
+    direction = SkyCoord(ra, dec, unit=unit, frame=radesys.lower())
 
     # Put it all together
-    dt = tm.light_travel_time(direction, kind='barycentric')
-    tdb = tm.tdb + dt
+    dt = ccd.tavg.light_travel_time(direction, kind='barycentric')
+    tdb = ccd.tavg.tdb + dt
+    if ccd.meta.get('MJD-OBS'):
+        after_key = 'MJD-OBS'
+    else:
+        after_key = 'DATE-OBS'    
     ccd.meta.insert(after_key, 
-               ('JDBARY', tdb.jd,
-                jdbary_comment),
+               ('MJDBARY', tdb.mjd,
+                'Obs. midpoint barycentric dynamic time (MJD)'),
                after=True)
     return ccd
+
+def obj_plot(ccd, photometry=None, outname=None, show=False, **kwargs):
+    # Don't gunk up the source_table ecsv with bounding box
+    # stuff, but keep in mind we sorted it, so key off of
+    # label
+    bbox_table = photometry.source_catalog.to_table(
+        ['label', 'bbox_xmin', 'bbox_xmax', 'bbox_ymin', 'bbox_ymax'])
+    mask = (photometry.wide_source_table['OBJECT']
+            == ccd.meta['OBJECT'])
+    label = photometry.wide_source_table[mask]['label']
+    bbts = bbox_table[bbox_table['label'] == label]
+    expand_bbox = 10
+    xmin = bbts['bbox_xmin'][0] - expand_bbox
+    xmax = bbts['bbox_xmax'][0] + expand_bbox
+    ymin = bbts['bbox_ymin'][0] - expand_bbox
+    ymax = bbts['bbox_ymax'][0] + expand_bbox
+    source_ccd = ccd[ymin:ymax, xmin:xmax]
+    threshold = photometry.threshold[ymin:ymax, xmin:xmax]
+    segm = photometry.segm_image.data[ymin:ymax, xmin:xmax]
+    #threshold = photometry.threshold_above_back[ymin:ymax, xmin:xmax]
+
+    #https://pythonmatplotlibtips.blogspot.com/2019/07/draw-two-axis-to-one-colorbar.html
+    ax = plt.subplot(projection=source_ccd.wcs)
+    ims = plt.imshow(source_ccd)
+    cbar = plt.colorbar(ims, fraction=0.03, pad=0.11)
+    pos = cbar.ax.get_position()
+    cax1 = cbar.ax
+    cax1.set_aspect('auto')
+    cax2 = cax1.twinx()
+    ylim = np.asarray(cax1.get_ylim())
+    nonlin = source_ccd.meta['NONLIN']
+    cax1.set_ylabel(source_ccd.unit)
+    cax2.set_ylim(ylim/nonlin*100)
+    cax1.yaxis.set_label_position('left')
+    cax1.tick_params(labelrotation=90)
+    cax2.set_ylabel('% nonlin')
+
+    ax.contour(segm, levels=0, colors='white')
+    ax.contour(source_ccd - threshold,
+               levels=0, colors='gray')
+    ax.set_title(f'{ccd.meta["OBJECT"]} {ccd.meta["DATE-AVG"]}')
+    savefig_overwrite(outroot + '.png')
+    
+
 
 class ExoMultiPipe(CorMultiPipeBase):
     def file_write(self, ccd, outname,
@@ -90,17 +133,54 @@ class ExoMultiPipe(CorMultiPipeBase):
                    overwrite=False,
                    **kwargs):
         if photometry is not None:
-            photometry.sky_coords_to_source_table()
-            photometry.obj_to_source_table()
-            source_table = photometry.source_table
-            source_table['DATE-AVG'] = ccd.meta['DATE-AVG']
-            source_table['JDBARY'] = ccd.meta['JDBARY']
-            source_table['EXPTIME'] = ccd.meta['EXPTIME']
-            source_table['AIRMASS'] = ccd.meta['AIRMASS']
-            source_table['filename'] = outname
+            photometry.wide_source_table['filename'] = outname
             outroot, _ = os.path.splitext(outname)
             tname = outroot + '.ecsv'
-            source_table.write(tname, delimiter=',', overwrite=overwrite)
+            photometry.wide_source_table.write(
+                tname, delimiter=',', overwrite=overwrite)
+            gname = outroot + '_gaia.ecsv'
+            photometry.source_gaia_join.write(
+                gname, delimiter=',', overwrite=overwrite)
+            # Don't gunk up the source_table ecsv with bounding box
+            # stuff, but keep in mind we sorted it, so key off of
+            # label
+            bbox_table = photometry.source_catalog.to_table(
+                ['label', 'bbox_xmin', 'bbox_xmax', 'bbox_ymin', 'bbox_ymax'])
+            mask = (photometry.wide_source_table['OBJECT']
+                    == ccd.meta['OBJECT'])
+            label = photometry.wide_source_table[mask]['label']
+            bbts = bbox_table[bbox_table['label'] == label]
+            expand_bbox = 10
+            xmin = bbts['bbox_xmin'][0] - expand_bbox
+            xmax = bbts['bbox_xmax'][0] + expand_bbox
+            ymin = bbts['bbox_ymin'][0] - expand_bbox
+            ymax = bbts['bbox_ymax'][0] + expand_bbox
+            source_ccd = ccd[ymin:ymax, xmin:xmax]
+            threshold = photometry.threshold[ymin:ymax, xmin:xmax]
+            segm = photometry.segm_image.data[ymin:ymax, xmin:xmax]
+            #threshold = photometry.threshold_above_back[ymin:ymax, xmin:xmax]
+
+            #https://pythonmatplotlibtips.blogspot.com/2019/07/draw-two-axis-to-one-colorbar.html
+            ax = plt.subplot(projection=source_ccd.wcs)
+            ims = plt.imshow(source_ccd)
+            cbar = plt.colorbar(ims, fraction=0.03, pad=0.11)
+            pos = cbar.ax.get_position()
+            cax1 = cbar.ax
+            cax1.set_aspect('auto')
+            cax2 = cax1.twinx()
+            ylim = np.asarray(cax1.get_ylim())
+            nonlin = source_ccd.meta['NONLIN']
+            cax1.set_ylabel(source_ccd.unit)
+            cax2.set_ylim(ylim/nonlin*100)
+            cax1.yaxis.set_label_position('left')
+            cax1.tick_params(labelrotation=90)
+            cax2.set_ylabel('% nonlin')
+
+            ax.contour(segm, levels=0, colors='white')
+            ax.contour(source_ccd - threshold,
+                       levels=0, colors='gray')
+            ax.set_title(f'{ccd.meta["OBJECT"]} {ccd.meta["DATE-AVG"]}')
+            savefig_overwrite(outroot + '.png')
         super().file_write(ccd, outname, overwrite=overwrite, **kwargs)
 
 def expo_calc(vmag):
@@ -120,17 +200,21 @@ directory = '/data/IoIO/raw/20220319/'
 glob_include=GLOB_INCLUDE
 calibration=None
 photometry=None
+keys_to_source_table=KEYS_TO_SOURCE_TABLE
+keep_intermediate=False
+#keep_intermediate=True
 cpulimit=None
 outdir_root=EXOPLANET_ROOT
 create_outdir=True
-keep_intermediate=False
 kwargs={}
 
 rd = reduced_dir(directory, outdir_root, create=False)
 if calibration is None:
     calibration = Calibration(reduce=True)
 if photometry is None:
-    photometry = CorPhotometry(cpulimit=cpulimit)
+    photometry = CorPhotometry(join_tolerance=5*u.arcsec,
+                               cpulimit=cpulimit,
+                               keys_to_source_table=keys_to_source_table)
 flist = multi_glob(directory, glob_list=glob_include)
 cmp = ExoMultiPipe(auto=True,
                    calibration=calibration,
@@ -271,3 +355,58 @@ if __name__ == "__main__":
     # 
     # 
     # Let me know if you have any questions or recommendations to make
+
+
+#####  from astropy.nddata import CCDData
+#####  ccd = CCDData.read('/tmp/WASP-36b-S001-R013-C002-R_p.fits')
+#####  source_ccd = ccd
+#####  ## https://stackoverflow.com/questions/27151098/draw-colorbar-with-twin-scales
+#####  ##https://pythonmatplotlibtips.blogspot.com/2019/07/draw-two-axis-to-one-colorbar.html
+#####  #
+#####  #fig = plt.figure()
+#####  #ax = plt.subplot(projection=source_ccd.wcs)
+#####  #ims = plt.imshow(source_ccd)
+#####  #cbar = fig.colorbar(ims, fraction=0.046, pad=0.04)
+#####  #pos = cbar.ax.get_position()
+#####  #cax1 = cbar.ax
+#####  #cax1.set_aspect('auto')
+#####  #cax2 = cax1.twinx()
+#####  #ylim = np.asarray(cax1.get_ylim())
+#####  #nonlin = source_ccd.meta['NONLIN']
+#####  #
+#####  #cax1.yaxis.set_ticks_position('left')
+#####  #cax1.yaxis.set_label_position('left')
+#####  #cax1.set_ylabel(source_ccd.unit)
+#####  #cax2.set_ylim(ylim/nonlin*100)
+#####  #cax2.set_ylabel('% nonlin')
+#####  #
+#####  #
+#####  #
+#####  #
+#####  #
+#####  #
+#####  ax = plt.subplot(projection=source_ccd.wcs)
+#####  ims = plt.imshow(source_ccd)
+#####  cbar = plt.colorbar(ims, fraction=0.03, pad=0.11)
+#####  pos = cbar.ax.get_position()
+#####  cax1 = cbar.ax
+#####  cax1.set_aspect('auto')
+#####  cax2 = cax1.twinx()
+#####  ylim = np.asarray(cax1.get_ylim())
+#####  nonlin = source_ccd.meta['NONLIN']
+#####  cax1.set_ylabel(source_ccd.unit)
+#####  cax2.set_ylim(ylim/nonlin*100)
+#####  cax1.yaxis.set_label_position('left')
+#####  #cax1.yaxis.set_ticks_position('right')
+#####  #cax1.yaxis.set_label_position('right')
+#####  cax1.tick_params(labelrotation=45)
+#####  cax2.set_ylabel('% nonlin')
+#####  #cax2.yaxis.set_ticks_position('left')
+#####  #cax2.yaxis.set_label_position('left')
+#####  #plt.tight_layout()
+#####  
+#####  #ax.contour(segm, levels=0, colors='white')
+#####  #ax.contour(source_ccd - threshold,
+#####  #           levels=0, colors='gray')
+#####  ax.set_title(f'{ccd.meta["OBJECT"]} {ccd.meta["DATE-OBS"]}')
+#####  plt.show()

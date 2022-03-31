@@ -59,7 +59,7 @@ def sun_angle(ccd,
               **kwargs):
     """cormultipipe post-processing routine that inserts angle between
     pointing direction and sun"""
-    sa = angle_to_major_body(ccd.meta, 'sun')
+    sa = angle_to_major_body(ccd, 'sun')
     bmp_meta['sun_angle'] = sa.value
     bmp_meta['sun_angle_unit'] = sa.unit
     ccd.meta['HIERARCH SUN_ANGLE'] = (sa.value, f'[{sa.unit}]')
@@ -157,7 +157,7 @@ def na_back_process(data,
     #         'alt': objctalt*u.deg,
     #         'az': objctaz*u.deg,
     #         'airmass': airmass,
-    #         'sun_angle': angle_to_major_body(ccd.meta, 'sun')}
+    #         'sun_angle': angle_to_major_body(ccd, 'sun')}
     # Add sun angle
     _ = sun_angle(data[0], bmp_meta=dmeta, **kwargs)
     bmp_meta['Na_back'] = dmeta

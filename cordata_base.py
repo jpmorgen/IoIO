@@ -18,6 +18,7 @@ from matplotlib.colors import LogNorm
 from astropy import log
 from astropy import units as u
 from astropy.stats import biweight_location
+from astropy.coordinates import EarthLocation
 
 from astropy_fits_key import FitsKeyArithmeticMixin
 
@@ -27,6 +28,18 @@ from precisionguide.utils import hist_of_im, iter_linfit
 
 import IoIO.sx694 as sx694
 from IoIO.utils import CCDImageFormatter
+
+# Got IoIO alt from a combination of Google Earth and USGS top
+# maps.  See IoIO.notebk Sun Apr 28 12:50:37 2019 EDT.  My
+# conclusion was that the altitude was compatible with WGS84,
+# though Google Maps apparently uses EGM96 elipsoid for heights
+# and WGS84 for lat-lon.  But EarthLocation does not support
+# EGM96, so use WGS84, which is a best-fit ellipsoid
+IOIO_1_LOCATION = EarthLocation.from_geodetic(
+    '110 15 25.18 W', '31 56 21.27 N', 1096.342, 'WGS84')
+IOIO_1_LOCATION.info.name = 'IoIO_1'
+IOIO_1_LOCATION.info.meta = {
+    'longname': 'Io Input/Output observatory Benson AZ USA'}
 
 # All global values are referenced to the unbinned, full-frame
 # CCD.  Calculations (should be) done such that binned & subframed
@@ -84,7 +97,6 @@ def run_level_default_ND_params(hdr):
         ND_params = np.asarray([[  3.63686271e-01,   3.68675375e-01],
                                 [  1.28303305e+03,   1.39479846e+03]])
     return ND_params
-
 
 def overscan_estimate(ccd_in, meta=None, master_bias=None,
                       binsize=None, min_width=1, max_width=8, box_size=100,
@@ -372,6 +384,25 @@ class CorDataBase(FitsKeyArithmeticMixin, NoCenterPGD, MaxImPGD):
         kwargs['ND_ref_y'] = self.ND_ref_y
         return kwargs
         
+    @pgproperty
+    def obs_location(self):
+        """Return `~astropy.coordinates.EarthLocation` of observatory given
+           standard ACP and MaxIm keywords.  Note WGS84 ellipsoid is assumed.
+
+        """
+        telescop = self.meta.get('telescop')
+        if telescop is not None and telescop == 'IoIO_1':
+            # Save some time
+            return IOIO_1_LOCATION
+        # ACP uses the *-OBS keywords.  MaxIm uses SITE* and does not
+        # record altitude.
+        lon = self.meta.get('LONG-OBS') or self.get('SITELONG')
+        lat = self.meta.get('LAT-OBS') or self.get('SITELAT')
+        # Just use an average elevation if none is available
+        # https://www.quora.com/What-is-the-average-elevation-of-Earth-above-the-ocean-including-land-area-below-sea-level-What-is-the-atmospheric-pressure-at-that-elevation
+        alt = self.meta.get('ALT-OBS') or 800 * u.m
+        return EarthLocation.from_geodetic(lon, lat, alt)
+
     @pgproperty
     def default_ND_params(self):
         """Returns default ND_params and set Y reference point, self.ND_ref_y

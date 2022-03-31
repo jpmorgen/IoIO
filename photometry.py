@@ -54,6 +54,7 @@ class Photometry:
                  no_deblend=False,
                  deblend_nlevels=32,
                  deblend_contrast=0.001,
+                 keys_to_source_table=None,
                  **kwargs):
         self.ccd = ccd
         self.seeing = seeing
@@ -65,6 +66,7 @@ class Photometry:
         self._no_deblend = no_deblend
         self.deblend_nlevels = deblend_nlevels
         self.deblend_contrast = deblend_contrast
+        self.keys_to_source_table = keys_to_source_table
         self.init_calc()
 
     def init_calc(self):
@@ -73,12 +75,13 @@ class Photometry:
         self._kernel = None
         self._source_mask = None
         self._back_obj = None
+        self._threshold = None
         self._segm_image = None
         self._segm_deblend = None
         self._source_catalog = None
         self._source_table = None
         self._solved = None
-        self._sky_coords = None
+        self._wcs = None
 
     def precalc(self):
         if self.ccd is None:
@@ -199,13 +202,24 @@ class Photometry:
         plt.show()
 
     @property
+    def threshold(self):
+        """Returns image of threshold values
+
+        """
+        if self._threshold is not None:
+            return self._threshold
+        self._threshold = (self.back_obj.background
+                           + self.back_rms_scale
+                           * self.back_obj.background_rms)
+        return self._threshold
+
+    @property
     def segm_image(self):
         if self._segm_image is not None:
             return self._segm_image
-        threshold = (self.back_obj.background +
-                     (self.back_rms_scale * self.back_obj.background_rms))
         segm = detect_sources(self.ccd.data,
-                              threshold.value, npixels=self.n_connected_pixels,
+                              self.threshold.value,
+                              npixels=self.n_connected_pixels,
                               filter_kernel=self.kernel, mask=self.ccd.mask)
         self._segm_image = segm
         return self._segm_image
@@ -300,8 +314,11 @@ image
     def source_table(self):
         if self._source_table is not None:
             return self._source_table
+        if self.source_catalog is None:
+            return None
         self._source_table = self.source_catalog.to_table()
         self._source_table.sort('segment_flux', reverse=True)
+        self.source_table_postprocess()
         return self._source_table
 
     @property
@@ -310,34 +327,119 @@ image
             self.astrometry
         return self._solved
 
-    def astrometry(self):
-        """Determine the ccd image astrometry based on the source catalog
+    @property
+    def wcs(self):
+        """Returns WCS using the source_table
 
         """
-        if self._solved:
-            return self.ccd.wcs
+        if self._wcs is not None:
+            return self._wcs
         if self.source_catalog is None:
             self._solved = False
             return None
-        # The could use astroquery.astrometry_net
-        
+        assert False, 'Code not written to use astroquery.astrometry_net'
+
     @property
-    def sky_coords(self):
-        if self._sky_coords is not None:
-            return self._sky_coords
+    def source_table_has_coord(self):
+        if 'coord' in self.source_table.colnames:
+            return True
         if not self.solved:
-            return None
-        skies = self.ccd.wcs.pixel_to_world(
+            return False
+        skies = self.wcs.pixel_to_world(
             self.source_table['xcentroid'],
             self.source_table['ycentroid'])
-        self._sky_coords = skies
-        return self._sky_coords
+        self.source_table['coord'] = skies
+        return True
 
-    def sky_coords_to_source_table(self):
-        """Add ra and dec columns to source_table"""
-        if self.sky_coords is None:
-            return
-        self.source_table['ra'] = self.sky_coords.ra
-        self.source_table['dec'] = self.sky_coords.dec
+    @property
+    def source_table_has_object(self):
+        assert False, 'Code needs to be customized of identify object and add a column named OBJECT'
 
+    @property
+    def source_table_has_key_cols(self):
+        if self.source_table is None:
+            return False
+        for ku in self.keys_to_source_table:
+            if isinstance(ku, tuple):
+                k = ku[0]
+                unit = ku[1]
+            else:
+                k = ku
+                unit = None
+            if k in self.source_table.colnames:
+                continue
+            val = self.ccd.meta.get(k)
+            if val is None:
+                log.warning(f'key {k} not found in FITS header')
+                return False
+            if unit is None:
+                self.source_table[k] = val
+            else:
+                self.source_table[k] = val*unit
+            self.source_table.meta[k] = self.ccd.meta.comments[k]
+        return True
+
+    @property
+    def wide_source_table(self):
+        if (self.source_table_has_coord
+            and self.source_table_has_object
+            and self.source_table_has_key_cols):
+            return self.source_table
+        return None    
+
+    def plot_object(self, outname=None, expand_bbox=10, show=False, **kwargs):
+        # Don't gunk up the source_table ecsv with bounding box
+        # stuff, but keep in mind we sorted it, so key off of
+        # label
+        bbox_table = photometry.source_catalog.to_table(
+            ['label', 'bbox_xmin', 'bbox_xmax', 'bbox_ymin', 'bbox_ymax'])
+        mask = (photometry.wide_source_table['OBJECT']
+                == ccd.meta['OBJECT'])
+        label = self.wide_source_table[mask]['label']
+        bbts = bbox_table[bbox_table['label'] == label]
+        xmin = bbts['bbox_xmin'][0] - expand_bbox
+        xmax = bbts['bbox_xmax'][0] + expand_bbox
+        ymin = bbts['bbox_ymin'][0] - expand_bbox
+        ymax = bbts['bbox_ymax'][0] + expand_bbox
+        source_ccd = self.ccd[ymin:ymax, xmin:xmax]
+        threshold = self.threshold[ymin:ymax, xmin:xmax]
+        segm = self.segm_image.data[ymin:ymax, xmin:xmax]
+        #https://pythonmatplotlibtips.blogspot.com/2019/07/draw-two-axis-to-one-colorbar.html
+        ax = plt.subplot(projection=source_ccd.wcs)
+        ims = plt.imshow(source_ccd)
+        cbar = plt.colorbar(ims, fraction=0.03, pad=0.11)
+        pos = cbar.ax.get_position()
+        cax1 = cbar.ax
+        cax1.set_aspect('auto')
+        cax2 = cax1.twinx()
+        ylim = np.asarray(cax1.get_ylim())
+        nonlin = source_ccd.meta['NONLIN']
+        cax1.set_ylabel(source_ccd.unit)
+        cax2.set_ylim(ylim/nonlin*100)
+        cax1.yaxis.set_label_position('left')
+        cax1.tick_params(labelrotation=90)
+        cax2.set_ylabel('% nonlin')
+
+        ax.contour(segm, levels=0, colors='white')
+        ax.contour(source_ccd - threshold,
+                   levels=0, colors='gray')
+        ax.set_title(f'{ccd.meta["OBJECT"]} {ccd.meta["DATE-AVG"]}')
+        savefig_overwrite(outroot + '.png')
+
+    @property
+    def source_with_simbad(self):
+        """Source catalog with simbad query results"""
+        assert False, 'Code not written to use, astroquery.simbad'
+
+    @property
+    def cat_table(self):
+        """Table of catalog query  table including all tagalongs of locally
+        downloaded data
+
+        """
+        if self._cat_table is not None:
+            return self._cat_table
+        if self.solved:
+            return self._cat_table
+        return None
 

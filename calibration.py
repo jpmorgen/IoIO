@@ -1991,7 +1991,7 @@ if __name__ == "__main__":
     #pgd = RedCorData.read(fname1)
     #pgd.meta = sx694.metadata(pgd.meta)
     #pgd.meta = sx694.exp_correct(pgd.meta)
-    #pgd.meta = sx694.date_beg_avg(pgd.meta)
+    #pgd.meta = sx694.date_obs(pgd.meta)
     #print(pgd.meta)
     ##
     #pgd = detflux(pgd)

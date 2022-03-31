@@ -619,11 +619,6 @@ def savefig_overwrite(fname, **kwargs):
         os.remove(fname)
     plt.savefig(fname, **kwargs)
 
-def best_fits_time(hdr):
-    # This could get fancier
-    date_obs = hdr.get('DATE-AVG') or hdr.get('DATE-OBS')
-    return Time(date_obs, format='fits')
-
 def location_to_dict(loc):
     """Useful for JPL horizons"""
     return {'lon': loc.lon.value,

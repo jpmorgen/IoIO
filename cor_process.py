@@ -6,27 +6,14 @@ import numpy as np
 from astropy import log
 from astropy import units as u
 from astropy.nddata import CCDData, StdDevUncertainty
-from astropy.coordinates import (Angle, EarthLocation, SkyCoord,
+from astropy.coordinates import (Angle, SkyCoord,
                                  solar_system_ephemeris, get_body)
 
 import ccdproc as ccdp
 
 import IoIO.sx694 as sx694
-from IoIO.utils import best_fits_time
-from IoIO.cordata_base import overscan_estimate, CorDataBase, CorDataNDparams
-
-# Got IoIO alt from a combination of Google Earth and USGS top
-# maps.  See IoIO.notebk Sun Apr 28 12:50:37 2019 EDT.  My
-# conclusion was that the altitude was compatible with WGS84,
-# though Google Maps apparently uses EGM96 elipsoid for heights
-# and WGS84 for lat-lon.  But EarthLocation does not support
-# EGM96, so use WGS84, which is a best-fit ellipsoid
-IOIO_1_LOCATION = EarthLocation.from_geodetic(
-    '110 15 25.18 W', '31 56 21.27 N', 1096.342, 'WGS84')
-IOIO_1_LOCATION.info.name = 'IoIO_1'
-
-IOIO_1_LOCATION.info.meta = {
-    'longname': 'Io Input/Output observatory Benson AZ USA'}
+from IoIO.cordata_base import (IOIO_1_LOCATION, overscan_estimate,
+                               CorDataBase, CorDataNDparams)
 
 # These come from the early MaxIm autosave observations and need to be
 # properly renamed
@@ -186,6 +173,28 @@ def standardize_filt_name(hdr_or_collection):
                after=True)
     return hdr
 
+# --> This eventually can move up to the read method
+def fix_radecsys_in_hdr(hdr_in):
+    """Change the depreciated RADECSYS keyword to RADESYS
+
+    WCS paper I (Greisen, E. W., and Calabretta, M. R., Astronomy &
+    Astrophysics, 395, 1061-1075, 2002.) defines RADESYSa instead of
+    RADECSYS.  The idea is RADESYS refers to the primary system
+    (e.g. FK4, ICRS, etc.) and RADESYS[A-Z] applies to other systems
+    in the other keywords that might be in units with other
+    distorions, etc.  So moving RADECSYS to RADESYS is forward
+    compatible
+
+    """
+    radecsys = hdr_in.get('RADECSYS')
+    if radecsys is None:
+        return hdr_in
+    hdr = hdr_in.copy()
+    hdr.insert('RADECSYS',
+               ('RADESYS', radecsys, 'Equatorial coordinate system'))
+    del hdr['RADECSYS']
+    return hdr    
+
 def obs_location_to_hdr(hdr_in, location=None):
     """Standardize FITS header keys for observatory location and name
     
@@ -219,52 +228,7 @@ def obs_location_to_hdr(hdr_in, location=None):
         del hdr['SITELAT'] # MaxIm
     return hdr
 
-def obs_location_from_hdr(hdr, ellipsoid=None):
-    """Return `~astropy.coordinates.EarthLocation` of observatory given
-       standard ACP and MaxIm keywords.  Note WGS84 ellipsoid is assumed.
-
-    Parameters
-    ----------
-    hdr : FITS header object
-
-    ellipsoid : str or None
-        If None, `astropy.coord.EarthLocation` default is used
-    """
-    telescop = hdr.get('telescop')
-    if telescop is not None and telescop == 'IoIO_1':
-        # Save some time
-        return IOIO_1_LOCATION
-    lon = hdr.get('LONG-OBS') or hdr.get('SITELONG')
-    lat = hdr.get('LAT-OBS') or hdr.get('SITELAT')
-    # Just use an average elevation is none is available
-    # https://www.quora.com/What-is-the-average-elevation-of-Earth-above-the-ocean-including-land-area-below-sea-level-What-is-the-atmospheric-pressure-at-that-elevation
-    alt = hdr.get('ALT-OBS') or 800 * u.m
-    return coord.EarthLocation.from_geodetic(lon, lat, alt,
-                                             ellipsoid=ellipsoid)
-
-# --> This eventually can move up to the read method
-def fix_radecsys_in_hdr(hdr_in):
-    """Change the depreciated RADECSYS keyword to RADESYS
-
-    WCS paper I (Greisen, E. W., and Calabretta, M. R., Astronomy &
-    Astrophysics, 395, 1061-1075, 2002.) defines RADESYSa instead of
-    RADECSYS.  The idea is RADESYS refers to the primary system
-    (e.g. FK4, ICRS, etc.) and RADESYS[A-Z] applies to other systems
-    in the other keywords that might be in units with other
-    distorions, etc.  So moving RADECSYS to RADESYS is forward
-    compatible
-
-    """
-    radecsys = hdr_in.get('RADECSYS')
-    if radecsys is None:
-        return hdr_in
-    hdr = hdr_in.copy()
-    hdr.insert('RADECSYS',
-               ('RADESYS', radecsys, 'Equatorial coordinate system'))
-    del hdr['RADECSYS']
-    return hdr    
-
-def angle_to_major_body(hdr, body_str):
+def angle_to_major_body(ccd, body_str):
     """Returns angle between pointing direction and solar system major
     body
 
@@ -287,10 +251,8 @@ def angle_to_major_body(hdr, body_str):
     
     objctra = hdr['OBJCTRA']
     objctdec = hdr['OBJCTDEC']
-    tm = best_fits_time(hdr)
-    location = obs_location_from_hdr(hdr)
     with solar_system_ephemeris.set('builtin'):
-        body_coord = get_body(body_str, tm, location)
+        body_coord = get_body(body_str, ccd.tavg, ccd.obs_location)
     ra = Angle(objctra, unit=u.hour)
     dec = Angle(objctdec, unit=u.deg)
     # Beware the default frame of SkyCoord is ICRS, which is relative
@@ -308,16 +270,18 @@ def angle_to_major_body(hdr, body_str):
     this_pointing = SkyCoord(frame=body_coord.frame, ra=ra, dec=dec)
     return this_pointing.separation(body_coord)
 
-def fix_obj_and_coord(hdr_in, **kwargs):
+def fix_obj_and_coord(ccd, **kwargs):
     """Fixes missing/incorrect OBJECT and coordinate keywords in hdr
 
     """
+    hdr_in = ccd.meta
     imagetyp = hdr_in.get('imagetyp') 
     if (imagetyp is not None
         and imagetyp.lower() != 'light'):
         # bias, dark, etc, don't have object names
-        return hdr_in
+        return ccd
     hdr = hdr_in.copy()
+    
     if hdr.get('objctra') is None:
         # IoIO.py ACP_IPT_Na_R was run from an ACP plan as a shell-out
         # and usually didn't have a MaxIm telescope connection.  This
@@ -328,7 +292,6 @@ def fix_obj_and_coord(hdr_in, **kwargs):
         # shell-out was only called when the telescope was pointed at
         # Jupiter.  Call that close enough.
         hdr['OBJECT'] = 'Jupiter'
-        tm = best_fits_time(hdr)
         location = obs_location_from_hdr(hdr)
         with solar_system_ephemeris.set('builtin'):
             target = get_body('Jupiter', tm, location)
@@ -360,7 +323,7 @@ def fix_obj_and_coord(hdr_in, **kwargs):
         # Also took some Mercury observations with MaxIm without
         # specifying object.  Check for all just for the heck of it
         for body in solar_system_ephemeris.bodies:
-            a = angle_to_major_body(hdr, body)
+            a = angle_to_major_body(ccd, body)
             # This should be accurate enough for our pointing
             if a < 1*u.deg:
                 hdr['object'] = body.capitalize()
@@ -369,7 +332,8 @@ def fix_obj_and_coord(hdr_in, **kwargs):
         # I named MaxIm autosave sequences after the filters rather
         # than the object
         hdr['OBJECT'] = 'Jupiter'
-    return hdr
+    ccd.meta = hdr
+    return ccd
     
 def kasten_young_airmass(hdr_in):
     """Record airmass considering curvature of Earth
@@ -434,7 +398,7 @@ def cor_process(ccd,
                 obs_location=True,
                 fix_filt_name=True,
                 exp_correct=True,
-                date_beg_avg_add=True,
+                date_obs_correct=True,
                 remove_raw_jd=True,
                 correct_obj_and_coord=True,
                 correct_obj_offset=True,
@@ -527,11 +491,12 @@ def cor_process(ccd,
         Correct for exposure time problems
         Default is ``True``
 
-    date_beg_avg_add : bool
-        Add DATE-BEG and DATE-AVG FITS keywords, which reflect
-        best-estimate shutter time and observation midpoint.  DATE-AVG
-        should be used for all ephemeris calculations.  Also removes
-        inaccurate/obsolete DATE, TIME-OBS, and UT keywords  
+    date_obs_correct : bool
+
+        Correct DATE-OBS keyword for best-estimate shutter time and
+        corrected exposure time.  Also removes inaccurate/obsolete
+        DATE, TIME-OBS, and UT keywords 
+
         Default is ``True``
 
     remove_raw_jd : bool
@@ -726,9 +691,9 @@ def cor_process(ccd,
         # Correct exposure time for driver bug
         nccd.meta = sx694.exp_correct(nccd.meta, *args, **kwargs)
         
-    if date_beg_avg_add:
+    if date_obs_correct:
         # Add DATE-BEG and DATE-AVG FITS keywords
-        nccd.meta = sx694.date_beg_avg(nccd.meta, *args, **kwargs)
+        nccd.meta = sx694.date_obs(nccd.meta, *args, **kwargs)
 
     if remove_raw_jd:
         if nccd.meta.get('JD*'):
@@ -742,7 +707,7 @@ def cor_process(ccd,
     if correct_obj_and_coord:
         # Add in Jupiter and missing coordinates when ACP shell-out
         # to IoIO.py was used
-        nccd.meta = fix_obj_and_coord(nccd.meta)
+        nccd = fix_obj_and_coord(nccd)
     
     if correct_obj_offset:
         # These are in files written by both MaxIm and ACP *when the

@@ -22,8 +22,7 @@ from IoIO.utils import (is_flux, reduced_dir, multi_glob,
                         closest_in_time, valid_long_exposure,
                         add_history, simple_show, best_fits_time,
                         location_to_dict)
-from IoIO.cor_process import (IOIO_1_LOCATION, standardize_filt_name,
-                              obs_location_from_hdr)
+from IoIO.cor_process import IOIO_1_LOCATION, standardize_filt_name
 from IoIO.calibration import Calibration
 from IoIO.cordata import CorData
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
@@ -183,7 +182,6 @@ def galsat_ephemeris(ccd_in,
     if obs_col_to_meta is None:
         obs_col_to_meta = OBS_COL_TO_META
     obs_name = obs_loc.info.name
-    tm = best_fits_time(ccd.meta)
 
     # Get our ephemerides from the perspective of the observatory
     # id_type='majorbody' required because minor bodies (e.g. asteroids)
@@ -191,7 +189,7 @@ def galsat_ephemeris(ccd_in,
     obs_eph = None
     for galsat in GALSATS:
         h = Horizons(id=GALSATS[galsat],
-                     epochs=tm.jd,
+                     epochs=ccd.tavg.jd,
                      location=location_to_dict(obs_loc),
                      id_type='majorbody')
         e = h.ephemerides(quantities=OBS_COL_NUMS)
@@ -211,7 +209,7 @@ def galsat_ephemeris(ccd_in,
             continue
         mask = obs_eph['targetname'] == f'{galsat} ({GALSATS[galsat]})'
         lt = obs_eph['lighttime'][mask]
-        epoch = tm.jd*u.day - lt
+        epoch = ccd.tavg.jd*u.day - lt
         h = Horizons(id=GALSATS['Jupiter'],
                      epochs=epoch.value,
                      location=f'500@{GALSATS[galsat]}',

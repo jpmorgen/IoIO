@@ -130,6 +130,7 @@ obj_center calculations by using CorDataBase as CCDData
         outname = outname.replace('Na-on', 'Na_on')
         return outname
 
+
 # Just use ccddata_cls as argument to CorMultiPipeBase
 #class CorMultiPipeNDparams(CorMultiPipeBase):
 #    """Uses CorDataNDparams to ensure ND_params calculations locate the ND

@@ -216,11 +216,13 @@ def exp_correct(hdr_in,
     #            'Corrected exposure time for SX694 MaxIm driver bug')
     return hdr
 
-def date_beg_avg(hdr_in,
+def date_obs(hdr_in,
              *args, **kargs):
-    """Add DATE-BEG and DATE-AVG keywords to FITS header
+    """Correct DATE-OBS keyword in FITS header for shutter latency
     See discussion in IoIO.notebk 
-    Mon May 17 13:30:45 2021 EDT  jpmorgen@snipe"""
+    Mon May 17 13:30:45 2021 EDT  jpmorgen@snipe
+    and IoIO_reduction.notebk 
+    Sun Mar 27 21:43:17 2022 EDT  jpmorgen@snipe"""
     hdr = hdr_in.copy()
     date_obs_str = hdr['DATE-OBS']
     date_obs = Time(date_obs_str, format='fits')
@@ -286,8 +288,18 @@ def date_beg_avg(hdr_in,
         exptime_uncertainty = 0
     date_avg_uncertainty = np.sqrt(date_beg_uncertainty**2
                                    + (exptime_uncertainty/2)**2)
-
-    hdr.comments['DATE-OBS'] = 'Commanded shutter time (ISO 8601 UTC)'
+    date_obs_str = hdr['DATE-OBS']
+    hdr.insert('DATE-OBS',
+               ('ODAT-OBS', date_obs_str,
+               'Commanded shutter time (ISO 8601 UTC)'))
+    # astropy.nddata.CCDData.read sends these off to astropy.wcslib,
+    # which assumes DATE-OBS is the shutter open time and blows away
+    # all other seemingly valid keywords, like DATE-BEG, DATE-AVG, and
+    # DATE-END.  Cheat a little here by putting in DATE-AVG for
+    # reading with pgdata.tavg method to avoid double-calculation on
+    # first read.  That method can deal with its absence.
+    hdr['DATE-OBS'] = (date_beg.fits,
+                       'Best estimate shutter open time (UTC)')
     # These end up appearing in reverse order to this
     hdr.insert('DATE-OBS',
                ('HIERARCH NTP-ACCURACY', ntp_accuracy,
@@ -307,29 +319,17 @@ def date_beg_avg(hdr_in,
                 '(s)'),
                after=True)
     hdr.insert('DATE-OBS',
-               ('HIERARCH DATE-BEG-UNCERTAINTY', date_beg_uncertainty,
+               ('HIERARCH DATE-OBS-UNCERTAINTY', date_beg_uncertainty,
                 '(s)'),
                after=True)
     # Avoid annoying WCS warnings
     hdr.insert('DATE-OBS',
-               ('MJD-AVG', date_avg.mjd,
-                'Best estimate midpoint of exposure (MJD)'),
-               after=True)
-    hdr.insert('DATE-OBS',
-               ('MJD-BEG', date_beg.mjd,
+               ('MJD-OBS', date_beg.mjd,
                 'Best estimate shutter open time (MJD)'),
-               after=True)
-    hdr.insert('DATE-OBS',
-               ('MJD-OBS', date_obs.mjd,
-                'Commanded shutter time (MJD)'),
                after=True)
     hdr.insert('DATE-OBS',
                ('DATE-AVG', date_avg.fits,
                 'Best estimate midpoint of exposure (UTC)'),
-               after=True)
-    hdr.insert('DATE-OBS',
-               ('DATE-BEG', date_beg.fits,
-                'Best estimate shutter open time (UTC)'),
                after=True)
     # Remove now inaccurate and obsolete keywords
     if hdr.get('date'):
