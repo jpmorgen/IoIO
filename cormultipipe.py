@@ -57,6 +57,8 @@ COR_PROCESS_EXPAND_FACTOR = 3.5
 
 IoIO_ROOT = '/data/IoIO'
 RAW_DATA_ROOT = os.path.join(IoIO_ROOT, 'raw')
+FIELD_STAR_ROOT = os.path.join(IoIO_ROOT, 'FieldStar')
+
 # string to append to processed files to avoid overwrite of raw data
 OUTNAME_APPEND = "_p"
 
@@ -81,8 +83,10 @@ obj_center calculations by using CorDataBase as CCDData
                  naxis1=sx694.naxis1,
                  naxis2=sx694.naxis2,
                  process_expand_factor=COR_PROCESS_EXPAND_FACTOR,
+                 field_star_root=FIELD_STAR_ROOT,
                  **kwargs):
         self.calibration = calibration
+        self.field_star_root = field_star_root
         self.auto = auto
         super().__init__(outname_append=outname_append,
                          naxis1=naxis1,
@@ -130,6 +134,48 @@ obj_center calculations by using CorDataBase as CCDData
         outname = outname.replace('Na-on', 'Na_on')
         return outname
 
+    def file_write(self, ccd, outname,
+                   photometry=None,
+                   in_name=None,
+                   field_star_root=None,
+                   write_local_photometry=False,
+                   overwrite=False,
+                   **kwargs):
+        """Collect photometry results from all our observations.  Join with
+        Sloan survey requires a separate step.
+        write_local_photometry = True implies create_outdir
+
+        """
+        written_name = super().file_write(
+            ccd, outname, overwrite=overwrite, **kwargs)
+        if (photometry is None
+            or photometry.wide_source_table is None):
+            return written_name
+
+        # Write our photometry results in centralized and, if desired,
+        # "local" directory, where local, in this sense, is where the
+        # FITS files end up getting written
+        photometry.wide_source_table['in_name'] = in_name
+        photometry.wide_source_table['outname'] = outname
+        field_star_root = field_star_root or self.field_star_root
+        bname = os.path.basename(outname)
+        broot, _ = os.path.splitext(bname)
+        date, _ = ccd.meta['DATE-OBS'].split('T')
+        photdir = os.path.join(field_star_root, date)
+        dir_list = [photdir]
+        if write_local_photometry:
+            locdir, _ = os.path.split(outname)
+            dir_list.append(locdir)
+        for d in dir_list:
+            os.makedirs(d, exist_ok=True)
+            root = os.path.join(d, broot)
+            tname = root + '.ecsv'
+            photometry.wide_source_table.write(
+                tname, delimiter=',', overwrite=overwrite)
+            gname = root + '_gaia.ecsv'
+            photometry.source_gaia_join.write(
+                gname, delimiter=',', overwrite=overwrite)
+        return written_name
 
 # Just use ccddata_cls as argument to CorMultiPipeBase
 #class CorMultiPipeNDparams(CorMultiPipeBase):

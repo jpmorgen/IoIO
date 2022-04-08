@@ -12,6 +12,8 @@ from astropy import log
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 
+import ccdproc as ccdp
+
 from ccdmultipipe import as_single
 
 from IoIO.utils import (reduced_dir, get_dirs_dates, multi_glob,
@@ -26,6 +28,8 @@ from IoIO.cor_photometry import CorPhotometry, add_astrometry
 EXOPLANET_ROOT = '/data/Exoplanets'
 GLOB_INCLUDE = ['TOI*', 'WASP*', 'KPS*', 'HAT*', 'K2*', 'TrES*',
                 'Qatar*', 'GJ*']
+JOIN_TOLERANCE = 5*u.arcsec
+
 KEYS_TO_SOURCE_TABLE = ['DATE-AVG',
                         ('DATE-AVG-UNCERTAINTY', u.s),
                         ('MJDBARY', u.day),
@@ -55,6 +59,8 @@ def barytime(ccd_in, bmp_meta=None, **kwargs):
     ctype1 = ccd.meta.get('CTYPE1')
     ctype2 = ccd.meta.get('CTYPE2')
     if ccd.meta.get('OBJECT_TO_OBJCTRADEC'):
+        # First choice is to get precise direction to object we are
+        # observing
         ra = ccd.meta.get('OBJCTRA')
         dec = ccd.meta.get('OBJCTDEC')
         unit = (u.hourangle, u.deg)
@@ -90,23 +96,16 @@ def barytime(ccd_in, bmp_meta=None, **kwargs):
                after=True)
     return ccd
 
-
 class ExoMultiPipe(CorMultiPipeBase):
     def file_write(self, ccd, outname,
                    photometry=None,
-                   overwrite=False,
                    **kwargs):
-        if photometry is not None:
-            photometry.wide_source_table['filename'] = outname
-            outroot, _ = os.path.splitext(outname)
-            tname = outroot + '.ecsv'
-            photometry.wide_source_table.write(
-                tname, delimiter=',', overwrite=overwrite)
-            gname = outroot + '_gaia.ecsv'
-            photometry.source_gaia_join.write(
-                gname, delimiter=',', overwrite=overwrite)
-            photometry.plot_object(outname=outroot + '.png')
-        super().file_write(ccd, outname, overwrite=overwrite, **kwargs)
+        written_name = super().file_write(
+            ccd, outname, photometry=photometry, 
+            write_local_photometry=True, **kwargs)
+        outroot, _ = os.path.splitext(outname)
+        photometry.plot_object(outname=outroot + '.png')
+        return written_name
 
 def expo_calc(vmag):
     # TOI-2109b was nice reference
@@ -117,107 +116,143 @@ def expo_calc(vmag):
     dmag = toi_mag - vmag
     return toi_expo * dmag.physical - expo_correct
 
+def exoplanet_pipeline(flist,
+                       reduced_directory,
+                       calibration=None,
+                       photometry=None,
+                       keep_intermediate=False,
+                       create_outdir=True,
+                       **kwargs):
+    # Process a list of observations of a single exoplanet
+    if calibration is None:
+        calibration = Calibration(reduce=True)
+    if photometry is None:
+        photometry = CorPhotometry(
+            precalc=True,
+            join_tolerance=JOIN_TOLERANCE,
+            keys_to_source_table=KEYS_TO_SOURCE_TABLE)
+    cmp = ExoMultiPipe(auto=True,
+                       calibration=calibration,
+                       photometry=photometry, 
+                       fits_fixed_ignore=True, outname_ext='.fits',
+                       keep_intermediate=keep_intermediate,
+                       post_process_list=[mask_nonlin_sat,
+                                          nd_filter_mask,
+                                          object_to_objctradec,
+                                          barytime,
+                                          add_astrometry,
+                                          as_single],
+                       create_outdir=create_outdir,
+                       **kwargs)
+    pout = cmp.pipeline([flist[0]], outdir='/tmp', overwrite=True)
+    #pout = cmp.pipeline(flist, outdir=reduced_directory, overwrite=True)
+
 def exoplanet_directory(directory,
                         glob_include=GLOB_INCLUDE,
-                        calibration=None,
-                        photometry=None,
-                        keys_to_source_table=KEYS_TO_SOURCE_TABLE,
-                        keep_intermediate=False,
-                        cpulimit=None,
                         outdir_root=EXOPLANET_ROOT,
-                        create_outdir=True,
                         **kwargs):
+    rd = reduced_dir(directory, outdir_root, create=False)
+    # Use multi_glob to get only the exoplanets, but use
+    # ccdp.ImageFileCollection to make sure the object is what we
+    # think it is.  This avoids having to grep it out of the filename
+    all_files = multi_glob(directory, glob_list=glob_include)
+    collection = ccdp.ImageFileCollection(filenames=all_files,
+                                          keywords=['object'])
+    exoplanets = collection.values('object', unique=True)
 
+    for e in exoplanets:
+        flist = collection.files_filtered(object=e, include_path=True)
+        exoplanet_pipeline(flist, rd, **kwargs)
+        # This could combine output ecsvs, do a Sloan catalog search on
+        # distinct fields and merge in the results
 
-log.setLevel('DEBUG')
-# This is eventually going to be something like exo_pipeline
-#directory = '/data/IoIO/raw/20210921'
-directory = '/data/IoIO/raw/20220319/'
-glob_include=GLOB_INCLUDE
-calibration=None
-photometry=None
-keys_to_source_table=KEYS_TO_SOURCE_TABLE
-keep_intermediate=False
-#keep_intermediate=True
-cpulimit=None
-outdir_root=EXOPLANET_ROOT
-create_outdir=True
-kwargs={}
+def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
+                   start=None,
+                   stop=None,
+                   calibration=None,
+                   photometry=None,
+                   keys_to_source_table=KEYS_TO_SOURCE_TABLE,
+                   join_tolerance=JOIN_TOLERANCE,
+                   create_outdir=True,
+                   cpulimit=None,
+                   **kwargs):
+    dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
+    dirs, _ = zip(*dirs_dates)
+    if len(dirs) == 0:
+        log.warning('No directories found')
+        return
+    if calibration is None:
+        calibration = Calibration(reduce=True)
+    if photometry is None:
+        photometry = CorPhotometry(
+            precalc=True,
+            join_tolerance=join_tolerance,
+            cpulimit=cpulimit,
+            keys_to_source_table=keys_to_source_table)
+    for directory in dirs:
+        rd = reduced_dir(directory, outdir_root, create=False)
+    
 
-rd = reduced_dir(directory, outdir_root, create=False)
-if calibration is None:
-    calibration = Calibration(reduce=True)
-if photometry is None:
-    photometry = CorPhotometry(join_tolerance=5*u.arcsec,
-                               cpulimit=cpulimit,
-                               keys_to_source_table=keys_to_source_table)
-flist = multi_glob(directory, glob_list=glob_include)
-cmp = ExoMultiPipe(auto=True,
-                   calibration=calibration,
-                   photometry=photometry, 
-                   fits_fixed_ignore=True, outname_ext='.fits',
-                   keep_intermediate=keep_intermediate,
-                   post_process_list=[mask_nonlin_sat,
-                                      nd_filter_mask,
-                                      object_to_objctradec,
-                                      barytime,
-                                      add_astrometry,
-                                      as_single],
-                   create_outdir=create_outdir,
-                   **kwargs)
-pout = cmp.pipeline([flist[0]], outdir='/tmp', overwrite=True)
-#pout = cmp.pipeline(flist, outdir=rd, overwrite=True)
 
 if __name__ == "__main__":
     log.setLevel('DEBUG')
  
-    data_root = RAW_DATA_ROOT
-    reduced_root = EXOPLANET_ROOT
-
-    dirs_dates = get_dirs_dates(data_root)
-
-
-    #### from cormultipipe import RedCorData
-    #### 
-    #### ccd = RedCorData.read('/data/io/IoIO/raw/20210921/TOI-2109-S004-R021-C002-R.fts')
-    #### ccd.meta = obs_location_to_hdr(ccd.meta, location=IOIO_1_LOCATION)
-    #### 
-    #### #ccd = barytime(ccd)
-    #### #print((ccd.meta['JDBARY'] - ccd.meta['BJD-OBS']) * 24*3600)
-
-    ##directory = '/data/IoIO/raw/20210823'
     #directory = '/data/IoIO/raw/20210921'
-    #rd = reduced_dir(directory, create=True)
-    #glob_include = ['TOI*']
+    directory = '/data/IoIO/raw/20220319/'
+    exoplanet_directory(directory, ccddata_write=False)
 
-    dirs, _ = zip(*dirs_dates)
-    assert len(dirs) > 0
 
-    calibration=None
-    photometry=None
-    cpulimit=None
-    if calibration is None:
-        calibration = Calibration(reduce=True)
-    if photometry is None:
-        photometry = CorPhotometry(cpulimit=cpulimit)
 
-    cmp = CorMultiPipeBase(auto=True, calibration=c,
-                           fits_fixed_ignore=True, outname_ext='.fits', 
-                           post_process_list=[barytime,
-                                              mask_nonlin_sat,
-                                              nd_filter_mask,
-                                              add_astrometry,
-                                              as_single])
-    for d in dirs:
-        flist = []
-        for gi in GLOB_INCLUDE:
-            flist += glob.glob(os.path.join(d, gi))
-        if len(flist) == 0:
-            log.debug(f'No exoplant observations in {d}')
-            continue
-        reddir = reduced_dir(d, reduced_root)
-        pout = cmp.pipeline(flist, outdir=reddir,
-                            create_outdir=True, overwrite=True)
+    #pout = exoplanet_pipeline(directory, ccddata_write=False)
+
+
+    #data_root = RAW_DATA_ROOT
+    #reduced_root = EXOPLANET_ROOT
+    #
+    #dirs_dates = get_dirs_dates(data_root)
+    #
+    #
+    ##### from cormultipipe import RedCorData
+    ##### 
+    ##### ccd = RedCorData.read('/data/io/IoIO/raw/20210921/TOI-2109-S004-R021-C002-R.fts')
+    ##### ccd.meta = obs_location_to_hdr(ccd.meta, location=IOIO_1_LOCATION)
+    ##### 
+    ##### #ccd = barytime(ccd)
+    ##### #print((ccd.meta['JDBARY'] - ccd.meta['BJD-OBS']) * 24*3600)
+    #
+    ###directory = '/data/IoIO/raw/20210823'
+    ##directory = '/data/IoIO/raw/20210921'
+    ##rd = reduced_dir(directory, create=True)
+    ##glob_include = ['TOI*']
+    #
+    #dirs, _ = zip(*dirs_dates)
+    #assert len(dirs) > 0
+    #
+    #calibration=None
+    #photometry=None
+    #cpulimit=None
+    #if calibration is None:
+    #    calibration = Calibration(reduce=True)
+    #if photometry is None:
+    #    photometry = CorPhotometry(cpulimit=cpulimit)
+    #
+    #cmp = CorMultiPipeBase(auto=True, calibration=c,
+    #                       fits_fixed_ignore=True, outname_ext='.fits', 
+    #                       post_process_list=[barytime,
+    #                                          mask_nonlin_sat,
+    #                                          nd_filter_mask,
+    #                                          add_astrometry,
+    #                                          as_single])
+    #for d in dirs:
+    #    flist = []
+    #    for gi in GLOB_INCLUDE:
+    #        flist += glob.glob(os.path.join(d, gi))
+    #    if len(flist) == 0:
+    #        log.debug(f'No exoplant observations in {d}')
+    #        continue
+    #    reddir = reduced_dir(d, reduced_root)
+    #    pout = cmp.pipeline(flist, outdir=reddir,
+    #                        create_outdir=True, overwrite=True)
 
 
     #calibration = Calibration(reduce=True)

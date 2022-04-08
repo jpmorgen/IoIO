@@ -364,12 +364,12 @@ image
     @property
     def solved(self):
         if self._solved is None:
-            self.astrometry
+            self.wcs
         return self._solved
 
     @property
     def wcs(self):
-        """Returns WCS using the source_table
+        """Returns WCS using the astrometry solution of source_table
 
         """
         if self._wcs is not None:
