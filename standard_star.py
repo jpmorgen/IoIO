@@ -240,7 +240,9 @@ class CorBurnashev(Burnashev):
         return filt_flux
 
 def object_to_objctradec(ccd_in, **kwargs):
-    """cormultipipe post-processing routine to query Simbad for RA and DEC"""
+    """cormultipipe post-processing routine to query Simbad for RA and DEC
+
+    """    
     ccd = ccd_in.copy()
     s = Simbad()
     simbad_results = s.query_object(ccd.meta['OBJECT'])
@@ -251,6 +253,10 @@ def object_to_objctradec(ccd_in, **kwargs):
                       '[hms J2000] Target right assention')
     ccd.meta['OBJCTDEC'] = (dec.to_string(),
                        '[dms J2000] Target declination')
+    ccd.meta.insert('OBJCTDEC',
+                    ('HIERARCH OBJECT_TO_OBJCTRADEC', True,
+                     'OBJCT* point to OBJECT'),
+                    after=True)
     return ccd
 
 def standard_star_process(ccd,
@@ -1123,22 +1129,20 @@ def extinction_correct(flex_input, airmass=None, ext_coef=None,
         (1) list: routine will be run on each member, with the output
         formed into a list (useful for list of `~astropy.nddata.CCDData`)
 
-        (2) `~astropy.nddata.CCDData`: data and uncertainty arrays
-        will be converted to magnitudes, excintion correction done on
-        that, and the results converted back into a non-magnitude
-        `~astropy.nddata.CCDData`.  This is necesesary because
-        functional `~astropy.unit.Quantity` like
-        `~astropy.units.Magnitude` cannot be stored into a
-        `~astropy.nddata.CCDData`
+        (2) `~astropy.nddata.CCDData`: this input cannot be expressed
+        in a functional `~astropy.unit.Quantity` (e.g.,
+        `~astropy.units.Magnitude`), so it will be kept in its current
+        units and scaled by the extinction correction in physical
+        units
 
         (3) `~astropy.unit.Quantity` or `float`:  Measured instrument
         magnitude(s) 
 
-    airmass : float or numpy.array
+    airmass : float, numpy.array, or None
         Airmass(es) at which correction is to be applied.  See 
         standard_star_obj
 
-    ext_coef : `~astropy.unit.Quantity` or float
+    ext_coef : `~astropy.unit.Quantity`, float, or None
         Extinction coef in units of instr_mag (per airmass).  See
         standard_star_obj
 
@@ -1150,8 +1154,7 @@ def extinction_correct(flex_input, airmass=None, ext_coef=None,
     standard_star_obj : ~IoIO.standard_star.StandardStar
         `~IoIO.standard_star.StandardStar` object used in the case
         that flex_input is a `~astropy.nddata.CCDData` to produce
-        'airmass' (AIRMASS) and ext_coef (from FILTER).  If airmass
-        and ext_coef are supplied, they override values derived from ccddata
+        ext_coef (from ccd.meta['FILTER'])
 
     **kwargs : dict, optional
         Allows routine to be used as cormultipipe post-processing routine
@@ -1173,35 +1176,28 @@ def extinction_correct(flex_input, airmass=None, ext_coef=None,
         if airmass is not None or ext_coef is not None:
             raise ValueError('ERROR: airmass and/or ext_coef supplied.  '
                              'CCDData metadata are used for these quantities')
-        ccd = flex_input
-        if inverse and ccd.meta.get('EXTINCTION_CORRECTED') != 1:
+        ccd = flex_input.copy()
+        old_ext_corr_val = ccd.meta.get('EXT_CORR_VAL')
+        if inverse and (old_ext_corr_val is None
+                        or old_ext_corr_val == 1):
+            # 1 would be inverse already applied
             raise ValueError('Inversion requested, but data are not extinction corrected')
         filt = ccd.meta['FILTER']
-        ext_coef, ext_coef_err = standard_star_obj.extinction_coef(filt)
         airmass = ccd.meta['AIRMASS']
-        mecdata = standard_star_obj.extinction_correct(
-            u.Magnitude(ccd.data*ccd.unit),
-            airmass=airmass, filt=filt, inverse=inverse, **kwargs)
-        mecerr = standard_star_obj.extinction_correct(
-            u.Magnitude(ccd.uncertainty.array*ccd.unit),
-            airmass=airmass, filt=filt, inverse=inverse, **kwargs)
-        mecdata = mecdata.physical
-        mecerr = mecerr.physical
-        mccd = ccd.copy()
-        mccd.data = mecdata.value
-        mccd.uncertainty = StdDevUncertainty(mecerr.value)
-        mccd.meta['EXT_COEF'] = (
+        ext_coef, ext_coef_err = standard_star_obj.extinction_coef(filt)
+        mag = u.Magnitude(1*ccd.unit)
+        ecmag = extinction_correct(mag, airmass, ext_coef,
+                                    inverse=inverse)
+        ecphys = ecmag.physical
+        ccd = ccd.multiply(ecphys.value, handle_meta='first_found')
+        ccd.meta['EXT_COEF'] = (
             ext_coef.value,
             f'extinction coefficient ({ext_coef.unit.to_string()})')
-        mccd.meta['HIERARCH EXT_COEF_ERR'] = (
+        ccd.meta['HIERARCH EXT_COEF_ERR'] = (
             ext_coef_err.value, f'[{ext_coef.unit.to_string()}]')
-        if inverse:
-            mccd.meta['HIERARCH EXTINCTION_CORRECTED'] = (
-                0, 'extinction correction reversed')
-        else:
-            mccd.meta['HIERARCH EXTINCTION_CORRECTED'] = (
-                1, 'extinction corrected')
-        return mccd
+        ccd.meta['HIERARCH EXT_CORR_VAL'] = (
+            ecphys.value, 'extinction cor. factor applied')
+        return ccd
     instr_mag = flex_input
     if (isinstance(instr_mag, u.Quantity)
         and isinstance(ext_coef, u.Quantity)):
@@ -1235,10 +1231,11 @@ def rayleigh_convert(ccd_in, standard_star_obj=None, inverse=False, **kwargs):
                             standard_star_obj=None,
                             **kwargs)
                 for ccd in ccd_in]
-    extinction_corrected = ccd_in.meta.get('extinction_corrected') or 0
-    if not inverse and extinction_corrected == 0:
-        raise ValueError('Extinction correction not done yet')
-    if inverse and extinction_corrected == 1:
+    ext_corr_val = ccd_in.meta.get('ext_corr_val')
+    if not inverse and (ext_corr_val is None
+                        or ext_corr_val == 1):
+        raise ValueError('Extinction correction needs to be done first')
+    if inverse and ext_corr_val is not None and ext_corr_val > 1:
         raise ValueError('Extinction correction still applied.  Invert that first')
     ccd = ccd_in.copy()
     rc, rc_err = standard_star_obj.rayleigh_conversion(ccd.meta['FILTER'])

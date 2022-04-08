@@ -76,18 +76,6 @@ def multi_glob(directory, glob_list=None):
         flist += glob.glob(os.path.join(directory, gi))
     return flist
     
-def is_flux(unit):
-    """Determine if we are in flux units or not"""
-    unit = unit.decompose()
-    if isinstance(unit, u.IrreducibleUnit):
-        return False
-    # numpy tests don't work with these objects, so do it by hand
-    spower = [p for un, p in zip(unit.bases, unit.powers)
-              if un == u.s]
-    if len(spower) == 0 or spower[0] != -1:
-        return False
-    return True
-
 def datetime_dir(directory,
                  date_formats=DATE_FORMATS):
     """Returns datetime object corresponding to date found in directory
@@ -368,7 +356,7 @@ def im_med_min_max(im):
     mlp = np.median(light_patch)
     return (mdp, mlp)
 
-def iter_polyfit(x, y, poly_class=Polynomial, deg=1, max_resid=None,
+def iter_polyfit(x, y, poly_class=None, deg=1, max_resid=None,
                  **kwargs):
     """Performs least squares fit iteratively to discard bad points
 
@@ -398,6 +386,8 @@ def iter_polyfit(x, y, poly_class=Polynomial, deg=1, max_resid=None,
        Best fit `~numpy.polynomial.polynomial.Polynomial`
 
     """
+    if poly_class is None:
+        poly_class = Polynomial
     x = np.asarray(x); y = np.asarray(y)
     # https://stackoverflow.com/questions/28647172/numpy-polyfit-doesnt-handle-nan-values
     idx = np.isfinite(x) & np.isfinite(y)
@@ -440,7 +430,7 @@ def iter_polyfit(x, y, poly_class=Polynomial, deg=1, max_resid=None,
         goodc = np.flatnonzero(np.abs(resid) < max_resid)
         if len(goodc) >= deg + 1:
             poly = iter_polyfit(x[goodc], y[goodc],
-                                poly_class=Polynomial,
+                                poly_class=poly_class,
                                 deg=deg, max_resid=None,
                                 **kwargs)
     return poly
@@ -588,31 +578,6 @@ def cached_csv(dict_list_code,
     if single_dictlist:
         dict_lists = dict_lists[0]
     return dict_lists    
-
-# https://stackoverflow.com/questions/27704490/interactive-pixel-information-of-an-image-in-python
-class CCDImageFormatter(object):
-    """Provides the x,y,z formatting I like for CCD images in the
-    interactive pyplot window"""
-    def __init__(self, im):
-        self.im = im
-    def __call__(self, x, y):
-        s = self.im.shape
-        col = int(x + 0.5)
-        row = int(y + 0.5)
-        if col >= 0 and col < s[1] and row >= 0 and row < s[0]:
-            z = self.im[row, col]
-            return 'x=%1.1f, y=%1.1f, z=%1.1f' % (x, y, z)
-        else:
-            return 'x=%1.1f, y=%1.1f' % (x, y)        
-
-def simple_show(im, **kwargs):
-    fig, ax = plt.subplots()
-    ax.imshow(im, origin='lower',
-              cmap=plt.cm.gray,
-              filternorm=0, interpolation='none',
-              **kwargs)
-    ax.format_coord = CCDImageFormatter(im.data)
-    plt.show()
 
 def savefig_overwrite(fname, **kwargs):
     if os.path.exists(fname):

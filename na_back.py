@@ -31,7 +31,8 @@ from precisionguide import pgproperty
 from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates,
                         closest_in_time, valid_long_exposure, im_med_min_max,
                         add_history, cached_csv, iter_polyfit, 
-                        simple_show, savefig_overwrite)
+                        savefig_overwrite)
+from IoIO.simple_show import simple_show
 from IoIO.cor_process import angle_to_major_body
 from IoIO.cordata_base import CorDataBase
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,

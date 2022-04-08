@@ -10,6 +10,8 @@ import subprocess
 
 import numpy as np
 
+import matplotlib.pyplot as plt
+
 from astropy import log
 from astropy import units as u
 from astropy.coordinates import Angle, SkyCoord
@@ -19,6 +21,7 @@ from astropy import table
 from astropy.wcs import WCS
 
 from IoIO.photometry import Photometry
+from IoIO.utils import savefig_overwrite
 from IoIO.cordata import CorData
 
 class CorPhotometry(Photometry):
@@ -60,24 +63,6 @@ class CorPhotometry(Photometry):
         self._gaia_table = None
         self._source_gaia_join = None
 
-    @property
-    def source_table(self):
-        if self._source_table is not None:
-            return self._source_table
-        # https://photutils.readthedocs.io/en/stable/api/photutils.segmentation.SourceCatalog.html
-        self._source_table = self.source_catalog.to_table(
-            ['label',
-             'xcentroid',
-             'ycentroid',
-             'elongation',
-             'equivalent_radius',
-             'min_value',
-             'max_value',
-             'segment_flux',
-             'segment_fluxerr'])
-        self._source_table.sort('segment_flux', reverse=True)
-        return self._source_table
-        
     @property
     def wcs(self):
         """Plate solve ccd image, setting ccd's WCS object
@@ -197,6 +182,14 @@ class CorPhotometry(Photometry):
         return True
 
     @property
+    def wide_source_table(self):
+        if (self.source_table_has_coord
+            and self.source_table_has_object
+            and self.source_table_has_key_cols):
+            return self.source_table
+        return None    
+
+    @property
     def rdls_table_has_coord(self):
         if 'coord' in self.rdls_table.colnames:
             return True
@@ -234,10 +227,57 @@ class CorPhotometry(Photometry):
         self._source_gaia_join = j
         return self._source_gaia_join
 
+    def plot_object(self, outname=None, expand_bbox=10, show=False, **kwargs):
+        """Plot primary object
+
+        """
+        # Don't gunk up the source_table ecsv with bounding box
+        # stuff, but keep in mind we sorted it, so key off of
+        # label
+        bbox_table = self.source_catalog.to_table(
+            ['label', 'bbox_xmin', 'bbox_xmax', 'bbox_ymin', 'bbox_ymax'])
+        mask = (self.wide_source_table['OBJECT']
+                == self.ccd.meta['OBJECT'])
+        label = self.wide_source_table[mask]['label']
+        bbts = bbox_table[bbox_table['label'] == label]
+        xmin = bbts['bbox_xmin'][0] - expand_bbox
+        xmax = bbts['bbox_xmax'][0] + expand_bbox
+        ymin = bbts['bbox_ymin'][0] - expand_bbox
+        ymax = bbts['bbox_ymax'][0] + expand_bbox
+        source_ccd = self.ccd[ymin:ymax, xmin:xmax]
+        threshold = self.threshold[ymin:ymax, xmin:xmax]
+        segm = self.segm_image.data[ymin:ymax, xmin:xmax]
+        #https://pythonmatplotlibtips.blogspot.com/2019/07/draw-two-axis-to-one-colorbar.html
+        ax = plt.subplot(projection=source_ccd.wcs)
+        ims = plt.imshow(source_ccd)
+        cbar = plt.colorbar(ims, fraction=0.03, pad=0.11)
+        pos = cbar.ax.get_position()
+        cax1 = cbar.ax
+        cax1.set_aspect('auto')
+        cax2 = cax1.twinx()
+        ylim = np.asarray(cax1.get_ylim())
+        nonlin = source_ccd.meta['NONLIN']
+        cax1.set_ylabel(source_ccd.unit)
+        cax2.set_ylim(ylim/nonlin*100)
+        cax1.yaxis.set_label_position('left')
+        cax1.tick_params(labelrotation=90)
+        cax2.set_ylabel('% nonlin')
+
+        ax.contour(segm, levels=0, colors='white')
+        ax.contour(source_ccd - threshold,
+                   levels=0, colors='gray')
+        ax.set_title(f'{self.ccd.meta["OBJECT"]} {self.ccd.meta["DATE-AVG"]}')
+        if show:
+            plt.show()
+        savefig_overwrite(outname)
+
 def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
                    in_name=None, outdir=None, create_outdir=None,
                    cpulimit=None, keep_intermediate=False, **kwargs):
-    """cormultipipe post-processing routine to add wcs to ccd"""
+    """cormultipipe post-processing routine to add wcs to ccd.  This
+    needs to be one of the last things in the cormultipipe stream
+    because ccd.meta, because any subsequent processing of ccd or
+    ccd.meta are not reflected in the photometry.ccd"""
     if isinstance(ccd_in, list):
         if isinstance(in_name, list):
             return [add_astrometry(

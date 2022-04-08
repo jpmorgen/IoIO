@@ -18,16 +18,17 @@ from ccdproc import ImageFileCollection, transform_image
 
 from bigmultipipe import assure_list, outname_creator#, cached_pout, prune_pout
 
-from IoIO.utils import (is_flux, reduced_dir, multi_glob,
-                        closest_in_time, valid_long_exposure,
-                        add_history, simple_show, best_fits_time,
+from IoIO.utils import (reduced_dir, multi_glob, closest_in_time,
+                        valid_long_exposure, add_history,
                         location_to_dict)
+from IoIO.simple_show import simple_show
 from IoIO.cor_process import IOIO_1_LOCATION, standardize_filt_name
 from IoIO.calibration import Calibration
 from IoIO.cordata import CorData
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                CorMultiPipeBase, mask_nonlin_sat,
                                combine_masks, detflux, nd_filter_mask)
+from IoIO.photometry import is_flux
 from IoIO.cor_photometry import CorPhotometry, add_astrometry
 from IoIO.standard_star import (StandardStar, extinction_correct,
                                 rayleigh_convert)
@@ -83,6 +84,11 @@ OBS_COL_TO_META = ['RA', 'DEC', 'r', 'r_rate', 'delta', 'delta_rate',
                    'PDObsLon', 'PDObsLat', 'PDSunLon', 'SubSol_ang',
                    'SubSol_dist', 'sysIII', 'phi']
 GALSAT_COL_NUMS = '14, 15'
+KEYS_TO_SOURCE_TABLE = ['DATE-AVG',
+                        'FILTER',
+                        'AIRMASS']
+
+
 #GALSAT_COL_TO_META = ['PDObsLon', 'PDObsLat', 'PDSunLon', 'SubSol_ang']
 
 ###class OnOffCorMultiPipe(CorMultiPipeBase):
@@ -313,12 +319,15 @@ def on_off_pipeline(directory=None, # raw day directory
                     outdir_root=None,
                     create_outdir=True,
                     cpulimit=60, # astrometry.net solve-field
+                    keys_to_source_table=KEYS_TO_SOURCE_TABLE,
                     **kwargs):
 
     if calibration is None:
         calibration = Calibration(reduce=True)
     if photometry is None:
-        photometry = CorPhotometry(cpulimit=cpulimit)
+        photometry = CorPhotometry(join_tolerance=5*u.arcsec,
+                                   cpulimit=cpulimit,
+                                   keys_to_source_table=keys_to_source_table)
     add_ephemeris = assure_list(add_ephemeris)
     pre_backsub = assure_list(pre_backsub)
     post_backsub = assure_list(post_backsub)

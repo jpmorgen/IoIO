@@ -21,7 +21,7 @@ from ccdmultipipe import CCDMultiPipe, CCDArgparseHandler
 
 import IoIO.sx694 as sx694
 from IoIO.utils import (reduced_dir, get_dirs_dates, im_med_min_max,
-                        add_history, is_flux)
+                        add_history)
 from IoIO.cordata_base import overscan_estimate, CorDataBase, CorDataNDparams
 from IoIO.cordata import CorData
 from IoIO.cor_process import cor_process
@@ -360,9 +360,6 @@ def detflux(ccd_in, exptime_unit=None, **kwargs):
     if isinstance(ccd_in, list):
         return [detflux(ccd, exptime_unit=None, **kwargs)
                 for ccd in ccd_in]
-    if is_flux(ccd_in.unit):
-        log.warning('Already in flux units.  Doing nothing.  Double-call?')
-        return ccd_in
     ccd = ccd_in.copy()
     # The exptime_unit stuff may become obsolete with Card Quantities
     exptime_unit = exptime_unit or u.s

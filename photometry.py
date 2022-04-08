@@ -8,15 +8,34 @@ from astropy import log
 from astropy import units as u
 from astropy.convolution import Gaussian2DKernel
 from astropy.stats import gaussian_fwhm_to_sigma, sigma_clipped_stats
+from astropy.coordinates import SkyCoord
 
 from photutils import make_source_mask, detect_sources, deblend_sources
 from photutils import SourceCatalog
 from photutils.background import Background2D
 from photutils.utils import calc_total_error
 
+from astroquery.simbad import Simbad
+from astroquery.sdss import SDSS
+
 from precisionguide import pgproperty
 
-from IoIO.utils import is_flux
+EXPTIME_KEY = 'EXPTIME'
+EXPTIME_UNIT = u.s
+SOURCE_TABLE_COLS = ['label',
+                     'xcentroid',
+                     'ycentroid',
+                     'elongation',
+                     'equivalent_radius',
+                     'min_value',
+                     'max_value',
+                     'segment_flux',
+                     'segment_fluxerr']
+VOTABLE_FIELDS = ['flux(U)', 'flux(B)', 'flux(V)', 'flux(R)',
+                  'flux(I)']
+PHOTOOBJ_FIELDS = ['ra', 'dec', 'probPSF', 'aperFlux7_u',
+                   'aperFlux7_g', 'aperFlux7_r', 'aperFlux7_i',
+                   'aperFlux7_z']
 
 class control_property(pgproperty):
     """Decorator for Photometry.  
@@ -42,6 +61,18 @@ class control_property(pgproperty):
             obj.init_calc()
         obj_dict[self._key] = val
 
+def is_flux(unit):
+    """Returns ``True`` if unit is reducable to flux unit"""
+    unit = unit.decompose()
+    if isinstance(unit, u.IrreducibleUnit):
+        return False
+    # numpy tests don't work with these objects, so do it by hand
+    spower = [p for un, p in zip(unit.bases, unit.powers)
+              if un == u.s]
+    if len(spower) == 0 or spower[0] != -1:
+        return False
+    return True
+
 class Photometry:
     def __init__(self,
                  ccd=None,
@@ -54,11 +85,17 @@ class Photometry:
                  no_deblend=False,
                  deblend_nlevels=32,
                  deblend_contrast=0.001,
+                 exptime_key=EXPTIME_KEY,
+                 exptime_unit=EXPTIME_UNIT,
                  keys_to_source_table=None,
+                 source_table_cols=SOURCE_TABLE_COLS,
+                 votable_fields=VOTABLE_FIELDS,
+                 photoobj_fields=PHOTOOBJ_FIELDS,
                  **kwargs):
         self.ccd = ccd
         self.seeing = seeing
         self.n_connected_pixels = n_connected_pixels
+        self.source_table_cols = source_table_cols
         self.source_mask_dilate = source_mask_dilate
         self.source_mask_nsigma = source_mask_nsigma
         self.n_back_boxes = n_back_boxes
@@ -66,7 +103,11 @@ class Photometry:
         self._no_deblend = no_deblend
         self.deblend_nlevels = deblend_nlevels
         self.deblend_contrast = deblend_contrast
+        self.exptime_key = exptime_key
+        self.exptime_unit = exptime_unit
         self.keys_to_source_table = keys_to_source_table
+        self.votable_fields = votable_fields
+        self.photoobj_fields = photoobj_fields
         self.init_calc()
 
     def init_calc(self):
@@ -271,7 +312,7 @@ image
         # CardQuantity stuff I have been working on, or however that turns
         # out, for now assume everything is in seconds
         if is_flux(self.ccd.unit):
-            effective_gain = self.ccd.meta['EXPTIME']*u.s
+            effective_gain = self.ccd.meta[self.exptime_key]*u.s
         else:
             effective_gain = 1*u.s
 
@@ -314,13 +355,12 @@ image
     def source_table(self):
         if self._source_table is not None:
             return self._source_table
-        if self.source_catalog is None:
-            return None
-        self._source_table = self.source_catalog.to_table()
+        # https://photutils.readthedocs.io/en/stable/api/photutils.segmentation.SourceCatalog.html
+        self._source_table = self.source_catalog.to_table(
+            self.source_table_cols)
         self._source_table.sort('segment_flux', reverse=True)
-        self.source_table_postprocess()
         return self._source_table
-
+        
     @property
     def solved(self):
         if self._solved is None:
@@ -352,13 +392,11 @@ image
         return True
 
     @property
-    def source_table_has_object(self):
-        assert False, 'Code needs to be customized of identify object and add a column named OBJECT'
-
-    @property
     def source_table_has_key_cols(self):
         if self.source_table is None:
             return False
+        if self.keys_to_source_table is None:
+            return True
         for ku in self.keys_to_source_table:
             if isinstance(ku, tuple):
                 k = ku[0]
@@ -382,19 +420,22 @@ image
     @property
     def wide_source_table(self):
         if (self.source_table_has_coord
-            and self.source_table_has_object
             and self.source_table_has_key_cols):
             return self.source_table
         return None    
 
     def plot_object(self, outname=None, expand_bbox=10, show=False, **kwargs):
+        """This will probably need to be overridden to put in desirable title,
+        any additional color bar axes, etc.
+
+        """ 
         # Don't gunk up the source_table ecsv with bounding box
         # stuff, but keep in mind we sorted it, so key off of
         # label
-        bbox_table = photometry.source_catalog.to_table(
+        bbox_table = self.source_catalog.to_table(
             ['label', 'bbox_xmin', 'bbox_xmax', 'bbox_ymin', 'bbox_ymax'])
-        mask = (photometry.wide_source_table['OBJECT']
-                == ccd.meta['OBJECT'])
+        mask = (self.wide_source_table['OBJECT']
+                == self.ccd.meta['OBJECT'])
         label = self.wide_source_table[mask]['label']
         bbts = bbox_table[bbox_table['label'] == label]
         xmin = bbts['bbox_xmin'][0] - expand_bbox
@@ -404,32 +445,72 @@ image
         source_ccd = self.ccd[ymin:ymax, xmin:xmax]
         threshold = self.threshold[ymin:ymax, xmin:xmax]
         segm = self.segm_image.data[ymin:ymax, xmin:xmax]
-        #https://pythonmatplotlibtips.blogspot.com/2019/07/draw-two-axis-to-one-colorbar.html
         ax = plt.subplot(projection=source_ccd.wcs)
         ims = plt.imshow(source_ccd)
-        cbar = plt.colorbar(ims, fraction=0.03, pad=0.11)
+        cbar = plt.colorbar(ims, fraction=0.03, pad=0.02)
         pos = cbar.ax.get_position()
         cax1 = cbar.ax
         cax1.set_aspect('auto')
-        cax2 = cax1.twinx()
-        ylim = np.asarray(cax1.get_ylim())
-        nonlin = source_ccd.meta['NONLIN']
         cax1.set_ylabel(source_ccd.unit)
-        cax2.set_ylim(ylim/nonlin*100)
-        cax1.yaxis.set_label_position('left')
-        cax1.tick_params(labelrotation=90)
-        cax2.set_ylabel('% nonlin')
 
         ax.contour(segm, levels=0, colors='white')
         ax.contour(source_ccd - threshold,
                    levels=0, colors='gray')
-        ax.set_title(f'{ccd.meta["OBJECT"]} {ccd.meta["DATE-AVG"]}')
-        savefig_overwrite(outroot + '.png')
+        ax.set_title(f'{self.ccd.meta["DATE-OBS"]}')
+        if show:
+            plt.show()
+        # Note. savefig does not overwrite
+        plt.savefig(outname)
 
     @property
-    def source_with_simbad(self):
-        """Source catalog with simbad query results"""
-        assert False, 'Code not written to use, astroquery.simbad'
+    def av_coord(self):
+        """Returns tuple:        
+
+        `~astropy.coordinates.SkyCoord` : average RA and DEC of
+        current entries in
+        `:prop:IoIO.photometry.Photometry.source_table '
+
+        `~astropy.coordinates.Angle`: distance of each source to
+        average RA and DEC
+
+        """
+        ra = self.wide_source_table['coord'].ra
+        dec = self.wide_source_table['coord'].dec
+        ccoord = SkyCoord(np.average(ra), np.average(dec))
+        dists = ccoord.separation(tab['coord'])
+        return (SkyCoord(ra, dec), dists)        
+
+    @property
+    def simbad_table(self):
+        """Returns `~astropy.table.QTable` with Simbad query results at
+        average RA and DEC of
+        `:prop:IoIO.photometry.Photometry.wide_source_table'
+
+        """
+        ccoord, dists = self.av_coord
+        sim = Simbad()
+        sim.add_votable_fields('flux(U)', 'flux(B)', 'flux(V)', 'flux(R)',
+                               'flux(I)')
+        return sim.query_region(ccoord, radius=np.max(dists/2))
+
+    @property
+    def sdss_table(self):
+        """Returns `~astropy.table.Table` with Simbad query results at
+        average RA and DEC of
+        `:prop:IoIO.photometry.Photometry.wide_source_table'
+
+        """
+        sdss = SDSS()
+
+        #ccoord = SkyCoord(143.50993, 55.239775, unit="deg")
+        #ccoord = SkyCoord(12, 30, unit=("hour", "deg"))
+
+        photoobj_fields = ['ra', 'dec', 'probPSF', 'aperFlux7_u',
+                           'aperFlux7_g', 'aperFlux7_r',
+                           'aperFlux7_i', 'aperFlux7_z']
+        sdss_results = sdss.query_region(ccoord, radius=np.max(dists/2),
+                                         photoobj_fields=photoobj_fields)
+        sdss_star_mask = sdss_results['probPSF'] == 1
 
     @property
     def cat_table(self):

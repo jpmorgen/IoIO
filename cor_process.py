@@ -249,8 +249,8 @@ def angle_to_major_body(ccd, body_str):
         angle between pointing direction and major body 
     """
     
-    objctra = hdr['OBJCTRA']
-    objctdec = hdr['OBJCTDEC']
+    objctra = ccd.meta['OBJCTRA']
+    objctdec = ccd.meta['OBJCTDEC']
     with solar_system_ephemeris.set('builtin'):
         body_coord = get_body(body_str, ccd.tavg, ccd.obs_location)
     ra = Angle(objctra, unit=u.hour)
@@ -312,10 +312,11 @@ def fix_obj_and_coord(ccd, **kwargs):
                           '[hms J2000] Telescope right ascension')
         hdr['OBJCTDEC'] = (hdr['OBJCTDEC'],
                           '[hms J2000] Telescope declination')
-        hdr['RA'] = (hdr['RA'],
-                     '[hms J2000] Telescope right ascension')
-        hdr['DEC'] = (hdr['DEC'],
-                      '[hms J2000] Telescope declination')
+        if hdr.get('ra') is not None:
+            hdr.comments['RA'] = \
+                     '[hms J2000] Telescope right ascension'
+            hdr.comments['DEC'] = \
+                      '[hms J2000] Telescope declination'
         
     obj = hdr.get('object') 
     if obj is None or obj == '':

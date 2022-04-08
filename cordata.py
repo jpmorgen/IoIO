@@ -15,9 +15,9 @@ from astropy import units as u
 
 from precisionguide import pgproperty, pgcoordproperty, NoCenterPGD
 
-from IoIO.utils import simple_show
 from IoIO.cordata_base import CorDataNDparams
 from IoIO.photometry import Photometry
+from IoIO.simple_show import simple_show
 
 # Experiments with medfilt show:
 # /data/IoIO/raw/2021-04_Astrometry/Jupiter_near_ND_edge_S7.fit and

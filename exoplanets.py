@@ -15,7 +15,8 @@ from astropy.coordinates import SkyCoord
 from ccdmultipipe import as_single
 
 from IoIO.utils import (reduced_dir, get_dirs_dates, multi_glob,
-                        savefig_overwrite, simple_show)
+                        savefig_overwrite)
+from IoIO.simple_show import simple_show
 from IoIO.cormultipipe import (RAW_DATA_ROOT, CorMultiPipeBase,
                                nd_filter_mask, mask_nonlin_sat)
 from IoIO.calibration import Calibration
@@ -23,11 +24,13 @@ from IoIO.standard_star import object_to_objctradec
 from IoIO.cor_photometry import CorPhotometry, add_astrometry
 
 EXOPLANET_ROOT = '/data/Exoplanets'
-GLOB_INCLUDE = ['TOI-*', 'WASP-*', 'GJ*']
+GLOB_INCLUDE = ['TOI*', 'WASP*', 'KPS*', 'HAT*', 'K2*', 'TrES*',
+                'Qatar*', 'GJ*']
 KEYS_TO_SOURCE_TABLE = ['DATE-AVG',
                         ('DATE-AVG-UNCERTAINTY', u.s),
                         ('MJDBARY', u.day),
                         ('EXPTIME', u.s),
+                        'FILTER',
                         'AIRMASS']
 
 # General FITS WCS reference:
@@ -49,13 +52,14 @@ def barytime(ccd_in, bmp_meta=None, **kwargs):
     """
     ccd = ccd_in.copy()
 
-    # Fancy conversion to ICRS is likely not done anywhere in IoIO
-    # system, so default to FK5 is safe
-    radesys = ccd.meta.get('RADESYS') or ccd.meta.get('RADECSYS') or 'FK5'
-    # Official plate solutions, if available
     ctype1 = ccd.meta.get('CTYPE1')
     ctype2 = ccd.meta.get('CTYPE2')
-    if ctype1 and ctype2 and 'RA' in ctype1 and 'DEC' in ctype2:
+    if ccd.meta.get('OBJECT_TO_OBJCTRADEC'):
+        ra = ccd.meta.get('OBJCTRA')
+        dec = ccd.meta.get('OBJCTDEC')
+        unit = (u.hourangle, u.deg)
+    elif ctype1 and ctype2 and 'RA' in ctype1 and 'DEC' in ctype2:
+        # Official plate solutions next preference, if available
         ra = ccd.meta.get('CRVAL1')
         dec = ccd.meta.get('CRVAL2')
         unit = (ccd.meta.get('CUNIT1') or u.deg,
@@ -68,6 +72,9 @@ def barytime(ccd_in, bmp_meta=None, **kwargs):
         dec = ccd.meta.get('DEC') or ccd.meta.get('OBJCTDEC')
         # These values are string sexagesimal with RA in hours
         unit = (u.hourangle, u.deg)
+    # Fancy conversion to ICRS is likely not done anywhere in IoIO
+    # system, so default to FK5 is safe
+    radesys = ccd.meta.get('RADESYS') or ccd.meta.get('RADECSYS') or 'FK5'
     direction = SkyCoord(ra, dec, unit=unit, frame=radesys.lower())
 
     # Put it all together
@@ -82,49 +89,6 @@ def barytime(ccd_in, bmp_meta=None, **kwargs):
                 'Obs. midpoint barycentric dynamic time (MJD)'),
                after=True)
     return ccd
-
-def obj_plot(ccd, photometry=None, outname=None, show=False, **kwargs):
-    # Don't gunk up the source_table ecsv with bounding box
-    # stuff, but keep in mind we sorted it, so key off of
-    # label
-    bbox_table = photometry.source_catalog.to_table(
-        ['label', 'bbox_xmin', 'bbox_xmax', 'bbox_ymin', 'bbox_ymax'])
-    mask = (photometry.wide_source_table['OBJECT']
-            == ccd.meta['OBJECT'])
-    label = photometry.wide_source_table[mask]['label']
-    bbts = bbox_table[bbox_table['label'] == label]
-    expand_bbox = 10
-    xmin = bbts['bbox_xmin'][0] - expand_bbox
-    xmax = bbts['bbox_xmax'][0] + expand_bbox
-    ymin = bbts['bbox_ymin'][0] - expand_bbox
-    ymax = bbts['bbox_ymax'][0] + expand_bbox
-    source_ccd = ccd[ymin:ymax, xmin:xmax]
-    threshold = photometry.threshold[ymin:ymax, xmin:xmax]
-    segm = photometry.segm_image.data[ymin:ymax, xmin:xmax]
-    #threshold = photometry.threshold_above_back[ymin:ymax, xmin:xmax]
-
-    #https://pythonmatplotlibtips.blogspot.com/2019/07/draw-two-axis-to-one-colorbar.html
-    ax = plt.subplot(projection=source_ccd.wcs)
-    ims = plt.imshow(source_ccd)
-    cbar = plt.colorbar(ims, fraction=0.03, pad=0.11)
-    pos = cbar.ax.get_position()
-    cax1 = cbar.ax
-    cax1.set_aspect('auto')
-    cax2 = cax1.twinx()
-    ylim = np.asarray(cax1.get_ylim())
-    nonlin = source_ccd.meta['NONLIN']
-    cax1.set_ylabel(source_ccd.unit)
-    cax2.set_ylim(ylim/nonlin*100)
-    cax1.yaxis.set_label_position('left')
-    cax1.tick_params(labelrotation=90)
-    cax2.set_ylabel('% nonlin')
-
-    ax.contour(segm, levels=0, colors='white')
-    ax.contour(source_ccd - threshold,
-               levels=0, colors='gray')
-    ax.set_title(f'{ccd.meta["OBJECT"]} {ccd.meta["DATE-AVG"]}')
-    savefig_overwrite(outroot + '.png')
-    
 
 
 class ExoMultiPipe(CorMultiPipeBase):
@@ -141,46 +105,7 @@ class ExoMultiPipe(CorMultiPipeBase):
             gname = outroot + '_gaia.ecsv'
             photometry.source_gaia_join.write(
                 gname, delimiter=',', overwrite=overwrite)
-            # Don't gunk up the source_table ecsv with bounding box
-            # stuff, but keep in mind we sorted it, so key off of
-            # label
-            bbox_table = photometry.source_catalog.to_table(
-                ['label', 'bbox_xmin', 'bbox_xmax', 'bbox_ymin', 'bbox_ymax'])
-            mask = (photometry.wide_source_table['OBJECT']
-                    == ccd.meta['OBJECT'])
-            label = photometry.wide_source_table[mask]['label']
-            bbts = bbox_table[bbox_table['label'] == label]
-            expand_bbox = 10
-            xmin = bbts['bbox_xmin'][0] - expand_bbox
-            xmax = bbts['bbox_xmax'][0] + expand_bbox
-            ymin = bbts['bbox_ymin'][0] - expand_bbox
-            ymax = bbts['bbox_ymax'][0] + expand_bbox
-            source_ccd = ccd[ymin:ymax, xmin:xmax]
-            threshold = photometry.threshold[ymin:ymax, xmin:xmax]
-            segm = photometry.segm_image.data[ymin:ymax, xmin:xmax]
-            #threshold = photometry.threshold_above_back[ymin:ymax, xmin:xmax]
-
-            #https://pythonmatplotlibtips.blogspot.com/2019/07/draw-two-axis-to-one-colorbar.html
-            ax = plt.subplot(projection=source_ccd.wcs)
-            ims = plt.imshow(source_ccd)
-            cbar = plt.colorbar(ims, fraction=0.03, pad=0.11)
-            pos = cbar.ax.get_position()
-            cax1 = cbar.ax
-            cax1.set_aspect('auto')
-            cax2 = cax1.twinx()
-            ylim = np.asarray(cax1.get_ylim())
-            nonlin = source_ccd.meta['NONLIN']
-            cax1.set_ylabel(source_ccd.unit)
-            cax2.set_ylim(ylim/nonlin*100)
-            cax1.yaxis.set_label_position('left')
-            cax1.tick_params(labelrotation=90)
-            cax2.set_ylabel('% nonlin')
-
-            ax.contour(segm, levels=0, colors='white')
-            ax.contour(source_ccd - threshold,
-                       levels=0, colors='gray')
-            ax.set_title(f'{ccd.meta["OBJECT"]} {ccd.meta["DATE-AVG"]}')
-            savefig_overwrite(outroot + '.png')
+            photometry.plot_object(outname=outroot + '.png')
         super().file_write(ccd, outname, overwrite=overwrite, **kwargs)
 
 def expo_calc(vmag):
@@ -191,6 +116,17 @@ def expo_calc(vmag):
     toi_expo = 20*u.s + expo_correct
     dmag = toi_mag - vmag
     return toi_expo * dmag.physical - expo_correct
+
+def exoplanet_directory(directory,
+                        glob_include=GLOB_INCLUDE,
+                        calibration=None,
+                        photometry=None,
+                        keys_to_source_table=KEYS_TO_SOURCE_TABLE,
+                        keep_intermediate=False,
+                        cpulimit=None,
+                        outdir_root=EXOPLANET_ROOT,
+                        create_outdir=True,
+                        **kwargs):
 
 
 log.setLevel('DEBUG')
@@ -221,10 +157,10 @@ cmp = ExoMultiPipe(auto=True,
                    photometry=photometry, 
                    fits_fixed_ignore=True, outname_ext='.fits',
                    keep_intermediate=keep_intermediate,
-                   post_process_list=[barytime,
-                                      mask_nonlin_sat,
+                   post_process_list=[mask_nonlin_sat,
                                       nd_filter_mask,
                                       object_to_objctradec,
+                                      barytime,
                                       add_astrometry,
                                       as_single],
                    create_outdir=create_outdir,

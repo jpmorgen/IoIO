@@ -27,7 +27,7 @@ from precisionguide import MaxImPGD, NoCenterPGD
 from precisionguide.utils import hist_of_im, iter_linfit
 
 import IoIO.sx694 as sx694
-from IoIO.utils import CCDImageFormatter
+from IoIO.simple_show import CCDImageFormatter
 
 # Got IoIO alt from a combination of Google Earth and USGS top
 # maps.  See IoIO.notebk Sun Apr 28 12:50:37 2019 EDT.  My
@@ -396,8 +396,8 @@ class CorDataBase(FitsKeyArithmeticMixin, NoCenterPGD, MaxImPGD):
             return IOIO_1_LOCATION
         # ACP uses the *-OBS keywords.  MaxIm uses SITE* and does not
         # record altitude.
-        lon = self.meta.get('LONG-OBS') or self.get('SITELONG')
-        lat = self.meta.get('LAT-OBS') or self.get('SITELAT')
+        lon = self.meta.get('LONG-OBS') or self.meta.get('SITELONG')
+        lat = self.meta.get('LAT-OBS') or self.meta.get('SITELAT')
         # Just use an average elevation if none is available
         # https://www.quora.com/What-is-the-average-elevation-of-Earth-above-the-ocean-including-land-area-below-sea-level-What-is-the-atmospheric-pressure-at-that-elevation
         alt = self.meta.get('ALT-OBS') or 800 * u.m
