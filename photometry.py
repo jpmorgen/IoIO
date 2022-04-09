@@ -26,6 +26,7 @@ SOURCE_TABLE_COLS = ['label',
                      'xcentroid',
                      'ycentroid',
                      'elongation',
+                     'eccentricity',
                      'equivalent_radius',
                      'min_value',
                      'max_value',
@@ -82,6 +83,7 @@ class Photometry:
                  source_mask_nsigma=2, # pixels
                  n_back_boxes=10, # number of boxes in each dimension used to calculate background
                  back_rms_scale=2.0, # Scale background rms for threshold calculation
+                 remove_masked_sources=True,
                  no_deblend=False,
                  deblend_nlevels=32,
                  deblend_contrast=0.001,
@@ -100,6 +102,7 @@ class Photometry:
         self.source_mask_nsigma = source_mask_nsigma
         self.n_back_boxes = n_back_boxes
         self.back_rms_scale = back_rms_scale
+        self.remove_masked_sources = remove_masked_sources
         self._no_deblend = no_deblend
         self.deblend_nlevels = deblend_nlevels
         self.deblend_contrast = deblend_contrast
@@ -262,6 +265,8 @@ class Photometry:
                               self.threshold.value,
                               npixels=self.n_connected_pixels,
                               filter_kernel=self.kernel, mask=self.ccd.mask)
+        if self.remove_masked_sources:
+            segm.remove_masked_labels(self.ccd.mask, partial_overlap=True)
         self._segm_image = segm
         return self._segm_image
 
