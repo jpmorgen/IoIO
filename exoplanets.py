@@ -11,9 +11,11 @@ import matplotlib.pyplot as plt
 from astropy import log
 from astropy import units as u
 from astropy.coordinates import SkyCoord
+from astroquery.simbad import Simbad
 
 import ccdproc as ccdp
 
+from bigmultipipe import prune_pout
 from ccdmultipipe import as_single
 
 from IoIO.utils import (reduced_dir, get_dirs_dates, multi_glob,
@@ -29,14 +31,13 @@ EXOPLANET_ROOT = '/data/Exoplanets'
 GLOB_INCLUDE = ['TOI*', 'WASP*', 'KPS*', 'HAT*', 'K2*', 'TrES*',
                 'Qatar*', 'GJ*']
 JOIN_TOLERANCE = 5*u.arcsec
-
 KEYS_TO_SOURCE_TABLE = ['DATE-AVG',
                         ('DATE-AVG-UNCERTAINTY', u.s),
                         ('MJDBARY', u.day),
                         ('EXPTIME', u.s),
                         'FILTER',
                         'AIRMASS']
-
+KEEP_FITS = 3
 # General FITS WCS reference:
 # https://fits.gsfc.nasa.gov/fits_wcs.html
 # https://heasarc.gsfc.nasa.gov/docs/fcg/standard_dict.html
@@ -104,7 +105,10 @@ class ExoMultiPipe(CorMultiPipeBase):
             ccd, outname, photometry=photometry, 
             write_local_photometry=True, **kwargs)
         outroot, _ = os.path.splitext(outname)
-        photometry.plot_object(outname=outroot + '.png')
+        try:
+            photometry.plot_object(outname=outroot + '.png')
+        except Exception as e:
+            log.warning(f'Not able to plot object for {outname}: {e}')
         return written_name
 
 def expo_calc(vmag):
@@ -121,6 +125,7 @@ def exoplanet_pipeline(flist,
                        calibration=None,
                        photometry=None,
                        keep_intermediate=False,
+                       keep_fits=KEEP_FITS,
                        create_outdir=True,
                        **kwargs):
     # Process a list of observations of a single exoplanet
@@ -144,8 +149,17 @@ def exoplanet_pipeline(flist,
                                           as_single],
                        create_outdir=create_outdir,
                        **kwargs)
-    pout = cmp.pipeline([flist[0]], outdir='/tmp', overwrite=True)
-    #pout = cmp.pipeline(flist, outdir=reduced_directory, overwrite=True)
+    #pout = cmp.pipeline([flist[0]], outdir='/tmp', overwrite=True)
+    pout = cmp.pipeline(flist, outdir=reduced_directory, overwrite=True)
+    pout, flist = prune_pout(pout, flist)
+    if len(pout) == 0:
+        log.warning(f'No good observations in series {flist[0]}')
+    # The way pipeline works, these will be randomized
+    outnames, bmp_meta = zip(*pout)
+    keep_fits = min(keep_fits, len(outnames))
+    for f in outnames[keep_fits:]:
+        os.remove(f)    
+    return bmp_meta
 
 def exoplanet_directory(directory,
                         glob_include=GLOB_INCLUDE,
@@ -156,17 +170,25 @@ def exoplanet_directory(directory,
     # ccdp.ImageFileCollection to make sure the object is what we
     # think it is.  This avoids having to grep it out of the filename
     all_files = multi_glob(directory, glob_list=glob_include)
+    if len(all_files) == 0:
+        return
     collection = ccdp.ImageFileCollection(filenames=all_files,
                                           keywords=['object'])
     exoplanets = collection.values('object', unique=True)
 
     for e in exoplanets:
+        # Load our object into the cache so there are no collisions
+        # during multiprocessing
+        s = Simbad()
+        simbad_results = s.query_object(e)
         flist = collection.files_filtered(object=e, include_path=True)
         exoplanet_pipeline(flist, rd, **kwargs)
         # This could combine output ecsvs, do a Sloan catalog search on
         # distinct fields and merge in the results
 
 def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
+                   outdir_root=EXOPLANET_ROOT,
+                   glob_include=GLOB_INCLUDE,
                    start=None,
                    stop=None,
                    calibration=None,
@@ -174,6 +196,7 @@ def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
                    keys_to_source_table=KEYS_TO_SOURCE_TABLE,
                    join_tolerance=JOIN_TOLERANCE,
                    create_outdir=True,
+                   keep_fits=KEEP_FITS,
                    cpulimit=None,
                    **kwargs):
     dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
@@ -190,16 +213,28 @@ def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
             cpulimit=cpulimit,
             keys_to_source_table=keys_to_source_table)
     for directory in dirs:
+        # For now, behave like Calibration.  If the directory is there
+        # with files in it, we are done.  Move/delete the directory to
+        # trigger recalculation
         rd = reduced_dir(directory, outdir_root, create=False)
-    
-
+        ecsv_list = glob.glob(os.path.join(rd, '*ecsv'))
+        if len(ecsv_list) > 0:
+            continue
+        exoplanet_directory(directory,
+                            glob_include=glob_include,
+                            outdir_root=outdir_root,
+                            calibration=calibration,
+                            photometry=photometry,
+                            create_outdir=create_outdir,
+                            keep_fits=keep_fits)
 
 if __name__ == "__main__":
     log.setLevel('DEBUG')
- 
+
+    exoplanet_tree(keep_fits=3)
     #directory = '/data/IoIO/raw/20210921'
-    directory = '/data/IoIO/raw/20220319/'
-    exoplanet_directory(directory, ccddata_write=False)
+    #directory = '/data/IoIO/raw/20220319/'
+    #exoplanet_directory(directory, ccddata_write=False)
 
 
 

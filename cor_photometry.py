@@ -240,6 +240,7 @@ class CorPhotometry(Photometry):
                 == self.ccd.meta['OBJECT'])
         label = self.wide_source_table[mask]['label']
         bbts = bbox_table[bbox_table['label'] == label]
+        # This assume that the source is not on the edge of the ccd
         xmin = bbts['bbox_xmin'][0] - expand_bbox
         xmax = bbts['bbox_xmax'][0] + expand_bbox
         ymin = bbts['bbox_ymin'][0] - expand_bbox
@@ -313,7 +314,8 @@ def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
     else:
         outname = None
     photometry.outname = outname or photometry.outname
-    ccd.wcs = photometry.wcs
+    if photometry.wcs is not None:
+        ccd.wcs = photometry.wcs
     # I am currently not putting the wcs into the metadata because I
     # don't need it -- it is available as ccd.wcs or realtively easily
     # extracted from disk like I do in Photometry.astrometry.  I am
