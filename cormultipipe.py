@@ -16,8 +16,9 @@ from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.time import Time
 
 from bigmultipipe import assure_list, multi_proc, multi_logging
+from bigmultipipe.argparse_handler import ArgparseHandler, BMPArgparseMixin
 
-from ccdmultipipe import CCDMultiPipe, CCDArgparseHandler
+from ccdmultipipe import CCDMultiPipe, CCDArgparseMixin
 
 import IoIO.sx694 as sx694
 from IoIO.utils import (reduced_dir, get_dirs_dates, im_med_min_max,
@@ -192,8 +193,11 @@ obj_center calculations by using CorDataBase as CCDData
 #    
 #    ccddata_cls = CorData
 
-class CorArgparseHandler(CCDArgparseHandler):
-    """Adds basic argparse options relevant to cormultipipe system""" 
+class CorArgparseMixin:
+
+    # This modifies BMPArgparseMixin outname_append
+    outname_append = OUTNAME_APPEND
+
     def add_log_level(self, 
                       default='DEBUG',
                       help=None,
@@ -214,6 +218,7 @@ class CorArgparseHandler(CCDArgparseHandler):
         self.parser.add_argument('--' + option, 
                             default=default, help=help, **kwargs)
         
+    # These might go away or morph if I use astropy Tables exclusively
     def add_read_csvs(self, 
                       default=False,
                       help=None,
@@ -238,10 +243,17 @@ class CorArgparseHandler(CCDArgparseHandler):
                                  default=default,
                                  help=help, **kwargs)
 
+class CorArgparseHandler(CorArgparseMixin, CCDArgparseMixin,
+                         BMPArgparseMixin, ArgparseHandler):
+    """Adds basic argparse options relevant to cormultipipe system""" 
+
     def add_all(self):
         """Add options used in cmd"""
         self.add_log_level()
+        self.add_create_outdir(default=True) 
+        self.add_outname_append()
         self.add_fits_fixed_ignore(default=True)
+        super().add_all()
 
     def cmd(self, args):
         log.setLevel(args.log_level)

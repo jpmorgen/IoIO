@@ -1542,7 +1542,7 @@ class StandardStar():
         ext_coef, _ = self.extinction_coef(filt)
         return extinction_correct(instr_mag, airmass, ext_coef, **kwargs)
 
-class SSArgparseHandler(CalArgparseHandler):
+class SSArgparseMixin:
     def add_standard_star_root(self, 
                                default=STANDARD_STAR_ROOT,
                                help=None,
@@ -1597,6 +1597,7 @@ class SSArgparseHandler(CalArgparseHandler):
                                  default=default,
                                  help=help, **kwargs)
 
+class SSArgparseHandler(SSArgparseMixin, CalArgparseHandler):
     def add_all(self):
         """Add options used in cmd"""
         super().add_all()

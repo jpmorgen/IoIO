@@ -38,6 +38,10 @@ PHOTOOBJ_FIELDS = ['ra', 'dec', 'probPSF', 'aperFlux7_u',
                    'aperFlux7_g', 'aperFlux7_r', 'aperFlux7_i',
                    'aperFlux7_z']
 
+# I am not using this just yet, I will when I implement Simbad UBVRI
+# and Sloan ugriz search results
+JOIN_TOLERANCE = 5*u.arcsec
+
 class control_property(pgproperty):
     """Decorator for Photometry.  
 
@@ -528,4 +532,16 @@ image
         if self.solved:
             return self._cat_table
         return None
+
+class PhotometryArgparseMixin:
+    def add_join_tolerance(self, 
+                 default=JOIN_TOLERANCE.value,
+                 help=None,
+                 **kwargs):
+        option = 'join_tolerance'
+        if help is None:
+            help = (f'catalog join matching tolerance in arcsec '
+                    f'(default: {default})')
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
 

@@ -20,9 +20,12 @@ from astropy.table import Table, MaskedColumn, Column, join_skycoord
 from astropy import table
 from astropy.wcs import WCS
 
-from IoIO.photometry import Photometry
+from IoIO.photometry import (JOIN_TOLERANCE, Photometry,
+                             PhotometryArgparseMixin)
 from IoIO.utils import savefig_overwrite
 from IoIO.cordata import CorData
+
+CPULIMIT = 60 #s
 
 class CorPhotometry(Photometry):
     """Subclass of Photometry to deal with specifics of IoIO coronagraph
@@ -47,14 +50,12 @@ class CorPhotometry(Photometry):
     def __init__(self,
                  ccd=None,
                  outname=None,
-                 cpulimit=None,
-                 join_tolerance=None,
+                 cpulimit=CPULIMIT,
+                 join_tolerance=JOIN_TOLERANCE,
                  **kwargs):
         super().__init__(ccd=ccd, **kwargs)
         self.outname = outname
         self.cpulimit = cpulimit
-        if join_tolerance is None:
-            join_tolerance = 5*u.arcsec
         self.join_tolerance = join_tolerance
 
     def init_calc(self):
@@ -322,6 +323,20 @@ def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
     # also not putting the SourceTable into the metadata, because it
     # is still hanging around in the Photometry object.
     return ccd    
+
+class CorPhotometryArgparseMixin(PhotometryArgparseMixin):
+    def add_cpulimit(self, 
+                 default=CPULIMIT,
+                 help=None,
+                 **kwargs):
+        option = 'cpulimit'
+        if help is None:
+            help = (f'max plate solve time in seconds (default: {default})')
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
+
+
+
 
 # rdls_table = Table.read('/tmp/WASP-36b-S001-R013-C002-R.rdls')
 # #rdls_table.sort('mag')

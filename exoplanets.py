@@ -3,10 +3,9 @@
 
 import os
 import glob
+import argparse
 
 import numpy as np
-
-import matplotlib.pyplot as plt
 
 from astropy import log
 from astropy import units as u
@@ -18,19 +17,19 @@ import ccdproc as ccdp
 from bigmultipipe import prune_pout
 from ccdmultipipe import as_single
 
-from IoIO.utils import (reduced_dir, get_dirs_dates, multi_glob,
-                        savefig_overwrite)
-from IoIO.simple_show import simple_show
+from IoIO.utils import (reduced_dir, get_dirs_dates, multi_glob)
 from IoIO.cormultipipe import (RAW_DATA_ROOT, CorMultiPipeBase,
-                               nd_filter_mask, mask_nonlin_sat)
-from IoIO.calibration import Calibration
+                               mask_nonlin_sat, nd_filter_mask)
+from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.standard_star import object_to_objctradec
-from IoIO.cor_photometry import CorPhotometry, add_astrometry
+from IoIO.photometry import JOIN_TOLERANCE
+from IoIO.cor_photometry import (CPULIMIT, CorPhotometry,
+                                 add_astrometry,
+                                 CorPhotometryArgparseMixin)
 
 EXOPLANET_ROOT = '/data/Exoplanets'
 GLOB_INCLUDE = ['TOI*', 'WASP*', 'KPS*', 'HAT*', 'K2*', 'TrES*',
                 'Qatar*', 'GJ*']
-JOIN_TOLERANCE = 5*u.arcsec
 KEYS_TO_SOURCE_TABLE = ['DATE-AVG',
                         ('DATE-AVG-UNCERTAINTY', u.s),
                         ('MJDBARY', u.day),
@@ -41,7 +40,6 @@ KEEP_FITS = 3
 # General FITS WCS reference:
 # https://fits.gsfc.nasa.gov/fits_wcs.html
 # https://heasarc.gsfc.nasa.gov/docs/fcg/standard_dict.html
-
 
 # https://docs.astropy.org/en/stable/time/index.html
 # https://www.aanda.org/articles/aa/pdf/2015/02/aa24653-14.pdf
@@ -228,10 +226,83 @@ def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
                             create_outdir=create_outdir,
                             keep_fits=keep_fits)
 
-if __name__ == "__main__":
-    log.setLevel('DEBUG')
+class ExoArgparseMixin:
+    def add_exoplanet_root(self,
+                           default=EXOPLANET_ROOT,
+                           help=None,
+                           **kwargs):
+        option = 'exoplanet_root'
+        if help is None:
+            help = f'exoplanet root (default: {default})'
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
 
-    exoplanet_tree(keep_fits=3)
+    def add_start(self, 
+                  default=None,
+                  help=None,
+                  **kwargs):
+        option = 'start'
+        if help is None:
+            help = 'start directory/date (default: earliest)'
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
+
+    def add_stop(self, 
+                 default=None,
+                 help=None,
+                 **kwargs):
+        option = 'stop'
+        if help is None:
+            help = 'stop directory/date (default: latest)'
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
+
+    def add_keep_fits(self, 
+                 default=KEEP_FITS,
+                 help=None,
+                 **kwargs):
+        option = 'keep_fits'
+        if help is None:
+            help = (f'keep N reduced FITS files (default: {default})')
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
+
+class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
+                         CalArgparseHandler):
+    def add_all(self):
+        """Add options used in cmd"""
+        self.add_exoplanet_root()
+        self.add_start()
+        self.add_stop()
+        self.add_cpulimit()
+        self.add_join_tolerance()
+        self.add_keep_fits()
+        super().add_all()
+
+    def cmd(self, args):
+        c = CalArgparseHandler.cmd(self, args)
+        exoplanet_tree(raw_data_root=args.raw_data_root,
+                       outdir_root=args.exoplanet_root,
+                       start=args.start,
+                       stop=args.stop,
+                       calibration=c,
+                       join_tolerance=args.join_tolerance,
+                       create_outdir=args.create_outdir,
+                       keep_fits=args.keep_fits,
+                       cpulimit=args.cpulimit)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Run exoplanet pipeline')
+    aph = ExoArgparseHandler(parser)
+    aph.add_all()
+    args = parser.parse_args()
+    aph.cmd(args)
+    
+
+    
+    #log.setLevel('DEBUG')
+    #exoplanet_tree(keep_fits=3)
     #directory = '/data/IoIO/raw/20210921'
     #directory = '/data/IoIO/raw/20220319/'
     #exoplanet_directory(directory, ccddata_write=False)

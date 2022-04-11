@@ -1874,8 +1874,8 @@ class Calibration():
                              f'{cflat_ratio["mad_std_ratio"]:.2f}')
         
         return tflat_ratio['biweight_ratio'], tflat_ratio['mad_std_ratio']
-            
-class CalArgparseHandler(CorArgparseHandler):
+
+class CalArgparseMixin:
     def add_calibration_root(self, 
                              default=CALIBRATION_ROOT,
                              help=None,
@@ -1906,15 +1906,17 @@ class CalArgparseHandler(CorArgparseHandler):
         self.parser.add_argument('--' + option, 
                                  default=default, help=help, **kwargs)
 
+    
+class CalArgparseHandler(CalArgparseMixin, CorArgparseHandler):
     def add_all(self):
         """Add options used in cmd"""
-        super().add_all()
         self.add_raw_data_root()
         self.add_calibration_root()
         self.add_calibration_start()
         self.add_calibration_stop()
         self.add_num_processes(default=MAX_NUM_PROCESSES)
         self.add_mem_frac(default=MAX_MEM_FRAC)
+        super().add_all()
 
     def cmd(self, args):
         super().cmd(args)
@@ -1927,7 +1929,7 @@ class CalArgparseHandler(CorArgparseHandler):
                         mem_frac=args.mem_frac)
         return c
             
-if __name__ == "__main__":
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Run calibration to generate bias, dark, flat frames')
     aph = CalArgparseHandler(parser)
