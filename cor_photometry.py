@@ -20,12 +20,20 @@ from astropy.table import Table, MaskedColumn, Column, join_skycoord
 from astropy import table
 from astropy.wcs import WCS
 
-from IoIO.photometry import (JOIN_TOLERANCE, Photometry,
+from astroquery.simbad import Simbad
+
+from precisionguide import PGData
+
+from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE, Photometry,
                              PhotometryArgparseMixin)
 from IoIO.utils import savefig_overwrite
 from IoIO.cordata import CorData
 
-CPULIMIT = 60 #s
+KEYS_TO_SOURCE_TABLE = ['DATE-AVG',
+                        ('DATE-AVG-UNCERTAINTY', u.s),
+                        ('EXPTIME', u.s),
+                        'FILTER',
+                        'AIRMASS']
 
 class CorPhotometry(Photometry):
     """Subclass of Photometry to deal with specifics of IoIO coronagraph
@@ -43,20 +51,25 @@ class CorPhotometry(Photometry):
             for the solve-field input and output.  If `None`, a
             temporary directory is created and files are created
             there.
-        cpulimit : float
+
+        solve_timeout : float
             Plate solve time limit (seconds)
+
+        keys_to_source_table : list
+            FITS header keys to add as columns to wide_source_table
 
     """
     def __init__(self,
                  ccd=None,
                  outname=None,
-                 cpulimit=CPULIMIT,
-                 join_tolerance=JOIN_TOLERANCE,
+                 solve_timeout=SOLVE_TIMEOUT,
+                 keys_to_source_table=KEYS_TO_SOURCE_TABLE,
                  **kwargs):
-        super().__init__(ccd=ccd, **kwargs)
+        super().__init__(ccd=ccd,
+                         keys_to_source_table=keys_to_source_table,
+                         **kwargs)
         self.outname = outname
-        self.cpulimit = cpulimit
-        self.join_tolerance = join_tolerance
+        self.solve_timeout = solve_timeout
 
     def init_calc(self):
         super().init_calc()
@@ -93,6 +106,7 @@ class CorPhotometry(Photometry):
             # units.  
             source_table = Table(source_table)
 
+        # If *_ephemeris has run, objct* coords are very high quality.  
         ra = Angle(self.ccd.meta['objctra'])
         ra = ra.to_string(sep=':')
         dec = Angle(self.ccd.meta['objctdec'])
@@ -103,16 +117,16 @@ class CorPhotometry(Photometry):
         radius = np.linalg.norm((naxis1, naxis2)) * u.pixel
         radius = radius * pixscale *u.arcsec/u.pixel
         radius = radius.to(u.deg)
-        if (isinstance(self.ccd, CorData)
+        if (isinstance(self.ccd, PGData)
             and self.ccd.center_quality > 5):
-            # Set our reference CRPIX* to Jupiter's position.  Note
-            # obj_center is python ordering
+            # Reference CRPIX* to object's PGData center pixel
+            # Note obj_center is python ordering
             c = self.ccd.obj_center
             crpix_str = f'--crpix-x {c[1]} --crpix-y {c[0]}'
         else:
             crpix_str = ''
-        if self.cpulimit is not None:
-            cpulimit_str = f'--cpulimit {self.cpulimit}'
+        if self.solve_timeout is not None:
+            cpulimit_str = f'--cpulimit {self.solve_timeout}'
         else:
             cpulimit_str = ''
 
@@ -275,7 +289,7 @@ class CorPhotometry(Photometry):
 
 def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
                    in_name=None, outdir=None, create_outdir=None,
-                   cpulimit=None, keep_intermediate=False, **kwargs):
+                   solve_timeout=None, keep_intermediate=False, **kwargs):
     """cormultipipe post-processing routine to add wcs to ccd.  This
     needs to be one of the last things in the cormultipipe stream
     because ccd.meta, because any subsequent processing of ccd or
@@ -286,7 +300,8 @@ def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
                 ccd, bmp_meta=bmp_meta, photometry=photometry,
                 in_name=fname, outdir=outdir,
                 create_outdir=create_outdir,
-                cpulimit=cpulimit,  keep_intermediate=keep_intermediate,
+                solve_timeout=solve_timeout,
+                keep_intermediate=keep_intermediate,
                 **kwargs)
                     for ccd, fname in zip(ccd_in, in_name)]
         else:
@@ -294,13 +309,14 @@ def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
                 ccd, bmp_meta=bmp_meta, photometry=photometry,
                 in_name=in_name, outdir=outdir,
                 create_outdir=create_outdir,
-                cpulimit=cpulimit,  keep_intermediate=keep_intermediate,
+                solve_timeout=solve_timeout,
+                keep_intermediate=keep_intermediate,
                 **kwargs)
                     for ccd in ccd_in]            
     ccd = ccd_in.copy()
     photometry = photometry or CorPhotometry()
     photometry.ccd = ccd
-    photometry.cpulimit = cpulimit or photometry.cpulimit
+    photometry.solve_timeout = solve_timeout or photometry.solve_timeout
     if keep_intermediate:
         if outdir is not None:
             bname = os.path.basename(in_name)
@@ -324,12 +340,39 @@ def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
     # is still hanging around in the Photometry object.
     return ccd    
 
+def object_to_objctradec(ccd_in, **kwargs):
+    """cormultipipe post-processing routine to query Simbad for RA and DEC
+
+    """    
+    ccd = ccd_in.copy()
+    s = Simbad()
+    obj = ccd.meta['OBJECT']
+    simbad_results = s.query_object(obj)
+    if simbad_results is None:
+        # Don't fail, since OBJT* are within pointing errors
+        log.warning(f'Simbad did not resolve: {obj}, relying on '
+                    f'OBJCTRA = {ccd.meta["OBJCTRA"]} '
+                    f'OBJCTDEC = {ccd.meta["OBJCTDEC"]}')
+        return ccd
+    obj_entry = simbad_results[0]
+    ra = Angle(obj_entry['RA'], unit=u.hour)
+    dec = Angle(obj_entry['DEC'], unit=u.deg)
+    ccd.meta['OBJCTRA'] = (ra.to_string(),
+                      '[hms J2000] Target right assention')
+    ccd.meta['OBJCTDEC'] = (dec.to_string(),
+                       '[dms J2000] Target declination')
+    ccd.meta.insert('OBJCTDEC',
+                    ('HIERARCH OBJECT_TO_OBJCTRADEC', True,
+                     'OBJCT* point to OBJECT'),
+                    after=True)
+    return ccd
+
 class CorPhotometryArgparseMixin(PhotometryArgparseMixin):
-    def add_cpulimit(self, 
-                 default=CPULIMIT,
+    def add_solve_timeout(self, 
+                 default=SOLVE_TIMEOUT,
                  help=None,
                  **kwargs):
-        option = 'cpulimit'
+        option = 'solve_timeout'
         if help is None:
             help = (f'max plate solve time in seconds (default: {default})')
         self.parser.add_argument('--' + option, 

@@ -21,21 +21,18 @@ from IoIO.utils import (reduced_dir, get_dirs_dates, multi_glob)
 from IoIO.cormultipipe import (RAW_DATA_ROOT, CorMultiPipeBase,
                                mask_nonlin_sat, nd_filter_mask)
 from IoIO.calibration import Calibration, CalArgparseHandler
-from IoIO.standard_star import object_to_objctradec
-from IoIO.photometry import JOIN_TOLERANCE
-from IoIO.cor_photometry import (CPULIMIT, CorPhotometry,
-                                 add_astrometry,
+from IoIO.photometry import SOLVE_TIMEOUT, JOIN_TOLERANCE
+from IoIO.cor_photometry import (KEYS_TO_SOURCE_TABLE, CorPhotometry,
+                                 add_astrometry, object_to_objctradec,
                                  CorPhotometryArgparseMixin)
 
 EXOPLANET_ROOT = '/data/Exoplanets'
 GLOB_INCLUDE = ['TOI*', 'WASP*', 'KPS*', 'HAT*', 'K2*', 'TrES*',
                 'Qatar*', 'GJ*']
-KEYS_TO_SOURCE_TABLE = ['DATE-AVG',
-                        ('DATE-AVG-UNCERTAINTY', u.s),
-                        ('MJDBARY', u.day),
-                        ('EXPTIME', u.s),
-                        'FILTER',
-                        'AIRMASS']
+# I am not sure the barytime calculations would be valid for solar
+# system objects because they are too close.  So we don't put this
+# into cor_photometry
+KEYS_TO_SOURCE_TABLE = KEYS_TO_SOURCE_TABLE + [('MJDBARY', u.day)]
 KEEP_FITS = 3
 # General FITS WCS reference:
 # https://fits.gsfc.nasa.gov/fits_wcs.html
@@ -132,7 +129,6 @@ def exoplanet_pipeline(flist,
     if photometry is None:
         photometry = CorPhotometry(
             precalc=True,
-            join_tolerance=JOIN_TOLERANCE,
             keys_to_source_table=KEYS_TO_SOURCE_TABLE)
     cmp = ExoMultiPipe(auto=True,
                        calibration=calibration,
@@ -191,11 +187,11 @@ def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
                    stop=None,
                    calibration=None,
                    photometry=None,
-                   keys_to_source_table=KEYS_TO_SOURCE_TABLE,
+                   solve_timeout=None,
                    join_tolerance=JOIN_TOLERANCE,
+                   keys_to_source_table=KEYS_TO_SOURCE_TABLE,
                    create_outdir=True,
                    keep_fits=KEEP_FITS,
-                   cpulimit=None,
                    **kwargs):
     dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
     dirs, _ = zip(*dirs_dates)
@@ -207,8 +203,8 @@ def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
     if photometry is None:
         photometry = CorPhotometry(
             precalc=True,
+            solve_timeout=solve_timeout,
             join_tolerance=join_tolerance,
-            cpulimit=cpulimit,
             keys_to_source_table=keys_to_source_table)
     for directory in dirs:
         # For now, behave like Calibration.  If the directory is there
@@ -274,7 +270,7 @@ class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
         self.add_exoplanet_root()
         self.add_start()
         self.add_stop()
-        self.add_cpulimit()
+        self.add_solve_timeout()
         self.add_join_tolerance()
         self.add_keep_fits()
         super().add_all()
@@ -289,7 +285,7 @@ class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
                        join_tolerance=args.join_tolerance,
                        create_outdir=args.create_outdir,
                        keep_fits=args.keep_fits,
-                       cpulimit=args.cpulimit)
+                       solve_timeout=args.solve_timeout)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -301,11 +297,11 @@ if __name__ == '__main__':
     
 
     
-    #log.setLevel('DEBUG')
-    #exoplanet_tree(keep_fits=3)
-    #directory = '/data/IoIO/raw/20210921'
-    #directory = '/data/IoIO/raw/20220319/'
-    #exoplanet_directory(directory, ccddata_write=False)
+#log.setLevel('DEBUG')
+##directory = '/data/IoIO/raw/20210921'
+#directory = '/data/IoIO/raw/20220319/'
+##exoplanet_tree()
+#exoplanet_directory(directory, ccddata_write=True)
 
 
 

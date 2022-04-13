@@ -1086,10 +1086,10 @@ def na_meso_sub(ccd_in, bmp_meta=None, na_meso_obj=None, **kwargs):
     ccd = ccd.subtract(meso, handle_meta='first_found')
     ccd.meta['MESO'] = (
         meso.value,
-        f'model mesospheric Na emission ({meso.unit.to_string()})')
+        f'model mesospheric Na emission ({meso.unit})')
     ccd.meta['MESO_ERR'] = (
         meso_err.value,
-        f'model mesospheric error ({meso_err.unit.to_string()})')
+        f'model mesospheric error ({meso_err.unit})')
     
     bmp_meta['meso'] = meso
     bmp_meta['meso_err'] = meso_err

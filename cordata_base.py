@@ -23,7 +23,7 @@ from astropy.coordinates import EarthLocation
 from astropy_fits_key import FitsKeyArithmeticMixin
 
 from precisionguide import pgproperty, pgcoordproperty
-from precisionguide import MaxImPGD, NoCenterPGD
+from precisionguide import MaxImPGD
 from precisionguide.utils import hist_of_im, iter_linfit
 
 import IoIO.sx694 as sx694
@@ -339,7 +339,7 @@ def keyword_arithmetic_image_handler(meta, operand1, operation, operand2,
 
     return o2
 
-class CorDataBase(FitsKeyArithmeticMixin, NoCenterPGD, MaxImPGD):
+class CorDataBase(FitsKeyArithmeticMixin, MaxImPGD):
     def __init__(self, data,
                  default_ND_params=None,
                  ND_params=None, # for _slice

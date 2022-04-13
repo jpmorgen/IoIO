@@ -23,11 +23,12 @@ from astropy.stats import mad_std, biweight_location
 from astropy.coordinates import Angle, SkyCoord
 # Rainy day project to get rid of pandas
 #from astropy.table import QTable
-from astroquery.simbad import Simbad
 from astropy.modeling import models, fitting
 from astropy.visualization import quantity_support
 from astropy.nddata import CCDData
 from astropy.nddata.nduncertainty import StdDevUncertainty
+
+from astroquery.simbad import Simbad
 
 from specutils import Spectrum1D, SpectralRegion
 from specutils.analysis import line_flux
@@ -239,33 +240,6 @@ class CorBurnashev(Burnashev):
             filt_flux = np.nansum(spec_dlambda*av_bin_flux)
         return filt_flux
 
-def object_to_objctradec(ccd_in, **kwargs):
-    """cormultipipe post-processing routine to query Simbad for RA and DEC
-
-    """    
-    ccd = ccd_in.copy()
-    s = Simbad()
-    obj = ccd.meta['OBJECT']
-    simbad_results = s.query_object(obj)
-    if simbad_results is None:
-        # Don't fail, since OBJT* are within pointing errors
-        log.warning(f'Simbad did not resolve: {obj}, relying on '
-                    f'OBJCTRA = {ccd.meta["OBJCTRA"]} '
-                    f'OBJCTDEC = {ccd.meta["OBJCTDEC"]}')
-        return ccd
-    obj_entry = simbad_results[0]
-    ra = Angle(obj_entry['RA'], unit=u.hour)
-    dec = Angle(obj_entry['DEC'], unit=u.deg)
-    ccd.meta['OBJCTRA'] = (ra.to_string(),
-                      '[hms J2000] Target right assention')
-    ccd.meta['OBJCTDEC'] = (dec.to_string(),
-                       '[dms J2000] Target declination')
-    ccd.meta.insert('OBJCTDEC',
-                    ('HIERARCH OBJECT_TO_OBJCTRADEC', True,
-                     'OBJCT* point to OBJECT'),
-                    after=True)
-    return ccd
-
 def standard_star_process(ccd,
                           bmp_meta=None,
                           in_name=None,
@@ -401,9 +375,9 @@ def standard_star_process(ccd,
         odetflux_err = detflux_err * exptime.value / oexptime
     
     # --> These will get better when Card units are implemented
-    ccd.meta['DETFLUX'] = (detflux.value, f'({detflux.unit.to_string()})')
+    ccd.meta['DETFLUX'] = (detflux.value, f'({detflux.unit})')
     ccd.meta['HIERARCH DETFLUX-ERR'] = (detflux_err.value,
-                                        f'({detflux.unit.to_string()})')
+                                        f'({detflux.unit})')
     ccd.meta['xcentrd'] = xcentrd
     ccd.meta['ycentrd'] = ycentrd
     ccd.meta['radius'] = radius    
@@ -1196,15 +1170,21 @@ def extinction_correct(flex_input, airmass=None, ext_coef=None,
         ecmag = extinction_correct(mag, airmass, ext_coef,
                                     inverse=inverse)
         ecphys = ecmag.physical
-        ccd = ccd.multiply(ecphys.value, handle_meta='first_found')
+        # Make sure we are explicitly in dimensionless units or else
+        # default ccd unit of adu is applied during multiplication
+        ec = ecphys.value#*u.dimensionless_unscaled
+        
+        ccd = ccd.multiply(ec,
+                           handle_meta='first_found')
         ccd.meta['EXT_COEF'] = (
             ext_coef.value,
-            f'extinction coefficient ({ext_coef.unit.to_string()})')
+            f'extinction coefficient ({ext_coef.unit})')
         ccd.meta['HIERARCH EXT_COEF_ERR'] = (
-            ext_coef_err.value, f'[{ext_coef.unit.to_string()}]')
+            ext_coef_err.value, f'[{ext_coef.unit}]')
         ccd.meta['HIERARCH EXT_CORR_VAL'] = (
             ecphys.value, 'extinction cor. factor applied')
         return ccd
+
     instr_mag = flex_input
     if (isinstance(instr_mag, u.Quantity)
         and isinstance(ext_coef, u.Quantity)):
@@ -1251,9 +1231,9 @@ def rayleigh_convert(ccd_in, standard_star_obj=None, inverse=False, **kwargs):
     else:
         ccd = ccd.multiply(rc, handle_meta='first_found')
     ccd.meta['HIERARCH RAYLEIGH_CONVERSION'] = (
-        rc.value, f'[{rc.unit.to_string()}]')
+        rc.value, f'[{rc.unit}]')
     ccd.meta['HIERARCH RAYLEIGH_CONVERSION_ERR'] = (
-        rc_err.value, f'[{rc_err.unit.to_string()}]')
+        rc_err.value, f'[{rc_err.unit}]')
     return ccd
     
 def standard_star_tree(raw_data_root=RAW_DATA_ROOT,

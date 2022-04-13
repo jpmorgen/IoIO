@@ -32,6 +32,7 @@ SOURCE_TABLE_COLS = ['label',
                      'max_value',
                      'segment_flux',
                      'segment_fluxerr']
+SOLVE_TIMEOUT = 60 # s
 VOTABLE_FIELDS = ['flux(U)', 'flux(B)', 'flux(V)', 'flux(R)',
                   'flux(I)']
 PHOTOOBJ_FIELDS = ['ra', 'dec', 'probPSF', 'aperFlux7_u',
@@ -93,6 +94,7 @@ class Photometry:
                  deblend_contrast=0.001,
                  exptime_key=EXPTIME_KEY,
                  exptime_unit=EXPTIME_UNIT,
+                 join_tolerance=JOIN_TOLERANCE,
                  keys_to_source_table=None,
                  source_table_cols=SOURCE_TABLE_COLS,
                  votable_fields=VOTABLE_FIELDS,
@@ -112,6 +114,7 @@ class Photometry:
         self.deblend_contrast = deblend_contrast
         self.exptime_key = exptime_key
         self.exptime_unit = exptime_unit
+        self.join_tolerance = join_tolerance
         self.keys_to_source_table = keys_to_source_table
         self.votable_fields = votable_fields
         self.photoobj_fields = photoobj_fields
@@ -428,8 +431,7 @@ image
 
     @property
     def wide_source_table(self):
-        if (self.source_table_has_coord
-            and self.source_table_has_key_cols):
+        if self.source_table_has_coord:
             return self.source_table
         return None    
 
@@ -540,7 +542,7 @@ class PhotometryArgparseMixin:
                  **kwargs):
         option = 'join_tolerance'
         if help is None:
-            help = (f'catalog join matching tolerance in arcsec '
+            help = (f'catalog join matching tolerance in {JOIN_TOLERANCE.unit} '
                     f'(default: {default})')
         self.parser.add_argument('--' + option, 
                                  default=default, help=help, **kwargs)

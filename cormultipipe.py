@@ -3,7 +3,6 @@ The cormultipipe module implements the IoIO coronagraph data reduction
 pipeline using ccdmultipipe/bigmultipipe as its base
 """
 
-import inspect
 import os
 import psutil
 import argparse
@@ -14,18 +13,18 @@ from astropy import log
 from astropy import units as u
 from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.time import Time
+from astropy.coordinates import SkyCoord
 
-from bigmultipipe import assure_list, multi_proc, multi_logging
 from bigmultipipe.argparse_handler import ArgparseHandler, BMPArgparseMixin
 
 from ccdmultipipe import CCDMultiPipe, CCDArgparseMixin
 
 import IoIO.sx694 as sx694
-from IoIO.utils import (reduced_dir, get_dirs_dates, im_med_min_max,
-                        add_history)
+from IoIO.utils import add_history
+
 from IoIO.cordata_base import overscan_estimate, CorDataBase, CorDataNDparams
 from IoIO.cordata import CorData
-from IoIO.cor_process import cor_process
+from IoIO.cor_process import cor_process, standardize_filt_name
 
 # Processing global variables.  Since I avoid use of the global
 # statement and don't reassign these at global scope, they stick to
@@ -155,7 +154,11 @@ obj_center calculations by using CorDataBase as CCDData
 
         # Write our photometry results in centralized and, if desired,
         # "local" directory, where local, in this sense, is where the
-        # FITS files end up getting written
+        # FITS files end up getting written.  Note we may be
+        # processing multiple files (e.g. on-off subtraction).  Make
+        # the first one primary
+        if isinstance(in_name, list):
+            in_name = in_name[0]
         photometry.wide_source_table['in_name'] = in_name
         photometry.wide_source_table['outname'] = outname
         field_star_root = field_star_root or self.field_star_root
@@ -177,86 +180,6 @@ obj_center calculations by using CorDataBase as CCDData
             photometry.source_gaia_join.write(
                 gname, delimiter=',', overwrite=overwrite)
         return written_name
-
-# Just use ccddata_cls as argument to CorMultiPipeBase
-#class CorMultiPipeNDparams(CorMultiPipeBase):
-#    """Uses CorDataNDparams to ensure ND_params calculations locate the ND
-#    filter to high precision.  Requires a decent amount of skylight
-#
-#    """
-#    ccddata_cls = CorDataNDparams
-#
-#class CorMultiPipe(CorMultiPipeNDparams):
-#    """Full CorMultiPipe system intended for coronagraphic observations
-#
-#    """
-#    
-#    ccddata_cls = CorData
-
-class CorArgparseMixin:
-
-    # This modifies BMPArgparseMixin outname_append
-    outname_append = OUTNAME_APPEND
-
-    def add_log_level(self, 
-                      default='DEBUG',
-                      help=None,
-                      **kwargs):
-        option = 'log_level'
-        if help is None:
-            help = f'astropy.log level (default: {default})'
-        self.parser.add_argument('--' + option, 
-                            default=default, help=help, **kwargs)
-
-    def add_raw_data_root(self, 
-                          default=RAW_DATA_ROOT,
-                          help=None,
-                          **kwargs):
-        option = 'raw_data_root'
-        if help is None:
-            help = f'raw data root (default: {default})'
-        self.parser.add_argument('--' + option, 
-                            default=default, help=help, **kwargs)
-        
-    # These might go away or morph if I use astropy Tables exclusively
-    def add_read_csvs(self, 
-                      default=False,
-                      help=None,
-                      **kwargs):
-        option = 'read_csvs'
-        if help is None:
-            help = (f'Read CSV files')
-        self.parser.add_argument('--' + option,
-                                 action=argparse.BooleanOptionalAction,
-                                 default=default,
-                                 help=help, **kwargs)
-
-    def add_write_csvs(self, 
-                      default=False,
-                      help=None,
-                      **kwargs):
-        option = 'write_csvs'
-        if help is None:
-            help = (f'Write CSV files')
-        self.parser.add_argument('--' + option,
-                                 action=argparse.BooleanOptionalAction,
-                                 default=default,
-                                 help=help, **kwargs)
-
-class CorArgparseHandler(CorArgparseMixin, CCDArgparseMixin,
-                         BMPArgparseMixin, ArgparseHandler):
-    """Adds basic argparse options relevant to cormultipipe system""" 
-
-    def add_all(self):
-        """Add options used in cmd"""
-        self.add_log_level()
-        self.add_create_outdir(default=True) 
-        self.add_outname_append()
-        self.add_fits_fixed_ignore(default=True)
-        super().add_all()
-
-    def cmd(self, args):
-        log.setLevel(args.log_level)
 
 ######### CorMultiPipe prepossessing routines
 def full_frame(data,
@@ -444,4 +367,107 @@ def detflux(ccd_in, exptime_unit=None, **kwargs):
         rdnoise /= exptime.value
         ccd.meta['RDNOISE'] = (rdnoise, '(electron/s)')
     return ccd
+
+def objctradec_to_obj_center(ccd_in, bmp_meta=None, **kwargs):
+    """Sets obj_center from OBJCTRA and OBJCTDEC keywords
+
+    OBJCTRA and OBJCTDEC are assumed to be set from an astrometry
+    calculation and thus center_quality is set to 10
+
+    """
+    if isinstance(ccd_in, list):
+        return [objctradec_to_obj_center(ccd, bmp_meta=bmp_meta,
+                                         **kwargs)
+                for ccd in ccd_in]
+    if ccd_in.wcs is None:
+        return ccd_in
+    objctra = ccd_in.meta.get('OBJCTRA')
+    objctdec = ccd_in.meta.get('OBJCTDEC')
+    if objctra is None and objctdec is None:
+        return ccd_in        
+    ccd = ccd_in.copy()
+    bmp_meta = bmp_meta or {}
+    cent = SkyCoord(objctra, objctdec, unit=(u.hour, u.deg))
+    x, y = ccd.wcs.world_to_pixel(cent)
+    ocenter = ccd.obj_center
+    oquality = ccd.center_quality
+    ccd.obj_center = (y, x)
+    ccd.center_quality = 10
+    dcent = ccd.obj_center - ocenter
+    norm_dcent = np.linalg.norm(dcent)
+    ccd.meta['OOBJ_CR0'] = (ocenter[1], 'Old OBJ_CR0')
+    ccd.meta['OOBJ_CR1'] = (ocenter[0], 'Old OBJ_CR1')
+    ccd.meta['HIERARCH OCENTER_QUALITY'] = (
+        oquality, 'Old center quality')
+    ccd.meta['DOBJ_CR0'] = (dcent[1], 'Delta original to current OBJ_CR0')
+    ccd.meta['DOBJ_CR1'] = (dcent[0], 'Delta original to current OBJ_CR1')
+    ccd.meta['DOBJ_CRN'] = (norm_dcent, 'norm of DOBJ_CR0 and DOBJ_CR1')
+    add_history(ccd.meta, 'Used OBJCTRA and OBJCTDEC keywords to calculate obj_cent')
+    bmp_meta['dobj_center'] = dcent
+    return ccd
+    
+######### Argparse mixin
+class CorArgparseMixin:
+    # This modifies BMPArgparseMixin outname_append
+    outname_append = OUTNAME_APPEND
+
+    def add_log_level(self, 
+                      default='DEBUG',
+                      help=None,
+                      **kwargs):
+        option = 'log_level'
+        if help is None:
+            help = f'astropy.log level (default: {default})'
+        self.parser.add_argument('--' + option, 
+                            default=default, help=help, **kwargs)
+
+    def add_raw_data_root(self, 
+                          default=RAW_DATA_ROOT,
+                          help=None,
+                          **kwargs):
+        option = 'raw_data_root'
+        if help is None:
+            help = f'raw data root (default: {default})'
+        self.parser.add_argument('--' + option, 
+                            default=default, help=help, **kwargs)
+        
+    # These might go away or morph if I use astropy Tables exclusively
+    def add_read_csvs(self, 
+                      default=False,
+                      help=None,
+                      **kwargs):
+        option = 'read_csvs'
+        if help is None:
+            help = (f'Read CSV files')
+        self.parser.add_argument('--' + option,
+                                 action=argparse.BooleanOptionalAction,
+                                 default=default,
+                                 help=help, **kwargs)
+
+    def add_write_csvs(self, 
+                      default=False,
+                      help=None,
+                      **kwargs):
+        option = 'write_csvs'
+        if help is None:
+            help = (f'Write CSV files')
+        self.parser.add_argument('--' + option,
+                                 action=argparse.BooleanOptionalAction,
+                                 default=default,
+                                 help=help, **kwargs)
+
+class CorArgparseHandler(CorArgparseMixin, CCDArgparseMixin,
+                         BMPArgparseMixin, ArgparseHandler):
+    """Adds basic argparse options relevant to cormultipipe system""" 
+
+    def add_all(self):
+        """Add options used in cmd"""
+        self.add_log_level()
+        self.add_create_outdir(default=True) 
+        self.add_outname_append()
+        self.add_fits_fixed_ignore(default=True)
+        super().add_all()
+
+    def cmd(self, args):
+        log.setLevel(args.log_level)
 
