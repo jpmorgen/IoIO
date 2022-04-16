@@ -7,7 +7,7 @@ from IoIO.cormultipipe import detflux, objctradec_to_obj_center, as_single
 from IoIO.standard_star import (StandardStar, extinction_correct,
                                 rayleigh_convert)
 from IoIO.horizons import obj_ephemeris
-from IoIO.na_nebula import on_off_pipeline
+from IoIO.on_off_pipeline import on_off_pipeline
 
 MERCURY_ROOT = '/data/Mercury'
 
