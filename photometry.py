@@ -10,7 +10,8 @@ from astropy.convolution import Gaussian2DKernel
 from astropy.stats import gaussian_fwhm_to_sigma, sigma_clipped_stats
 from astropy.coordinates import SkyCoord
 
-from photutils import make_source_mask, detect_sources, deblend_sources
+from photutils import (make_source_mask, detect_sources,
+                       detect_threshold, deblend_sources)
 from photutils import SourceCatalog
 from photutils.background import Background2D
 from photutils.utils import calc_total_error
@@ -41,7 +42,8 @@ PHOTOOBJ_FIELDS = ['ra', 'dec', 'probPSF', 'aperFlux7_u',
 
 # I am not using this just yet, I will when I implement Simbad UBVRI
 # and Sloan ugriz search results
-JOIN_TOLERANCE = 5*u.arcsec
+JOIN_TOLERANCE = 5
+JOIN_TOLERANCE_UNIT = u.arcsec
 
 class control_property(pgproperty):
     """Decorator for Photometry.  
@@ -94,7 +96,7 @@ class Photometry:
                  deblend_contrast=0.001,
                  exptime_key=EXPTIME_KEY,
                  exptime_unit=EXPTIME_UNIT,
-                 join_tolerance=JOIN_TOLERANCE,
+                 join_tolerance=JOIN_TOLERANCE*JOIN_TOLERANCE_UNIT,
                  keys_to_source_table=None,
                  source_table_cols=SOURCE_TABLE_COLS,
                  votable_fields=VOTABLE_FIELDS,
@@ -126,6 +128,9 @@ class Photometry:
         self._kernel = None
         self._source_mask = None
         self._back_obj = None
+        self._background = None
+        self._sig_clipped_stats = None
+        self._back_rms = None
         self._threshold = None
         self._segm_image = None
         self._segm_deblend = None
@@ -220,12 +225,19 @@ class Photometry:
         """Make a source mask to enable optimal background estimation"""
         if self._source_mask is not None:
             return self._source_mask
-        source_mask = make_source_mask(self.ccd.data,
-                                       nsigma=self.source_mask_nsigma,
-                                       npixels=self.n_connected_pixels,
-                                       filter_kernel=self.kernel,
-                                       mask=self.coverage_mask,
-                                       dilate_size=self.source_mask_dilate)
+        try:
+            source_mask = make_source_mask(
+                self.ccd.data,
+                nsigma=self.source_mask_nsigma,
+                npixels=self.n_connected_pixels,
+                filter_kernel=self.kernel,
+                mask=self.coverage_mask,
+                dilate_size=self.source_mask_dilate)
+        except Exception as e:
+            log.warning('Received the following error: ' + str(e))
+            log.warning('source_mask will not be used')
+            source_mask = np.zeros_like(self.ccd.mask, dtype=bool)
+            
         self._source_mask = source_mask
         return self._source_mask
 
@@ -239,18 +251,65 @@ class Photometry:
     def back_obj(self):
         if self._back_obj is not None:
             return self._back_obj
-        box_size = int(np.mean(self.ccd.shape) / self.n_back_boxes)
-        back = Background2D(self.ccd, box_size, mask=self.source_mask,
-                            coverage_mask=self.coverage_mask)
-        self._back_obj = back
-        return self._back_obj
+        try: 
+            box_size = int(np.mean(self.ccd.shape) / self.n_back_boxes)
+            back = Background2D(self.ccd, box_size, mask=self.source_mask,
+                                coverage_mask=self.coverage_mask)
+            self._back_obj = back
+            return self._back_obj
+        except Exception as e:
+            log.warning('Received the following error: ' + str(e))
+            return None
+
+    @property
+    def sig_clipped_stats(self):
+        """returns ()"""
+        if self._sig_clipped_stats is not None:
+            return self._sig_clipped_stats
+        mean, median, std = sigma_clipped_stats(
+            self.ccd.data, sigma=3.0, mask=self.ccd.mask)
+        self._sig_clipped_stats = (
+            mean*self.ccd.unit,
+            median*self.ccd.unit,
+            std*self.ccd.unit)
+        return self._sig_clipped_stats
+        
+    @property
+    def background(self):
+        if self._background is not None:
+            return self._background
+        if self.back_obj is not None:
+            self._background = self.back_obj.background
+            return self._background
+
+        mean, median, std = self.sig_clipped_stats
+        log.warning(f'Setting background using median {median}')
+        back = np.full_like(self.ccd, median)
+        # np doesn't propagate units
+        self._background = back*self.ccd.unit
+        return self._background
 
     def show_background(self):
-        impl = plt.imshow(self.back_obj.background.value, origin='lower',
+        impl = plt.imshow(self.background.value, origin='lower',
                           cmap=plt.cm.gray,
                           filternorm=0, interpolation='none')
         self.back_obj.plot_meshes()
         plt.show()
+
+    @property
+    def back_rms(self):
+        if self._back_rms is not None:
+            return self._back_rms
+        if self.back_obj is not None:
+            self._back_rms = self.back_obj.background_rms
+            return self._back_rms
+        
+        mean, median, std = self.sig_clipped_stats
+        log.warning(f'Setting background rms using image std {std}')
+        rms = np.full_like(self.ccd, std)
+        # np doesn't propagate units
+        self._back_rms = rms*self.ccd.unit
+        return self._back_rms
 
     @property
     def threshold(self):
@@ -259,11 +318,11 @@ class Photometry:
         """
         if self._threshold is not None:
             return self._threshold
-        self._threshold = (self.back_obj.background
+        self._threshold = (self.background
                            + self.back_rms_scale
-                           * self.back_obj.background_rms)
+                           * self.back_rms)
         return self._threshold
-
+            
     @property
     def segm_image(self):
         if self._segm_image is not None:
@@ -272,7 +331,9 @@ class Photometry:
                               self.threshold.value,
                               npixels=self.n_connected_pixels,
                               filter_kernel=self.kernel, mask=self.ccd.mask)
-        if self.remove_masked_sources:
+        if (segm is not None
+            and self.remove_masked_sources
+            and self.ccd.mask is not None):
             segm.remove_masked_labels(self.ccd.mask, partial_overlap=True)
         self._segm_image = segm
         return self._segm_image
@@ -324,9 +385,9 @@ image
         # CardQuantity stuff I have been working on, or however that turns
         # out, for now assume everything is in seconds
         if is_flux(self.ccd.unit):
-            effective_gain = self.ccd.meta[self.exptime_key]*u.s
+            effective_gain = self.ccd.meta[self.exptime_key]*self.exptime_unit
         else:
-            effective_gain = 1*u.s
+            effective_gain = 1*self.exptime_unit
 
         if self.ccd.uncertainty is None:
             log.warning(f'photometry being conducted on ccd data with no uncertainty.  Is this file being properly reduced?  Soldiering on....')
@@ -337,29 +398,29 @@ image
             else:
                 total_error = \
                     calc_total_error(self.ccd,
-                                     self.back_obj.background_rms,
+                                     self.back_rms,
                                      effective_gain) 
         else:
             uncert = self.ccd.uncertainty.array*self.ccd.unit
             if self.ccd.uncertainty.uncertainty_type == 'std':
-                total_error = np.sqrt(self.back_obj.background_rms**2
-                                      + uncert**2)
+                total_error = np.sqrt(self.back_rms**2 + uncert**2)
             elif self.ccd.uncertainty.uncertainty_type == 'var':
                 # --> if I work in units make var units ccd.unit**2
                 var  = uncert*self.ccd.unit
-                total_error = np.sqrt(self.back_obj.background_rms**2 + var)
+                total_error = np.sqrt(self.back_rms**2 + var)
             else:
                 raise ValueError(f'Unsupported uncertainty type {self.ccd.uncertainty.uncertainty_type} for {in_name}')
 
         # Call to SourceCatalog is a little awkward because it expects
-        # a Quantity.  Don't forget to subtract background!
-        back = self.back_obj.background
-        sc = SourceCatalog(self.ccd.data*self.ccd.unit - back,
+        # a Quantity.  Don't forget to subtract background!  Note that
+        # if _back is set, that meas we have a somewhat pathological
+        # case
+        sc = SourceCatalog(self.ccd.data*self.ccd.unit - self.background,
                            self.segm_deblend, 
                            error=total_error,
                            mask=self.ccd.mask,
                            kernel=self.kernel,
-                           background=back)
+                           background=self.background)
         self._source_catalog = sc
         return self._source_catalog
 
@@ -537,13 +598,45 @@ image
 
 class PhotometryArgparseMixin:
     def add_join_tolerance(self, 
-                 default=JOIN_TOLERANCE.value,
+                 default=JOIN_TOLERANCE,
                  help=None,
                  **kwargs):
         option = 'join_tolerance'
         if help is None:
-            help = (f'catalog join matching tolerance in {JOIN_TOLERANCE.unit} '
+            help = (f'catalog join matching tolerance in join_tolerance_unit '
+                    f'(default: {default})')
+        self.parser.add_argument('--' + option, type=float,
+                                 default=default, help=help, **kwargs)
+
+    def add_join_tolerance_unit(self, 
+                 default=JOIN_TOLERANCE_UNIT.to_string(),
+                 help=None,
+                 **kwargs):
+        option = 'join_tolerance_unit'
+        if help is None:
+            help = (f'unit of catalog join matching tolerance '
                     f'(default: {default})')
         self.parser.add_argument('--' + option, 
                                  default=default, help=help, **kwargs)
 
+if __name__ == '__main__':
+    import glob
+    import ccdproc as ccdp
+    from IoIO.cordata import CorData
+    from IoIO.cor_process import cor_process
+    from IoIO.calibration import Calibration
+    directory = '/data/IoIO/raw/2021-10-28/'
+    collection = ccdp.ImageFileCollection(
+        directory, glob_include='Mercury*',
+        glob_exclude='*_moving_to*')
+    flist = collection.files_filtered(include_path=True)
+    c = Calibration(reduce=True)
+    photometry = Photometry()
+    for fname in flist:
+        log.info(f'trying {fname}')
+        rccd = CorData.read(fname)
+        ccd = cor_process(rccd, calibration=c, auto=True)
+        photometry.ccd = ccd
+        #photometry.show_segm()
+        source_table = photometry.source_table
+        source_table.show_in_browser()

@@ -184,6 +184,7 @@ cbar = plt.colorbar(shrink=0.6)
 cbar.ax.set_xlabel(bsub.unit.to_string())
 savefig_overwrite(f'/data/Mercury/analysis/2020-05-27/IoIO_{just_date}.png', transparent=True)
 plt.show()
+plt.close()
 
 yaxis = (np.arange(nr) - 20*Rmpix) / Rmpix
 ax1 = plt.subplot(1, 4, 1)
@@ -203,7 +204,7 @@ ax3.set_ylim(-17, 17)
 ax3.set_xlim(100, 250)
 savefig_overwrite(f'/data/Mercury/analysis/2020-05-27/IoIO_{just_date}_cross-tail_profiles.png', transparent=True)
 plt.show()
-
+plt.close()
 subim_corners = np.asarray(((round(center[0]-2*Rmpix), round(center[1]-20*Rmpix)),
                             (round(center[0]+2*Rmpix), s[1]-100)))
 prof_im = bsub_full_im[subim_corners[0,0]:subim_corners[1,0],
@@ -231,7 +232,7 @@ plt.xscale("log")
 plt.yscale("log")
 savefig_overwrite(f'/data/Mercury/analysis/2020-05-27/IoIO_{just_date}_profile.png', transparent=True)
 plt.show()
-
+plt.close()
 
 
 ### s = np.asarray(bsub.shape)

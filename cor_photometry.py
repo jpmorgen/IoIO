@@ -5,6 +5,7 @@ module so that jobs can be run in the cwd
 """
 
 import os
+import argparse
 from tempfile import TemporaryDirectory
 import subprocess
 
@@ -28,7 +29,9 @@ from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE, Photometry,
                              PhotometryArgparseMixin)
 from IoIO.utils import savefig_overwrite
 from IoIO.cordata import CorData
+from cormultipipe import nd_filter_mask
 
+MIN_SOURCES_TO_SOLVE = 5
 KEYS_TO_SOURCE_TABLE = ['DATE-AVG',
                         ('DATE-AVG-UNCERTAINTY', u.s),
                         ('EXPTIME', u.s),
@@ -89,22 +92,22 @@ class CorPhotometry(Photometry):
         """
         if self._wcs is not None:
             return self._wcs
-        if self.source_catalog is None:
+        if (self.source_catalog is None
+            or len(self.source_catalog) < MIN_SOURCES_TO_SOLVE):
             self._solved = False
             return None
 
-        # Ack.  Astropy is not making this easy.  Writing the
-        # QTable fails entirely, possibly because it has mixed
-        # Quantity and non-Quantity columns.  Error has something
-        # about not being able to represent an object
-        # Save off a separate qtable so we have our quantities
-        source_table = self.source_table        
-        if source_table.has_mixin_columns:
-            # Move collection of Quantity columns to regular
-            # columns with quantity attributes.  This lets the
-            # write happen, but, unfortunately does not record the
-            # units.  
-            source_table = Table(source_table)
+        # Ack.  Astropy is not making this easy.  Writing the QTable
+        # fails entirely, possibly because it has mixed Quantity and
+        # non-Quantity columns (has_mixin_columns).  Error has
+        # something about not being able to represent an object.  When
+        # I convert to Table and try to save that, I get lots of
+        # WARNINGS about units not being able to round-trip, even
+        # though they can round trip if that is the only type of unit
+        # in the table.  Sigh.  Save off a separate Table with just
+        # the quantities we are interested in, since we throw it away
+        # anyway
+        xyls_table = self.source_table['xcentroid', 'ycentroid']
 
         # If *_ephemeris has run, objct* coords are very high quality.  
         ra = Angle(self.ccd.meta['objctra'])
@@ -149,7 +152,7 @@ class CorPhotometry(Photometry):
             outroot, _ = os.path.splitext(outname)
             xyls_file = outroot + '.xyls'
             astrometry_command += xyls_file
-            source_table.write(xyls_file, format='fits', overwrite=True)
+            xyls_table.write(xyls_file, format='fits', overwrite=True)
             p = subprocess.run(astrometry_command, shell=True,
                                capture_output=True)
             self.solve_field_stdout = p.stdout
@@ -286,6 +289,7 @@ class CorPhotometry(Photometry):
         if show:
             plt.show()
         savefig_overwrite(outname)
+        plt.close()
 
 def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
                    in_name=None, outdir=None, create_outdir=None,
@@ -312,10 +316,11 @@ def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
                 solve_timeout=solve_timeout,
                 keep_intermediate=keep_intermediate,
                 **kwargs)
-                    for ccd in ccd_in]            
+                    for ccd in ccd_in]
     ccd = ccd_in.copy()
     photometry = photometry or CorPhotometry()
-    photometry.ccd = ccd
+    # Blank out the ND filter for photometry calculations
+    photometry.ccd = nd_filter_mask(ccd)
     photometry.solve_timeout = solve_timeout or photometry.solve_timeout
     if keep_intermediate:
         if outdir is not None:
@@ -333,6 +338,7 @@ def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
     photometry.outname = outname or photometry.outname
     if photometry.wcs is not None:
         ccd.wcs = photometry.wcs
+    ccd.meta['HIERARCH PHOTUTILS_NSOURCES'] = len(photometry.source_table)
     # I am currently not putting the wcs into the metadata because I
     # don't need it -- it is available as ccd.wcs or realtively easily
     # extracted from disk like I do in Photometry.astrometry.  I am
@@ -375,10 +381,20 @@ class CorPhotometryArgparseMixin(PhotometryArgparseMixin):
         option = 'solve_timeout'
         if help is None:
             help = (f'max plate solve time in seconds (default: {default})')
-        self.parser.add_argument('--' + option, 
+        self.parser.add_argument('--' + option, type=float,
                                  default=default, help=help, **kwargs)
 
-
+    def add_keep_intermediate(self, 
+                      default=False,
+                      help=None,
+                      **kwargs):
+        option = 'keep_intermediate'
+        if help is None:
+            help = (f'Keep intermediate astrometry solve files')
+        self.parser.add_argument('--' + option,
+                                 action=argparse.BooleanOptionalAction,
+                                 default=default,
+                                 help=help, **kwargs)
 
 
 # rdls_table = Table.read('/tmp/WASP-36b-S001-R013-C002-R.rdls')
@@ -406,3 +422,41 @@ class CorPhotometryArgparseMixin(PhotometryArgparseMixin):
 #     join_funcs={'coord': join_skycoord(tol)})
 #                                           
 
+if __name__ == '__main__':
+    ## Mercury test
+    #import glob
+    #import ccdproc as ccdp
+    #from IoIO.cordata import CorData
+    #from IoIO.cor_process import cor_process
+    #from IoIO.calibration import Calibration
+    #directory = '/data/IoIO/raw/2021-10-28/'
+    #collection = ccdp.ImageFileCollection(
+    #    directory, glob_include='Mercury*',
+    #    glob_exclude='*_moving_to*')
+    #flist = collection.files_filtered(include_path=True)
+    #c = Calibration(reduce=True)
+    #photometry = CorPhotometry()
+    #for fname in flist:
+    #    log.info(f'trying {fname}')
+    #    rccd = CorData.read(fname)
+    #    ccd = cor_process(rccd, calibration=c, auto=True)
+    #    ccd = add_astrometry(ccd, photometry=photometry, solve_timeout=1)
+    #    #photometry.show_segm()
+    #    source_table = photometry.source_table
+    #    source_table.show_in_browser()
+
+    # Exoplanet test
+    from IoIO.cordata import CorData
+    from IoIO.cor_process import cor_process
+    from IoIO.calibration import Calibration
+    c = Calibration(reduce=True)    
+    photometry = CorPhotometry()
+    fname = '/data/IoIO/raw/20220414/KPS-1b-S001-R001-C001-R.fts'
+    rccd = CorData.read(fname)
+    ccd = cor_process(rccd, calibration=c, auto=True)
+    photometry.ccd = ccd
+    photometry.source_table.show_in_browser()
+    photometry.wide_source_table.show_in_browser()
+    photometry.wide_rdls_table.show_in_browser()
+    photometry.source_gaia_join.show_in_browser()
+    photometry.source_gaia_join.write('/tmp/test_gaia.ecsv', overwrite=True)

@@ -483,7 +483,7 @@ def standard_star_pipeline(directory,
 
 def exposure_correct_plot(exposure_correct_data,
                           show=False,
-                          outname=None,
+                          plotname=None,
                           latency_change_dates=None):
     if len(exposure_correct_data) == 0:
         return
@@ -534,8 +534,8 @@ def exposure_correct_plot(exposure_correct_data,
     plt.ylabel('Exposure correction (s)')
     ax.set_ylim([0, 5])
     f.autofmt_xdate()  # orient date labels at a slant
-    if outname is not None:
-        savefig_overwrite(outname, transparent=True)
+    if plotname is not None:
+        savefig_overwrite(plotname, transparent=True)
     if show:
         plt.show()
     plt.close()
@@ -998,19 +998,19 @@ def standard_star_directory(directory,
                        bottom=True, top=True, left=True, right=True)
         plt.xlabel('airmass')
         fname = f"{just_date}_{obj}_extinction.png"
-        outname = os.path.join(outdir, fname)
+        plotname = os.path.join(outdir, fname)
         if create_outdir:
             os.makedirs(outdir, exist_ok=True)
-        savefig_overwrite(outname, transparent=True)
+        savefig_overwrite(plotname, transparent=True)
         if show:
             plt.show()
         plt.close()
 
     if len(exposure_correct_data) > 0:
-        outname = os.path.join(outdir, "exposure_correction.png")
+        plotname = os.path.join(outdir, "exposure_correction.png")
         exposure_correct_plot(exposure_correct_data,
                               show=show,
-                              outname=outname)
+                              plotname=plotname)
 
     # Running into problems after several directories have run, but it
     # is not a specific file, since they all run OK when re-run.
@@ -1035,13 +1035,13 @@ def standard_star_directory(directory,
 def filter_stripchart(df=None,
                       title=None,
                       column=None,
-                      outname=None,
+                      plotname=None,
                       show=False):
     filters = list(set(df['filter']))
     filters.sort()
     filters.reverse()
     nfilt = len(filters)
-    if outname or show:
+    if plotname or show:
         f = plt.figure(figsize=[8.5, 11])
         plt.suptitle(f"{title}")
         plot_date_range = [np.min(df['min_plot_date']),
@@ -1061,7 +1061,7 @@ def filter_stripchart(df=None,
                         'mad_std': mads,
                         'unit': col_unit}
         summary_list.append(summary_dict)
-        if not(outname or show):
+        if not(plotname or show):
             continue
 
         # If we made it here, we want to include a plot as output
@@ -1081,13 +1081,14 @@ def filter_stripchart(df=None,
                  f' {biweight_loc:.4g} +/- {mads:.2g}',
                  ha='center', va='bottom', transform=ax.transAxes)
 
-    if outname or show:
+    if plotname or show:
         # Put slanted date axis on bottom plot
         f.autofmt_xdate()
-    if outname:
-        savefig_overwrite(outname, transparent=True)
+    if plotname:
+        savefig_overwrite(plotname, transparent=True)
     if show:
         plt.show()
+    plt.close()
 
     return summary_list
 
@@ -1404,13 +1405,13 @@ class StandardStar():
 
     def exposure_correct_plot(self):
         if self.write_summary_plots:
-            outname = os.path.join(self.created_outdir_root,
+            plotname = os.path.join(self.created_outdir_root,
                                    f'{self.start_str}{self.stop_str}'
                                    f'exposure_correction.png')
         else:
-            outname = None
+            plotname = None
         exposure_correct_plot(self.exposure_correct_data,
-                              outname=outname,
+                              plotname=plotname,
                               latency_change_dates=sx694.latency_change_dates,
                               show=self.show)
 
@@ -1423,9 +1424,9 @@ class StandardStar():
         outbase = os.path.join(self.created_outdir_root,
                                f'{self.start_str}{self.stop_str}zero_point')
         if self.write_summary_plots:
-            outname = outbase+'.png'
+            plotname = outbase+'.png'
         else:
-            outname = None
+            plotname = None
         self._zero_points = cached_csv(filter_stripchart, outbase+'.csv',
                                        read_csvs=False, write_csvs=True,
                                        show=self.show,
@@ -1433,7 +1434,7 @@ class StandardStar():
                                        title=(f'Vega zero point magnitiudes '
                                               f'{zero_point_unit}'),
                                        column='zero_point',
-                                       outname=outname)
+                                       plotname=plotname)
         return self._zero_points
 
     @property
@@ -1446,9 +1447,9 @@ class StandardStar():
                                f'{self.start_str}{self.stop_str}'
                                f'rayleigh_conversion')
         if self.write_summary_plots:
-            outname = outbase+'.png'
+            plotname = outbase+'.png'
         else:
-            outname = None
+            plotname = None
         rayleigh_conversion_unit = \
             self.extinction_data_frame.iloc[0]['rayleigh_conversion_unit']
         self._rayleigh_conversions = \
@@ -1460,7 +1461,7 @@ class StandardStar():
                        title=(f'Rayleigh Conversion '
                               f'{rayleigh_conversion_unit}'),
                        column='rayleigh_conversion',
-                       outname=outname)
+                       plotname=plotname)
         return self._rayleigh_conversions
 
     @property
@@ -1473,9 +1474,9 @@ class StandardStar():
                                f'{self.start_str}{self.stop_str}'
                                f'extinction_coefs')
         if self.write_summary_plots:
-            outname = outbase+'.png'
+            plotname = outbase+'.png'
         else:
-            outname = None
+            plotname = None
         self._extinction_coefs = \
             cached_csv(filter_stripchart, outbase+'.csv',
                        read_csvs=False,
@@ -1484,7 +1485,7 @@ class StandardStar():
                        df=self.extinction_data_frame,
                        title=f'Extinction coefficients',
                        column='extinction_coef',
-                       outname=outname)
+                       plotname=plotname)
         return self._extinction_coefs
 
     def zero_point(self, filt):
@@ -1616,7 +1617,6 @@ if __name__ == '__main__':
     aph.add_all()
     args = parser.parse_args()
     aph.cmd(args)
-
 
     #log.setLevel('DEBUG')
     #parser = argparse.ArgumentParser(

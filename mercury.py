@@ -1,54 +1,41 @@
 #!/usr/bin/python3
 """Reduce Mercury observations"""
 
-import os
-import glob
+import ccdproc as ccdp
 
-from astropy import log, time, units as u
-
-from ccdmultipipe import as_single
-
-from cormultipipe import (RAW_DATA_ROOT,
-                          get_dirs_dates, reduced_dir,
-                          Calibration, OffCorMultiPipe, FixFnameCorMultipipe,
-                          mask_nonlin_sat, detflux)
+from IoIO.cormultipipe import detflux, objctradec_to_obj_center, as_single
+from IoIO.standard_star import (StandardStar, extinction_correct,
+                                rayleigh_convert)
+from IoIO.horizons import obj_ephemeris
+from IoIO.na_nebula import on_off_pipeline
 
 MERCURY_ROOT = '/data/Mercury'
-GLOB_INCLUDE = ['Mercury*']
 
-class FixFnameOffCorMultipipe(FixFnameCorMultipipe, OffCorMultiPipe):
-    pass
+standard_star_obj = StandardStar(reduce=True)
 
-if __name__ == "__main__":
-    log.setLevel('DEBUG')
+#directory = '/data/IoIO/raw/2018-05-08/'
+directory = '/data/IoIO/raw/2021-10-28/'
 
-    # --> Need a start-stop with this and might make this a general
-    # --> routine that accepts the CorMultiPipe object and arguments
- 
-    data_root = RAW_DATA_ROOT
-    reduced_root = MERCURY_ROOT
+# --> Eventually it might be nice to reduce all of the images
+# separately, somehow rejecting the ones that have too much saturation
+# and then revisiting closest_in_time
 
-    start = "2021-09-01"
-    stop = "2021-12-31"
-    dirs_dates = get_dirs_dates(data_root, start=start, stop=stop)
+collection = ccdp.ImageFileCollection(
+    directory, glob_include='Mercury*_Na*',
+    glob_exclude='*_moving_to*')
 
-    dirs, _ = zip(*dirs_dates)
-    assert len(dirs) > 0
-
-    c = Calibration(reduce=True)
-
-    cmp = OffCorMultiPipe(auto=True, calibration=c,
-                          fits_fixed_ignore=True, outname_ext='.fits', 
-                          post_process_list=[mask_nonlin_sat, detflux,
-                                             as_single])
-    for d in dirs:
-        flist = []
-        for gi in GLOB_INCLUDE:
-            flist += glob.glob(os.path.join(d, gi))
-        if len(flist) == 0:
-            log.debug(f'No observations in {d}')
-            continue
-        reddir = reduced_dir(d, reduced_root)
-        pout = cmp.pipeline(flist, outdir=reddir,
-                            create_outdir=True, overwrite=True)
+pout = on_off_pipeline(directory,
+                       collection=collection,
+                       band='Na',
+                       horizons_id='199',
+                       horizons_id_type='majorbody',
+                       obj_ephm_prefix='Mercury',
+                       standard_star_obj=standard_star_obj,
+                       add_ephemeris=obj_ephemeris,
+                       pre_backsub=[objctradec_to_obj_center, detflux],
+                       post_backsub=[extinction_correct,
+                                     rayleigh_convert, as_single],
+                       outdir_root=MERCURY_ROOT,
+                       fits_fixed_ignore=True,
+                       solve_timeout=2)
 

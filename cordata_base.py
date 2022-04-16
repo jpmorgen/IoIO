@@ -344,9 +344,17 @@ class CorDataBase(FitsKeyArithmeticMixin, MaxImPGD):
                  default_ND_params=None,
                  ND_params=None, # for _slice
                  ND_ref_y=ND_REF_Y,
-                 edge_mask=(5, -15), # Absolute coords, ragged on right edge.  If one value, assumed equal from *each* edge (e.g., (5, -5)
+                 edge_mask=(15, -15), 
                  copy=False,
                  **kwargs):
+        # Note for edge_mask.  This reads in absolute coords and is
+        # designed to mask off the light leak from the left and right
+        # edges of the ND filter edges.  In early days used 5, -5.
+        # Then the ragged right edge wasn't being masked as well, so I
+        # used 5, -15.  Once I got better photometry tools, I saw both
+        # edges leaked light about the same amount, so we are up to
+        # 15, -15
+        
         # Pattern after NDData init but skip all the tests
         if isinstance(data, CorDataBase):
             # Sigh.  We have to undo the convenience of our pgproperty

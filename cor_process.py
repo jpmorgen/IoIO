@@ -639,6 +639,8 @@ def cor_process(ccd,
 
     """
 
+    if ccd.meta.get('cor_processed') is not None:
+        return ccd
     if gain_key is None:
         gain_key = ccdp.Keyword('GAIN', u.electron/u.adu)
     if readnoise_key is None:
@@ -943,8 +945,10 @@ def cor_process(ccd,
     if gain is not None and not gain_corrected:
         nccd = ccdp.gain_correct(nccd, gain)
 
-    return nccd
+    nccd.meta['HIERARCH COR_PROCESSED'] = (
+        True, 'IoIO Coronagraph CCD calibrated')
 
+    return nccd
 
 if __name__ == "__main__":
     log.setLevel('DEBUG')

@@ -2,6 +2,8 @@
 
 """Reduce IoIO sodium nebula observations"""
 
+import os
+
 import numpy as np
 
 from scipy.ndimage import shift
@@ -13,7 +15,7 @@ import astropy.units as u
 
 import ccdproc as ccdp
 
-from bigmultipipe import assure_list, outname_creator
+from bigmultipipe import assure_list, outname_creator, prune_pout
 
 from IoIO.utils import (reduced_dir, multi_glob, closest_in_time,
                         valid_long_exposure, add_history)
@@ -21,9 +23,12 @@ from IoIO.simple_show import simple_show
 from IoIO.cor_process import standardize_filt_name
 from IoIO.calibration import Calibration
 from IoIO.cordata import CorData
-from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT, CorMultiPipeBase,
+from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
+                               COR_PROCESS_EXPAND_FACTOR,
+                               CorMultiPipeBase,
+                               reject_center_quality_below,
                                mask_nonlin_sat, combine_masks,
-                               detflux, nd_filter_mask,
+                               nd_filter_mask, detflux,
                                objctradec_to_obj_center)
 from IoIO.photometry import SOLVE_TIMEOUT, JOIN_TOLERANCE, is_flux
 from IoIO.cor_photometry import CorPhotometry, add_astrometry
@@ -37,6 +42,7 @@ from IoIO.horizons import galsat_ephemeris
 # so their metadata and Photometry object stick around the longest.
 ON_REGEXP = '_on'
 OFF_REGEXP = '_off'
+ON_OFF_PROCESS_EXPAND_FACTOR = COR_PROCESS_EXPAND_FACTOR*2
 
 # Early on Na
 # Na-*
@@ -72,6 +78,7 @@ def off_band_subtract(ccd_in,
                       bmp_meta=None,
                       off_on_ratio=None,
                       calibration=None,
+                      max_shift_off=50,
                       show=False,
                       outdir=None, # These get set by the pipeline
                       create_outdir=None,
@@ -96,12 +103,21 @@ def off_band_subtract(ccd_in,
     band, _ = filt.split('_')
     if off_on_ratio is None:
         off_on_ratio, _ = calibration.flat_ratio(band)
+    off_nd0 = off.copy()
+    off_nd0.mask = None
+    off_nd0 = nd_filter_mask(off_nd0, nd_edge_expand=0)
+    off.data[off_nd0.ND_coords] = 0
+    off.uncertainty.array[off_nd0.ND_coords] = 0
+    del off_nd0
 
     shift_off = on.obj_center - off.obj_center
     d_on_off = np.linalg.norm(shift_off)
+    if d_on_off > max_shift_off:
+        bmp_meta.clear
+        return None
     off = ccdp.transform_image(off, shift, shift=shift_off)
     if d_on_off > 5:
-            log.warning('On- and off-band image centers are > 5 pixels apart')
+        log.warning('On- and off-band image centers are > 5 pixels apart')
 
     assert is_flux(on.unit) and is_flux(off.unit)
     off = off.divide(off_on_ratio,
@@ -123,7 +139,7 @@ def off_band_subtract(ccd_in,
     bmp_meta.update(tmeta)
     return on
             
-def on_off_pipeline(directory=None, # raw day directory
+def on_off_pipeline(directory=None, # raw day directory, specify even if collection specified
                     bmp=None, # BigMultiPipe object
                     band=None,
                     collection=None,
@@ -137,6 +153,7 @@ def on_off_pipeline(directory=None, # raw day directory
                     outdir=None,
                     outdir_root=None,
                     create_outdir=True,
+                    process_expand_factor=ON_OFF_PROCESS_EXPAND_FACTOR,
                     **kwargs):
 
     if collection is not None and glob_include is not None:
@@ -148,7 +165,8 @@ def on_off_pipeline(directory=None, # raw day directory
     add_ephemeris = assure_list(add_ephemeris)
     pre_backsub = assure_list(pre_backsub)
     post_backsub = assure_list(post_backsub)
-    post_process_list = [combine_masks,
+    post_process_list = [reject_center_quality_below,
+                         combine_masks,
                          mask_nonlin_sat,
                          *add_ephemeris,
                          add_astrometry,
@@ -159,7 +177,7 @@ def on_off_pipeline(directory=None, # raw day directory
         # Right now, dump Na and SII into separate top-level reduction
         # directories
         outdir_root = os.path.join(IoIO_ROOT, band)
-        outdir = outdir or reduced_dir(directory, outdir_root, create=False)
+    outdir = outdir or reduced_dir(directory, outdir_root, create=False)
     if collection is None:
         flist = multi_glob(directory, glob_include)
         collection = ccdp.ImageFileCollection(directory, filenames=flist)
@@ -190,10 +208,10 @@ def on_off_pipeline(directory=None, # raw day directory
         create_outdir=create_outdir,
         post_process_list=post_process_list,
         num_processes=num_processes,
+        process_expand_factor=process_expand_factor,
         **kwargs)
-    pout = cmp.pipeline([f_pairs[0]], outdir=outdir, overwrite=True)
-    return pout
-    #pout = cmp.pipeline(f_pairs, outdir=outdir, overwrite=True)
+    #pout = cmp.pipeline([f_pairs[0]], outdir=outdir, overwrite=True)
+    pout = cmp.pipeline(f_pairs, outdir=outdir, overwrite=True)
     pout, _ = prune_pout(pout, f_pairs)
     return pout
 
@@ -222,39 +240,40 @@ log.setLevel('DEBUG')
 ##################################
 # This would be na_neb_directory or torus_directory
 
-##directory = '/data/IoIO/raw/2017-05-02'
-directory = '/data/IoIO/raw/2018-05-08/'
-calibration=None
-photometry=None
-solve_timeout=None
-join_tolerance=JOIN_TOLERANCE
-
-if calibration is None:
-    calibration = Calibration(reduce=True)
-if photometry is None:
-    photometry = CorPhotometry(precalc=True,
-        solve_timeout=solve_timeout,# These belong go at the calling level
-        join_tolerance=join_tolerance)
-
-#pout = on_off_pipeline(directory, band='Na',
-#                       fits_fixed_ignore=True)
-
-na_meso_obj = NaBack(reduce=True)
-standard_star_obj = StandardStar(reduce=True, write_summary_plots=True)
-
-# --> here is where I make a multiglob flist, put it into a collection
-# and discard frames where RAOFF and DECOFF are present
-pout = on_off_pipeline(directory,
-                       glob_include=TORUS_NA_NEB_GLOB_LIST,
-                       band='Na',
-                       na_meso_obj=na_meso_obj,
-                       standard_star_obj=standard_star_obj,
-                       add_ephemeris=galsat_ephemeris,
-                       pre_backsub=[objctradec_to_obj_center, detflux],
-                       post_backsub=[sun_angle, na_meso_sub,
-                                     extinction_correct, rayleigh_convert],
-                       fits_fixed_ignore=True,
-                       process_expand_factor=15) # --> Not sure if this is accurate
+###directory = '/data/IoIO/raw/2017-05-02'
+#directory = '/data/IoIO/raw/2018-05-08/'
+#calibration=None
+#photometry=None
+#solve_timeout=None
+#join_tolerance=JOIN_TOLERANCE
+#process_expand_factor=2  # --> Not sure if this is accurate
+#fits_fixed_ignore=True
+#
+#if calibration is None:
+#    calibration = Calibration(reduce=True)
+#if photometry is None:
+#    photometry = CorPhotometry(precalc=True,
+#        solve_timeout=solve_timeout,# These belong go at the calling level
+#        join_tolerance=join_tolerance)
+#
+##pout = on_off_pipeline(directory, band='Na',
+##                       fits_fixed_ignore=True)
+#
+#na_meso_obj = NaBack(reduce=True)
+#standard_star_obj = StandardStar(reduce=True, write_summary_plots=True)
+#
+## --> here is where I make a multiglob flist, put it into a collection
+## and discard frames where RAOFF and DECOFF are present
+#pout = on_off_pipeline(directory,
+#                       glob_include=TORUS_NA_NEB_GLOB_LIST,
+#                       band='Na',
+#                       na_meso_obj=na_meso_obj,
+#                       standard_star_obj=standard_star_obj,
+#                       add_ephemeris=galsat_ephemeris,
+#                       pre_backsub=[objctradec_to_obj_center, detflux],
+#                       post_backsub=[sun_angle, na_meso_sub,
+#                                     extinction_correct, rayleigh_convert],
+#                       fits_fixed_ignore=fits_fixed_ignore)
 
 #pout = on_off_pipeline(directory,
 #                       glob_include=TORUS_NA_NEB_GLOB_LIST,
@@ -263,8 +282,7 @@ pout = on_off_pipeline(directory,
 #                       add_ephemeris=galsat_ephemeris,
 #                       pre_backsub=[objctradec_to_obj_center, detflux],
 #                       post_backsub=[extinction_correct, rayleigh_convert],
-#                       fits_fixed_ignore=True,
-#                       process_expand_factor=15) # --> Not sure if this is accurate
+#                       fits_fixed_ignore=True)
 #
 
 

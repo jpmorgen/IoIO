@@ -20,7 +20,7 @@ from bigmultipipe.argparse_handler import ArgparseHandler, BMPArgparseMixin
 from ccdmultipipe import CCDMultiPipe, CCDArgparseMixin
 
 import IoIO.sx694 as sx694
-from IoIO.utils import add_history
+from IoIO.utils import add_history, im_med_min_max
 
 from IoIO.cordata_base import overscan_estimate, CorDataBase, CorDataNDparams
 from IoIO.cordata import CorData
@@ -67,6 +67,7 @@ OUTNAME_APPEND = "_p"
 # that is designed to mask pixels inside the ND filter to make
 # centering of object more reliable
 ND_EDGE_EXPAND = 40
+MIN_CENTER_QUALITY = 5
 
 ######### CorMultiPipe object
 
@@ -175,10 +176,10 @@ obj_center calculations by using CorDataBase as CCDData
             root = os.path.join(d, broot)
             tname = root + '.ecsv'
             photometry.wide_source_table.write(
-                tname, delimiter=',', overwrite=overwrite)
+                tname, delimiter=',', overwrite=True)
             gname = root + '_gaia.ecsv'
             photometry.source_gaia_join.write(
-                gname, delimiter=',', overwrite=overwrite)
+                gname, delimiter=',', overwrite=True)
         return written_name
 
 ######### CorMultiPipe prepossessing routines
@@ -226,12 +227,36 @@ def light_image(im, light_tolerance=3, **kwargs):
     return im
 
 ######### CorMultiPipe post-processing routines
+def reject_center_quality_below(ccd_in, bmp_meta=None,
+                                min_center_quality=MIN_CENTER_QUALITY,
+                                **kwargs):
+    # NOTE: unlike the general pattern of post-processing routines,
+    # this does not return a copy of the ccd and it expects to
+    # sometimes return None
+    if bmp_meta is None:
+        bmp_meta = {}
+    if isinstance(ccd_in, list):
+        result = [reject_center_quality_below(
+            ccd, bmp_meta=bmp_meta,
+            min_center_quality=min_center_quality, **kwargs)
+                  for ccd in ccd_in]
+        if None in result:
+            bmp_meta.clear()
+            return None
+        return result
+    if ccd_in.center_quality >= min_center_quality:
+        return ccd_in
+    bmp_meta.clear()
+    return None
+    
 def add_raw_fname(ccd_in, in_name=None, **kwargs):
     ccd = ccd_in.copy()
     if isinstance(in_name, str):
         ccd.meta['RAWFNAME'] = in_name
     elif isinstance(in_name, list):
-        ccd.meta['RAWFNAME'] = in_name[0]
+        # Generally I process multiple files in inverse order so
+        # metadata, etc., of primary file is easiest to grab
+        ccd.meta['RAWFNAME'] = in_name[-1]
     else:
         raise ValueError(f'cannot convert to RAWFNAME in_name {in_name}')
     return ccd

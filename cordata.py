@@ -196,6 +196,9 @@ class CorData(CorDataNDparams, NoCenterPGD):
             sum_bright_pixels = np.sum(ccd.data)
             if sum_bright_pixels < nonlin * self.min_source_threshold:
                 log.debug(f'No bright source found: number of bright pixels ~ {sum_bright_pixels/nonlin} < {self.min_source_threshold} self.min_source_threshold')
+                # Not sure why center_quality is not being set in self
+                # with the call in return
+                self.center_quality = NoCenterPGD(self).center_quality
                 return NoCenterPGD(self).obj_center           
 
             # If we made it here, Jupiter is outside the ND filter,
@@ -390,6 +393,9 @@ if __name__ == "__main__":
     #print(ccd.obj_center)
     #print(ccd.center_quality)
     
+    #fname = '/data/IoIO/raw/2021-10-28/Mercury-0008_Na_on.fit'
+    fname = '/data/IoIO/raw/2021-10-28/Mercury-0003_Na_off.fit'
+
     ccd = CorData.read(fname, show=True)
-    print(ccd.obj_center)
     print(ccd.center_quality)
+    print(ccd.obj_center)

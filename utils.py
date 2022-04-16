@@ -583,9 +583,3 @@ def savefig_overwrite(fname, **kwargs):
     if os.path.exists(fname):
         os.remove(fname)
     plt.savefig(fname, **kwargs)
-
-def location_to_dict(loc):
-    """Useful for JPL horizons"""
-    return {'lon': loc.lon.value,
-            'lat': loc.lat.value,
-            'elevation': loc.height.to(u.km).value}

@@ -9,7 +9,6 @@ from astropy.table import MaskedColumn
 
 from astroquery.jplhorizons import Horizons
 
-from IoIO.utils import location_to_dict
 from IoIO.cor_process import IOIO_1_LOCATION
 
 # https://ssd.jpl.nasa.gov/horizons/manual.html
@@ -22,50 +21,86 @@ GALSATS = {
     'Ganymede': 503,
     'Callisto': 504}
 
-# --> In a horizons module, could potentially have the default columns
-# for all of t he different object types and handle those nicely into
-# the ccd.meta
-OBS_COL_NUMS = \
+OBJ_COL_NUMS = \
+    '1, 3, 9, 10, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 27'
+
+OBJ_COL_TO_META = ['RA', 'DEC', 'RA_rate', 'DEC_rate', 'V',
+                   'surfbright', 'illumination', 'ang_width',
+                   'PDObsLon', 'PDObsLat', 'PDSunLon', 'PDSunLat',
+                   'SubSol_ang', 'SubSol_dist', 'NPole_ang',
+                   'NPole_dist', 'EclLon', 'EclLat', 'r', 'r_rate',
+                   'delta', 'delta_rate', 'lighttime', 'vel_sun',
+                   'vel_obs', 'elong', 'elongFlag', 'alpha',
+                   'sunTargetPA', 'velocityPA']
+
+
+GALSAT_FROM_OBS_COL_NUMS = \
     '1, 3, 6, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26, 27'
 GALSAT_COL_NUMS = '14, 15'
-OBS_COL_TO_META = ['RA', 'DEC', 'r', 'r_rate', 'delta', 'delta_rate',
-                   'PDObsLon', 'PDObsLat', 'PDSunLon', 'SubSol_ang',
-                   'SubSol_dist']
-GALSAT_OBS_COL_TO_META = OBS_COL_TO_META + ['sysIII', 'phi']
-
+GALSAT_OBS_COL_TO_META = ['RA', 'DEC', 'r', 'r_rate', 'delta', 'delta_rate',
+                          'PDObsLon', 'PDObsLat', 'PDSunLon', 'SubSol_ang',
+                          'SubSol_dist', 'sysIII', 'phi']
 
 #GALSAT_COL_TO_META = ['PDObsLon', 'PDObsLat', 'PDSunLon', 'SubSol_ang']
 
-##################################################################
-# This stuff could go in a separate horizons or ephemeris module and
-# could include comet and asteroid.  Would want to hack apart the
-# targetname returned by HORIZONS to get a better prepend.  Note that
-# this is just for a single object in the FOV.  More complicated
-# systems need a custom setup, like galsat_ephemeris
-##################################################################
+def location_to_dict(loc):
+    """Useful for JPL horizons"""
+    return {'lon': loc.lon.value,
+            'lat': loc.lat.value,
+            'elevation': loc.height.to(u.km).value}
+
+def table_row_to_ccd_meta(ccd_in,
+                          t=None,
+                          col_list=None,
+                          prefix='',
+                          row=0):
+    ccd = ccd_in.copy()
+    for col in col_list:
+        if t[col].mask[row]:
+            continue
+        if len(prefix) == 0:
+            prefix_str = ''
+        else:
+            prefix_str = f'{prefix}_'
+        ccd.meta[f'HIERARCH {prefix_str}{col}'] = \
+            (t[col][row], f'[{t[col].unit}]')
+    return ccd
+
 def obj_ephemeris(ccd_in,
-                  horizons_id=None,
-                  bmp_meta=None,
                   in_name=None,
+                  bmp_meta=None,
+                  horizons_id=None,
+                  horizons_id_type=None,
                   obs_loc=None,
-                  obs_col_to_meta=None,
+                  quantities=None,
+                  obj_ephm_prefix='TARGET',
+                  obs_col_to_meta=None, # Observer table columns
                   **kwargs):
     """cormultipipe post-processing routine to add generic object
     ephemeris metadata to ccd.meta and bmp_meta
 
     """
+    quantities = quantities or OBJ_COL_NUMS
     if isinstance(ccd_in, list):
         if isinstance(in_name, list):
-            return [obj_ephemeris(ccd, horizons_id=horizons_id,
-                                  bmp_meta=bmp_meta, 
-                                  in_name=fname, obs_loc=obs_loc,
+            return [obj_ephemeris(ccd,
+                                  in_name=fname,
+                                  bmp_meta=bmp_meta,
+                                  horizons_id=horizons_id,
+                                  horizons_id_type=horizons_id_type,
+                                  obs_loc=obs_loc,
+                                  quantities=quantities,
                                   obs_col_to_meta=obs_col_to_meta,
                                   **kwargs)
                     for ccd, fname in zip(ccd_in, in_name)]
         else:
-            return [obj_ephemeris(ccd, bmp_meta=bmp_meta, 
+            return [obj_ephemeris(ccd,
+                                  in_name=in_name,
+                                  bmp_meta=bmp_meta,
                                   horizons_id=horizons_id,
-                                  in_name=in_name, obs_loc=obs_loc,
+                                  horizons_id_type=horizons_id_type,
+                                  obs_loc=obs_loc,
+                                  quantities=quantities,
                                   obs_col_to_meta=obs_col_to_meta,
                                   **kwargs)
                 for ccd in ccd_in]
@@ -73,25 +108,27 @@ def obj_ephemeris(ccd_in,
     if obs_loc is None:
         obs_loc = IOIO_1_LOCATION
     if obs_col_to_meta is None:
-        obs_col_to_meta = OBS_COL_TO_META
+        obs_col_to_meta = OBJ_COL_TO_META
     obs_name = obs_loc.info.name
     h = Horizons(id=horizons_id,
                  epochs=ccd.tavg.jd,
                  location=location_to_dict(obs_loc),
-                 id_type='majorbody')
-    e = h.ephemerides(quantities=OBS_COL_NUMS)
+                 id_type=horizons_id_type)
+    e = h.ephemerides(quantities=quantities)
     ra = Angle(e['RA'].quantity)
     dec = Angle(e['DEC'].quantity)
     ccd.meta['OBJCTRA'] = (ra[0].to_string(unit=u.hour),
                            'OBJECT RA from HORIZONS')
     ccd.meta['OBJCTDEC'] = (dec[0].to_string(unit=u.deg),
                             'OBJECT DEC from HORIZONS')
-    target = e['targetname'][0]
-    for col in obs_col_to_meta:
-        if e[col].mask[0]:
-            continue
-        ccd.meta[f'HIERARCH {target}_{col}'] = \
-            (e[col][0], f'[{e[col].unit}]')
+    ccd.meta['HIERARCH HORIZONS_TARGET'] = e['targetname'][0]
+    ccd = table_row_to_ccd_meta(ccd, e, obs_col_to_meta,
+                                prefix=obj_ephm_prefix, row=0)
+    #for col in obs_col_to_meta:
+    #    if e[col].mask[0]:
+    #        continue
+    #    ccd.meta[f'HIERARCH OBJECT_{col}'] = \
+    #        (e[col][0], f'[{e[col].unit}]')
     return ccd
 
 def galsat_ephemeris(ccd_in,
@@ -135,7 +172,7 @@ def galsat_ephemeris(ccd_in,
                      epochs=ccd.tavg.jd,
                      location=location_to_dict(obs_loc),
                      id_type='majorbody')
-        e = h.ephemerides(quantities=OBS_COL_NUMS)
+        e = h.ephemerides(quantities=GALSAT_FROM_OBS_COL_NUMS)
         if obs_eph is None:
             obs_eph = e
         else:        
@@ -204,3 +241,25 @@ def galsat_ephemeris(ccd_in,
     #bmp_meta['obs_eph'] = obs_eph
     return ccd
 
+#from IoIO.cordata import CorData
+#from IoIO.cor_process import cor_process
+#from IoIO.calibration import Calibration
+#
+#fname = '/data/IoIO/raw/2021-10-28/Mercury-0001_Na_on.fit'
+#rccd = CorData.read(fname)
+#c = Calibration(reduce=True)
+#ccd = cor_process(rccd, calibration=c, auto=True)
+#
+#ccd = obj_ephemeris(ccd,
+#                    horizons_id=199,
+#                    horizons_id_type='majorbody',
+#                    quantities=OBJ_COL_NUMS,
+#                    obs_col_to_meta=OBJ_COL_TO_META)
+
+#ccd = obj_ephemeris(ccd,
+#                    horizons_id='Ceres',
+#                    id_type='asteroid_name',
+#                    quantities=MERCURY_COL_NUMS,
+#                    obs_col_to_meta=OBS_COL_TO_META)
+#
+                    

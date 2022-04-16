@@ -127,14 +127,15 @@ def exoplanet_pipeline(flist,
     if calibration is None:
         calibration = Calibration(reduce=True)
     if photometry is None:
+        # Basic defaults.  Better to get these from calling level
         photometry = CorPhotometry(
             precalc=True,
             keys_to_source_table=KEYS_TO_SOURCE_TABLE)
     cmp = ExoMultiPipe(auto=True,
                        calibration=calibration,
-                       photometry=photometry, 
-                       fits_fixed_ignore=True, outname_ext='.fits',
+                       photometry=photometry,
                        keep_intermediate=keep_intermediate,
+                       fits_fixed_ignore=True, outname_ext='.fits',
                        post_process_list=[mask_nonlin_sat,
                                           nd_filter_mask,
                                           object_to_objctradec,
@@ -188,6 +189,7 @@ def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
                    calibration=None,
                    photometry=None,
                    solve_timeout=None,
+                   keep_intermediate=None,
                    join_tolerance=JOIN_TOLERANCE,
                    keys_to_source_table=KEYS_TO_SOURCE_TABLE,
                    create_outdir=True,
@@ -220,6 +222,7 @@ def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
                             calibration=calibration,
                             photometry=photometry,
                             create_outdir=create_outdir,
+                            keep_intermediate=keep_intermediate,
                             keep_fits=keep_fits)
 
 class ExoArgparseMixin:
@@ -260,7 +263,7 @@ class ExoArgparseMixin:
         option = 'keep_fits'
         if help is None:
             help = (f'keep N reduced FITS files (default: {default})')
-        self.parser.add_argument('--' + option, 
+        self.parser.add_argument('--' + option, type=int, 
                                  default=default, help=help, **kwargs)
 
 class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
@@ -271,21 +274,25 @@ class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
         self.add_start()
         self.add_stop()
         self.add_solve_timeout()
+        self.add_keep_intermediate()
         self.add_join_tolerance()
+        self.add_join_tolerance_unit()
         self.add_keep_fits()
         super().add_all()
 
     def cmd(self, args):
         c = CalArgparseHandler.cmd(self, args)
+        join_tolerance = args.join_tolerance*u.Unit(args.join_tolerance_unit)
         exoplanet_tree(raw_data_root=args.raw_data_root,
                        outdir_root=args.exoplanet_root,
                        start=args.start,
                        stop=args.stop,
                        calibration=c,
-                       join_tolerance=args.join_tolerance,
+                       solve_timeout=args.solve_timeout,
+                       keep_intermediate=args.keep_intermediate,
+                       join_tolerance=join_tolerance,
                        create_outdir=args.create_outdir,
-                       keep_fits=args.keep_fits,
-                       solve_timeout=args.solve_timeout)
+                       keep_fits=args.keep_fits)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(

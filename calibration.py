@@ -1089,7 +1089,7 @@ def flat_combine_one_fdict(fdict,
     if show:
         impl = plt.imshow(im, origin='upper', cmap=plt.cm.gray)
         plt.show()
-    plt.close()
+        plt.close()
     discard_intermediate(out_fnames, sdir,
                          calibration_scratch, keep_intermediate)
     
@@ -1205,7 +1205,6 @@ class Calibration():
                  calibration_root=CALIBRATION_ROOT,
                  subdirs=CALIBRATION_SUBDIRS,
                  fits_fixed_ignore=True,
-                 warning_ignore_list=[],
                  keep_intermediate=False,
                  ccdt_tolerance=CCDT_TOLERANCE,
                  dark_exp_margin=DARK_EXP_MARGIN,
@@ -1229,6 +1228,7 @@ class Calibration():
                  flat_cut=FLAT_CUT,
                  nd_edge_expand=ND_EDGE_EXPAND,
                  stable_flat_date=STABLE_FLAT_DATE,
+                 plot_flat_ratios=False,
                  lockfile=LOCKFILE):
         self._raw_data_root = raw_data_root
         self._calibration_root = calibration_root
@@ -1250,6 +1250,7 @@ class Calibration():
         self.flat_cut = flat_cut
         self.nd_edge_expand = nd_edge_expand
         self.stable_flat_date = stable_flat_date
+        self.plot_flat_ratios = plot_flat_ratios
         self.num_processes = num_processes
         self.mem_frac = mem_frac
         self.num_ccdts = num_ccdts
@@ -1773,6 +1774,9 @@ class Calibration():
 
     @property
     def flat_ratio_list(self):
+        # NOTE: making the flat ratio plots can only be triggered with
+        # the plot_flat_ratios property
+
         if self._flat_ratio_list is not None:
             return self._flat_ratio_list
         
@@ -1805,8 +1809,9 @@ class Calibration():
         tbl = QTable(rows=ratio_dlist)
             
         flat_ratio_list = []
-        f = plt.figure(figsize=[8.5, 11])
-        plt.title('Sky flat ratios')
+        if self.plot_flat_ratios:
+            f = plt.figure(figsize=[8.5, 11])
+            plt.title('Sky flat ratios')
         #print('Narrow-band sky flat ratios fit to >2020-01-01 data only')
         #print('Day sky does have Na on-band emission, however, Greet 1988 PhD suggests')
         #print('it is so hard to measure with a good Fabry-Perot, that we are')
@@ -1829,28 +1834,31 @@ class Calibration():
                             'std_ratio': std_ratio}
             #print(f'{band} med {med_ratio:.2f} +/- {std_ratio:.2f}')
             #print(f'{band} biweight {biweight_ratio:.2f} +/- {mad_std_ratio:.2f}')
-            ax = plt.subplot(2, 1, ib+1)
-            ax.yaxis.set_minor_locator(AutoMinorLocator())
-            ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
-            #plt.plot(tbl['time'], tbl['ratio'], 'k.')
-            plt.plot(this_band['time'], this_band['ratio'], 'k.')
-            plt.ylabel(f'{band} off/on ratio')
-            plt.axhline(y=biweight_ratio, color='red')
-            plt.text(0.5, biweight_ratio + 0.1*mad_std_ratio, 
-                     f'{biweight_ratio:.2f} +/- {mad_std_ratio:.2f}',
-                     ha='center', transform=ax.get_yaxis_transform())
-            plt.axhline(y=biweight_ratio+mad_std_ratio,
-                        linestyle='--', color='k', linewidth=1)
-            plt.axhline(y=biweight_ratio-mad_std_ratio,
-                        linestyle='--', color='k', linewidth=1)
-            plt.ylim([biweight_ratio-3*mad_std_ratio, biweight_ratio+3*mad_std_ratio])
-            plt.gcf().autofmt_xdate()
             flat_ratio_list.append(t_flat_ratio)
 
-        outname = os.path.join(self._calibration_root,
-                               'flat__ratio_vs_time.png')
-        savefig_overwrite(outname, transparent=True)
-        plt.close()
+            if self.plot_flat_ratios:
+                ax = plt.subplot(2, 1, ib+1)
+                ax.yaxis.set_minor_locator(AutoMinorLocator())
+                ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
+                #plt.plot(tbl['time'], tbl['ratio'], 'k.')
+                plt.plot(this_band['time'], this_band['ratio'], 'k.')
+                plt.ylabel(f'{band} off/on ratio')
+                plt.axhline(y=biweight_ratio, color='red')
+                plt.text(0.5, biweight_ratio + 0.1*mad_std_ratio, 
+                         f'{biweight_ratio:.2f} +/- {mad_std_ratio:.2f}',
+                         ha='center', transform=ax.get_yaxis_transform())
+                plt.axhline(y=biweight_ratio+mad_std_ratio,
+                            linestyle='--', color='k', linewidth=1)
+                plt.axhline(y=biweight_ratio-mad_std_ratio,
+                            linestyle='--', color='k', linewidth=1)
+                plt.ylim([biweight_ratio-3*mad_std_ratio,
+                          biweight_ratio+3*mad_std_ratio])
+                plt.gcf().autofmt_xdate()
+                outname = os.path.join(self._calibration_root,
+                                       'flat__ratio_vs_time.png')
+                savefig_overwrite(outname, transparent=True)
+                plt.close()
+
         self._flat_ratio_list = flat_ratio_list
         return self._flat_ratio_list
 
@@ -1906,10 +1914,23 @@ class CalArgparseMixin:
         self.parser.add_argument('--' + option, 
                                  default=default, help=help, **kwargs)
 
+    def add_plot_flat_ratios(self, 
+                             default=False,
+                             help=None,
+                             **kwargs):
+        option = 'plot_flat_ratios'
+        if help is None:
+            help = 'plot flat ratios vs time'
+        self.parser.add_argument('--' + option,
+                                 action=argparse.BooleanOptionalAction,
+                                 default=default,
+                                 help=help, **kwargs)
+
     
 class CalArgparseHandler(CalArgparseMixin, CorArgparseHandler):
-    def add_all(self):
+    def add_all(self, plot_flat_ratios=False):
         """Add options used in cmd"""
+        self.add_plot_flat_ratios(default=plot_flat_ratios)
         self.add_raw_data_root()
         self.add_calibration_root()
         self.add_calibration_start()
@@ -1925,6 +1946,7 @@ class CalArgparseHandler(CalArgparseMixin, CorArgparseHandler):
                         calibration_root=args.calibration_root,
                         start_date=args.calibration_start,
                         stop_date=args.calibration_stop,
+                        fits_fixed_ignore=args.fits_fixed_ignore,
                         num_processes=args.num_processes,
                         mem_frac=args.mem_frac)
         return c
@@ -1933,7 +1955,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Run calibration to generate bias, dark, flat frames')
     aph = CalArgparseHandler(parser)
-    aph.add_all()
+    aph.add_all(plot_flat_ratios=True)
     args = parser.parse_args()
     aph.cmd(args)
 
