@@ -9,6 +9,7 @@ import numpy as np
 
 from astropy import log
 from astropy import units as u
+from astropy.time import Time
 from astropy.coordinates import SkyCoord
 from astroquery.simbad import Simbad
 
@@ -29,6 +30,9 @@ from IoIO.cor_photometry import (KEYS_TO_SOURCE_TABLE, CorPhotometry,
 EXOPLANET_ROOT = '/data/Exoplanets'
 GLOB_INCLUDE = ['TOI*', 'WASP*', 'KPS*', 'HAT*', 'K2*', 'TrES*',
                 'Qatar*', 'GJ*']
+
+MIN_TRANSIT_OBS_TIME = 45*u.min
+
 # I am not sure the barytime calculations would be valid for solar
 # system objects because they are too close.  So we don't put this
 # into cor_photometry
@@ -209,19 +213,26 @@ def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
     if len(dirs) == 0:
         log.warning('No directories found')
         return []
-    exoplanets = []
+    exoplanet_obs = []
     for directory in dirs:
         all_files = multi_glob(directory, glob_list=glob_include)
         if len(all_files) == 0:
             continue
-        collection = ccdp.ImageFileCollection(filenames=all_files,
-                                              keywords=['object'])
+        collection = ccdp.ImageFileCollection(
+            filenames=all_files,
+            keywords=['date-obs', 'object'])
         texos = collection.values('object', unique=True)
-        # Standardize to no spaces
-        texos = [e.replace(' ', '') for e in texos]
-        exoplanets.extend(texos)
-    exoplanets = list(set(exoplanets))
-    return exoplanets
+        for e in texos:
+            tc = collection.filter(object=e)
+            date_obss = tc.values('date-obs')
+            tts = Time(date_obss, format='fits')
+            if (np.max(tts) - np.min(tts) < MIN_TRANSIT_OBS_TIME):
+                continue
+            # Standardize to no spaces
+            e = e.replace(' ', '')
+            date, _ = date_obss[0].split('T')
+            exoplanet_obs.append((e, date))
+    return exoplanet_obs
 
 class ExoArgparseMixin:
     def add_exoplanet_root(self,
@@ -292,9 +303,15 @@ class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
 
     def cmd(self, args):
         if args.list_exoplanets:
-            exoplanets = list_exoplanets()
-            for e in exoplanets:
-                print(e)
+            exoplanet_obs = list_exoplanets()
+            exos_dates = list(zip(*exoplanet_obs))
+            exos = list(exos_dates[0])
+            counts = [(e, exos.count(e))
+                       for e in set(exos)]
+            print('Exoplanets observed on date:')
+            for e in exoplanet_obs: print(e)
+            print('\nExoplanet observation counts:')
+            for c in counts: print(c)
             return
         c = CalArgparseHandler.cmd(self, args)
         join_tolerance = args.join_tolerance*u.Unit(args.join_tolerance_unit)

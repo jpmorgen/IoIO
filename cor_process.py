@@ -6,7 +6,7 @@ import numpy as np
 from astropy import log
 from astropy import units as u
 from astropy.nddata import CCDData, StdDevUncertainty
-from astropy.coordinates import (Angle, SkyCoord, AltAz, #HADec,
+from astropy.coordinates import (Angle, SkyCoord, AltAz, HADec,
                                  solar_system_ephemeris, get_body)
 
 import ccdproc as ccdp
@@ -316,16 +316,16 @@ def fix_obj_and_coord(ccd_in, **kwargs):
         ccd.meta['OBJCTAZ'] = (altaz.az.value, f'[{altaz.az.unit}]')
         ccd.meta['OBJCTALT'] = (altaz.alt.value,
                                 f'[{altaz.alt.unit}]')
-        #hadec = ccd.sky_coord.transform_to(
-        #    HADec(obstime=ccd.tavg, location=ccd.obs_location))
-        #hastr = hadec.ha.to_string(unit=u.hour, sep=' ', pad=True)
-        #ccd.meta['OBJCTHA'] = (hastr, f'[{hadec.ha.unit}]')
-        #if hadec.ha < 0*u.deg:
-        #    ccd.meta['PIERSIDE'] = 'WEST'
-        #elif hadec.ha > ACP_TRACK_PAST_MERIDIAN:
-        #    ccd.meta['PIERSIDE'] = 'EAST'
-        #else:
-        #    log.warning(f'Ambiguous PIERSIDE for {hastr}')        
+        hadec = ccd.sky_coord.transform_to(
+            HADec(obstime=ccd.tavg, location=ccd.obs_location))
+        hastr = hadec.ha.to_string(unit=u.hour, sep=' ', pad=True)
+        ccd.meta['OBJCTHA'] = (hastr, f'[{hadec.ha.unit}]')
+        if hadec.ha < 0*u.deg:
+            ccd.meta['PIERSIDE'] = 'WEST'
+        elif hadec.ha > ACP_TRACK_PAST_MERIDIAN:
+            ccd.meta['PIERSIDE'] = 'EAST'
+        else:
+            log.warning(f'Ambiguous PIERSIDE for {hastr}')        
     else:
         # Tweak metadata a little: These values are actually read from
         # the telescope and are not the real RA and DEC of the target

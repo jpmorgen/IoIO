@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 from astropy import log
 from astropy import units as u
-from astropy.convolution import Gaussian2DKernel
+from astropy.convolution import Gaussian2DKernel, convolve
 from astropy.stats import gaussian_fwhm_to_sigma, sigma_clipped_stats
 from astropy.coordinates import SkyCoord
 
@@ -193,6 +193,7 @@ class Photometry:
         # Kernel ends up getting reset when it doesn't necessarily
         # need to be, but more pain than it is worth to address that
         self._kernel = None
+        self._convolved_data = None
         self._source_mask = None
         self._back_obj = None
         self._background = None
@@ -200,6 +201,7 @@ class Photometry:
         self._back_rms = None
         self._threshold = None
         self._segm_image = None
+        self.segm_failed = None
         self._segm_deblend = None
         self._source_catalog = None
         self._source_table = None
@@ -288,16 +290,21 @@ class Photometry:
         return self._kernel
 
     @property
+    def convolved_data(self):
+        if self._convolved_data is not None:
+            return self._convolved_data
+        return convolve(self.ccd.data, self.kernel)
+
+    @property
     def source_mask(self):
         """Make a source mask to enable optimal background estimation"""
         if self._source_mask is not None:
             return self._source_mask
         try:
             source_mask = make_source_mask(
-                self.ccd.data,
+                self.convolved_data,
                 nsigma=self.source_mask_nsigma,
                 npixels=self.n_connected_pixels,
-                filter_kernel=self.kernel,
                 mask=self.coverage_mask,
                 dilate_size=self.source_mask_dilate)
         except Exception as e:
@@ -392,14 +399,18 @@ class Photometry:
             
     @property
     def segm_image(self):
+        if self.segm_failed:
+            return None
         if self._segm_image is not None:
             return self._segm_image
-        segm = detect_sources(self.ccd.data,
+        segm = detect_sources(self.convolved_data,
                               self.threshold.value,
                               npixels=self.n_connected_pixels,
-                              filter_kernel=self.kernel, mask=self.ccd.mask)
-        if (segm is not None
-            and self.remove_masked_sources
+                              mask=self.ccd.mask)
+        if segm is None:
+            self.segm_failed = True
+            return None
+        if (self.remove_masked_sources
             and self.ccd.mask is not None):
             segm.remove_masked_labels(self.ccd.mask, partial_overlap=True)
         self._segm_image = segm
@@ -416,10 +427,10 @@ class Photometry:
         if self.segm_image is None:
             # Pathological case of no sources found
             return None
-        segm_deblend = deblend_sources(self.ccd.data,
+        segm_deblend = deblend_sources(self.convolved_data,
                                        self.segm_image, 
                                        npixels=self.n_connected_pixels,
-                                       filter_kernel=self.kernel,
+                                       kernel=self.kernel,
                                        nlevels=self.deblend_nlevels,
                                        contrast=self.deblend_contrast)
         self._segm_deblend = segm_deblend
@@ -468,26 +479,29 @@ image
                                      self.back_rms,
                                      effective_gain) 
         else:
-            uncert = self.ccd.uncertainty.array*self.ccd.unit
+            # BEWARE!  Units don't like being sqrted -- it is not a
+            # reversable process from **2 even though they repr the same!
+            assert self.ccd.unit == self.back_rms.unit
+            uncert = self.ccd.uncertainty.array
             if self.ccd.uncertainty.uncertainty_type == 'std':
-                total_error = np.sqrt(self.back_rms**2 + uncert**2)
+                total_error = np.sqrt(self.back_rms.value**2 + uncert**2)
             elif self.ccd.uncertainty.uncertainty_type == 'var':
-                # --> if I work in units make var units ccd.unit**2
-                var  = uncert*self.ccd.unit
-                total_error = np.sqrt(self.back_rms**2 + var)
+                total_error = np.sqrt(self.back_rms.value**2 + var)
             else:
                 raise ValueError(f'Unsupported uncertainty type {self.ccd.uncertainty.uncertainty_type} for {in_name}')
+            total_error *= self.back_rms.unit
 
         # Call to SourceCatalog is a little awkward because it expects
         # a Quantity.  Don't forget to subtract background!  Note that
-        # if _back is set, that meas we have a somewhat pathological
+        # if _back is set, that means we have a somewhat pathological
         # case
-        sc = SourceCatalog(self.ccd.data*self.ccd.unit - self.background,
-                           self.segm_deblend, 
-                           error=total_error,
-                           mask=self.ccd.mask,
-                           kernel=self.kernel,
-                           background=self.background)
+        sc = SourceCatalog(
+            self.ccd.data*self.ccd.unit - self.background,
+            self.segm_deblend,
+            convolved_data=self.convolved_data*self.ccd.unit,
+            error=total_error,
+            mask=self.ccd.mask,
+            background=self.background)
         self._source_catalog = sc
         return self._source_catalog
 
