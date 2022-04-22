@@ -867,8 +867,11 @@ class NaBack():
             meso_vol_corrected = \
                 self.meso_vol_corrected_sin_physical(iplot_date*u.day)
             meso_vol_corrected_err = self.meso_vol_corrected_err
+        else:
+            meso_vol_corrected = meso_vol_corrected[0]
+            meso_vol_corrected_err = meso_vol_corrected_err[0]            
 
-        print(f'meso_vol_corrected {meso_vol_corrected}')
+        #print(f'meso_vol_corrected {meso_vol_corrected}')
         bb = self.corrected_meso_vol_to_back_rate(
             u.Magnitude(meso_vol_corrected), airmass, sun_angle)
         return bb, meso_vol_corrected_err
@@ -1084,6 +1087,7 @@ def na_meso_sub(ccd_in, bmp_meta=None, na_meso_obj=None, **kwargs):
                                            ccd.meta['AIRMASS'],
                                            ccd.meta['SUN_ANGLE'])
     ccd = ccd.subtract(meso, handle_meta='first_found')
+
     ccd.meta['MESO'] = (
         meso.value,
         f'model mesospheric Na emission ({meso.unit})')

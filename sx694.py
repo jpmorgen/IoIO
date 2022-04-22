@@ -119,12 +119,6 @@ def metadata(hdr_in,
     if hdr.get('exposure') is not None:
         del hdr['EXPOSURE']
     hdr.comments['exptime'] = 'Exposure time (second)'
-    radecsys = hdr.get('RADECSYS')
-    # Try to avoid annoying WCS warnings.  Note missing "C"
-    if radecsys is not None:
-        hdr.insert('RADECSYS',
-                   ('RADESYS', radecsys, hdr.comments['RADECSYS']))
-        del hdr['RADECSYS']
     if hdr.get('instrume'):
         hdr.insert('INSTRUME',
                    ('CAMERA', camera_description),
@@ -292,12 +286,10 @@ def date_obs(hdr_in,
     hdr.insert('DATE-OBS',
                ('ODAT-OBS', date_obs_str,
                'Commanded shutter time (ISO 8601 UTC)'))
-    # astropy.nddata.CCDData.read sends these off to astropy.wcslib,
-    # which assumes DATE-OBS is the shutter open time and blows away
-    # all other seemingly valid keywords, like DATE-BEG, DATE-AVG, and
-    # DATE-END.  Cheat a little here by putting in DATE-AVG for
-    # reading with pgdata.tavg method to avoid double-calculation on
-    # first read.  That method can deal with its absence.
+    # astropy.nddata.CCDData.read assumes DATE-OBS is the shutter open
+    # time.  Calculate DATE-AVG here for reading with pgdata.tavg
+    # method to avoid double-calculation on first read.  That method
+    # can deal with its absence.
     hdr['DATE-OBS'] = (date_beg.fits,
                        'Best estimate shutter open time (UTC)')
     # These end up appearing in reverse order to this
@@ -323,6 +315,10 @@ def date_obs(hdr_in,
                 '(s)'),
                after=True)
     # Avoid annoying WCS warnings
+    hdr.insert('DATE-OBS',
+               ('MJD-AVG', date_avg.mjd,
+                'Best estimate midpoint of exposure (MJD)'),
+               after=True)
     hdr.insert('DATE-OBS',
                ('MJD-OBS', date_beg.mjd,
                 'Best estimate shutter open time (MJD)'),

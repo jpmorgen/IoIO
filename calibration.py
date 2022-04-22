@@ -125,12 +125,10 @@ FLAT_RATIO_CHECK_LIST = \
       'std_ratio': 0.06540676680077083}]
 
 def jd_meta(ccd, bmp_meta=None, **kwargs):
-    """CorMultiPipe post-processing routine to return JD
+    """CorMultiPipe post-processing routine to return JD.  Assumes PGData
     """
-    date_obs = ccd.meta.get('DATE-AVG') or ccd.meta.get('DATE-OBS')
-    tm = Time(date_obs, format='fits')
     if bmp_meta is not None:
-        bmp_meta['jd'] = tm.jd
+        bmp_meta['jd'] = ccd.tavg.jd
     return ccd
 
 def fdict_list_collector(fdict_list_creator,
@@ -1693,7 +1691,7 @@ class Calibration():
         good = np.logical_and(within_tol, ~bad)
         good_ccdt_idx = np.flatnonzero(good)
         if len(good_ccdt_idx) == 0:
-            log.warning(f'No biases found within {ccdt_tolerance} C, broadening by factor of 2')
+            log.debug(f'No biases found within {ccdt_tolerance} C, broadening by factor of 2')
             return self.best_bias(hdr, ccdt_tolerance=ccdt_tolerance*2)
         ddates = tm - self.bias_table['dates']
         best_ccdt_date_idx = np.argmin(np.abs(ddates[good_ccdt_idx]))
@@ -1726,7 +1724,7 @@ class Calibration():
         good = np.logical_and(within_tol, ~bad)
         good_ccdt_idx = np.flatnonzero(good)
         if len(good_ccdt_idx) == 0:
-            log.warning(f'No darks found within {ccdt_tolerance} C, broadening by factor of 2')
+            log.debug(f'No darks found within {ccdt_tolerance} C, broadening by factor of 2')
             return self.best_dark(hdr, ccdt_tolerance=ccdt_tolerance*2)
         # Find the longest exposure time in our collection of darks
         # that matches our exposure.  Prefer longer exposure times by
@@ -1735,7 +1733,7 @@ class Calibration():
         good_exptime_idx = np.flatnonzero(
             abs(dexptimes[good_ccdt_idx]) <  dark_exp_margin)
         if len(good_exptime_idx) == 0:
-            log.warning(f'No darks found with exptimes within {dark_exp_margin} s, broadening margin by factor of 2')
+            log.debug(f'No darks found with exptimes within {dark_exp_margin} s, broadening margin by factor of 2')
             return self.best_dark(hdr,
                                   ccdt_tolerance=ccdt_tolerance,
                                   dark_exp_margin=dark_exp_margin*2)

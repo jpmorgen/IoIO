@@ -21,6 +21,9 @@ from astropy.time import Time
 
 from bigmultipipe import assure_list
 
+# MaxIM, ACP, FITS
+FITS_GLOB_LIST = ['*.fit', '*.fts', '*.fits']
+
 # These are MaxIm and ACP day-level raw data directories, respectively
 DATE_FORMATS = ["%Y-%m-%d", "%Y%m%d"]
 

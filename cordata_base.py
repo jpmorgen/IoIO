@@ -18,12 +18,12 @@ from matplotlib.colors import LogNorm
 from astropy import log
 from astropy import units as u
 from astropy.stats import biweight_location
-from astropy.coordinates import EarthLocation
+from astropy.coordinates import EarthLocation, SkyCoord
 
 from astropy_fits_key import FitsKeyArithmeticMixin
 
 from precisionguide import pgproperty, pgcoordproperty
-from precisionguide import MaxImPGD
+from precisionguide import ACPPGD
 from precisionguide.utils import hist_of_im, iter_linfit
 
 import IoIO.sx694 as sx694
@@ -194,9 +194,10 @@ def overscan_estimate(ccd_in, meta=None, master_bias=None,
         gain = bias.meta['GAIN']
         if bias.unit is u.electron:
             # Convert bias back to ADU for subtraction
-            bias = bias.divide(gain*u.electron/u.adu)
+            bias = bias.divide(gain*u.electron/u.adu,
+                               handle_meta='first_found')
         try:
-            bsccd = ccd.subtract(bias)
+            bsccd = ccd.subtract(bias, handle_meta='first_found')
             bsccd.meta['HIERARCH subtract_bias'] = True
             ccd = bsccd
         except Exception as e:
@@ -295,7 +296,7 @@ def keyword_arithmetic_image_handler(meta, operand1, operation, operand2,
                 # projects may incorporate offset (overscan) into the
                 # bias
                 o2 = 0
-            elif imagetyp == 'flat':
+            elif 'flat' in imagetyp:
                 # Check for unprocessed flat
                 if operand2.meta.get('flatdiv') is None:
                     # med is not the best value, since the flats roll
@@ -339,7 +340,7 @@ def keyword_arithmetic_image_handler(meta, operand1, operation, operand2,
 
     return o2
 
-class CorDataBase(FitsKeyArithmeticMixin, MaxImPGD):
+class CorDataBase(FitsKeyArithmeticMixin, ACPPGD):
     def __init__(self, data,
                  default_ND_params=None,
                  ND_params=None, # for _slice
@@ -394,22 +395,61 @@ class CorDataBase(FitsKeyArithmeticMixin, MaxImPGD):
         
     @pgproperty
     def obs_location(self):
-        """Return `~astropy.coordinates.EarthLocation` of observatory given
-           standard ACP and MaxIm keywords.  Note WGS84 ellipsoid is assumed.
+        """Return `~astropy.coordinates.EarthLocation` of observatory 
 
         """
         telescop = self.meta.get('telescop')
         if telescop is not None and telescop == 'IoIO_1':
             # Save some time
             return IOIO_1_LOCATION
-        # ACP uses the *-OBS keywords.  MaxIm uses SITE* and does not
-        # record altitude.
-        lon = self.meta.get('LONG-OBS') or self.meta.get('SITELONG')
-        lat = self.meta.get('LAT-OBS') or self.meta.get('SITELAT')
-        # Just use an average elevation if none is available
-        # https://www.quora.com/What-is-the-average-elevation-of-Earth-above-the-ocean-including-land-area-below-sea-level-What-is-the-atmospheric-pressure-at-that-elevation
-        alt = self.meta.get('ALT-OBS') or 800 * u.m
-        return EarthLocation.from_geodetic(lon, lat, alt)
+        return super().obs_location
+
+    @pgproperty
+    def sky_coord(self):
+        """Return `~astropy.coordinates.SkyCoord` of object being observed.
+
+        Unless OBJECT_TO_OBJCTRADEC is set, this is a bit ambiguous
+        because of RAOFF and DECOFF as noted in the comments in the
+        code.  In short, our priority is to point somewhere within the
+        FOV actually observed even if RAOFF and DECOFF are large
+
+        """
+        ctype1 = self.meta.get('CTYPE1')
+        ctype2 = self.meta.get('CTYPE2')
+        if self.meta.get('OBJECT_TO_OBJCTRADEC'):
+            # First choice is to get precise direction to object we are
+            # observing
+            ra = self.meta.get('OBJCTRA')
+            dec = self.meta.get('OBJCTDEC')
+            unit = (u.hourangle, u.deg)
+        elif ctype1 and ctype2 and 'RA' in ctype1 and 'DEC' in ctype2:
+            # Official plate solutions next preference, if available,
+            # though there will be some offset from actual object
+            # unless CRVAL* are preset to object (e.g. with a good
+            # obj_center)
+            ra = self.meta.get('CRVAL1')
+            dec = self.meta.get('CRVAL2')
+            unit = (self.meta.get('CUNIT1') or u.deg,
+                     self.meta.get('CUNIT2') or u.deg)
+        else:
+            # Our standard has been to use RA and DEC as telescope
+            # pointing position (e.g. center of FOV) and OBJECT* as
+            # the object being pointed to before RAOFF & DECOFF (if
+            # any) are applied.  This works OK for small offsets, but
+            # starts to be troublesome for large ones.  Lets assume
+            # that small offsets are recorded of sources that can have
+            # astrometry done on them, which sets OBJECT_TO_OBJCTRADEC
+            # and try to stay in the FOV with this code.
+            ra = self.meta.get('RA')
+            dec = self.meta.get('DEC')
+            # These values are string sexagesimal with RA in hours
+            unit = (u.hourangle, u.deg)
+        # Fancy conversion to ICRS is likely not done anywhere in IoIO
+        # system, so default to FK5 is safe
+        radesys = (self.meta.get('RADESYS')
+                   or self.meta.get('RADECSYS')
+                   or 'FK5')
+        return SkyCoord(ra, dec, unit=unit, frame=radesys.lower())
 
     @pgproperty
     def default_ND_params(self):
@@ -757,8 +797,8 @@ class CorDataNDparams(CorDataBase):
 
         """
         # Biases and darks don't have signal to spot ND filter
-        if (self.imagetyp == 'bias'
-            or self.imagetyp == 'dark'):
+        if ('bias' in self.imagetyp
+            or 'dark' in self.imagetyp):
             return super().ND_params
 
         # Transform everything to our potentially binned and subframed
@@ -792,7 +832,7 @@ class CorDataNDparams(CorDataBase):
         # We don't need error or mask stuff, so just work with the
         # data array, which we will call "im"
 
-        if self.imagetyp == 'flat':
+        if 'flat' in self.imagetyp:
             # Flats have high contrast and low sensitivity to hot
             # pixels, so we can work with the whole image.  It is OK
             # that this is not a copy of self.im since we are not

@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-"""Reduce IoIO sodium nebula observations"""
+"""Module to provide bigmultipipe pipeline that provides off-band subtraction"""
 
 import os
 
@@ -30,12 +30,8 @@ from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                mask_nonlin_sat, combine_masks,
                                nd_filter_mask, detflux,
                                objctradec_to_obj_center)
-from IoIO.photometry import SOLVE_TIMEOUT, JOIN_TOLERANCE, is_flux
+from IoIO.photometry import is_flux
 from IoIO.cor_photometry import CorPhotometry, add_astrometry
-from IoIO.standard_star import (StandardStar, extinction_correct,
-                                rayleigh_convert)
-from IoIO.na_back import sun_angle, NaBack, na_meso_sub
-from IoIO.horizons import galsat_ephemeris
 
 # Use these to pick out on- and off-band filter explicitly, since we
 # play with the order of reduction to reduce the on-band images last
@@ -158,12 +154,14 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
 
     if collection is not None and glob_include is not None:
         raise ValueError('specify either collection of glob_include to make sure the correct files are selected')
-    if calibration is None:
-        calibration = Calibration(reduce=True)
-    if photometry is None:
-        photometry = CorPhotometry(precalc=True)
+    calibration = calibration or Calibration(reduce=True)
+    photometry = photometry or CorPhotometry()
     add_ephemeris = assure_list(add_ephemeris)
     pre_backsub = assure_list(pre_backsub)
+    if len(add_ephemeris) > 0:
+        # This is safe because objctradec_to_obj_center doesn't muck
+        # with obj_center if there is no wcs
+        pre_backsub.insert(0, objctradec_to_obj_center)
     post_backsub = assure_list(post_backsub)
     post_process_list = [reject_center_quality_below,
                          combine_masks,
@@ -171,6 +169,7 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
                          *add_ephemeris,
                          add_astrometry,
                          *pre_backsub,
+                         detflux,
                          off_band_subtract,
                          *post_backsub]
     if outdir is None and outdir_root is None:
@@ -200,9 +199,10 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
  
     cmp = CorMultiPipeBase(
         ccddata_cls=CorData,
-        auto=True,
         calibration=calibration,
+        auto=True,
         photometry=photometry,
+        mask_ND_before_astrometry=True, 
         outname_append='-back-sub',
         outname_ext='.fits', 
         create_outdir=create_outdir,
@@ -210,12 +210,10 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
         num_processes=num_processes,
         process_expand_factor=process_expand_factor,
         **kwargs)
-    #pout = cmp.pipeline([f_pairs[0]], outdir=outdir, overwrite=True)
-    pout = cmp.pipeline(f_pairs, outdir=outdir, overwrite=True)
+    pout = cmp.pipeline([f_pairs[0]], outdir=outdir, overwrite=True)
+    #pout = cmp.pipeline(f_pairs, outdir=outdir, overwrite=True)
     pout, _ = prune_pout(pout, f_pairs)
     return pout
-
-log.setLevel('DEBUG')
 
 #### from cor_process import cor_process
 #### c = Calibration(reduce=True)
@@ -270,7 +268,7 @@ log.setLevel('DEBUG')
 #                       na_meso_obj=na_meso_obj,
 #                       standard_star_obj=standard_star_obj,
 #                       add_ephemeris=galsat_ephemeris,
-#                       pre_backsub=[objctradec_to_obj_center, detflux],
+#                       pre_backsub=[objctradec_to_obj_center],
 #                       post_backsub=[sun_angle, na_meso_sub,
 #                                     extinction_correct, rayleigh_convert],
 #                       fits_fixed_ignore=fits_fixed_ignore)
@@ -280,7 +278,7 @@ log.setLevel('DEBUG')
 #                       band='SII',
 #                       standard_star_obj=standard_star_obj,
 #                       add_ephemeris=galsat_ephemeris,
-#                       pre_backsub=[objctradec_to_obj_center, detflux],
+#                       pre_backsub=[objctradec_to_obj_center],
 #                       post_backsub=[extinction_correct, rayleigh_convert],
 #                       fits_fixed_ignore=True)
 #
@@ -288,7 +286,7 @@ log.setLevel('DEBUG')
 
 #pout = on_off_pipeline(directory, band='SII',
 #                       add_ephemeris=galsat_ephemeris,
-#                       pre_backsub=[objctradec_to_obj_center, detflux],
+#                       pre_backsub=[objctradec_to_obj_center],
 #                       fits_fixed_ignore=True)
 
 

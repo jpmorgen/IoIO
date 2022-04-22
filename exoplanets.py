@@ -51,45 +51,19 @@ def barytime(ccd_in, bmp_meta=None, **kwargs):
 
     """
     ccd = ccd_in.copy()
-
-    ctype1 = ccd.meta.get('CTYPE1')
-    ctype2 = ccd.meta.get('CTYPE2')
-    if ccd.meta.get('OBJECT_TO_OBJCTRADEC'):
-        # First choice is to get precise direction to object we are
-        # observing
-        ra = ccd.meta.get('OBJCTRA')
-        dec = ccd.meta.get('OBJCTDEC')
-        unit = (u.hourangle, u.deg)
-    elif ctype1 and ctype2 and 'RA' in ctype1 and 'DEC' in ctype2:
-        # Official plate solutions next preference, if available
-        ra = ccd.meta.get('CRVAL1')
-        dec = ccd.meta.get('CRVAL2')
-        unit = (ccd.meta.get('CUNIT1') or u.deg,
-                 ccd.meta.get('CUNIT2') or u.deg)
-    else:
-        # ACP puts RA and DEC in as read from telescope and/or copied
-        # from PinPoint CRVAL1, CRVAL2
-        # MaxIm puts OBJCTRA and OBJCTDEC in as read from telescope
-        ra = ccd.meta.get('RA') or ccd.meta.get('OBJCTRA')
-        dec = ccd.meta.get('DEC') or ccd.meta.get('OBJCTDEC')
-        # These values are string sexagesimal with RA in hours
-        unit = (u.hourangle, u.deg)
-    # Fancy conversion to ICRS is likely not done anywhere in IoIO
-    # system, so default to FK5 is safe
-    radesys = ccd.meta.get('RADESYS') or ccd.meta.get('RADECSYS') or 'FK5'
-    direction = SkyCoord(ra, dec, unit=unit, frame=radesys.lower())
-
-    # Put it all together
-    dt = ccd.tavg.light_travel_time(direction, kind='barycentric')
+    dt = ccd.tavg.light_travel_time(
+        ccd.sky_coord, kind='barycentric')
     tdb = ccd.tavg.tdb + dt
-    if ccd.meta.get('MJD-OBS'):
+    if ccd.meta.get('MJD-AVG'):
+        after_key = 'MJD-AVG'
+    elif ccd.meta.get('MJD-OBS'):
         after_key = 'MJD-OBS'
     else:
-        after_key = 'DATE-OBS'    
+        after_key = 'DATE-OBS'
     ccd.meta.insert(after_key, 
-               ('MJDBARY', tdb.mjd,
-                'Obs. midpoint barycentric dynamic time (MJD)'),
-               after=True)
+                    ('MJDBARY', tdb.mjd,
+                     'Obs. midpoint barycentric dynamic time (MJD)'),
+                    after=True)
     return ccd
 
 class ExoMultiPipe(CorMultiPipeBase):
@@ -225,6 +199,30 @@ def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
                             keep_intermediate=keep_intermediate,
                             keep_fits=keep_fits)
 
+def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
+                    glob_include=GLOB_INCLUDE,
+                    start=None,
+                    stop=None):
+    """List exoplanet observation present in raw_data_root"""
+    dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
+    dirs, _ = zip(*dirs_dates)
+    if len(dirs) == 0:
+        log.warning('No directories found')
+        return []
+    exoplanets = []
+    for directory in dirs:
+        all_files = multi_glob(directory, glob_list=glob_include)
+        if len(all_files) == 0:
+            continue
+        collection = ccdp.ImageFileCollection(filenames=all_files,
+                                              keywords=['object'])
+        texos = collection.values('object', unique=True)
+        # Standardize to no spaces
+        texos = [e.replace(' ', '') for e in texos]
+        exoplanets.extend(texos)
+    exoplanets = list(set(exoplanets))
+    return exoplanets
+
 class ExoArgparseMixin:
     def add_exoplanet_root(self,
                            default=EXOPLANET_ROOT,
@@ -266,6 +264,17 @@ class ExoArgparseMixin:
         self.parser.add_argument('--' + option, type=int, 
                                  default=default, help=help, **kwargs)
 
+    def add_list_exoplanets(self, 
+                            default=False,
+                            help=None,
+                            **kwargs):
+        option = 'list_exoplanets'
+        if help is None:
+            help = 'print list of exoplanets observed'
+        self.parser.add_argument('--' + option,
+                                 action=argparse.BooleanOptionalAction,
+                                 default=default, help=help, **kwargs)
+
 class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
                          CalArgparseHandler):
     def add_all(self):
@@ -278,9 +287,15 @@ class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
         self.add_join_tolerance()
         self.add_join_tolerance_unit()
         self.add_keep_fits()
+        self.add_list_exoplanets()
         super().add_all()
 
     def cmd(self, args):
+        if args.list_exoplanets:
+            exoplanets = list_exoplanets()
+            for e in exoplanets:
+                print(e)
+            return
         c = CalArgparseHandler.cmd(self, args)
         join_tolerance = args.join_tolerance*u.Unit(args.join_tolerance_unit)
         exoplanet_tree(raw_data_root=args.raw_data_root,
@@ -301,9 +316,7 @@ if __name__ == '__main__':
     aph.add_all()
     args = parser.parse_args()
     aph.cmd(args)
-    
-
-    
+                 
 #log.setLevel('DEBUG')
 ##directory = '/data/IoIO/raw/20210921'
 #directory = '/data/IoIO/raw/20220319/'

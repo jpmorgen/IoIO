@@ -3,7 +3,9 @@
 
 import ccdproc as ccdp
 
-from IoIO.cormultipipe import detflux, objctradec_to_obj_center, as_single
+from ccdmultipipe import as_single
+
+from IoIO.cormultipipe import detflux, objctradec_to_obj_center
 from IoIO.standard_star import (StandardStar, extinction_correct,
                                 rayleigh_convert)
 from IoIO.horizons import obj_ephemeris
@@ -12,6 +14,10 @@ from IoIO.on_off_pipeline import on_off_pipeline
 MERCURY_ROOT = '/data/Mercury'
 
 standard_star_obj = StandardStar(reduce=True)
+
+# --> Might want to have a pre-backsub routine that adds Mercury as
+# --> OBJECT, since that got messed up on occation -- was set to a
+# --> focus star and I forgot to go explicitly go to Mercury
 
 #directory = '/data/IoIO/raw/2018-05-08/'
 directory = '/data/IoIO/raw/2021-10-28/'
@@ -32,7 +38,6 @@ pout = on_off_pipeline(directory,
                        obj_ephm_prefix='Mercury',
                        standard_star_obj=standard_star_obj,
                        add_ephemeris=obj_ephemeris,
-                       pre_backsub=[objctradec_to_obj_center, detflux],
                        post_backsub=[extinction_correct,
                                      rayleigh_convert, as_single],
                        outdir_root=MERCURY_ROOT,

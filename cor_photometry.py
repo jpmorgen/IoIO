@@ -161,6 +161,9 @@ class CorPhotometry(Photometry):
                 self._solved = True
                 with fits.open(outroot + '.wcs') as HDUL:
                     self._wcs = WCS(HDUL[0].header)
+                # The astrometry.net code or CCDData.read seems to set
+                # RADESYS = FK5 deep in the bowls of wcs so nothing I
+                # do affects it
                 self._rdls_table = Table.read(outroot + '.rdls')
                 #self.source_table.show_in_browser()
                 return self._wcs
@@ -266,6 +269,9 @@ class CorPhotometry(Photometry):
         source_ccd = self.ccd[ymin:ymax, xmin:xmax]
         threshold = self.threshold[ymin:ymax, xmin:xmax]
         segm = self.segm_image.data[ymin:ymax, xmin:xmax]
+        back = self.background[ymin:ymax, xmin:xmax]
+        # Take median back_rms for plotting purposes
+        back_rms = np.median(self.back_rms[ymin:ymax, xmin:xmax])
         #https://pythonmatplotlibtips.blogspot.com/2019/07/draw-two-axis-to-one-colorbar.html
         ax = plt.subplot(projection=source_ccd.wcs)
         ims = plt.imshow(source_ccd)
@@ -283,21 +289,41 @@ class CorPhotometry(Photometry):
         cax2.set_ylabel('% nonlin')
 
         ax.contour(segm, levels=0, colors='white')
+        ax.contour(source_ccd - back,
+                   levels=np.arange(2,11)*back_rms, colors='gray')
         ax.contour(source_ccd - threshold,
-                   levels=0, colors='gray')
+                   levels=0, colors='green')
         ax.set_title(f'{self.ccd.meta["OBJECT"]} {self.ccd.meta["DATE-AVG"]}')
+        ax.text(0.1, 0.9, f'back_rms_scale = {self.back_rms_scale}',
+                color='white', transform=ax.transAxes)
         if show:
             plt.show()
         savefig_overwrite(outname)
         plt.close()
 
-def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
-                   in_name=None, outdir=None, create_outdir=None,
-                   solve_timeout=None, keep_intermediate=False, **kwargs):
-    """cormultipipe post-processing routine to add wcs to ccd.  This
-    needs to be one of the last things in the cormultipipe stream
-    because ccd.meta, because any subsequent processing of ccd or
-    ccd.meta are not reflected in the photometry.ccd"""
+def add_astrometry(ccd_in, bmp_meta=None,
+                   photometry=None,
+                   mask_ND_before_astrometry=False,
+                   in_name=None,
+                   outdir=None,
+                   create_outdir=None,
+                   solve_timeout=None,
+                   keep_intermediate=False,
+                   **kwargs):
+    """cormultipipe post-processing routine to add wcs to ccd
+
+    Parameters
+    ----------
+    ccd_in
+
+    photometry created if none proveded
+
+    mask_ND_before_astrometry : bool
+        Convenience parameter to improve photometry solves by masking
+        ND filter in the case where ND filter is not otherwise masked
+        Default is ``False``
+
+    """
     if isinstance(ccd_in, list):
         if isinstance(in_name, list):
             return [add_astrometry(
@@ -319,8 +345,10 @@ def add_astrometry(ccd_in, bmp_meta=None, photometry=None,
                     for ccd in ccd_in]
     ccd = ccd_in.copy()
     photometry = photometry or CorPhotometry()
-    # Blank out the ND filter for photometry calculations
-    photometry.ccd = nd_filter_mask(ccd)
+    if mask_ND_before_astrometry:
+        photometry.ccd = nd_filter_mask(ccd)
+    else:
+        photometry.ccd = ccd
     photometry.solve_timeout = solve_timeout or photometry.solve_timeout
     if keep_intermediate:
         if outdir is not None:
@@ -371,6 +399,9 @@ def object_to_objctradec(ccd_in, **kwargs):
                     ('HIERARCH OBJECT_TO_OBJCTRADEC', True,
                      'OBJCT* point to OBJECT'),
                     after=True)
+    # Reset ccd.sky_coord, just in case it has been used before now
+    # (e.g. in cor_process)
+    ccd.sky_coord = None
     return ccd
 
 class CorPhotometryArgparseMixin(PhotometryArgparseMixin):

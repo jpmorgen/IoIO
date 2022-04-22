@@ -37,9 +37,10 @@ OBJ_COL_TO_META = ['RA', 'DEC', 'RA_rate', 'DEC_rate', 'V',
 GALSAT_FROM_OBS_COL_NUMS = \
     '1, 3, 6, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26, 27'
 GALSAT_COL_NUMS = '14, 15'
-GALSAT_OBS_COL_TO_META = ['RA', 'DEC', 'r', 'r_rate', 'delta', 'delta_rate',
-                          'PDObsLon', 'PDObsLat', 'PDSunLon', 'SubSol_ang',
-                          'SubSol_dist', 'sysIII', 'phi']
+GALSAT_OBS_COL_TO_META = ['RA', 'DEC', 'r', 'r_rate', 'delta',
+                          'delta_rate', 'PDObsLon', 'PDObsLat',
+                          'PDSunLon', 'SubSol_ang', 'SubSol_dist',
+                          'NPole_ang', 'NPole_dist', 'sysIII', 'phi']
 
 #GALSAT_COL_TO_META = ['PDObsLon', 'PDObsLat', 'PDSunLon', 'SubSol_ang']
 
@@ -117,6 +118,10 @@ def obj_ephemeris(ccd_in,
     e = h.ephemerides(quantities=quantities)
     ra = Angle(e['RA'].quantity)
     dec = Angle(e['DEC'].quantity)
+    ccd.meta['RADESYS'] = ('ICRF', 'OBJCT* from JPL HORIZONS')
+    if ccd.wcs is not None:
+        # The real place to change RADESYS is in the wcs
+        ccd.wcs.wcs.radesys = 'ICRS'
     ccd.meta['OBJCTRA'] = (ra[0].to_string(unit=u.hour),
                            'OBJECT RA from HORIZONS')
     ccd.meta['OBJCTDEC'] = (dec[0].to_string(unit=u.deg),

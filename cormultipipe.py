@@ -280,7 +280,7 @@ def mask_above_key(ccd_in, bmp_meta=None, key=None, margin=0.1, **kwargs):
     mask = ccd.data >= masklevel - margin
     n_masked = np.count_nonzero(mask)
     if n_masked > 0:
-        log.info(f'Masking {n_masked} pixels above {key}')
+        log.debug(f'Masking {n_masked} pixels above {key}')
     if len(key) > 6:
         h = 'HIERARCH '
     else:
@@ -319,14 +319,15 @@ def combine_masks(data, **kwargs):
         if ccd.mask is None:
             continue
         if newmask is None:
-            newmask = ccd.mask
+            newmask = ccd.mask.copy()
             continue
-        newmask += ccd.mask
+        newmask = np.logical_or(newmask, ccd.mask)
     if newmask is None:
         return data
-    # Write mask into ccds
+    # Write mask into copied versions of ccds
     newdata = []
-    for ccd in data:
+    for ccd_in in data:
+        ccd = ccd_in.copy()        
         ccd.mask = newmask
         newdata.append(ccd)
     return newdata
@@ -396,7 +397,9 @@ def detflux(ccd_in, exptime_unit=None, **kwargs):
 def objctradec_to_obj_center(ccd_in, bmp_meta=None, **kwargs):
     """Sets obj_center from OBJCTRA and OBJCTDEC keywords
 
-    OBJCTRA and OBJCTDEC are assumed to be set from an astrometry
+    Only operates if ccd.wcs is set.
+
+    NOTE! OBJCTRA and OBJCTDEC are assumed to be set from an ephemeris
     calculation and thus center_quality is set to 10
 
     """
@@ -408,7 +411,7 @@ def objctradec_to_obj_center(ccd_in, bmp_meta=None, **kwargs):
         return ccd_in
     objctra = ccd_in.meta.get('OBJCTRA')
     objctdec = ccd_in.meta.get('OBJCTDEC')
-    if objctra is None and objctdec is None:
+    if objctra is None or objctdec is None:
         return ccd_in        
     ccd = ccd_in.copy()
     bmp_meta = bmp_meta or {}
@@ -430,7 +433,7 @@ def objctradec_to_obj_center(ccd_in, bmp_meta=None, **kwargs):
     add_history(ccd.meta, 'Used OBJCTRA and OBJCTDEC keywords to calculate obj_cent')
     bmp_meta['dobj_center'] = dcent
     return ccd
-    
+
 ######### Argparse mixin
 class CorArgparseMixin:
     # This modifies BMPArgparseMixin outname_append

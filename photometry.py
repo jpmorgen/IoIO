@@ -19,6 +19,11 @@ from photutils.utils import calc_total_error
 from astroquery.simbad import Simbad
 from astroquery.sdss import SDSS
 
+from reproject.mosaicking import find_optimal_celestial_wcs
+from ccdproc import wcs_project
+
+from bigmultipipe import assure_list
+
 from precisionguide import pgproperty
 
 EXPTIME_KEY = 'EXPTIME'
@@ -81,15 +86,77 @@ def is_flux(unit):
         return False
     return True
 
+def rot_wcs(wcs, angle):
+    """Rotate WCS by angle (CCW)"""
+    if not isinstance(angle, u.Quantity):
+        raise ValueError('angle must be a Quantity')
+    c, s = np.cos(angle), np.sin(angle)
+    rmat = np.asarray(((c, -s),
+                       (s, c)))
+    r_wcs = wcs.copy()
+    if r_wcs.wcs.has_cd():
+        r_cd = np.matmul(r_wcs.wcs.cd, rmat)
+        r_wcs.wcs.cd = r_cd
+    elif r_wcs.wcs.has_pc():
+        r_pc = np.matmul(r_wcs.wcs.pc, rmat)
+        r_wcs.wcs.pc = r_pc
+    else:
+        raise ValueError('ccd.wcs.wcs does not have expected cd or pc '
+                         'transformation matrix')
+    return r_wcs
+
+def rot_to(ccd_in,
+           rot_to_angle=0,
+           rot_angle_from_key=None,
+           rot_angle_key_unit=u.degree,
+           **kwargs):
+    """Reproject image to celestial coords plus an additional rotation
+    measured CCW from N
+
+    Parameters
+    ----------
+    ccd_in : astropy.nddata.CCDData
+        Input `~astropy.nddata.CCDData`
+
+    rot_to_angle : astropy.units.Quantity, optional
+        Additional rotation angle after CCD image has been oriented N
+        up, E west, CCW.
+        Default is `0`
+        
+    rot_angle_from_key : str or list of str None
+        FITS header key(s) from which rotation angle is constructed.
+        Values in keys are added to each other, including the initial
+        value of rot_to_angle
+        Default is `None`
+
+    rot_angle_key_unit : astropy.units.Unit
+        Unit applied to rot_angle_from_key
+        Default is `astropy.units.deg`
+
+    **kwargs : required as bigmultipipe post-processing routine
+
+    """
+    ccd = ccd_in.copy()
+    if rot_angle_from_key is not None:
+        rot_angle_from_key = assure_list(rot_angle_from_key)
+        for k in rot_angle_from_key:
+            rot_to_angle += ccd.meta[k]
+        rot_to_angle *= rot_angle_key_unit
+    # North up, east left
+    ne_wcs, _ = find_optimal_celestial_wcs([(ccd.data, ccd.wcs)])
+    r_wcs = rot_wcs(ne_wcs, rot_to_angle)
+    ccd = wcs_project(ccd, r_wcs)
+    return ccd
+    
 class Photometry:
     def __init__(self,
-                 ccd=None,
+                 ccd=None, # Passed by reference since nothing operates ON it
                  seeing=5, # pixels
                  n_connected_pixels=5,
                  source_mask_dilate=11, # pixels
-                 source_mask_nsigma=2, # pixels
+                 source_mask_nsigma=2, # sigma above background
                  n_back_boxes=10, # number of boxes in each dimension used to calculate background
-                 back_rms_scale=2.0, # Scale background rms for threshold calculation
+                 back_rms_scale=5.0, # Scale background rms for threshold calculation
                  remove_masked_sources=True,
                  no_deblend=False,
                  deblend_nlevels=32,
