@@ -118,14 +118,14 @@ def obj_ephemeris(ccd_in,
     e = h.ephemerides(quantities=quantities)
     ra = Angle(e['RA'].quantity)
     dec = Angle(e['DEC'].quantity)
-    ccd.meta['RADESYS'] = ('ICRF', 'OBJCT* from JPL HORIZONS')
-    if ccd.wcs is not None:
-        # The real place to change RADESYS is in the wcs
-        ccd.wcs.wcs.radesys = 'ICRS'
     ccd.meta['OBJCTRA'] = (ra[0].to_string(unit=u.hour),
                            'OBJECT RA from HORIZONS')
     ccd.meta['OBJCTDEC'] = (dec[0].to_string(unit=u.deg),
                             'OBJECT DEC from HORIZONS')
+    ccd.meta.insert('OBJCTDEC',
+                    ('HIERARCH OBJECT_TO_OBJCTRADEC', True,
+                     'OBJCT* point to OBJECT'),
+                    after=True)
     ccd.meta['HIERARCH HORIZONS_TARGET'] = e['targetname'][0]
     ccd = table_row_to_ccd_meta(ccd, e, obs_col_to_meta,
                                 prefix=obj_ephm_prefix, row=0)

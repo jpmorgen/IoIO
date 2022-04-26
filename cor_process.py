@@ -361,7 +361,9 @@ def fix_obj_and_coord(ccd_in, **kwargs):
         ccd.meta['OBJECT'] = 'Jupiter'
         
     return ccd
-    
+
+# --> I will want some sort of integrator for this to calculate
+# airmass at midpoint and handle case where we are close to horizon
 def kasten_young_airmass(ccd_in):
     """Record airmass considering curvature of Earth
 

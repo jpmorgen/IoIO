@@ -147,7 +147,7 @@ def metadata(hdr_in,
         plate_scale *= u.radian
         plate_scale = plate_scale.to(u.arcsec)
         # Proper FITS header units would make this easier
-        hdr['PIXSCALE'] = (plate_scale.value, '[arcsec] approximate unbinned pixel scale')    
+        hdr['PIXSCALE'] = (plate_scale.value, '[arcsec] approximate binned pixel scale')    
     return hdr
 
 def exp_correct_value(date_obs):

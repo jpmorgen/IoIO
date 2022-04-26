@@ -184,19 +184,18 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
     f_pairs = closest_in_time(collection, (f'{band}_on', f'{band}_off'),
                               valid_long_exposure,
                               directory=directory)
-    # I want to reduce the on-band images last so their metadata and
-    # Photometry objects stick around for subsequent processing.  This
-    # will make it hard to get the information for the off-band
-    # filters in case I want to use that for calibration purposes
-    # too.  Cross that bridge when I come to it.  Note that list
-    # method reverse does not work with lists of strings, presumably
-    # because strings are invariants and reverse() does it work in place
-    f_pairs = [list(reversed(p)) for p in f_pairs]
     if len(f_pairs) == 0:
         log.warning(f'No matching set of on-off {band} files found '
                     f'in {directory}')
         return []
- 
+    # I want to reduce the on-band images last so their metadata and
+    # Photometry objects stick around for subsequent processing.  This
+    # will make it hard to get the information for the off-band
+    # filters in case I want to use that for calibration purposes too.
+    # To fix that and potential loss of data in a pair where one is OK
+    # and the other is not, it might ultimately be best to reduce all
+    # the data individually and then combine with closest_in_time
+    for f in f_pairs: f.reverse()
     cmp = CorMultiPipeBase(
         ccddata_cls=CorData,
         calibration=calibration,

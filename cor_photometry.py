@@ -28,7 +28,6 @@ from precisionguide import PGData
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE, Photometry,
                              PhotometryArgparseMixin)
 from IoIO.utils import savefig_overwrite
-from IoIO.cordata import CorData
 from cormultipipe import nd_filter_mask
 
 MIN_SOURCES_TO_SOLVE = 5
@@ -109,18 +108,27 @@ class CorPhotometry(Photometry):
         # anyway
         xyls_table = self.source_table['xcentroid', 'ycentroid']
 
-        # If *_ephemeris has run, objct* coords are very high quality.  
-        ra = Angle(self.ccd.meta['objctra'])
-        ra = ra.to_string(sep=':')
-        dec = Angle(self.ccd.meta['objctdec'])
-        dec = dec.to_string(alwayssign=True, sep=':')
-        naxis1 = self.ccd.meta['naxis1']
-        naxis2 = self.ccd.meta['naxis2']
-        pixscale = self.ccd.meta['PIXSCALE']
-        radius = np.linalg.norm((naxis1, naxis2)) * u.pixel
-        radius = radius * pixscale *u.arcsec/u.pixel
+        # Use SkyCoord to parse.  Note this assumes RADEC is always in hours
+        sc = SkyCoord(self.ccd.meta['objctra'],
+                      self.ccd.meta['objctdec'],
+                      unit=(u.hour, u.deg))
+        ra = sc.ra.to_string(sep=':')
+        dec = sc.dec.to_string(alwayssign=True, sep=':')
+        ccd_shape = np.asarray(self.ccd.shape)
+        pradius = np.average(ccd_shape) * u.pixel
+        # PIXSCALE is binned
+        pixscale = self.ccd.meta.get('PIXSCALE')
+        if pixscale is None:
+            # failsafe that should not happen if sx694.metadata has run
+            radius = 0.5*u.deg
+            pixscale = radius/pradius
+            pixscale = pixscale.to(u.arcsec/u.pixel)
+            pixscale = pixscale.value
+        else:
+            radius = pradius * pixscale * u.arcsec/u.pixel
         radius = radius.to(u.deg)
-        if (isinstance(self.ccd, PGData)
+        if (self.ccd.meta.get('OBJECT_TO_OBJCTRADEC')
+            and isinstance(self.ccd, PGData)
             and self.ccd.center_quality > 5):
             # Reference CRPIX* to object's PGData center pixel
             # Note obj_center is python ordering
@@ -128,6 +136,7 @@ class CorPhotometry(Photometry):
             crpix_str = f'--crpix-x {c[1]} --crpix-y {c[0]}'
         else:
             crpix_str = ''
+
         if self.solve_timeout is not None:
             cpulimit_str = f'--cpulimit {self.solve_timeout}'
         else:
@@ -136,7 +145,7 @@ class CorPhotometry(Photometry):
         astrometry_command = \
             f'solve-field --x-column xcentroid --y-column ycentroid ' \
             f'--ra {ra} --dec {dec} --radius {2*radius.value:.2f} ' \
-            f'--width {naxis1} --height {naxis2} ' \
+            f'--width {ccd_shape[1]:.0f} --height {ccd_shape[0]:.0f} ' \
             f'--scale-low {pixscale*0.8:.2f} '\
             f'--scale-high {pixscale*1.2:.2f} --scale-units arcsecperpix ' \
             f'{crpix_str} {cpulimit_str} ' \
@@ -383,6 +392,9 @@ def object_to_objctradec(ccd_in, **kwargs):
     obj = ccd.meta['OBJECT']
     simbad_results = s.query_object(obj)
     if simbad_results is None:
+        # --> This is where I want to emulate simbad results for
+        # Qatars or add abstraction layer for Simbad to do so
+
         # Don't fail, since OBJT* are within pointing errors
         log.warning(f'Simbad did not resolve: {obj}, relying on '
                     f'OBJCTRA = {ccd.meta["OBJCTRA"]} '
@@ -482,12 +494,17 @@ if __name__ == '__main__':
     from IoIO.calibration import Calibration
     c = Calibration(reduce=True)    
     photometry = CorPhotometry()
-    fname = '/data/IoIO/raw/20220414/KPS-1b-S001-R001-C001-R.fts'
+    #fname = '/data/IoIO/raw/20220414/KPS-1b-S001-R001-C001-R.fts'
+    #directory = '/data/IoIO/raw/2018-05-08/'
+    #fname = os.path.join(directory, 'SII_on-band_007.fits')
+    fname = '/data/IoIO/raw/2019-04_Astrometry/Main_Astrometry_West_of_Pier.fit'
     rccd = CorData.read(fname)
-    ccd = cor_process(rccd, calibration=c, auto=True)
-    photometry.ccd = ccd
-    photometry.source_table.show_in_browser()
-    photometry.wide_source_table.show_in_browser()
-    photometry.wide_rdls_table.show_in_browser()
-    photometry.source_gaia_join.show_in_browser()
-    photometry.source_gaia_join.write('/tmp/test_gaia.ecsv', overwrite=True)
+    #ccd = cor_process(rccd, calibration=c, auto=True)
+    #photometry.ccd = ccd
+    photometry.ccd = rccd
+    #photometry.source_table.show_in_browser()
+    print(photometry.wcs)
+    #photometry.wide_source_table.show_in_browser()
+    #photometry.wide_rdls_table.show_in_browser()
+    #photometry.source_gaia_join.show_in_browser()
+    #photometry.source_gaia_join.write('/tmp/test_gaia.ecsv', overwrite=True)

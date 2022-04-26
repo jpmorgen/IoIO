@@ -31,7 +31,7 @@ EXOPLANET_ROOT = '/data/Exoplanets'
 GLOB_INCLUDE = ['TOI*', 'WASP*', 'KPS*', 'HAT*', 'K2*', 'TrES*',
                 'Qatar*', 'GJ*']
 
-MIN_TRANSIT_OBS_TIME = 45*u.min
+MIN_TRANSIT_OBS_TIME = 1*u.hour
 
 # I am not sure the barytime calculations would be valid for solar
 # system objects because they are too close.  So we don't put this
@@ -84,14 +84,18 @@ class ExoMultiPipe(CorMultiPipeBase):
             log.warning(f'Not able to plot object for {outname}: {e}')
         return written_name
 
-def expo_calc(vmag):
-    # TOI-2109b was nice reference
+def estimate_exposure(vmag):
+    # HAT-P-36b as ref
     expo_correct = 2*u.s
-    vmag = vmag*u.mag(u.ct/u.s)
-    toi_mag = 10*u.mag(u.ct/u.s)
-    toi_expo = 20*u.s + expo_correct
-    dmag = toi_mag - vmag
-    return toi_expo * dmag.physical - expo_correct
+    ref_mag = 12.26*u.mag(u.electron)
+    ref_expo = 102*u.s
+    ref_frac_nonlin = 60
+    target_nonlin = 50
+    vmag = vmag*u.mag(u.electron)
+    dmag = ref_mag - vmag
+    return (target_nonlin/ref_frac_nonlin
+            *(ref_expo * dmag.physical)
+            - expo_correct)
 
 def exoplanet_pipeline(flist,
                        reduced_directory,
@@ -213,6 +217,9 @@ def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
     if len(dirs) == 0:
         log.warning('No directories found')
         return []
+    sim = Simbad()
+    sim.add_votable_fields('flux(U)', 'flux(B)', 'flux(V)', 'flux(R)',
+                           'flux(I)')
     exoplanet_obs = []
     for directory in dirs:
         all_files = multi_glob(directory, glob_list=glob_include)
@@ -220,9 +227,15 @@ def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
             continue
         collection = ccdp.ImageFileCollection(
             filenames=all_files,
-            keywords=['date-obs', 'object'])
+            keywords=['date-obs', 'object', 'exptime'])
         texos = collection.values('object', unique=True)
         for e in texos:
+            simbad_results = sim.query_object(e)
+            if simbad_results is None:
+                log.warning(f'Simbad did not resolve: {e}')
+                vband = np.NAN
+            else:
+                vband = simbad_results['FLUX_V'][0]    
             tc = collection.filter(object=e)
             date_obss = tc.values('date-obs')
             tts = Time(date_obss, format='fits')
@@ -231,10 +244,33 @@ def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
             # Standardize to no spaces
             e = e.replace(' ', '')
             date, _ = date_obss[0].split('T')
-            exoplanet_obs.append((e, date))
+            exptime = tc.values('exptime')[0]
+            exoplanet_obs.append((e, date, exptime, vband))
     return exoplanet_obs
 
 class ExoArgparseMixin:
+    def add_expo_calc(self, 
+                      default=None,
+                      help=None,
+                      **kwargs):
+        option = 'expo_calc'
+        if help is None:
+            help = 'Estimate exposure time for Vmag (default: None)'
+        self.parser.add_argument('--' + option, type=float,
+                                 nargs=1, metavar='Vmag',
+                                 default=default, help=help, **kwargs)
+
+    def add_list_exoplanets(self, 
+                            default=False,
+                            help=None,
+                            **kwargs):
+        option = 'list_exoplanets'
+        if help is None:
+            help = 'print list of exoplanets observed'
+        self.parser.add_argument('--' + option,
+                                 action=argparse.BooleanOptionalAction,
+                                 default=default, help=help, **kwargs)
+
     def add_exoplanet_root(self,
                            default=EXOPLANET_ROOT,
                            help=None,
@@ -275,21 +311,12 @@ class ExoArgparseMixin:
         self.parser.add_argument('--' + option, type=int, 
                                  default=default, help=help, **kwargs)
 
-    def add_list_exoplanets(self, 
-                            default=False,
-                            help=None,
-                            **kwargs):
-        option = 'list_exoplanets'
-        if help is None:
-            help = 'print list of exoplanets observed'
-        self.parser.add_argument('--' + option,
-                                 action=argparse.BooleanOptionalAction,
-                                 default=default, help=help, **kwargs)
-
 class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
                          CalArgparseHandler):
     def add_all(self):
         """Add options used in cmd"""
+        self.add_expo_calc()
+        self.add_list_exoplanets()
         self.add_exoplanet_root()
         self.add_start()
         self.add_stop()
@@ -298,10 +325,12 @@ class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
         self.add_join_tolerance()
         self.add_join_tolerance_unit()
         self.add_keep_fits()
-        self.add_list_exoplanets()
         super().add_all()
 
     def cmd(self, args):
+        if args.expo_calc is not None:
+            print(estimate_exposure(args.expo_calc))
+            return
         if args.list_exoplanets:
             exoplanet_obs = list_exoplanets()
             exos_dates = list(zip(*exoplanet_obs))
