@@ -134,7 +134,8 @@ def off_band_subtract(ccd_in,
              'outname': outname}
     bmp_meta.update(tmeta)
     return on
-            
+
+# --> Consider off-band image as background, particularly with Mercury
 def on_off_pipeline(directory=None, # raw day directory, specify even if collection specified
                     bmp=None, # BigMultiPipe object
                     band=None,

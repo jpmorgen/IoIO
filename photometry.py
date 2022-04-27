@@ -1,4 +1,4 @@
-"""IoIO Photometry object"""
+"""Base Photometry object that provides interface with photutils"""
 
 import numpy as np
 
@@ -293,6 +293,8 @@ class Photometry:
     def convolved_data(self):
         if self._convolved_data is not None:
             return self._convolved_data
+        if self.ccd is None:
+            raise ValueError('Oops, Photometry(ccd) was not set to anything')
         return convolve(self.ccd.data, self.kernel)
 
     @property

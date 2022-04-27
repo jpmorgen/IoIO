@@ -129,9 +129,15 @@ obj_center calculations by using CorDataBase as CCDData
                 for d in data]
 
     def outname_create(self, *args,
+                       outname_ext='.fits',
                        **kwargs):
-        """Fix inconsistent Na_on filenames"""
-        outname = super().outname_create(*args, **kwargs)
+        """Default to .fits as output extension, fix inconsistent Na_on
+        filenames recorded with MaxIm
+
+        """
+        outname = super().outname_create(*args,
+                                         outname_ext=outname_ext,
+                                         **kwargs)
         outname = outname.replace('Na-on', 'Na_on')
         return outname
 
@@ -149,6 +155,7 @@ obj_center calculations by using CorDataBase as CCDData
         """
         written_name = super().file_write(
             ccd, outname, overwrite=overwrite, **kwargs)
+        
         if (photometry is None
             or photometry.wide_source_table is None):
             return written_name
@@ -181,6 +188,12 @@ obj_center calculations by using CorDataBase as CCDData
             photometry.source_gaia_join.write(
                 gname, delimiter=',', overwrite=True)
         return written_name
+
+class CorMultiPipeBinnedOK(CorMultiPipeBase, CCDMultiPipe):
+    """Enable binned images on the main camera to be processed"""
+
+    def pre_process(self, *args, **kwargs):
+        return CCDMultiPipe(self).pre_process(*args, **kwargs)
 
 ######### CorMultiPipe prepossessing routines
 def full_frame(data,

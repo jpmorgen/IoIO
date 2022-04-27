@@ -31,6 +31,7 @@ from IoIO.utils import savefig_overwrite
 from cormultipipe import nd_filter_mask
 
 MIN_SOURCES_TO_SOLVE = 5
+MAX_SOURCES_TO_SOLVE = 100
 KEYS_TO_SOURCE_TABLE = ['DATE-AVG',
                         ('DATE-AVG-UNCERTAINTY', u.s),
                         ('EXPTIME', u.s),
@@ -70,6 +71,7 @@ class CorPhotometry(Photometry):
         super().__init__(ccd=ccd,
                          keys_to_source_table=keys_to_source_table,
                          **kwargs)
+        self.wcs_by_proxy = None
         self.outname = outname
         self.solve_timeout = solve_timeout
 
@@ -107,6 +109,9 @@ class CorPhotometry(Photometry):
         # the quantities we are interested in, since we throw it away
         # anyway
         xyls_table = self.source_table['xcentroid', 'ycentroid']
+        # This assumes that source_table is sorted by reverse segment_flux
+        last_source = np.min((len(xyls_table), MAX_SOURCES_TO_SOLVE))
+        xyls_table = xyls_table[0:last_source]
 
         # Use SkyCoord to parse.  Note this assumes RADEC is always in hours
         sc = SkyCoord(self.ccd.meta['objctra'],
@@ -115,18 +120,18 @@ class CorPhotometry(Photometry):
         ra = sc.ra.to_string(sep=':')
         dec = sc.dec.to_string(alwayssign=True, sep=':')
         ccd_shape = np.asarray(self.ccd.shape)
-        pradius = np.average(ccd_shape) * u.pixel
+        pdiameter = np.average(ccd_shape) * u.pixel
         # PIXSCALE is binned
         pixscale = self.ccd.meta.get('PIXSCALE')
         if pixscale is None:
             # failsafe that should not happen if sx694.metadata has run
-            radius = 0.5*u.deg
-            pixscale = radius/pradius
+            diameter = 1*u.deg
+            pixscale = diameter/pdiameter
             pixscale = pixscale.to(u.arcsec/u.pixel)
             pixscale = pixscale.value
         else:
-            radius = pradius * pixscale * u.arcsec/u.pixel
-        radius = radius.to(u.deg)
+            diameter = pdiameter * pixscale * u.arcsec/u.pixel
+        diameter = diameter.to(u.deg)
         if (self.ccd.meta.get('OBJECT_TO_OBJCTRADEC')
             and isinstance(self.ccd, PGData)
             and self.ccd.center_quality > 5):
@@ -144,7 +149,7 @@ class CorPhotometry(Photometry):
 
         astrometry_command = \
             f'solve-field --x-column xcentroid --y-column ycentroid ' \
-            f'--ra {ra} --dec {dec} --radius {2*radius.value:.2f} ' \
+            f'--ra {ra} --dec {dec} --radius {2*diameter.value:.2f} ' \
             f'--width {ccd_shape[1]:.0f} --height {ccd_shape[0]:.0f} ' \
             f'--scale-low {pixscale*0.8:.2f} '\
             f'--scale-high {pixscale*1.2:.2f} --scale-units arcsecperpix ' \
@@ -168,6 +173,7 @@ class CorPhotometry(Photometry):
             self.solve_field_stderr = p.stderr
             if os.path.isfile(outroot+'.solved'):
                 self._solved = True
+                self.wcs_by_proxy = False
                 with fits.open(outroot + '.wcs') as HDUL:
                     self._wcs = WCS(HDUL[0].header)
                 # The astrometry.net code or CCDData.read seems to set
@@ -176,6 +182,7 @@ class CorPhotometry(Photometry):
                 self._rdls_table = Table.read(outroot + '.rdls')
                 #self.source_table.show_in_browser()
                 return self._wcs
+
 
     @property
     def rdls_table(self):
