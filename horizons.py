@@ -232,6 +232,10 @@ def galsat_ephemeris(ccd_in,
                                    'OBJECT RA from HORIZONS')
             ccd.meta['OBJCTDEC'] = (dec[0].to_string(unit=u.deg),
                                     'OBJECT DEC from HORIZONS')
+            ccd.meta.insert('OBJCTDEC',
+                            ('HIERARCH OBJECT_TO_OBJCTRADEC', True,
+                             'OBJCT* point to OBJECT'),
+                            after=True)
             
         for col in obs_col_to_meta:
             if te[col].mask[0]:

@@ -57,6 +57,7 @@ COR_PROCESS_EXPAND_FACTOR = 3.5
 
 IoIO_ROOT = '/data/IoIO'
 RAW_DATA_ROOT = os.path.join(IoIO_ROOT, 'raw')
+ASTROMETRY_ROOT = os.path.join(IoIO_ROOT, 'Astrometry')
 FIELD_STAR_ROOT = os.path.join(IoIO_ROOT, 'FieldStar')
 
 # string to append to processed files to avoid overwrite of raw data
@@ -68,6 +69,24 @@ OUTNAME_APPEND = "_p"
 # centering of object more reliable
 ND_EDGE_EXPAND = 40
 MIN_CENTER_QUALITY = 5
+
+
+# This is a little octobus stomachy.  The idea is that cor_photmetry
+# uses CorMultiPipeBase to reduce the base set of astrometry files and
+# CorMultiPipeBase.file_write writes FITS headers from solved images
+# to a centralized location.  To avoid circular import between
+# cor_photometry and cormultipipe, put astrometry_outname here even
+# though conceptually, it is more related to cor_photometry
+def astrometry_outname(fname, date_obs):
+    """Returns full pathname to centralized location into which a
+    plate-solved FITS header will be written.
+
+    """
+    bname = os.path.basename(fname)
+    broot, _ = os.path.splitext(bname)
+    outdir = os.path.join(ASTROMETRY_ROOT, date_obs)
+    outname = os.path.join(outdir, broot+'_wcs.fits')
+    return outname
 
 ######### CorMultiPipe object
 
@@ -155,24 +174,42 @@ obj_center calculations by using CorDataBase as CCDData
         """
         written_name = super().file_write(
             ccd, outname, overwrite=overwrite, **kwargs)
-        
-        if (photometry is None
-            or photometry.wide_source_table is None):
+
+        if photometry is None or not photometry.solved:
+            return written_name
+
+        # Write our astrometry in a full FITS header in a centralized
+        # location.  Note we may be processing multiple files
+        # (e.g. on-off subtraction).  Make the first one primary.
+        if isinstance(in_name, list):
+            in_name = in_name[0]
+
+        date, _ = ccd.meta['DATE-OBS'].split('T')
+        aoutname = astrometry_outname(in_name, date)
+        ccd.mask = None
+        ccd.uncertainty = None
+        hdul = ccd.to_hdu()
+        hdul[0].data = None
+        d = os.path.dirname(aoutname)
+        os.makedirs(d, exist_ok=True)
+        hdul.writeto(aoutname,
+                     overwrite=True)        
+
+        if photometry.wide_source_table is None:
             return written_name
 
         # Write our photometry results in centralized and, if desired,
         # "local" directory, where local, in this sense, is where the
-        # FITS files end up getting written.  Note we may be
-        # processing multiple files (e.g. on-off subtraction).  Make
-        # the first one primary
-        if isinstance(in_name, list):
-            in_name = in_name[0]
+        # FITS files end up getting written.  Note, the
+        # wide_source_table requires we have a valid OBJECT, which
+        # techncially we don't need for accumulating sample
+        # photometry, but there are not currently many cases we care
+        # about that would have this
         photometry.wide_source_table['in_name'] = in_name
         photometry.wide_source_table['outname'] = outname
         field_star_root = field_star_root or self.field_star_root
         bname = os.path.basename(outname)
         broot, _ = os.path.splitext(bname)
-        date, _ = ccd.meta['DATE-OBS'].split('T')
         photdir = os.path.join(field_star_root, date)
         dir_list = [photdir]
         if write_local_photometry:
@@ -184,6 +221,9 @@ obj_center calculations by using CorDataBase as CCDData
             tname = root + '.ecsv'
             photometry.wide_source_table.write(
                 tname, delimiter=',', overwrite=True)
+            if photometry.source_gaia_join is None:
+                # This was a proxy solve
+                continue
             gname = root + '_gaia.ecsv'
             photometry.source_gaia_join.write(
                 gname, delimiter=',', overwrite=True)

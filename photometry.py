@@ -137,6 +137,9 @@ def rot_to(ccd_in,
 
     """
     ccd = ccd_in.copy()
+
+    print(ccd.meta)
+
     if rot_angle_from_key is not None:
         rot_angle_from_key = assure_list(rot_angle_from_key)
         for k in rot_angle_from_key:
@@ -525,7 +528,11 @@ image
 
     @property
     def wcs(self):
-        """Returns WCS using the astrometry solution of source_table
+        """Returns WCS using the astrometry solution of source_table 
+
+        MUST BE SUBCLASSESED with specific code to extract pixel
+        scale, FOV radius, etc. needed for astroquery.astrometry or
+        astrometry.net code call
 
         """
         if self._wcs is not None:
@@ -533,7 +540,8 @@ image
         if self.source_catalog is None:
             self._solved = False
             return None
-        assert False, 'Code not written to use astroquery.astrometry_net'
+        # Let base class be used quietly in the case astrometry is not needed
+        self._solved = False
 
     @property
     def source_table_has_coord(self):

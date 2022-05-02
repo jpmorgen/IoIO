@@ -20,7 +20,7 @@ from IoIO.cordata_base import (IOIO_1_LOCATION, overscan_estimate,
 JUPITER_SYNONYMS = ['IPT', 'Na', 'Na_IPT', 'Na_IPT_R']
 
 # ACK!  I really should have connected and disconnected the telescope
-# during the ACP shell-out
+# during the ACP shell-out.  See comments in code where this is used
 ACP_TRACK_PAST_MERIDIAN = 45*u.min
 
 def get_filt_name(f, date_obs):
@@ -320,12 +320,19 @@ def fix_obj_and_coord(ccd_in, **kwargs):
             HADec(obstime=ccd.tavg, location=ccd.obs_location))
         hastr = hadec.ha.to_string(unit=u.hour, sep=' ', pad=True)
         ccd.meta['OBJCTHA'] = (hastr, f'[{hadec.ha.unit}]')
+        # For east of the merdian, we are guaranteed to be PIERSIDE
+        # WEST because ACP did not do early pier flips.  There is a
+        # deadband between meridian and ACP_TRACK_PAST_MERIDIAN where
+        # we just don't know the answer.  Make sure that we enter
+        # something in the PIERSIDE keyword.  This ensures that if it
+        # is not set, there is a problem somewhere else in the system!
         if hadec.ha < 0*u.deg:
             ccd.meta['PIERSIDE'] = 'WEST'
         elif hadec.ha > ACP_TRACK_PAST_MERIDIAN:
             ccd.meta['PIERSIDE'] = 'EAST'
         else:
             log.warning(f'Ambiguous PIERSIDE for {hastr}')        
+            ccd.meta['PIERSIDE'] = 'UNKNOWN'
     else:
         # Tweak metadata a little: These values are actually read from
         # the telescope and are not the real RA and DEC of the target
@@ -355,11 +362,14 @@ def fix_obj_and_coord(ccd_in, **kwargs):
                 ccd.meta['object'] = body.capitalize()
                 break
 
-    if ccd.meta.get('object') in JUPITER_SYNONYMS:
+    if obj in JUPITER_SYNONYMS:
         # I named MaxIm autosave sequences after the filters rather
         # than the object
         ccd.meta['OBJECT'] = 'Jupiter'
-        
+
+    if obj == 'WASP-136b':
+        # Fix typo
+        ccd.meta['OBJECT'] = 'WASP-163b'
     return ccd
 
 # --> I will want some sort of integrator for this to calculate
