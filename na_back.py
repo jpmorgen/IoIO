@@ -41,6 +41,8 @@ from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.standard_star import (extinction_correct,
                                 StandardStar, SSArgparseHandler)
+# --> Consider making this CorPhotometry and allowing astrometric and
+# --> photometric information to be siphoned off
 from IoIO.photometry import Photometry
 
 NA_BACK_ROOT = os.path.join(IoIO_ROOT, 'Na_back')

@@ -44,6 +44,18 @@ GALSAT_OBS_COL_TO_META = ['RA', 'DEC', 'r', 'r_rate', 'delta',
 
 #GALSAT_COL_TO_META = ['PDObsLon', 'PDObsLat', 'PDSunLon', 'SubSol_ang']
 
+# https://lasp.colorado.edu/home/mop/files/2015/02/CoOrd_systems7.pdf
+# sysIII is confusing because it is a left-handed coordinate system.
+# JUNO_JMAG_VIP4 defines a right-handed coordinates system with X-axis
+# defined by the intersection of the magnetic and geographic equators.
+# When viewed the observer is situated at the sysIII of that X-axis,
+# the magnetic field is tilted CW at its maximum value because the
+# tilt of the magnetic field is toward sysIII 200.8 AND sysIII is
+# left-handed.  The tilt of the field is 9.5 deg, but the centrifugal
+# equator of the IPT is less than that [woudl like a reference]
+JUNO_JMAG_VIP4 = 290.8*u.deg
+CENTRIFUGAL_EQUATOR_AMPLITUDE = 6.8*u.deg
+
 def location_to_dict(loc):
     """Useful for JPL horizons"""
     return {'lon': loc.lon.value,
@@ -221,9 +233,16 @@ def galsat_ephemeris(ccd_in,
 
     obs_eph.add_columns([sysIIIs, phis], names=['sysIII', 'phi'])
 
+    # Put all this into ccd.meta
     for galsat in GALSATS:
         mask = obs_eph['targetname'] == f'{galsat} ({GALSATS[galsat]})'
         te = obs_eph[mask]
+        for col in obs_col_to_meta:
+            if te[col].mask[0]:
+                continue
+            ccd.meta[f'HIERARCH {galsat}_{col}'] = \
+                (te[col][0], f'[{te[col].unit}]')
+
         if galsat == 'Jupiter':
             # Put Jupiter's precise coordinates into header
             ra = Angle(te['RA'].quantity)
@@ -236,13 +255,15 @@ def galsat_ephemeris(ccd_in,
                             ('HIERARCH OBJECT_TO_OBJCTRADEC', True,
                              'OBJCT* point to OBJECT'),
                             after=True)
-            
-        for col in obs_col_to_meta:
-            if te[col].mask[0]:
-                continue
-            ccd.meta[f'HIERARCH {galsat}_{col}'] = \
-                (te[col][0], f'[{te[col].unit}]')
-
+            # Put IPT centrifugal equator into ccd.meta.
+            # JUNO_JMAG_VIP4 X-axis effectively defines the *descending*
+            # node of IPT tilt because it is left handed, though this
+            # is cast in terms of the
+            sysIII = te['PDObsLon'].quantity
+            IPT_NPole_ang = -(CENTRIFUGAL_EQUATOR_AMPLITUDE
+                             * np.cos(sysIII[0] - JUNO_JMAG_VIP4))
+            ccd.meta['HIERARCH IPT_NPole_ang'] = (
+                IPT_NPole_ang.value, f'[{IPT_NPole_ang.unit}]')
 
     # I am going to leave this out for now because I can get it from
     # ccd.meta.  I may want to distill it to a simple dictionary, but

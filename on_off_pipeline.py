@@ -77,7 +77,6 @@ def off_band_subtract(ccd_in,
                       max_shift_off=50,
                       show=False,
                       outdir=None, # These get set by the pipeline
-                      create_outdir=None,
                       outname_append=None,
                       **kwargs):
     """cormultipipe post-processing routine that subtracts off-band image
@@ -126,7 +125,6 @@ def off_band_subtract(ccd_in,
     on.meta['HIERARCH SHIFT_OFF_D'] = (d_on_off, '[pix] dist on - off')
     add_history(on.meta, 'Scaled and shifted OFF_BAND by OFF_SCL and SHIFT_OFF')
     outname = outname_creator(on_fname, outdir=outdir,
-                              create_outdir=create_outdir,
                               outname_append=outname_append)
     tmeta = {'band': band,
              'off_on_ratio': off_on_ratio,

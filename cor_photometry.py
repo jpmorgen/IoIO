@@ -35,8 +35,7 @@ import IoIO.sx694 as sx694
 from IoIO.utils import FITS_GLOB_LIST, multi_glob, savefig_overwrite
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE, rot_wcs,
                              Photometry, PhotometryArgparseMixin)
-from IoIO.cormultipipe import (RAW_DATA_ROOT, ASTROMETRY_ROOT,
-                               astrometry_outname,
+from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                CorMultiPipeBinnedOK, nd_filter_mask)
 from IoIO.calibration import Calibration
 
@@ -49,9 +48,11 @@ KEYS_TO_SOURCE_TABLE = ['DATE-AVG',
                         'FILTER',
                         'AIRMASS']
 
+# We are going to save all our astrometry solutions to a centralized location
+ASTROMETRY_ROOT = os.path.join(IoIO_ROOT, 'Astrometry')
+
 # Proxy WCS settings.  
 MIN_CENTER_QUALITY = 5
-
 
 # MaxIm provides output as below whenever a PinPoint solution is
 # successful.  
@@ -157,6 +158,17 @@ def pierside(wcs):
     log.error(f'WCS solution not consistent with '
               f'IoIO coronagraph {wcs}')
     return 'ERROR'
+
+def astrometry_outname(fname, date_obs):
+    """Returns full pathname to centralized location into which a
+    plate-solved FITS header will be written.
+
+    """
+    bname = os.path.basename(fname)
+    broot, _ = os.path.splitext(bname)
+    outdir = os.path.join(ASTROMETRY_ROOT, date_obs)
+    outname = os.path.join(outdir, broot+'_wcs.fits')
+    return outname
 
 def astrometry_outname_as_outname(ccd, bmp_meta=None,
                            in_name=None,
@@ -738,7 +750,8 @@ class CorPhotometry(Photometry):
                 color='white', transform=ax.transAxes)
         if show:
             plt.show()
-        savefig_overwrite(outname)
+        if outname is not None:
+            savefig_overwrite(outname)
         plt.close()
 
 def object_to_objctradec(ccd_in, **kwargs):
@@ -773,6 +786,29 @@ def object_to_objctradec(ccd_in, **kwargs):
     # (e.g. in cor_process)
     ccd.sky_coord = None
     return ccd
+
+def write_astrometry(ccd_in, in_name=None,
+                       write_to_central_astrometry=True,
+                       **kwargs):
+    # Save WCS into centralized directory before we do any subsequent
+    # rotations.  This also effectively caches our astrometry
+    # solutions!  We have to copy our current ccd and send that to an
+    # HDUList, otherwise the wcs won't get into the metadata
+    if not write_to_central_astrometry:
+        return ccd_in
+    ccd = ccd_in.copy()
+    date, _ = ccd.meta['DATE-OBS'].split('T')
+    aoutname = astrometry_outname(in_name, date)
+    ccd.mask = None
+    ccd.uncertainty = None
+    # ccd.to_hdu needs at least some data to work
+    hdul = ccd.to_hdu()
+    hdul[0].data = None
+    d = os.path.dirname(aoutname)
+    os.makedirs(d, exist_ok=True)
+    hdul.writeto(aoutname,
+                 overwrite=True)
+    return ccd_in
 
 def add_astrometry(ccd_in, bmp_meta=None,
                    photometry=None,
@@ -854,11 +890,9 @@ def add_astrometry(ccd_in, bmp_meta=None,
     # Reset PIERSIDE in case proxy wcs was able to fill in a missing
     # pierside
     ccd.meta['PIERSIDE'] = photometry.pierside
-    # I am currently not putting the wcs into the metadata because I
-    # don't need it -- it is available as ccd.wcs or realtively easily
-    # extracted from disk like I do in Photometry.astrometry.  I am
-    # also not putting the SourceTable into the metadata, because it
-    # is still hanging around in the Photometry object.
+
+    ccd = write_astrometry(ccd, in_name=in_name, **kwargs)
+
     return ccd    
 
 class CorPhotometryArgparseMixin(PhotometryArgparseMixin):

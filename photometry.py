@@ -137,9 +137,6 @@ def rot_to(ccd_in,
 
     """
     ccd = ccd_in.copy()
-
-    print(ccd.meta)
-
     if rot_angle_from_key is not None:
         rot_angle_from_key = assure_list(rot_angle_from_key)
         for k in rot_angle_from_key:

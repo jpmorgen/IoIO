@@ -388,7 +388,8 @@ def standard_star_process(ccd,
 
     max_frac_nonlin = max_val/nonlin
 
-    # After binning pixel size
+    # --> Ideally I use the closest astrometry solution
+    # After binning pixel size 
     pixsz = np.asarray((ccd.meta['XPIXSZ'], ccd.meta['YPIXSZ']))
     pix_area = np.prod(pixsz)
     pix_area *= u.micron**2
