@@ -48,8 +48,10 @@ KEYS_TO_SOURCE_TABLE = ['DATE-AVG',
                         'FILTER',
                         'AIRMASS']
 
-# We are going to save all our astrometry solutions to a centralized location
+# We are going to save all our astrometry and photometry solutions to
+# a centralized location
 ASTROMETRY_ROOT = os.path.join(IoIO_ROOT, 'Astrometry')
+PHOTOMETRY_ROOT = os.path.join(IoIO_ROOT, 'FieldStar')
 
 # Proxy WCS settings.  
 MIN_CENTER_QUALITY = 5
@@ -171,9 +173,9 @@ def astrometry_outname(fname, date_obs):
     return outname
 
 def astrometry_outname_as_outname(ccd, bmp_meta=None,
-                           in_name=None,
-                           photometry=None,
-                           **kwargs):
+                                  in_name=None,
+                                  photometry=None,
+                                  **kwargs):
     """Cormultipipe postprocessing routine that enables FITS file to be
     written to ASTROMETRY_ROOT system
 
@@ -787,13 +789,15 @@ def object_to_objctradec(ccd_in, **kwargs):
     ccd.sky_coord = None
     return ccd
 
-def write_astrometry(ccd_in, in_name=None,
-                       write_to_central_astrometry=True,
-                       **kwargs):
+def write_astrometry(ccd_in, in_name=None, outname=None,
+                     write_to_central_astrometry=True,
+                     **kwargs):
     # Save WCS into centralized directory before we do any subsequent
     # rotations.  This also effectively caches our astrometry
     # solutions!  We have to copy our current ccd and send that to an
-    # HDUList, otherwise the wcs won't get into the metadata
+    # HDUList, otherwise the wcs won't get into the metadata.  Unlike
+    # write_photometry, we don't expect a local version of this, since
+    # the WCS solutions are saved with the primary FITS output
     if not write_to_central_astrometry:
         return ccd_in
     ccd = ccd_in.copy()
@@ -808,7 +812,41 @@ def write_astrometry(ccd_in, in_name=None,
     os.makedirs(d, exist_ok=True)
     hdul.writeto(aoutname,
                  overwrite=True)
-    return ccd_in
+    return
+
+def write_photometry(in_name=None, outname=None, photometry=None,
+                     create_outdir=False,
+                     write_wide_source_table=False,
+                     write_source_gaia_join=False,
+                     **kwargs):
+    # CorPhotometry.wide_source_table requires we have coordinates
+    # (which we need) and a valid OBJECT and other columns, which
+    # we don't technically need at this point.  But there are not
+    # currently [m?]any cases we care about that would fail to
+    # have OBJECT, etc.  We certainly need the coordinates, so
+    # just go with this.
+    if (photometry is None
+        or not photometry.solved
+        or photometry.wide_source_table is None
+        or not (write_wide_source_table
+                or write_source_gaia_join)):
+        return
+
+    photometry.wide_source_table['in_name'] = in_name
+    photometry.wide_source_table['outname'] = outname
+    if create_outdir:
+        os.makedirs(os.path.dirname(outname), exist_ok=True)
+    oroot, _ = os.path.splitext(outname)
+    oname = oroot + '.ecsv'
+    if write_wide_source_table:
+        photometry.wide_source_table.write(
+            oname, delimiter=',', overwrite=True)
+    if (photometry.source_gaia_join is None
+        or not write_source_gaia_join):
+        return
+    gname = oroot + '_gaia.ecsv'
+    photometry.source_gaia_join.write(
+        gname, delimiter=',', overwrite=True)
 
 def add_astrometry(ccd_in, bmp_meta=None,
                    photometry=None,
@@ -818,6 +856,7 @@ def add_astrometry(ccd_in, bmp_meta=None,
                    create_outdir=None,
                    solve_timeout=None,
                    keep_intermediate=False,
+                   write_to_central_photometry=True,
                    **kwargs):
     """cormultipipe post-processing routine to add wcs to ccd
 
@@ -841,6 +880,7 @@ def add_astrometry(ccd_in, bmp_meta=None,
                 create_outdir=create_outdir,
                 solve_timeout=solve_timeout,
                 keep_intermediate=keep_intermediate,
+                write_to_central_photometry=write_to_central_photometry,
                 **kwargs)
                     for ccd, fname in zip(ccd_in, in_name)]
         else:
@@ -850,6 +890,7 @@ def add_astrometry(ccd_in, bmp_meta=None,
                 create_outdir=create_outdir,
                 solve_timeout=solve_timeout,
                 keep_intermediate=keep_intermediate,
+                write_to_central_photometry=write_to_central_photometry,
                 **kwargs)
                     for ccd in ccd_in]
     ccd = ccd_in.copy()
@@ -891,7 +932,20 @@ def add_astrometry(ccd_in, bmp_meta=None,
     # pierside
     ccd.meta['PIERSIDE'] = photometry.pierside
 
-    ccd = write_astrometry(ccd, in_name=in_name, **kwargs)
+    # Permanently install centralized astrometry and photometry
+    # writing, though user can override
+    write_astrometry(ccd, in_name=in_name, **kwargs)
+    if write_to_central_photometry:
+        # Slighly different logic, since write_photometry also handles
+        # case where local progressing pipeline writes photometry
+        bname = os.path.basename(in_name)
+        date, _ = ccd.meta['DATE-OBS'].split('T')
+        outname = os.path.join(PHOTOMETRY_ROOT, date, bname)
+        write_photometry(in_name=in_name, outname=outname,
+                         photometry=photometry,
+                         create_outdir=True,
+                         write_source_gaia_join=True,
+                         **kwargs)
 
     return ccd    
 

@@ -368,7 +368,7 @@ def fix_obj_and_coord(ccd_in, **kwargs):
         ccd.meta['OBJECT'] = 'Jupiter'
 
     if obj == 'WASP-136b':
-        # Fix typo
+        # Fix typo (also in outname_create)
         ccd.meta['OBJECT'] = 'WASP-163b'
     return ccd
 

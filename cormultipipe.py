@@ -57,7 +57,6 @@ COR_PROCESS_EXPAND_FACTOR = 3.5
 
 IoIO_ROOT = '/data/IoIO'
 RAW_DATA_ROOT = os.path.join(IoIO_ROOT, 'raw')
-FIELD_STAR_ROOT = os.path.join(IoIO_ROOT, 'FieldStar')
 
 # string to append to processed files to avoid overwrite of raw data
 OUTNAME_APPEND = "_p"
@@ -85,10 +84,8 @@ obj_center calculations by using CorDataBase as CCDData
                  naxis1=sx694.naxis1,
                  naxis2=sx694.naxis2,
                  process_expand_factor=COR_PROCESS_EXPAND_FACTOR,
-                 field_star_root=FIELD_STAR_ROOT,
                  **kwargs):
         self.calibration = calibration
-        self.field_star_root = field_star_root
         self.auto = auto
         super().__init__(outname_append=outname_append,
                          naxis1=naxis1,
@@ -140,67 +137,8 @@ obj_center calculations by using CorDataBase as CCDData
                                          outname_ext=outname_ext,
                                          **kwargs)
         outname = outname.replace('Na-on', 'Na_on')
+        outname = outname.replace('WASP-136b', 'WASP-163b')
         return outname
-
-    def file_write(self, ccd, outname,
-                   photometry=None,
-                   in_name=None,
-                   field_star_root=None,
-                   write_to_central_photometry=True,
-                   write_local_photometry=False,
-                   overwrite=False,
-                   **kwargs):
-        """Write FITS file in local directory and photometry Tables in
-        centralized location.  Join with Sloan survey requires a
-        separate step.  write_local_photometry = True implies
-        create_outdir.  The photometry code needs to be here, since we
-        use our outname, which is not determined until just before
-        file_write
-
-        """
-        written_name = super().file_write(
-            ccd, outname, overwrite=overwrite, **kwargs)
-
-        # CorPhotometry.wide_source_table requires we have coordinates
-        # (which we need) and a valid OBJECT and other columns, which
-        # we don't technically need at this point.  But there are not
-        # currently [m?]any cases we care about that would fail to
-        # have OBJECT, etc.  We certainly need the coordinates, so
-        # just go with this.
-        if (not (write_to_central_photometry or write_local_photometry)
-            or photometry is None
-            or not photometry.solved
-            or photometry.wide_source_table is None):
-            return written_name
-
-        # Note we may be processing multiple files (e.g. on-off
-        # subtraction).  Make the first one primary.
-        if isinstance(in_name, list):
-            in_name = in_name[0]
-
-        photometry.wide_source_table['in_name'] = in_name
-        photometry.wide_source_table['outname'] = outname
-        field_star_root = field_star_root or self.field_star_root
-        bname = os.path.basename(outname)
-        broot, _ = os.path.splitext(bname)
-        photdir = os.path.join(field_star_root, date)
-        dir_list = [photdir]
-        if write_local_photometry:
-            locdir, _ = os.path.split(outname)
-            dir_list.append(locdir)
-        for d in dir_list:
-            os.makedirs(d, exist_ok=True)
-            root = os.path.join(d, broot)
-            tname = root + '.ecsv'
-            photometry.wide_source_table.write(
-                tname, delimiter=',', overwrite=True)
-            if photometry.source_gaia_join is None:
-                # This was a proxy solve
-                continue
-            gname = root + '_gaia.ecsv'
-            photometry.source_gaia_join.write(
-                gname, delimiter=',', overwrite=True)
-        return written_name
 
 class CorMultiPipeBinnedOK(CorMultiPipeBase, CCDMultiPipe):
     """Enable binned images on the main camera to be processed"""

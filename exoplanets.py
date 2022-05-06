@@ -24,7 +24,8 @@ from IoIO.cormultipipe import (RAW_DATA_ROOT, CorMultiPipeBase,
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.photometry import SOLVE_TIMEOUT, JOIN_TOLERANCE
 from IoIO.cor_photometry import (KEYS_TO_SOURCE_TABLE, CorPhotometry,
-                                 add_astrometry, object_to_objctradec,
+                                 add_astrometry, write_photometry,
+                                 object_to_objctradec,
                                  CorPhotometryArgparseMixin)
 
 EXOPLANET_ROOT = '/data/Exoplanets'
@@ -37,7 +38,7 @@ MIN_TRANSIT_OBS_TIME = 1*u.hour
 # system objects because they are too close.  So we don't put this
 # into cor_photometry
 KEYS_TO_SOURCE_TABLE = KEYS_TO_SOURCE_TABLE + [('MJDBARY', u.day)]
-KEEP_FITS = 3
+KEEP_FITS = 100000
 # General FITS WCS reference:
 # https://fits.gsfc.nasa.gov/fits_wcs.html
 # https://heasarc.gsfc.nasa.gov/docs/fcg/standard_dict.html
@@ -72,11 +73,13 @@ def barytime(ccd_in, bmp_meta=None, **kwargs):
 
 class ExoMultiPipe(CorMultiPipeBase):
     def file_write(self, ccd, outname,
-                   photometry=None,
+                   in_name=None, photometry=None,
                    **kwargs):
         written_name = super().file_write(
             ccd, outname, photometry=photometry, 
             write_local_photometry=True, **kwargs)
+        write_photometry(in_name=in_name, outname=outname,
+                         photometry=photometry, **kwargs)
         outroot, _ = os.path.splitext(outname)
         try:
             photometry.plot_object(outname=outroot + '.png')
