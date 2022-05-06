@@ -76,10 +76,11 @@ class ExoMultiPipe(CorMultiPipeBase):
                    in_name=None, photometry=None,
                    **kwargs):
         written_name = super().file_write(
-            ccd, outname, photometry=photometry, 
-            write_local_photometry=True, **kwargs)
+            ccd, outname, photometry=photometry, **kwargs)
         write_photometry(in_name=in_name, outname=outname,
-                         photometry=photometry, **kwargs)
+                         photometry=photometry,
+                         write_wide_source_table=True,
+                         **kwargs)
         outroot, _ = os.path.splitext(outname)
         try:
             photometry.plot_object(outname=outroot + '.png')

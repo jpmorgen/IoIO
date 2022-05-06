@@ -153,9 +153,9 @@ PIERSIDE_WEST = cardinal_directions(read_wcs(PIERSIDE_WEST_FILE))
 
 def pierside(wcs):
     cdwcs = cardinal_directions(wcs)
-    if cdwcs == PIERSIDE_WEST:
+    if np.all(cdwcs == PIERSIDE_WEST):
         return 'WEST'
-    if cdwcs == -PIERSIDE_WEST:
+    if np.all(cdwcs == -PIERSIDE_WEST):
         return 'EAST'
     log.error(f'WCS solution not consistent with '
               f'IoIO coronagraph {wcs}')
