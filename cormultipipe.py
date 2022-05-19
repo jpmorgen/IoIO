@@ -381,7 +381,7 @@ def objctradec_to_obj_center(ccd_in, bmp_meta=None, **kwargs):
     bmp_meta = bmp_meta or {}
     cent = SkyCoord(objctra, objctdec, unit=(u.hour, u.deg))
     x, y = ccd.wcs.world_to_pixel(cent)
-    ocenter = ccd.obj_center
+    ocenter = ccd.obj_center.copy()
     oquality = ccd.center_quality
     ccd.obj_center = (y, x)
     ccd.center_quality = 10

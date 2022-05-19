@@ -305,10 +305,12 @@ def fix_obj_and_coord(ccd_in, **kwargs):
                      '[hms] Target right ascension')
         ccd.meta['DEC'] = (target_ra_dec[1],
                       '[dms] Target declination')
-        ccd.meta.insert('OBJCTDEC',
-                        ('HIERARCH OBJECT_TO_OBJCTRADEC', True,
-                         'Assumed ACP shell-out'),
-                        after=True)
+        # This ends up making a duplicate when object_to_objctradec is
+        # called for real
+        #ccd.meta.insert('OBJCTDEC',
+        #                ('HIERARCH OBJECT_TO_OBJCTRADEC', True,
+        #                 'Assumed ACP shell-out'),
+        #                after=True)
         # Reset sky_coord so it reads these keys
         ccd.sky_coord = None
         altaz = ccd.sky_coord.transform_to(

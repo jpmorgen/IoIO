@@ -20,7 +20,6 @@ from astroquery.simbad import Simbad
 from astroquery.sdss import SDSS
 
 from reproject.mosaicking import find_optimal_celestial_wcs
-from ccdproc import wcs_project
 
 from bigmultipipe import assure_list
 
@@ -105,6 +104,113 @@ def rot_wcs(wcs, angle):
                          'transformation matrix')
     return r_wcs
 
+def wcs_project(ccd, target_wcs, target_shape=None, order='bilinear'):
+    """
+    Given a CCDData image with WCS, project it onto a target WCS and
+    return the reprojected data as a new CCDData image.
+
+    Any flags, weight, XXor uncertaintyXX are ignored in doing the
+    reprojection. (tweak from ccdproc.wcs_project)
+
+    Parameters
+    ----------
+    ccd : `~astropy.nddata.CCDData`
+        Data to be projected.
+
+    target_wcs : `~astropy.wcs.WCS` object
+        WCS onto which all images should be projected.
+
+    target_shape : two element list-like or None, optional
+        Shape of the output image. If omitted, defaults to the shape of the
+        input image.
+        Default is ``None``.
+
+    order : str, optional
+        Interpolation order for re-projection. Must be one of:
+
+        + 'nearest-neighbor'
+        + 'bilinear'
+        + 'biquadratic'
+        + 'bicubic'
+
+        Default is ``'bilinear'``.
+
+    {log}
+
+    Returns
+    -------
+    ccd : `~astropy.nddata.CCDData`
+        A transformed CCDData object.
+    """
+    from astropy.nddata.ccddata import _generate_wcs_and_update_header
+    from astropy.wcs.utils import proj_plane_pixel_area
+    from reproject import reproject_interp
+
+    if not (ccd.wcs.is_celestial and target_wcs.is_celestial):
+        raise ValueError('one or both WCS is not celestial.')
+
+    if target_shape is None:
+        target_shape = ccd.shape
+
+    projected_image_raw, _ = reproject_interp((ccd.data, ccd.wcs),
+                                              target_wcs,
+                                              shape_out=target_shape,
+                                              order=order)
+
+    reprojected_mask = None
+    if ccd.mask is not None:
+        reprojected_mask, _ = reproject_interp((ccd.mask, ccd.wcs),
+                                               target_wcs,
+                                               shape_out=target_shape,
+                                               order=order)
+        # Make the mask 1 if the reprojected mask pixel value is non-zero.
+        # A small threshold is included to allow for some rounding in
+        # reproject_interp.
+        reprojected_mask = reprojected_mask > 1e-8
+
+    reprojected_uncert = None
+    if ccd.uncertainty is not None:
+        reprojected_uncert, _ = reproject_interp(
+            (ccd.uncertainty.array, ccd.wcs),
+            target_wcs,
+            shape_out=target_shape,
+            order=order)
+        
+    # The reprojection will contain nan for any pixels for which the source
+    # was outside the original image. Those should be masked also.
+    output_mask = np.isnan(projected_image_raw)
+
+    if reprojected_mask is not None:
+        output_mask = output_mask | reprojected_mask
+
+    # Need to scale counts by ratio of pixel areas
+    area_ratio = (proj_plane_pixel_area(target_wcs) /
+                  proj_plane_pixel_area(ccd.wcs))
+
+    # If nothing ended up masked, don't create a mask.
+    if not output_mask.any():
+        output_mask = None
+
+    # If there are any wcs keywords in the header, remove them
+    hdr, _ = _generate_wcs_and_update_header(ccd.header)
+
+    nccd = ccd.copy()
+    nccd.data = area_ratio * projected_image_raw
+    nccd.mask = output_mask
+    if nccd.uncertainty:
+        if nccd.uncertainty.uncertainty_type == 'std':
+            nccd.uncertainty.array = area_ratio * reprojected_uncert
+        if nccd.uncertainty.uncertainty_type == 'var':
+            nccd.uncertainty.array = area_ratio**2 * reprojected_uncert
+    nccd.meta = hdr
+    wcs = target_wcs
+    #nccd = CCDData(area_ratio * projected_image_raw, wcs=target_wcs,
+    #               mask=output_mask,
+    #               header=hdr, unit=ccd.unit)
+
+    return nccd
+
+
 def rot_to(ccd_in,
            rot_to_angle=0,
            rot_angle_from_key=None,
@@ -139,13 +245,17 @@ def rot_to(ccd_in,
     ccd = ccd_in.copy()
     if rot_angle_from_key is not None:
         rot_angle_from_key = assure_list(rot_angle_from_key)
+        docstring = ''
         for k in rot_angle_from_key:
             rot_to_angle += ccd.meta[k]
+            docstring += f'{k} '
         rot_to_angle *= rot_angle_key_unit
     # North up, east left
     ne_wcs, _ = find_optimal_celestial_wcs([(ccd.data, ccd.wcs)])
     r_wcs = rot_wcs(ne_wcs, rot_to_angle)
     ccd = wcs_project(ccd, r_wcs)
+    if docstring:
+        ccd.meta['HIERARCH ROT_FROM_KEYS'] = docstring
     return ccd
     
 class Photometry:

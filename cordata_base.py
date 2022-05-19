@@ -49,7 +49,7 @@ IOIO_1_LOCATION.info.meta = {
 # after fall 2020, this might need to change into a function that
 # floats around, though for now it is just used to speed finding hot
 # pixels and so is OK
-SMALL_FILT_CROP = ((350, 550), (1900, 2100))
+SMALL_FILT_CROP = np.asarray(((350, 550), (1900, 2100)))
 
 # ND_params[0, :] represent the slope relative to the *Y-axis* of the
 # left and right sides of the ND filter.  ND_params[1,:] represents
@@ -703,7 +703,7 @@ class CorDataNDparams(CorDataBase):
                  max_fit_delta_pix=25, # Thowing out point in 1 line fit
                  max_parallel_delta_pix=50, # Find 2 lines inconsistent
                  max_ND_width_range=(80,400), # jump-starting flats & sanity check others
-                 small_filt_crop=np.asarray(SMALL_FILT_CROP),
+                 small_filt_crop=SMALL_FILT_CROP,
                  plot_prof=False,
                  plot_dprof=False,
                  plot_ND_edges=False,

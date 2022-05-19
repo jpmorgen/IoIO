@@ -1815,7 +1815,8 @@ class Calibration():
         #print('dominated by continuum')
         #print('COPY THESE INTO cormultipipe.py globals')
         for ib, band in enumerate(['Na', 'SII']):
-            plt.title(f'Sky flat ratios fit to > {self.stable_flat_date}')
+            if self.plot_flat_ratios:
+                plt.title(f'Sky flat ratios fit to > {self.stable_flat_date}')
             this_band = tbl[tbl['band'] == band]
             # Started taking flats in a more uniform way after 2020-01-01
             good_dates = this_band[this_band['date']

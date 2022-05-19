@@ -33,6 +33,7 @@ from precisionguide import PGData
 
 import IoIO.sx694 as sx694
 from IoIO.utils import FITS_GLOB_LIST, multi_glob, savefig_overwrite
+from cordata_base import SMALL_FILT_CROP
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE, rot_wcs,
                              Photometry, PhotometryArgparseMixin)
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
@@ -418,8 +419,15 @@ class CorPhotometry(Photometry):
         tobs = Time(date_obs)
         dts = tobs - wcs_tobs
         ibest = np.argmin(np.abs(dts))
-        self._proxy_wcs_file = wcs_collect.files_filtered(
+        best_wcs_file = wcs_collect.files_filtered(
             include_path=True)[ibest]
+        phdr = getheader(best_wcs_file)
+        proxy_wcs_file = phdr.get('PROXYWCS')
+        if proxy_wcs_file:
+            # Make sure to reference original WCS file
+            self._proxy_wcs_file = proxy_wcs_file
+        else:
+            self._proxy_wcs_file = best_wcs_file
         wcs_xy_binning = np.asarray(
             (wcs_collect.values('xbinning')[ibest],
              wcs_collect.values('ybinning')[ibest]))
@@ -550,6 +558,7 @@ class CorPhotometry(Photometry):
         pixscale = self.ccd.meta.get('PIXSCALE')
         if pixscale is None:
             # failsafe that should not happen if sx694.metadata has run
+            # Assumes full-frame
             diameter = 1*u.deg
             pixscale = diameter/pdiameter
             pixscale = pixscale.to(u.arcsec/u.pixel)
@@ -895,10 +904,19 @@ def add_astrometry(ccd_in, bmp_meta=None,
                     for ccd in ccd_in]
     ccd = ccd_in.copy()
     photometry = photometry or CorPhotometry()
+
+    #if 'SII' in ccd.meta['filter']:
+    #    # Experiment with sub-image in SII filter cases Didn't seem to
+    #    # help, OOPS, we need to reference everything to full CCD to
+    #    # get WCS reference right
+    #    s = SMALL_FILT_CROP
+    #    ccd = ccd[s[0,0]:s[1,0], s[0,1]:s[1,1]]
+
     if mask_ND_before_astrometry:
         photometry.ccd = nd_filter_mask(ccd)
     else:
         photometry.ccd = ccd
+
     photometry.solve_timeout = solve_timeout or photometry.solve_timeout
     if keep_intermediate:
         if outdir is not None:

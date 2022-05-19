@@ -138,6 +138,8 @@ def obj_ephemeris(ccd_in,
                     ('HIERARCH OBJECT_TO_OBJCTRADEC', True,
                      'OBJCT* point to OBJECT'),
                     after=True)
+    # Refresh sky_coord!
+    ccd.sky_coord = None
     ccd.meta['HIERARCH HORIZONS_TARGET'] = e['targetname'][0]
     ccd = table_row_to_ccd_meta(ccd, e, obs_col_to_meta,
                                 prefix=obj_ephm_prefix, row=0)
@@ -255,6 +257,8 @@ def galsat_ephemeris(ccd_in,
                             ('HIERARCH OBJECT_TO_OBJCTRADEC', True,
                              'OBJCT* point to OBJECT'),
                             after=True)
+            # Refresh sky_coord!
+            ccd.sky_coord = None
             # Put IPT centrifugal equator into ccd.meta.
             # JUNO_JMAG_VIP4 X-axis effectively defines the *descending*
             # node of IPT tilt because it is left handed, though this
