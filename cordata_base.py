@@ -497,10 +497,22 @@ class CorDataBase(FitsKeyArithmeticMixin, ACPPGD):
 
     @edge_mask.setter
     def edge_mask(self, edge_mask):
+        # Peek into our decorator to see if we are changing our property
+        obj_dict = self.__dict__
+        oND_params = obj_dict.get('ND_params')
+        oedge_mask = obj_dict.get('edge_mask')
         edge_mask = np.asarray(edge_mask)
         if edge_mask.size == 1:
             edge_mask = np.append(edge_mask, -edge_mask)
-        return edge_mask        
+        if (oedge_mask is None
+            or np.all(oedge_mask == edge_mask)
+            or oND_params is None):
+            return edge_mask
+        # If we made it here, we need to tweak ND_params and reset
+        # dependent property
+        self.ND_params[1,:] = oND_params[1,:] + edge_mask - oedge_mask
+        self.ND_coords = None
+        return edge_mask
 
     def ND_params_unbinned(self, ND_params_in):
         ND_params = ND_params_in.copy()
@@ -1162,7 +1174,10 @@ if __name__ == "__main__":
     # --> Basically the problem is I have been sub-imaged and have not
     # --> added that back again.  That is the X part of the crop
 
-    ccd = CorDataNDparams.read(fname, plot_ND_edges=True)
+    #ccd = CorDataNDparams.read(fname, plot_ND_edges=True)
+    ccd = CorDataNDparams.read(fname)
+    print(ccd.ND_params)
+    ccd.edge_mask = 150
     print(ccd.ND_params)
     # Fixed!
 

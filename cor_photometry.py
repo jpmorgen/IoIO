@@ -41,7 +41,7 @@ from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
 from IoIO.calibration import Calibration
 
 MIN_SOURCES_TO_SOLVE = 5
-MAX_SOURCES_TO_SOLVE = 100
+MAX_SOURCES_TO_SOLVE = 500
 ASTROMETRY_GLOB = '*_Astrometry'
 KEYS_TO_SOURCE_TABLE = ['DATE-AVG',
                         ('DATE-AVG-UNCERTAINTY', u.s),
@@ -302,12 +302,15 @@ class CorPhotometry(Photometry):
         if len(flist) == 0:
             return
         calibration = Calibration(reduce=True)
+        # Make sure original solutions stands.  Note we have to do
+        # this in the photometry we pass to cmp, since add_astrometry
+        # doesn't handle it
+        self.solve_by_proxy = False
         cmp = CorMultiPipeBinnedOK(
             calibration=calibration,
             auto=True,
             photometry=self,
-            #solve_timeout=600, # Try to solve all [didn't help]
-            solve_by_proxy=False, # make sure original solutions stand
+            solve_timeout=600, # Try to solve all [didn't help]
             mask_ND_before_astrometry=True, 
             create_outdir=True,
             post_process_list=[add_astrometry,
@@ -443,6 +446,7 @@ class CorPhotometry(Photometry):
         wcs_to_ccd_scale_col = wcs_to_ccd_scale[..., None]
         wcs.wcs.pc *= wcs_to_ccd_scale_col
         #wcs._naxis /= wcs_to_ccd_scale
+        #wcs.wcs.cdelt *= wcs_to_ccd_scale
 
         # SIP distortion is present when astrometry.net code has
         # solved the proxy image, but I find that SIP is not
@@ -514,6 +518,10 @@ class CorPhotometry(Photometry):
         wcs.wcs.crval = np.asarray((self.ccd.sky_coord.ra.deg,
                                     self.ccd.sky_coord.dec.deg))
         wcs.wcs.crpix = self.ccd.obj_center[::-1] + 1
+        wcs.wcs.dateobs = self.ccd.meta['DATE-OBS']
+        wcs.wcs.mjdobs = self.ccd.meta['MJD-OBS']
+        wcs.wcs.dateavg = self.ccd.meta['DATE-AVG']
+        wcs.wcs.mjdavg = self.ccd.meta['MJD-AVG']
         # Setting solved=True allows accumulated solves to extend
         # PIERSIDE during times of PIERSIDE = UNKNOWN
         self._solved = True
@@ -550,8 +558,8 @@ class CorPhotometry(Photometry):
         last_source = np.min((len(xyls_table), MAX_SOURCES_TO_SOLVE))
         xyls_table = xyls_table[0:last_source]
 
-        ra = self.ccd.sky_coord.ra.to_string(sep=':')
-        dec = self.ccd.sky_coord.dec.to_string(alwayssign=True, sep=':')
+        ra = self.ccd.sky_coord.ra.to_string(unit=u.deg)
+        dec = self.ccd.sky_coord.dec.to_string(unit=u.deg)
         ccd_shape = np.asarray(self.ccd.shape)
         pdiameter = np.average(ccd_shape) * u.pixel
         # PIXSCALE is binned
@@ -581,9 +589,22 @@ class CorPhotometry(Photometry):
         else:
             cpulimit_str = ''
 
+        # Search radius has to be surprisingly large for this to work
+        # with the IoIO Astrometry calibration data for some reason.
+        # 2 worked, but make it 4 for good measure
+        search_radius = diameter.value*4
+
+        # Trying odds-to-solve and odds-to-reject didn't help
+        # f'--odds-to-solve 1e2 --odds-to-reject 1e-200 '\
+        # Trying bigger diameter and more pix scale
+        # f'--scale-low {pixscale*0.5:.2f} '\
+        # f'--scale-high {pixscale*2:.2f} --scale-units arcsecperpix ' \
+
+        # f'--scale-low {pixscale*0.8:.2f} '\
+        # f'--scale-high {pixscale*1.2:.2f} --scale-units arcsecperpix ' \
         astrometry_command = \
             f'solve-field --x-column xcentroid --y-column ycentroid ' \
-            f'--ra {ra} --dec {dec} --radius {diameter.value:.2f} ' \
+            f'--ra {ra} --dec {dec} --radius {search_radius:.2f} ' \
             f'--width {ccd_shape[1]:.0f} --height {ccd_shape[0]:.0f} ' \
             f'--scale-low {pixscale*0.8:.2f} '\
             f'--scale-high {pixscale*1.2:.2f} --scale-units arcsecperpix ' \
@@ -614,6 +635,7 @@ class CorPhotometry(Photometry):
                 self._rdls_table = Table.read(outroot + '.rdls')
                 #self.source_table.show_in_browser()
                 self._solved = True
+                log.debug(f'SOLVED {self.ccd.meta["rawfname"]}')
             elif not self.solve_by_proxy:
                 # PinPoint WCS does get read, so might as well put it
                 # in our object, since this gives us a way to get
@@ -626,8 +648,10 @@ class CorPhotometry(Photometry):
                 # figure out how to get astrometry.net to solve
                 # them....
                 self._solved = False
+                log.debug(f'NOT SOLVED {self.ccd.meta["rawfname"]}')
             else:
                 wcs = self.proxy_wcs
+                log.debug(f'NOT SOLVED {self.ccd.meta["rawfname"]}')
             self._wcs = wcs
             return self._wcs
 
@@ -819,8 +843,7 @@ def write_astrometry(ccd_in, in_name=None, outname=None,
     hdul[0].data = None
     d = os.path.dirname(aoutname)
     os.makedirs(d, exist_ok=True)
-    hdul.writeto(aoutname,
-                 overwrite=True)
+    hdul.writeto(aoutname, overwrite=True)
     return
 
 def write_photometry(in_name=None, outname=None, photometry=None,
@@ -919,7 +942,9 @@ def add_astrometry(ccd_in, bmp_meta=None,
 
     photometry.solve_timeout = solve_timeout or photometry.solve_timeout
     if keep_intermediate:
-        if outdir is not None:
+        if outdir is None:
+            outname = None
+        else:
             bname = os.path.basename(in_name)
             outname = os.path.join(outdir, bname)
             if create_outdir:
@@ -940,7 +965,11 @@ def add_astrometry(ccd_in, bmp_meta=None,
     ccd.meta['HIERARCH ASTROMETRY_NET_SOLVED'] = (
         photometry.solved and photometry.proxy_wcs_file is None)
     ccd.meta['PROXYWCS'] = photometry.proxy_wcs_file
-    ccd.meta['HIERARCH PHOTUTILS_NSOURCES'] = len(photometry.source_table)
+    if photometry.source_table is None:
+        nsources = 0
+    else:
+        nsources = len(photometry.source_table)
+        ccd.meta['HIERARCH PHOTUTILS_NSOURCES'] = nsources
     ccd_pierside = ccd.meta['PIERSIDE']
     if (ccd_pierside != 'UNKNOWN'
         and ccd_pierside != photometry.pierside):
@@ -1017,29 +1046,52 @@ class CorPhotometryArgparseMixin(PhotometryArgparseMixin):
 #                                           
 
 if __name__ == '__main__':
-    from IoIO.cordata import CorData
-    from IoIO.cor_process import cor_process
-    from IoIO.calibration import Calibration
-    c = Calibration(reduce=True)
-    ##fname = '/data/IoIO/raw/20220414/KPS-1b-S001-R001-C001-R.fts'
-    #directory = '/data/IoIO/raw/2018-05-08/'
-    #fname = os.path.join(directory, 'SII_on-band_007.fits')
-    fname = '/data/IoIO/raw/2018-05-08/SII_on-band_007.fits'
-    rccd = CorData.read(fname)
-    ccd = cor_process(rccd, calibration=c, auto=True)
-    photometry = CorPhotometry(ccd)
-    wcs = photometry.proxy_wcs
-    print(wcs)
+    log.setLevel('DEBUG')
+    # Base Astrometry test
+    photometry = CorPhotometry()
+    photometry.reduce_base_astrometry()
+    
+    #from IoIO.cordata import CorData
+    #from IoIO.cor_process import cor_process
+    #from IoIO.calibration import Calibration
+    #from IoIO.horizons import galsat_ephemeris
+    #from astropy.wcs.utils import proj_plane_pixel_scales
+    #c = Calibration(reduce=True)
+    ###fname = '/data/IoIO/raw/20220414/KPS-1b-S001-R001-C001-R.fts'
+    ##directory = '/data/IoIO/raw/2018-05-08/'
+    ##fname = os.path.join(directory, 'SII_on-band_007.fits')
+    ##fname = '/data/IoIO/raw/2018-05-08/SII_on-band_007.fits'
+    #fname = '/data/IoIO/raw/2020-09_Astrometry/Main_Astrometry_East_of_Pier.fit'
+    #rccd = CorData.read(fname)
+    #ccd = cor_process(rccd, calibration=c, auto=True)
+    ##ccd = galsat_ephemeris(ccd)
+    ##ccd = object_to_objctradec(ccd)
+    #photometry = CorPhotometry(ccd)
+    #photometry.source_table.show_in_browser()
+    ##wcs = photometry.proxy_wcs
+    ##print(wcs)
+    ##pixscale = (np.linalg.norm(np.mean(np.abs(wcs.wcs.cdelt))
+    ##             np.linalg.norm(wcs.wcs.pc[0,:])
+    ##            np.linalg.norm(wcs.wcs.pc[1,:]))
+    ##print(pixscale)
+    ##pixscale = proj_plane_pixel_scales(wcs) * u.deg
+    
+    
+    
+    #pixscale = np.linalg.norm(wcs.wcs.pc)  *u.deg
+    #pixscale = np.mean(np.abs(wcs.wcs.cdelt)) *u.deg
+    #print(pixscale.to(u.arcsec))
 
+    ##fname = '/data/IoIO/raw/20220414/KPS-1b-S001-R001-C001-R.fts'
     #fname = '/data/IoIO/raw/2018-01_Astrometry/PinPointSolutionEastofPier.fit'
-    #rccd = CorDataNDparams.read(fname)
+    #rccd = CorData.read(fname)
     #c = Calibration(reduce=True)
     #ccd = cor_process(rccd, calibration=c, auto=True, gain=False)
     #p = CorPhotometry(ccd=ccd)
-
-    ## Base Astrometry test
-    #photometry = CorPhotometry()
-    #photometry.reduce_base_astrometry()
+    #p.source_table.show_in_browser()
+    #print(p.wcs)
+    #print(p.solve_field_stdout)
+    #print(p.solve_field_stderr)
     
     ## Mercury test
     #import glob

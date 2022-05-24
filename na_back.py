@@ -199,7 +199,7 @@ def na_back_pipeline(directory=None, # raw directory
         raoffs = collection.values('raoff', unique=True)
         decoffs = collection.values('decoff', unique=True)
     except Exception as e:
-        log.error(f'Problem with RAOFF/DECOFF in {directory}: {e}')
+        log.debug(f'Skipping {directory} because of problem with RAOFF/DECOFF: {e}')
         return []
     f_pairs = []
     for raoff in raoffs:

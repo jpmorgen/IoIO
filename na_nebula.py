@@ -65,7 +65,8 @@ def na_nebula_directory(directory,
 
 log.setLevel('DEBUG')
 
-directory = '/data/IoIO/raw/20210607/'
+#directory = '/data/IoIO/raw/20210607/'
+directory = '/data/IoIO/raw/20211017/'
 
 #directory = '/data/IoIO/raw/2017-05-02'
 #directory = '/data/IoIO/raw/2018-05-08/'

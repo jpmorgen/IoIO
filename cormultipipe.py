@@ -303,11 +303,16 @@ def nd_filter_mask(ccd_in, nd_edge_expand=ND_EDGE_EXPAND, **kwargs):
     if isinstance(ccd_in, list):
         return [nd_filter_mask(ccd, nd_edge_expand=ND_EDGE_EXPAND, **kwargs)
                 for ccd in ccd_in]
+    nd_edge_expand = np.asarray(nd_edge_expand)
+    if nd_edge_expand.size == 1:
+        nd_edge_expand = np.append(nd_edge_expand, -nd_edge_expand)
     ccd = ccd_in.copy()
     mask = np.zeros(ccd.shape, bool)
     # Return a copy of ccd with the edge_mask property adjusted.  Do
     # it this way to keep ccd's ND filt parameters intact
-    emccd = CorDataBase(ccd_in, edge_mask=-nd_edge_expand)
+    emccd = ccd.copy()
+    # We are expanding.  edge_mask contracts
+    emccd.edge_mask = -nd_edge_expand
     mask[emccd.ND_coords] = True
     if ccd.mask is None:
         ccd.mask = mask

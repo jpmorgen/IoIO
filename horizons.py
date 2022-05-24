@@ -253,6 +253,10 @@ def galsat_ephemeris(ccd_in,
                                    'OBJECT RA from HORIZONS')
             ccd.meta['OBJCTDEC'] = (dec[0].to_string(unit=u.deg),
                                     'OBJECT DEC from HORIZONS')
+            if ccd.meta.get('OBJECT_TO_OBJCTRADEC'):
+                # For some reason astropy doesn't catch the duplicate,
+                # which is from ACP shell-out repair
+                del ccd.meta['OBJECT_TO_OBJCTRADEC']
             ccd.meta.insert('OBJCTDEC',
                             ('HIERARCH OBJECT_TO_OBJCTRADEC', True,
                              'OBJCT* point to OBJECT'),

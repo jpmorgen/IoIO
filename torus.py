@@ -49,27 +49,27 @@ directory = '/data/IoIO/raw/2018-05-08/'
 
 standard_star_obj = standard_star_obj or StandardStar(reduce=True)
 
-pout = on_off_pipeline(directory,
-                       glob_include=TORUS_NA_NEB_GLOB_LIST,
-                       band='SII',
-                       standard_star_obj=standard_star_obj,
-                       add_ephemeris=galsat_ephemeris,
-                       rot_angle_from_key='Jupiter_NPole_ang',
-                       post_backsub=[extinction_correct, rayleigh_convert,
-                                     rot_to],
-                       outdir_root=outdir_root,
-                       fits_fixed_ignore=fits_fixed_ignore)
-
 #pout = on_off_pipeline(directory,
 #                       glob_include=TORUS_NA_NEB_GLOB_LIST,
 #                       band='SII',
 #                       standard_star_obj=standard_star_obj,
 #                       add_ephemeris=galsat_ephemeris,
-#                       rot_angle_from_key=['Jupiter_NPole_ang',
-#                                           'IPT_NPole_ang'],
+#                       rot_angle_from_key='Jupiter_NPole_ang',
 #                       post_backsub=[extinction_correct, rayleigh_convert,
 #                                     rot_to],
 #                       outdir_root=outdir_root,
 #                       fits_fixed_ignore=fits_fixed_ignore)
+
+pout = on_off_pipeline(directory,
+                       glob_include=TORUS_NA_NEB_GLOB_LIST,
+                       band='SII',
+                       standard_star_obj=standard_star_obj,
+                       add_ephemeris=galsat_ephemeris,
+                       rot_angle_from_key=['Jupiter_NPole_ang',
+                                           'IPT_NPole_ang'],
+                       post_backsub=[extinction_correct, rayleigh_convert,
+                                     rot_to],
+                       outdir_root=outdir_root,
+                       fits_fixed_ignore=fits_fixed_ignore)
 
 

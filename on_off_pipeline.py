@@ -30,7 +30,7 @@ from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                mask_nonlin_sat, combine_masks,
                                nd_filter_mask, detflux,
                                objctradec_to_obj_center)
-from IoIO.photometry import is_flux
+from IoIO.photometry import Photometry, is_flux
 from IoIO.cor_photometry import CorPhotometry, add_astrometry
 
 # Use these to pick out on- and off-band filter explicitly, since we
@@ -74,6 +74,9 @@ def off_band_subtract(ccd_in,
                       bmp_meta=None,
                       off_on_ratio=None,
                       calibration=None,
+                      smooth_off=False,
+                      smooth_off_boxes=10,
+                      off_nd_edge_expand=0,
                       max_shift_off=50,
                       show=False,
                       outdir=None, # These get set by the pipeline
@@ -98,11 +101,15 @@ def off_band_subtract(ccd_in,
     band, _ = filt.split('_')
     if off_on_ratio is None:
         off_on_ratio, _ = calibration.flat_ratio(band)
+    if smooth_off:
+        photometry = Photometry(off, n_back_boxes=smooth_off_boxes)
+        off.data = photometry.background.value
+        off.uncertainty.array = photometry.back_rms.value
     off_nd0 = off.copy()
     off_nd0.mask = None
-    off_nd0 = nd_filter_mask(off_nd0, nd_edge_expand=0)
-    off.data[off_nd0.ND_coords] = 0
-    off.uncertainty.array[off_nd0.ND_coords] = 0
+    off_nd0 = nd_filter_mask(off_nd0, nd_edge_expand=off_nd_edge_expand)
+    off.data[off_nd0.mask] = 0
+    off.uncertainty.array[off_nd0.mask] = 0
     del off_nd0
 
     shift_off = on.obj_center - off.obj_center
@@ -117,9 +124,13 @@ def off_band_subtract(ccd_in,
     assert is_flux(on.unit) and is_flux(off.unit)
     off = off.divide(off_on_ratio,
                      handle_meta='first_found')
+    
     on = on.subtract(off, handle_meta='first_found')
     on.meta['OFF_BAND'] = off_fname
     on.meta['OFF_SCL'] = (1/off_on_ratio, 'scale factor applied to OFF_BAND')
+    if smooth_off:
+        on.meta['HIERARCH SMOOTH_OFF'] = (True, 'OFF_BAND smoothed')
+        on.meta['HIERARCH SMOOTH_OFF_BOXES'] = (smooth_off_boxes, 'Background2D n_back_boxes')
     on.meta['HIERARCH SHIFT_OFF_X'] = (shift_off[1], '[pix] x dist on - off')
     on.meta['HIERARCH SHIFT_OFF_Y'] = (shift_off[0], '[pix] y dist on - off')
     on.meta['HIERARCH SHIFT_OFF_D'] = (d_on_off, '[pix] dist on - off')
@@ -131,17 +142,19 @@ def off_band_subtract(ccd_in,
              'shift_off': shift_off,
              'outname': outname}
     bmp_meta.update(tmeta)
+
     return on
 
 # --> Consider off-band image as background, particularly with Mercury
 def on_off_pipeline(directory=None, # raw day directory, specify even if collection specified
-                    bmp=None, # BigMultiPipe object
                     band=None,
                     collection=None,
                     glob_include=None, # Used if collection is None
+                    PipeObj=None,
                     calibration=None,
                     photometry=None,
                     add_ephemeris=None,
+                    pre_process_list=None,
                     pre_backsub=None,
                     post_backsub=None,
                     num_processes=None,
@@ -153,9 +166,12 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
 
     if collection is not None and glob_include is not None:
         raise ValueError('specify either collection of glob_include to make sure the correct files are selected')
+    if PipeObj is None:
+        PipeObj = CorMultiPipeBase
     calibration = calibration or Calibration(reduce=True)
     photometry = photometry or CorPhotometry()
     add_ephemeris = assure_list(add_ephemeris)
+    pre_process_list = assure_list(pre_process_list)
     pre_backsub = assure_list(pre_backsub)
     if len(add_ephemeris) > 0:
         # This is safe because objctradec_to_obj_center doesn't muck
@@ -195,7 +211,7 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
     # and the other is not, it might ultimately be best to reduce all
     # the data individually and then combine with closest_in_time
     for f in f_pairs: f.reverse()
-    cmp = CorMultiPipeBase(
+    cmp = PipeObj(
         ccddata_cls=CorData,
         calibration=calibration,
         auto=True,
@@ -204,6 +220,7 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
         outname_append='-back-sub',
         outname_ext='.fits', 
         create_outdir=create_outdir,
+        pre_process_list=pre_process_list,
         post_process_list=post_process_list,
         num_processes=num_processes,
         process_expand_factor=process_expand_factor,

@@ -8,7 +8,7 @@ from astropy import log
 from astropy import units as u
 from astropy.convolution import Gaussian2DKernel, convolve
 from astropy.stats import gaussian_fwhm_to_sigma, sigma_clipped_stats
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import Angle, SkyCoord
 
 from photutils import (make_source_mask, detect_sources,
                        detect_threshold, deblend_sources)
@@ -73,36 +73,76 @@ class control_property(pgproperty):
             obj.init_calc()
         obj_dict[self._key] = val
 
-def is_flux(unit):
-    """Returns ``True`` if unit is reducable to flux unit"""
-    unit = unit.decompose()
-    if isinstance(unit, u.IrreducibleUnit):
-        return False
-    # numpy tests don't work with these objects, so do it by hand
-    spower = [p for un, p in zip(unit.bases, unit.powers)
-              if un == u.s]
-    if len(spower) == 0 or spower[0] != -1:
-        return False
-    return True
+def create_rmat(angle):
+    """Returns MATHEMATICAL 2D rotation matrix of angle.  This needs to be
+    transposed if being used with FITS
 
-def rot_wcs(wcs, angle):
-    """Rotate WCS by angle (CCW)"""
+    """ 
     if not isinstance(angle, u.Quantity):
         raise ValueError('angle must be a Quantity')
     c, s = np.cos(angle), np.sin(angle)
-    rmat = np.asarray(((c, -s),
+    return np.asarray(((c, -s),
                        (s, c)))
-    r_wcs = wcs.copy()
+    
+def rot_wcs(wcs, angle, return_cd_or_pc=False):
+    """Rotate WCS by angle (CCW)"""
+    rmat = create_rmat(angle)
+    # Keeping in mind we are in FITS space, which is transposed
+    rmat = np.transpose(rmat)
+
+    # OOPS!  This was a subtle bug.  The nice thing about standards is
+    # there are so many to choose from!  the other astropy stuff &
+    # numpy use copy() to do deepcopy()
+    r_wcs = wcs.deepcopy()
     if r_wcs.wcs.has_cd():
-        r_cd = np.matmul(r_wcs.wcs.cd, rmat)
-        r_wcs.wcs.cd = r_cd
+        cd_or_pc = np.matmul(r_wcs.wcs.cd, rmat)
+        r_wcs.wcs.cd = cd_or_pc
     elif r_wcs.wcs.has_pc():
-        r_pc = np.matmul(r_wcs.wcs.pc, rmat)
-        r_wcs.wcs.pc = r_pc
+        cd_or_pc = np.matmul(r_wcs.wcs.pc, rmat)
+        r_wcs.wcs.pc = cd_or_pc
     else:
         raise ValueError('ccd.wcs.wcs does not have expected cd or pc '
                          'transformation matrix')
+    if return_cd_or_pc:
+        return (r_wcs, cd_or_pc)
     return r_wcs
+
+def rot_angle_by_wcs(angle, ccd):
+    """Rotates angle referenced to N, CCW positive by wcs transformation
+    such that returned angle reads in pixel space
+
+    NOTE: There may be a more elegant and accurate way to do this but
+    I am not finding it.  This is good enough for plotting purposes
+
+    """
+    # Rotate the wcs by our angle so now the WCS N is pointing toward
+    # our desired direction
+    wcs = rot_wcs(ccd.wcs, angle)
+
+    # Create a northward vector that is not too long with which to
+    # measure our angle.
+
+    # There are some circumstances I have found that wcs doesn't have
+    # _naxis defined, so guess.  Note naxis is full field.  I am
+    # trying to get 1/2 way to the edge
+    naxis = ccd.shape[::-1]
+    cdelt = wcs.proj_plane_pixel_scales()
+    d_north = cdelt[1]*naxis[1]/4
+    w_rot = wcs.wcs.crval * u.deg
+    w_rot[1] += d_north
+    coord = SkyCoord(*list(w_rot))
+    p_rot = wcs.world_to_pixel(coord)
+    v_rot = p_rot - (wcs.wcs.crpix - 1)
+    v_up = np.asarray((0,1))
+    # This is the angle to N, but not N CCW oriented
+    angle = np.arccos(np.dot(v_up, v_rot)
+                      / (np.linalg.norm(v_up)
+                         * np.linalg.norm(v_rot)))
+    angle *= u.rad
+    angle = angle.to(u.deg)
+    if v_rot[0] > 0:
+        angle = 360*u.deg - angle
+    return angle
 
 def wcs_project(ccd, target_wcs, target_shape=None, order='bilinear'):
     """
@@ -203,21 +243,21 @@ def wcs_project(ccd, target_wcs, target_shape=None, order='bilinear'):
         if nccd.uncertainty.uncertainty_type == 'var':
             nccd.uncertainty.array = area_ratio**2 * reprojected_uncert
     nccd.meta = hdr
-    wcs = target_wcs
+    nccd.wcs = target_wcs
     #nccd = CCDData(area_ratio * projected_image_raw, wcs=target_wcs,
     #               mask=output_mask,
     #               header=hdr, unit=ccd.unit)
 
     return nccd
 
-
 def rot_to(ccd_in,
-           rot_to_angle=0,
+           rot_to_angle=0*u.degree,
            rot_angle_from_key=None,
            rot_angle_key_unit=u.degree,
            **kwargs):
-    """Reproject image to celestial coords plus an additional rotation
-    measured CCW from N
+    """Reproject image such that "up" is celestial coords plus an
+    additional rotation measured CCW from N.  Another way to think of
+    it: situates to celestial N and rotates CW by the given angle(s)
 
     Parameters
     ----------
@@ -243,21 +283,132 @@ def rot_to(ccd_in,
 
     """
     ccd = ccd_in.copy()
+    docstring = ''
     if rot_angle_from_key is not None:
         rot_angle_from_key = assure_list(rot_angle_from_key)
-        docstring = ''
         for k in rot_angle_from_key:
-            rot_to_angle += ccd.meta[k]
+            rot_to_angle += ccd.meta[k] * rot_angle_key_unit
             docstring += f'{k} '
-        rot_to_angle *= rot_angle_key_unit
     # North up, east left
     ne_wcs, _ = find_optimal_celestial_wcs([(ccd.data, ccd.wcs)])
-    r_wcs = rot_wcs(ne_wcs, rot_to_angle)
+    # Clockwise rotation
+    r_wcs = rot_wcs(ne_wcs, -rot_to_angle)
     ccd = wcs_project(ccd, r_wcs)
     if docstring:
         ccd.meta['HIERARCH ROT_FROM_KEYS'] = docstring
     return ccd
     
+def flip_wcs(ccd_in, axis):
+    """Flip ccd's WCS along axis 0 = up/down, 1 = left/right"""
+    # https://en.wikipedia.org/wiki/Rotations_and_reflections_in_two_dimensions
+    if axis == 0:
+        mat = np.asarray(((1, 0), (0, -1)))
+        fits_axis = 1
+    elif axis == 1:
+        mat = np.asarray(((-1, 0), (0, 1)))
+        fits_axis = 0
+    else:
+        raise ValueError(f'{axis} is not 0 or 1')
+    # Keeping in mind we are in FITS space, which is transposed
+    mat = np.transpose(mat)
+    ccd = ccd_in.copy()
+    # wcs._naxis is not always set, so we have to do this from the CCD shape
+    naxis = ccd.shape[::-1]
+    crpix = ccd.wcs.wcs.crpix
+    delta_cr_from_center = ccd.wcs.wcs.crpix[fits_axis] - naxis[fits_axis]/2
+    crpix[fits_axis] = naxis[fits_axis]/2 - delta_cr_from_center
+    ccd.wcs.wcs.crpix = crpix
+    
+    if ccd.wcs.wcs.has_cd():
+        cd = np.matmul(ccd.wcs.wcs.cd, mat)
+        ccd.wcs.wcs.cd = cd
+    elif ccd.wcs.wcs.has_pc():
+        pc = np.matmul(ccd.wcs.wcs.pc, mat)
+        ccd.wcs.wcs.pc = pc
+    else:
+        raise ValueError('ccd.wcs.wcs does not have expected cd or pc '
+                         'transformation matrix')
+    return ccd
+
+def flip_along(ccd_in,
+            flip_along_axis=None,
+            flip_along_angle=0*u.degree,
+            flip_angle_from_key=None,
+            flip_angle_key_unit=u.degree,
+            **kwargs):
+    """Flip ccd image along desired axis so that flip_along_angle heads
+    generally to the right (axis 0) or up (axis 1).  Usually, rot_to
+    has already been applied
+
+    Parameters
+    ----------
+    ccd_in : astropy.nddata.CCDData
+        Input `~astropy.nddata.CCDData`
+
+    flip_along_axis : int
+      Axis about which to flip (required) 0 = up/down, 1 = left/right
+
+    flip_along_angle : astropy.units.Quantity, optional
+        Reference angle, N up, E west, CCW
+        Default is `0`
+        
+    flip_angle_from_key : str or list of str None
+        FITS header key(s) from which flip angle is constructed.
+        Values in keys are added to each other, including the initial
+        value of rot_to_angle
+        Default is `None`
+
+    flip_angle_key_unit : astropy.units.Unit
+        Unit applied to flip_angle_from_key
+        Default is `astropy.units.deg`
+
+    **kwargs : required as bigmultipipe post-processing routine
+
+    """
+    if flip_along_axis is None:
+        raise ValueError('flip_along_axis must be specified')
+    ccd = ccd_in.copy()
+    docstring = ''
+    if flip_angle_from_key is not None:
+        flip_angle_from_key = assure_list(flip_angle_from_key)
+        for k in flip_angle_from_key:
+            flip_along_angle += ccd.meta[k] * flip_angle_key_unit
+            docstring += f'{k} '
+    # Our flip_along_angle is referenced to celestial N, but there is
+    # a good chance we have rotated relative to that with rot_to.  We
+    # want to rotate our angle accordingly, but we have a routine
+    # handy that rotates the wcs, from which we can read the angle
+    flip_along_angle = rot_angle_by_wcs(flip_along_angle, ccd)
+    flip_along_angle = Angle(flip_along_angle)
+    abounds = np.asarray((90, 270))
+    if flip_along_axis == 1:
+        abounds -= 90
+    abounds *= u.deg
+    if flip_along_angle.is_within_bounds(*list(abounds)):
+        # We have to flip the wcs separately and carefully because of
+        # the underlying C structure.
+        wcs = ccd.wcs
+        ccd.wcs = None
+        ccd = np.flip(ccd, flip_along_axis)
+        ccd.wcs = wcs
+        ccd = flip_wcs(ccd, flip_along_axis)
+        ccd.meta['HIERARCH FLIP_AXIS'] = (flip_along_axis, 'flipped along C axis')
+        if docstring:
+            ccd.meta['HIERARCH FLIP_FROM_KEYS'] = docstring
+    return ccd    
+
+def is_flux(unit):
+    """Returns ``True`` if unit is reducable to flux unit"""
+    unit = unit.decompose()
+    if isinstance(unit, u.IrreducibleUnit):
+        return False
+    # numpy tests don't work with these objects, so do it by hand
+    spower = [p for un, p in zip(unit.bases, unit.powers)
+              if un == u.s]
+    if len(spower) == 0 or spower[0] != -1:
+        return False
+    return True
+
 class Photometry:
     def __init__(self,
                  ccd=None, # Passed by reference since nothing operates ON it
@@ -622,6 +773,8 @@ image
         if self._source_table is not None:
             return self._source_table
         # https://photutils.readthedocs.io/en/stable/api/photutils.segmentation.SourceCatalog.html
+        if self.source_catalog is None:
+            return None
         self._source_table = self.source_catalog.to_table(
             self.source_table_cols)
         self._source_table.sort('segment_flux', reverse=True)
@@ -652,10 +805,10 @@ image
 
     @property
     def source_table_has_coord(self):
+        if self.source_table is None or not self.solved:
+            return False
         if 'coord' in self.source_table.colnames:
             return True
-        if not self.solved:
-            return False
         skies = self.wcs.pixel_to_world(
             self.source_table['xcentroid'],
             self.source_table['ycentroid'])
@@ -823,18 +976,32 @@ if __name__ == '__main__':
     from IoIO.cordata import CorData
     from IoIO.cor_process import cor_process
     from IoIO.calibration import Calibration
-    directory = '/data/IoIO/raw/2021-10-28/'
-    collection = ccdp.ImageFileCollection(
-        directory, glob_include='Mercury*',
-        glob_exclude='*_moving_to*')
-    flist = collection.files_filtered(include_path=True)
-    c = Calibration(reduce=True)
-    photometry = Photometry()
-    for fname in flist:
-        log.info(f'trying {fname}')
-        rccd = CorData.read(fname)
-        ccd = cor_process(rccd, calibration=c, auto=True)
-        photometry.ccd = ccd
-        #photometry.show_segm()
-        source_table = photometry.source_table
-        source_table.show_in_browser()
+    ccd = CorData.read('/data/Mercury/2021-10-28/Mercury-0001_Na_on-back-sub_Mercury_N_up.fits')
+    north = ccd.meta['TARGET_NPole_ang']*u.deg
+    antisun = ccd.meta['TARGET_sunTargetPA']*u.deg
+    print(f'original north {north}')
+    north = rot_angle_by_wcs(north, ccd)
+    print(f'rotated by wcs {north}\n')
+    print(f'original antisun {antisun}')
+    antisun = rot_angle_by_wcs(antisun, ccd)
+    print(f'rotated by wcs {antisun}')
+
+
+
+
+
+    #directory = '/data/IoIO/raw/2021-10-28/'
+    #collection = ccdp.ImageFileCollection(
+    #    directory, glob_include='Mercury*',
+    #    glob_exclude='*_moving_to*')
+    #flist = collection.files_filtered(include_path=True)
+    #c = Calibration(reduce=True)
+    #photometry = Photometry()
+    #for fname in flist:
+    #    log.info(f'trying {fname}')
+    #    rccd = CorData.read(fname)
+    #    ccd = cor_process(rccd, calibration=c, auto=True)
+    #    photometry.ccd = ccd
+    #    #photometry.show_segm()
+    #    source_table = photometry.source_table
+    #    source_table.show_in_browser()

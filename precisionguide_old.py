@@ -108,7 +108,8 @@ default_guide_box_command_file = os.path.join(raw_data_root, 'GuideBoxCommand.tx
 default_guide_box_log_file = os.path.join(raw_data_root, 'GuideBoxLog.txt')
 
 run_level_main_astrometry = os.path.join(
-    raw_data_root, '2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit')
+    raw_data_root, '2022-05_Astrometry/Main_Astrometry_East_of_Pier.fit')
+    #raw_data_root, '2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2021-03_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2020-09_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2020-03_Astrometry/Main_Astrometry_East_of_Pier.fit')
@@ -118,13 +119,9 @@ run_level_main_astrometry = os.path.join(
     #raw_data_root, '2019-02_Astrometry/PinPointSolutionWestofPier.fit')
     #raw_data_root, '2018-04_Astrometry/PinPointSolutionEastofPier.fit')
 
-# --> Currently only guider WestofPier (looking east) works properly,
-# --> which might indicate that calculations need to be made with true
-# --> north of CCD aligned with true north button on mount.  Although
-# --> pier flip doesn't affect N/S because tube rolls over too, E/W is
-# --> affected
 run_level_guider_astrometry = os.path.join(
-    raw_data_root, '2021-04_Astrometry/Guider_Astrometry_East_of_Pier.fit')
+    raw_data_root, '2022-05_Astrometry/Guider_Astrometry_East_of_Pier.fit')
+    #raw_data_root, '2021-04_Astrometry/Guider_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2021-03_Astrometry/Guider_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2020-09_Astrometry/Guider_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2020-03_Astrometry/Guider_Astrometry_East_of_Pier.fit')
