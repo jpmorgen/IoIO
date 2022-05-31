@@ -255,10 +255,11 @@ class CorData(CorDataNDparams, NoCenterPGD):
         NDstd = np.std(patch.data[patch.ND_coords])
         log.debug(f'ND median, std {NDmed}, {NDstd}, 6*self.readnoise= {6*self.readnoise}')
         boost_ND_coords = patch.ND_coords_above(NDmed + 6*self.readnoise)
-        patch.data[boost_ND_coords] *= boost_factor
-        patch.data[patch.data < boost_factor] = 0
-        patch = patch.divide(boost_factor*u.dimensionless_unscaled,
-                             handle_meta='first_found')
+        if boost_ND_coords is not None:
+            patch.data[boost_ND_coords] *= boost_factor
+            patch.data[patch.data < boost_factor] = 0
+            patch = patch.divide(boost_factor*u.dimensionless_unscaled,
+                                 handle_meta='first_found')
 
         if self.show:
             simple_show(patch, norm=LogNorm())

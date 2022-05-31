@@ -5,6 +5,7 @@ import astropy.units as u
 
 import ccdproc as ccdp
 
+from bigmultipipe import outname_creator
 from ccdmultipipe import as_single
 
 from IoIO.cormultipipe import (CorMultiPipeBase, detflux,
@@ -27,11 +28,11 @@ class MercuryMultiPipe(CorMultiPipeBase):
         written_name = super().file_write(
             ccd, outname, photometry=photometry, **kwargs)
         # f_pairs has been reversed to photometry is from on-band
-        write_photometry(in_name=in_name[1], outname=outname,
-                         photometry=photometry,
-                         write_wide_source_table=True,
-                         **kwargs)
-        outroot, _ = os.path.splitext(outname)
+        #write_photometry(in_name=in_name[1], outname=outname,
+        #                 photometry=photometry,
+        #                 write_wide_source_table=True,
+        #                 **kwargs)
+        #outroot, _ = os.path.splitext(outname)
         return written_name
 
 def backsub(ccd_in, bmp_meta=None,
@@ -52,12 +53,14 @@ def backsub(ccd_in, bmp_meta=None,
 
 standard_star_obj = StandardStar(reduce=True)
 
-# --> Might want to have a pre-backsub routine that adds Mercury as
+# --> Might want to have a pre-offsub routine that adds Mercury as
 # --> OBJECT, since that got messed up on occation -- was set to a
 # --> focus star and I forgot to go explicitly go to Mercury
 
 #directory = '/data/IoIO/raw/2018-05-08/'
+# --> Collaborative paper
 directory = '/data/IoIO/raw/2021-10-28/'
+#directory = '/data/IoIO/raw/2020-05-27/'
 
 # --> Eventually it might be nice to reduce all of the images
 # separately, somehow rejecting the ones that have too much saturation
@@ -78,7 +81,7 @@ collection = ccdp.ImageFileCollection(
 #                       standard_star_obj=standard_star_obj,
 #                       add_ephemeris=obj_ephemeris,
 #                       off_nd_edge_expand=OFF_ND_EDGE_EXPAND,
-#                       post_backsub=[backsub, extinction_correct,
+#                       post_offsub=[backsub, extinction_correct,
 #                                     rayleigh_convert, as_single],
 #                       outdir_root=MERCURY_ROOT,
 #                       fits_fixed_ignore=True)#,
@@ -99,11 +102,34 @@ collection = ccdp.ImageFileCollection(
 #                       #flip_along_axis=1,
 #                       #flip_angle_from_key='TARGET_sunTargetPA',
 #                       off_nd_edge_expand=OFF_ND_EDGE_EXPAND,
-#                       post_backsub=[backsub, extinction_correct, rot_to,
+#                       post_offsub=[backsub, extinction_correct, rot_to,
 #                                     as_single],
 #                       outdir_root=MERCURY_ROOT,
 #                       fits_fixed_ignore=True,
 #                       solve_timeout=2)
+
+# 
+### Checks out
+##pout = on_off_pipeline(directory,
+##                       collection=collection,
+##                       band='Na',
+##                       PipeObj=MercuryMultiPipe,
+##                       smooth_off=True,
+##                       horizons_id='199',
+##                       horizons_id_type='majorbody',
+##                       obj_ephm_prefix='Mercury',
+##                       standard_star_obj=standard_star_obj,
+##                       add_ephemeris=obj_ephemeris,
+##                       rot_angle_from_key='TARGET_NPole_ang',
+##                       flip_along_axis=1,
+##                       flip_angle_from_key='TARGET_sunTargetPA',
+##                       off_nd_edge_expand=OFF_ND_EDGE_EXPAND,
+##                       post_offsub=[backsub, extinction_correct,
+##                                     rayleigh_convert, rot_to,
+##                                     flip_along, as_single],
+##                       outdir_root=MERCURY_ROOT,
+##                       fits_fixed_ignore=True,
+##                       solve_timeout=2)
 
 pout = on_off_pipeline(directory,
                        collection=collection,
@@ -115,16 +141,20 @@ pout = on_off_pipeline(directory,
                        obj_ephm_prefix='Mercury',
                        standard_star_obj=standard_star_obj,
                        add_ephemeris=obj_ephemeris,
+                       write_local_photometry=True,
+                       write_proxy_photometry=True,
+                       write_wide_source_table=True,
                        rot_angle_from_key='TARGET_NPole_ang',
                        flip_along_axis=1,
                        flip_angle_from_key='TARGET_sunTargetPA',
                        off_nd_edge_expand=OFF_ND_EDGE_EXPAND,
-                       post_backsub=[backsub, extinction_correct,
-                                     rayleigh_convert, rot_to,
-                                     flip_along, as_single],
+                       post_offsub=[backsub, extinction_correct,
+                                    rayleigh_convert, rot_to,
+                                    flip_along, as_single],
                        outdir_root=MERCURY_ROOT,
                        fits_fixed_ignore=True,
                        solve_timeout=2)
+
 
 ## Checks out
 #pout = on_off_pipeline(directory,
@@ -140,7 +170,7 @@ pout = on_off_pipeline(directory,
 #                       rot_to_angle=270*u.deg,
 #                       rot_angle_from_key='TARGET_sunTargetPA',
 #                       off_nd_edge_expand=OFF_ND_EDGE_EXPAND,
-#                       post_backsub=[backsub, extinction_correct,
+#                       post_offsub=[backsub, extinction_correct,
 #                                     rayleigh_convert, rot_to,
 #                                     as_single],
 #                       outdir_root=MERCURY_ROOT,
@@ -162,7 +192,7 @@ pout = on_off_pipeline(directory,
 #                       flip_along_axis=0,
 #                       flip_angle_from_key='TARGET_NPole_ang',
 #                       off_nd_edge_expand=OFF_ND_EDGE_EXPAND,
-#                       post_backsub=[backsub, extinction_correct,
+#                       post_offsub=[backsub, extinction_correct,
 #                                     rayleigh_convert, rot_to,
 #                                     flip_along, as_single],
 #                       outdir_root=MERCURY_ROOT,

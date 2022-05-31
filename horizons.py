@@ -1,5 +1,8 @@
 """Provide JPL HORIZONS functionality for IoIO data"""
 
+from random import randint
+from time import sleep
+
 import numpy as np
 
 from astropy import log
@@ -7,7 +10,7 @@ import astropy.units as u
 from astropy.coordinates import Angle
 from astropy.table import MaskedColumn
 
-from astroquery.jplhorizons import Horizons
+from astroquery.jplhorizons import Horizons, HorizonsClass
 
 from IoIO.cor_process import IOIO_1_LOCATION
 
@@ -37,10 +40,39 @@ OBJ_COL_TO_META = ['RA', 'DEC', 'RA_rate', 'DEC_rate', 'V',
 GALSAT_FROM_OBS_COL_NUMS = \
     '1, 3, 6, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26, 27'
 GALSAT_COL_NUMS = '14, 15'
-GALSAT_OBS_COL_TO_META = ['RA', 'DEC', 'r', 'r_rate', 'delta',
-                          'delta_rate', 'PDObsLon', 'PDObsLat',
-                          'PDSunLon', 'SubSol_ang', 'SubSol_dist',
-                          'NPole_ang', 'NPole_dist', 'sysIII', 'phi']
+GALSAT_OBS_COL_TO_META = ['RA', 'DEC', 'ang_width', 'r', 'r_rate',
+                          'delta', 'delta_rate', 'PDObsLon',
+                          'PDObsLat', 'PDSunLon', 'SubSol_ang',
+                          'SubSol_dist', 'NPole_ang', 'NPole_dist',
+                          'sysIII', 'phi']
+
+
+# super(): no arguments
+# Means that HorizonsClass is 
+class CorHorizons(HorizonsClass):
+    def ephemerides_async(self, *args, **kwargs):
+        try:
+            retval = super().ephemerides_async(*args, **kwargs)
+        except Exception as e:
+            log.warning(f'JPL throttling connection')
+            print(e)
+            sleep(randint(10,100))
+            retval = self.ephemerides_async(*args, **kwargs)
+        return retval            
+
+#    raise ValueError('time range ({:s}) requires start, stop, '
+#ValueError: time range ({'__module__': 'IoIO.horizons', '__qualname__': 'CorHorizons', 'ephemerides': <function CorHorizons.ephemerides at 0x7f0160fa5280>, '__classcell__': <cell at 0x7f0161079730: empty>}) requires start, stop, and step
+#class CorHorizons(Horizons):
+#    def ephemerides(*args, **kwargs):
+#        try:
+#            retval = super().ephemerides(*args, **kwargs)
+#        except Exception as e:
+#            log.warning(f'JPL throttling connection')
+#            print(e)
+#            sleep(randint(10,100))
+#            retval = self.ephemerides(*args, **kwargs)
+#        return retval            
+
 
 #GALSAT_COL_TO_META = ['PDObsLon', 'PDObsLat', 'PDSunLon', 'SubSol_ang']
 
@@ -123,10 +155,10 @@ def obj_ephemeris(ccd_in,
     if obs_col_to_meta is None:
         obs_col_to_meta = OBJ_COL_TO_META
     obs_name = obs_loc.info.name
-    h = Horizons(id=horizons_id,
-                 epochs=ccd.tavg.jd,
-                 location=location_to_dict(obs_loc),
-                 id_type=horizons_id_type)
+    h = CorHorizons(id=horizons_id,
+                    epochs=ccd.tavg.jd,
+                    location=location_to_dict(obs_loc),
+                    id_type=horizons_id_type)
     e = h.ephemerides(quantities=quantities)
     ra = Angle(e['RA'].quantity)
     dec = Angle(e['DEC'].quantity)
@@ -187,10 +219,10 @@ def galsat_ephemeris(ccd_in,
     # are the default
     obs_eph = None
     for galsat in GALSATS:
-        h = Horizons(id=GALSATS[galsat],
-                     epochs=ccd.tavg.jd,
-                     location=location_to_dict(obs_loc),
-                     id_type='majorbody')
+        h = CorHorizons(id=GALSATS[galsat],
+                        epochs=ccd.tavg.jd,
+                        location=location_to_dict(obs_loc),
+                        id_type='majorbody')
         e = h.ephemerides(quantities=GALSAT_FROM_OBS_COL_NUMS)
         if obs_eph is None:
             obs_eph = e
@@ -209,10 +241,10 @@ def galsat_ephemeris(ccd_in,
         mask = obs_eph['targetname'] == f'{galsat} ({GALSATS[galsat]})'
         lt = obs_eph['lighttime'][mask]
         epoch = ccd.tavg.jd*u.day - lt
-        h = Horizons(id=GALSATS['Jupiter'],
-                     epochs=epoch.value,
-                     location=f'500@{GALSATS[galsat]}',
-                     id_type='majorbody')
+        h = CorHorizons(id=GALSATS['Jupiter'],
+                        epochs=epoch.value,
+                        location=f'500@{GALSATS[galsat]}',
+                        id_type='majorbody')
         e = h.ephemerides(quantities=GALSAT_COL_NUMS)
         if gs_eph is None:
             gs_eph = e

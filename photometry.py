@@ -251,7 +251,7 @@ def wcs_project(ccd, target_wcs, target_shape=None, order='bilinear'):
     return nccd
 
 def rot_to(ccd_in,
-           rot_to_angle=0*u.degree,
+           rot_to_angle=None,
            rot_angle_from_key=None,
            rot_angle_key_unit=u.degree,
            **kwargs):
@@ -264,10 +264,10 @@ def rot_to(ccd_in,
     ccd_in : astropy.nddata.CCDData
         Input `~astropy.nddata.CCDData`
 
-    rot_to_angle : astropy.units.Quantity, optional
+    rot_to_angle : astropy.units.Quantity or None, optional
         Additional rotation angle after CCD image has been oriented N
-        up, E west, CCW.
-        Default is `0`
+        up, E west, CCW.  If None, no additional rotation is done
+        Default is `None`
         
     rot_angle_from_key : str or list of str None
         FITS header key(s) from which rotation angle is constructed.
@@ -283,6 +283,7 @@ def rot_to(ccd_in,
 
     """
     ccd = ccd_in.copy()
+    rot_to_angle = rot_to_angle or 0*u.degree
     docstring = ''
     if rot_angle_from_key is not None:
         rot_angle_from_key = assure_list(rot_angle_from_key)
@@ -290,7 +291,8 @@ def rot_to(ccd_in,
             rot_to_angle += ccd.meta[k] * rot_angle_key_unit
             docstring += f'{k} '
     # North up, east left
-    ne_wcs, _ = find_optimal_celestial_wcs([(ccd.data, ccd.wcs)])
+    ne_wcs, _ = find_optimal_celestial_wcs([(ccd.data, ccd.wcs)],
+                                           auto_rotate=True)
     # Clockwise rotation
     r_wcs = rot_wcs(ne_wcs, -rot_to_angle)
     ccd = wcs_project(ccd, r_wcs)
@@ -331,11 +333,11 @@ def flip_wcs(ccd_in, axis):
     return ccd
 
 def flip_along(ccd_in,
-            flip_along_axis=None,
-            flip_along_angle=0*u.degree,
-            flip_angle_from_key=None,
-            flip_angle_key_unit=u.degree,
-            **kwargs):
+               flip_along_axis=None,
+               flip_along_angle=None,
+               flip_angle_from_key=None,
+               flip_angle_key_unit=u.degree,
+               **kwargs):
     """Flip ccd image along desired axis so that flip_along_angle heads
     generally to the right (axis 0) or up (axis 1).  Usually, rot_to
     has already been applied
@@ -348,9 +350,9 @@ def flip_along(ccd_in,
     flip_along_axis : int
       Axis about which to flip (required) 0 = up/down, 1 = left/right
 
-    flip_along_angle : astropy.units.Quantity, optional
-        Reference angle, N up, E west, CCW
-        Default is `0`
+    flip_along_angle : astropy.units.Quantity or None, optional
+        Reference angle, N up, E west, CCW.  If None, 0 is used.
+        Default is `None`
         
     flip_angle_from_key : str or list of str None
         FITS header key(s) from which flip angle is constructed.
@@ -367,6 +369,7 @@ def flip_along(ccd_in,
     """
     if flip_along_axis is None:
         raise ValueError('flip_along_axis must be specified')
+    flip_along_angle = flip_along_angle or 0*u.deg
     ccd = ccd_in.copy()
     docstring = ''
     if flip_angle_from_key is not None:

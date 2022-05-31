@@ -29,11 +29,13 @@ from reproject.mosaicking import find_optimal_celestial_wcs
 
 import ccdproc as ccdp
 
+from bigmultipipe import outname_creator
+
 from precisionguide import PGData
 
 import IoIO.sx694 as sx694
 from IoIO.utils import FITS_GLOB_LIST, multi_glob, savefig_overwrite
-from cordata_base import SMALL_FILT_CROP
+from IoIO.cordata_base import SMALL_FILT_CROP
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE, rot_wcs,
                              Photometry, PhotometryArgparseMixin)
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
@@ -135,10 +137,11 @@ def cardinal_directions(wcs):
     out, hence the 0s
 
     """
+    # Avoid pass byt reference bug by copying cd/pc to mat
     if wcs.wcs.has_cd():
-        mat = wcs.wcs.cd
+        mat = wcs.wcs.cd.copy()
     elif wcs.wcs.has_pc():
-        mat = wcs.wcs.pc
+        mat = wcs.wcs.pc.copy()
     else:
         raise ValueError('wcs.wcs does not have expected cd or pc '
                          'pixel to world transformation matrix')
@@ -424,10 +427,12 @@ class CorPhotometry(Photometry):
         ibest = np.argmin(np.abs(dts))
         best_wcs_file = wcs_collect.files_filtered(
             include_path=True)[ibest]
+        wcs = WCS(best_wcs_file)
+        # Reference original WCS file in our header if this is a chain
+        # of proxies
         phdr = getheader(best_wcs_file)
         proxy_wcs_file = phdr.get('PROXYWCS')
         if proxy_wcs_file:
-            # Make sure to reference original WCS file
             self._proxy_wcs_file = proxy_wcs_file
         else:
             self._proxy_wcs_file = best_wcs_file
@@ -435,7 +440,6 @@ class CorPhotometry(Photometry):
             (wcs_collect.values('xbinning')[ibest],
              wcs_collect.values('ybinning')[ibest]))
         wcs_raw_pierside = wcs_collect.values('pierside')[ibest]
-        wcs = WCS(self._proxy_wcs_file)
 
         # Scale WCS transformations to match ccd pixel size.  All of
         # our Astrometry solutions have run through the wcslib stuff,
@@ -848,6 +852,7 @@ def write_astrometry(ccd_in, in_name=None, outname=None,
 
 def write_photometry(in_name=None, outname=None, photometry=None,
                      create_outdir=False,
+                     write_proxy_photometry=False,
                      write_wide_source_table=False,
                      write_source_gaia_join=False,
                      **kwargs):
@@ -858,7 +863,7 @@ def write_photometry(in_name=None, outname=None, photometry=None,
     # have OBJECT, etc.  We certainly need the coordinates, so
     # just go with this.
     if (photometry is None
-        or not photometry.solved
+        or not (photometry.solved or write_proxy_photometry)
         or photometry.wide_source_table is None
         or not (write_wide_source_table
                 or write_source_gaia_join)):
@@ -889,6 +894,7 @@ def add_astrometry(ccd_in, bmp_meta=None,
                    solve_timeout=None,
                    keep_intermediate=False,
                    write_to_central_photometry=True,
+                   write_local_photometry=False,
                    **kwargs):
     """cormultipipe post-processing routine to add wcs to ccd
 
@@ -913,6 +919,7 @@ def add_astrometry(ccd_in, bmp_meta=None,
                 solve_timeout=solve_timeout,
                 keep_intermediate=keep_intermediate,
                 write_to_central_photometry=write_to_central_photometry,
+                write_local_photometry=write_local_photometry,
                 **kwargs)
                     for ccd, fname in zip(ccd_in, in_name)]
         else:
@@ -923,6 +930,7 @@ def add_astrometry(ccd_in, bmp_meta=None,
                 solve_timeout=solve_timeout,
                 keep_intermediate=keep_intermediate,
                 write_to_central_photometry=write_to_central_photometry,
+                write_local_photometry=write_local_photometry
                 **kwargs)
                     for ccd in ccd_in]
     ccd = ccd_in.copy()
@@ -993,6 +1001,14 @@ def add_astrometry(ccd_in, bmp_meta=None,
                          create_outdir=True,
                          write_source_gaia_join=True,
                          **kwargs)
+    if write_local_photometry:
+        # Guess at reasonable outname
+        outname = outname_creator(in_name, outdir=outdir, **kwargs)
+        write_photometry(in_name=in_name, outname=outname,
+                         photometry=photometry,
+                         outdir=outdir,
+                         create_outdir=create_outdir,
+                         **kwargs)
 
     return ccd    
 
@@ -1048,28 +1064,36 @@ class CorPhotometryArgparseMixin(PhotometryArgparseMixin):
 if __name__ == '__main__':
     log.setLevel('DEBUG')
     # Base Astrometry test
-    photometry = CorPhotometry()
-    photometry.reduce_base_astrometry()
+    #photometry = CorPhotometry()
+    #photometry.reduce_base_astrometry()
     
-    #from IoIO.cordata import CorData
-    #from IoIO.cor_process import cor_process
-    #from IoIO.calibration import Calibration
-    #from IoIO.horizons import galsat_ephemeris
-    #from astropy.wcs.utils import proj_plane_pixel_scales
-    #c = Calibration(reduce=True)
+    from IoIO.cordata import CorData
+    from IoIO.cor_process import cor_process
+    from IoIO.cormultipipe import add_raw_fname
+    from IoIO.calibration import Calibration
+    from IoIO.horizons import galsat_ephemeris
+    from astropy.wcs.utils import proj_plane_pixel_scales
+    c = Calibration(reduce=True)
+    fname = '/data/IoIO/raw/20211028/0029P-S001-R001-C001-Na_off_dupe-1.fts'
+    rccd = CorData.read(fname)
+    ccd = cor_process(rccd, calibration=c, auto=True)
+    ccd = add_raw_fname(ccd, in_name=fname)
+    photometry = CorPhotometry(ccd)
+    wcs = photometry.wcs
+    print(wcs)
     ###fname = '/data/IoIO/raw/20220414/KPS-1b-S001-R001-C001-R.fts'
     ##directory = '/data/IoIO/raw/2018-05-08/'
     ##fname = os.path.join(directory, 'SII_on-band_007.fits')
     ##fname = '/data/IoIO/raw/2018-05-08/SII_on-band_007.fits'
-    #fname = '/data/IoIO/raw/2020-09_Astrometry/Main_Astrometry_East_of_Pier.fit'
+    ##fname = '/data/IoIO/raw/2020-09_Astrometry/Main_Astrometry_East_of_Pier.fit'
     #rccd = CorData.read(fname)
     #ccd = cor_process(rccd, calibration=c, auto=True)
-    ##ccd = galsat_ephemeris(ccd)
-    ##ccd = object_to_objctradec(ccd)
+    #ccd = galsat_ephemeris(ccd)
+    #ccd = object_to_objctradec(ccd)
     #photometry = CorPhotometry(ccd)
-    #photometry.source_table.show_in_browser()
-    ##wcs = photometry.proxy_wcs
-    ##print(wcs)
+    ##photometry.source_table.show_in_browser()
+    #wcs = photometry.proxy_wcs
+    #print(wcs)
     ##pixscale = (np.linalg.norm(np.mean(np.abs(wcs.wcs.cdelt))
     ##             np.linalg.norm(wcs.wcs.pc[0,:])
     ##            np.linalg.norm(wcs.wcs.pc[1,:]))

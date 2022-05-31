@@ -359,6 +359,9 @@ def im_med_min_max(im):
     mlp = np.median(light_patch)
     return (mdp, mlp)
 
+# Note, this already exists in a more general form in astropy
+# https://docs.astropy.org/en/stable/modeling/example-fitting-line.html#fit-using-uncertainties
+
 def iter_polyfit(x, y, poly_class=None, deg=1, max_resid=None,
                  **kwargs):
     """Performs least squares fit iteratively to discard bad points

@@ -155,8 +155,8 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
                     photometry=None,
                     add_ephemeris=None,
                     pre_process_list=None,
-                    pre_backsub=None,
-                    post_backsub=None,
+                    pre_offsub=None,
+                    post_offsub=None,
                     num_processes=None,
                     outdir=None,
                     outdir_root=None,
@@ -172,21 +172,21 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
     photometry = photometry or CorPhotometry()
     add_ephemeris = assure_list(add_ephemeris)
     pre_process_list = assure_list(pre_process_list)
-    pre_backsub = assure_list(pre_backsub)
+    pre_offsub = assure_list(pre_offsub)
     if len(add_ephemeris) > 0:
         # This is safe because objctradec_to_obj_center doesn't muck
         # with obj_center if there is no wcs
-        pre_backsub.insert(0, objctradec_to_obj_center)
-    post_backsub = assure_list(post_backsub)
+        pre_offsub.insert(0, objctradec_to_obj_center)
+    post_offsub = assure_list(post_offsub)
     post_process_list = [reject_center_quality_below,
                          combine_masks,
                          mask_nonlin_sat,
                          *add_ephemeris,
                          add_astrometry,
-                         *pre_backsub,
+                         *pre_offsub,
                          detflux,
                          off_band_subtract,
-                         *post_backsub]
+                         *post_offsub]
     if outdir is None and outdir_root is None:
         # Right now, dump Na and SII into separate top-level reduction
         # directories
@@ -225,7 +225,9 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
         num_processes=num_processes,
         process_expand_factor=process_expand_factor,
         **kwargs)
+    print(f_pairs[0])
     pout = cmp.pipeline([f_pairs[0]], outdir=outdir, overwrite=True)
+    #pout = cmp.pipeline([f_pairs[6]], outdir=outdir, overwrite=True)
     #pout = cmp.pipeline(f_pairs, outdir=outdir, overwrite=True)
     pout, _ = prune_pout(pout, f_pairs)
     return pout
@@ -283,8 +285,8 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
 #                       na_meso_obj=na_meso_obj,
 #                       standard_star_obj=standard_star_obj,
 #                       add_ephemeris=galsat_ephemeris,
-#                       pre_backsub=[objctradec_to_obj_center],
-#                       post_backsub=[sun_angle, na_meso_sub,
+#                       pre_offsub=[objctradec_to_obj_center],
+#                       post_offsub=[sun_angle, na_meso_sub,
 #                                     extinction_correct, rayleigh_convert],
 #                       fits_fixed_ignore=fits_fixed_ignore)
 
@@ -293,15 +295,15 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
 #                       band='SII',
 #                       standard_star_obj=standard_star_obj,
 #                       add_ephemeris=galsat_ephemeris,
-#                       pre_backsub=[objctradec_to_obj_center],
-#                       post_backsub=[extinction_correct, rayleigh_convert],
+#                       pre_offsub=[objctradec_to_obj_center],
+#                       post_offsub=[extinction_correct, rayleigh_convert],
 #                       fits_fixed_ignore=True)
 #
 
 
 #pout = on_off_pipeline(directory, band='SII',
 #                       add_ephemeris=galsat_ephemeris,
-#                       pre_backsub=[objctradec_to_obj_center],
+#                       pre_offsub=[objctradec_to_obj_center],
 #                       fits_fixed_ignore=True)
 
 

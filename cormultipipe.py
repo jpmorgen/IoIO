@@ -256,7 +256,7 @@ def mask_above_key(ccd_in, bmp_meta=None, key=None, margin=0.1, **kwargs):
         if ccd.mask is None:
             ccd.mask = mask
         else:
-            ccd.mask = ccd.mask + mask
+            ccd.mask = np.ma.mask_or(ccd.mask, mask)
     if bmp_meta is not None:
         bmp_meta[n_masked_key] = n_masked
     return ccd
@@ -317,7 +317,7 @@ def nd_filter_mask(ccd_in, nd_edge_expand=ND_EDGE_EXPAND, **kwargs):
     if ccd.mask is None:
         ccd.mask = mask
     else:
-        ccd.mask = ccd.mask + mask
+        ccd.mask = np.ma.mask_or(ccd.mask, mask)
     return ccd
 
 #def multi_filter_proc(data, **kwargs):
@@ -386,8 +386,14 @@ def objctradec_to_obj_center(ccd_in, bmp_meta=None, **kwargs):
     bmp_meta = bmp_meta or {}
     cent = SkyCoord(objctra, objctdec, unit=(u.hour, u.deg))
     x, y = ccd.wcs.world_to_pixel(cent)
-    ocenter = ccd.obj_center.copy()
-    oquality = ccd.center_quality
+    # Check for pre-processed ccd
+    ocenter = (ccd.meta.get('OBJ_CR1'), ccd.meta.get('OBJ_CR0'))
+    ocenter = np.asarray(ocenter)
+    oquality = ccd.meta.get('CENTER_QUALITY')
+    if ocenter.all() == None:
+        # Calculate
+        ocenter = ccd.obj_center.copy()
+        oquality = ccd.center_quality
     ccd.obj_center = (y, x)
     ccd.center_quality = 10
     dcent = ccd.obj_center - ocenter
