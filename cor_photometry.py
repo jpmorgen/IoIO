@@ -36,6 +36,7 @@ from precisionguide import PGData
 import IoIO.sx694 as sx694
 from IoIO.utils import FITS_GLOB_LIST, multi_glob, savefig_overwrite
 from IoIO.cordata_base import SMALL_FILT_CROP
+from IoIO.cordata import CorData
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE, rot_wcs,
                              Photometry, PhotometryArgparseMixin)
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
@@ -944,6 +945,10 @@ def add_astrometry(ccd_in, bmp_meta=None,
     #    ccd = ccd[s[0,0]:s[1,0], s[0,1]:s[1,1]]
 
     if mask_ND_before_astrometry:
+        # Subtle order bug if obj_center isn't called before we blank
+        # out the info it uses to to find itself
+        if isinstance(ccd, CorData):
+            ccd.obj_center
         photometry.ccd = nd_filter_mask(ccd)
     else:
         photometry.ccd = ccd
@@ -1067,20 +1072,37 @@ if __name__ == '__main__':
     #photometry = CorPhotometry()
     #photometry.reduce_base_astrometry()
     
+    from IoIO.simple_show import simple_show
     from IoIO.cordata import CorData
     from IoIO.cor_process import cor_process
-    from IoIO.cormultipipe import add_raw_fname
+    from IoIO.cormultipipe import add_raw_fname, detflux
     from IoIO.calibration import Calibration
-    from IoIO.horizons import galsat_ephemeris
+    from IoIO.horizons import obj_ephemeris, galsat_ephemeris
     from astropy.wcs.utils import proj_plane_pixel_scales
     c = Calibration(reduce=True)
-    fname = '/data/IoIO/raw/20211028/0029P-S001-R001-C001-Na_off_dupe-1.fts'
+    fname = '/data/IoIO/raw/2021-10-28/Mercury-0001_Na_on.fit'
     rccd = CorData.read(fname)
     ccd = cor_process(rccd, calibration=c, auto=True)
     ccd = add_raw_fname(ccd, in_name=fname)
-    photometry = CorPhotometry(ccd)
-    wcs = photometry.wcs
-    print(wcs)
+    ccd = obj_ephemeris(ccd, horizons_id='199',
+                        horizons_id_type='majorbody',
+                        obj_ephm_prefix='Mercury')
+    ccd = detflux(ccd)
+    photometry = CorPhotometry(ccd, seeing=10, back_rms_scale=2)
+    #wcs = photometry.wcs
+    #photometry.wide_source_table.show_in_browser()
+    ccd = add_astrometry(ccd, in_name=fname, photometry=photometry,
+                         mask_ND_before_astrometry=True,
+                         write_to_central_photometry=False)
+    ccd.write('/data/Mercury/2021-10-28/Mercury-0001_Na_hand.fits', overwrite=True)
+
+    ##fname = '/data/IoIO/raw/20211028/0029P-S001-R001-C001-Na_off_dupe-1.fts'
+    #rccd = CorData.read(fname)
+    #ccd = cor_process(rccd, calibration=c, auto=True)
+    #ccd = add_raw_fname(ccd, in_name=fname)
+    #photometry = CorPhotometry(ccd)
+    #wcs = photometry.wcs
+    #print(wcs)
     ###fname = '/data/IoIO/raw/20220414/KPS-1b-S001-R001-C001-R.fts'
     ##directory = '/data/IoIO/raw/2018-05-08/'
     ##fname = os.path.join(directory, 'SII_on-band_007.fits')

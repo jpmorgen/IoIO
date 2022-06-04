@@ -515,7 +515,7 @@ def cached_csv(dict_list_code,
         If `True` read csv(s) from `csvnames`
         Default is `False`
 
-    write_pout : bool
+    write_csvs : bool
         If `True` write csv(s) to filename(s) listed in `csvnames`
         Default is `False`
 

@@ -22,7 +22,8 @@ from ccdmultipipe import CCDMultiPipe, CCDArgparseMixin
 import IoIO.sx694 as sx694
 from IoIO.utils import add_history, im_med_min_max
 
-from IoIO.cordata_base import overscan_estimate, CorDataBase, CorDataNDparams
+from IoIO.cordata_base import (SMALL_FILT_CROP, overscan_estimate,
+                               CorDataBase, CorDataNDparams)
 from IoIO.cordata import CorData
 from IoIO.cor_process import cor_process, standardize_filt_name
 
@@ -408,6 +409,20 @@ def objctradec_to_obj_center(ccd_in, bmp_meta=None, **kwargs):
     add_history(ccd.meta, 'Used OBJCTRA and OBJCTDEC keywords to calculate obj_cent')
     bmp_meta['dobj_center'] = dcent
     return ccd
+
+def small_filter_crop(ccd_in, small_filt_crop=SMALL_FILT_CROP, **kwargs):
+    """Crops ccd image to ((y0, y1), (x0, x1)) set in small_filt_crop,
+which defaults to the same values used for CorDataNDparams"""
+    if isinstance(ccd_in, list):
+        result = [small_filter_crop(
+            ccd, small_filt_crop=small_filt_crop, **kwargs)
+                  for ccd in ccd_in]
+        return result
+    if full_frame(ccd_in) is None:
+        raise ValueError(f'Input ccd is not full-frame')
+    vert = np.asarray(small_filt_crop)
+    ccd = ccd_in[vert[0,0]:vert[1,0], vert[0,1]:vert[1,1]]
+    return ccd    
 
 ######### Argparse mixin
 class CorArgparseMixin:

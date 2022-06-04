@@ -10,9 +10,14 @@ import astropy.units as u
 from astropy.coordinates import Angle
 from astropy.table import MaskedColumn
 
-from astroquery.jplhorizons import Horizons, HorizonsClass
+from astroquery.jplhorizons import HorizonsClass
+from astroquery.utils import async_to_sync
 
 from IoIO.cor_process import IOIO_1_LOCATION
+
+# Wait time to try HORIZONS query again when it is rate limiting.
+HORIZONS_WAIT_MIN = 10
+HORIZONS_WAIT_MAX = 100
 
 # https://ssd.jpl.nasa.gov/horizons/manual.html
 
@@ -46,19 +51,48 @@ GALSAT_OBS_COL_TO_META = ['RA', 'DEC', 'ang_width', 'r', 'r_rate',
                           'SubSol_dist', 'NPole_ang', 'NPole_dist',
                           'sysIII', 'phi']
 
+@async_to_sync
+class RateLimitedHorizonsClass(HorizonsClass):
+    """Define a class AND method to handle HORIZONS returning a server
+    error when the rate of queries is too large.  Waits a random time
+    and tries again.
 
-# super(): no arguments
-# Means that HorizonsClass is 
-class CorHorizons(HorizonsClass):
-    def ephemerides_async(self, *args, **kwargs):
+    """
+    # Tried to override the ephemerides and ephemerides_async methods
+    # and that caused too many problems because of all of the nested
+    # decorators: the try at this level was never triggered.
+    def rate_limited_ephemerides(self, *args, **kwargs):
         try:
-            retval = super().ephemerides_async(*args, **kwargs)
-        except Exception as e:
+            return self.ephemerides(*args, **kwargs)
+        except ValueError as e:
+            if not 'There was an unexpected problem with server. Please wait a minute or so and try again.' in str(e):
+                raise e
             log.warning(f'JPL throttling connection')
-            print(e)
-            sleep(randint(10,100))
-            retval = self.ephemerides_async(*args, **kwargs)
-        return retval            
+            sleep(randint(HORIZONS_WAIT_MIN, HORIZONS_WAIT_MAX))
+            return self.rate_limited_ephemerides(*args, **kwargs)
+RateLimitedHorizons = RateLimitedHorizonsClass()
+
+#@async_to_sync
+#class CorHorizonsClass(HorizonsClass):
+#    def ephemerides_async(self, *args, **kwargs):
+#        """Horizons """
+#        try:
+#            print('HERE I AM')
+#            return super().ephemerides_async(*args, **kwargs)
+#            # Recursion error because of decorator overwriting
+#            # whatever ephemerides is 
+#            #return super().ephemerides(*args, **kwargs)
+#            # Didn't properly init
+#            #return HorizonsClass(self).ephemerides(*args, **kwargs)
+#        except ValueError as e:
+#            if 'There was an unexpected problem with server. Please wait a minute or so and try again.' in str(e):
+#                print('SUCCESS IN SPOTTING EXCEPTION')
+#            log.warning(f'JPL throttling connection')
+#            print(e)
+#            sleep(randint(10,100))
+#            return self.ephemerides_async(*args, **kwargs)
+## Try definition as per Horizons
+#CorHorizons = CorHorizonsClass()
 
 #    raise ValueError('time range ({:s}) requires start, stop, '
 #ValueError: time range ({'__module__': 'IoIO.horizons', '__qualname__': 'CorHorizons', 'ephemerides': <function CorHorizons.ephemerides at 0x7f0160fa5280>, '__classcell__': <cell at 0x7f0161079730: empty>}) requires start, stop, and step
@@ -135,6 +169,7 @@ def obj_ephemeris(ccd_in,
                                   horizons_id_type=horizons_id_type,
                                   obs_loc=obs_loc,
                                   quantities=quantities,
+                                  obj_ephm_prefix=obj_ephm_prefix,
                                   obs_col_to_meta=obs_col_to_meta,
                                   **kwargs)
                     for ccd, fname in zip(ccd_in, in_name)]
@@ -146,6 +181,7 @@ def obj_ephemeris(ccd_in,
                                   horizons_id_type=horizons_id_type,
                                   obs_loc=obs_loc,
                                   quantities=quantities,
+                                  obj_ephm_prefix=obj_ephm_prefix,
                                   obs_col_to_meta=obs_col_to_meta,
                                   **kwargs)
                 for ccd in ccd_in]
@@ -155,11 +191,11 @@ def obj_ephemeris(ccd_in,
     if obs_col_to_meta is None:
         obs_col_to_meta = OBJ_COL_TO_META
     obs_name = obs_loc.info.name
-    h = CorHorizons(id=horizons_id,
+    h = RateLimitedHorizons(id=horizons_id,
                     epochs=ccd.tavg.jd,
                     location=location_to_dict(obs_loc),
                     id_type=horizons_id_type)
-    e = h.ephemerides(quantities=quantities)
+    e = h.rate_limited_ephemerides(quantities=quantities)
     ra = Angle(e['RA'].quantity)
     dec = Angle(e['DEC'].quantity)
     ccd.meta['OBJCTRA'] = (ra[0].to_string(unit=u.hour),
@@ -219,11 +255,11 @@ def galsat_ephemeris(ccd_in,
     # are the default
     obs_eph = None
     for galsat in GALSATS:
-        h = CorHorizons(id=GALSATS[galsat],
+        h = RateLimitedHorizons(id=GALSATS[galsat],
                         epochs=ccd.tavg.jd,
                         location=location_to_dict(obs_loc),
                         id_type='majorbody')
-        e = h.ephemerides(quantities=GALSAT_FROM_OBS_COL_NUMS)
+        e = h.rate_limited_ephemerides(quantities=GALSAT_FROM_OBS_COL_NUMS)
         if obs_eph is None:
             obs_eph = e
         else:        
@@ -241,11 +277,11 @@ def galsat_ephemeris(ccd_in,
         mask = obs_eph['targetname'] == f'{galsat} ({GALSATS[galsat]})'
         lt = obs_eph['lighttime'][mask]
         epoch = ccd.tavg.jd*u.day - lt
-        h = CorHorizons(id=GALSATS['Jupiter'],
+        h = RateLimitedHorizons(id=GALSATS['Jupiter'],
                         epochs=epoch.value,
                         location=f'500@{GALSATS[galsat]}',
                         id_type='majorbody')
-        e = h.ephemerides(quantities=GALSAT_COL_NUMS)
+        e = h.rate_limited_ephemerides(quantities=GALSAT_COL_NUMS)
         if gs_eph is None:
             gs_eph = e
         else:

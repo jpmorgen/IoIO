@@ -14,8 +14,8 @@ from astropy.modeling import models, fitting
 from ccdmultipipe import as_single
 
 from IoIO.simple_show import simple_show
-from IoIO.cordata_base import SMALL_FILT_CROP
-from IoIO.cormultipipe import IoIO_ROOT, objctradec_to_obj_center
+from IoIO.cormultipipe import (IoIO_ROOT, objctradec_to_obj_center,
+                               small_filter_crop)
 from IoIO.calibration import Calibration
 from IoIO.photometry import SOLVE_TIMEOUT, JOIN_TOLERANCE, rot_to
 from IoIO.cor_photometry import CorPhotometry
@@ -242,8 +242,9 @@ def ansa_parameters(ccd_in,
     bmp_meta.update(ansa_meta)
     return ccd
 
+from IoIO.cormultipipe import full_frame
+
 def characterize_ansas(ccd_in, bmp_meta=None,
-                       characterize_ansa_crop=SMALL_FILT_CROP,
                        **kwargs):
     # MAKE SURE THIS IS CALLED BEFORE ANY ROTATIONS
     # The underlying reproject stuff in rot_to is a little unstable
@@ -252,49 +253,55 @@ def characterize_ansas(ccd_in, bmp_meta=None,
     # expected, since celestial N should be the constant reference).
     # When autorotate is not used, rotation come out as expected, but
     # crpix is all weird.  
-    cac = np.asarray(characterize_ansa_crop)
-    ccd = ccd_in[cac[0,0]:cac[1,0], cac[0,1]:cac[1,1]]
-    ccd = ccd_in.copy()
-    # MASK GALSATS
-
-    # This behavior is a little unexpected and inconsistent given how
-    # I wrote rot_to.  I expect rot_to to start with celestial N time
-    # I do a rotation, so I have to rotate by all rotations to get to
-    # the desired rotation.  But switching to using shapley calculates
-    # incremental rotation, which actually simplifies this logic
-    rfk = ccd.meta.get('ROT_FROM_KEYS')
-    
-
-    # Make sure we are rotated in the correct direction.  Since rot_to
-    # always reorients and rotates relative to celestial N, we just
-    # have to make sure all our keys are already in ROT_FROM_KEYS.
-    ansa_rots = ['Jupiter_NPole_ang', 'IPT_NPole_ang']
-    rfk = ccd.meta.get('ROT_FROM_KEYS')
-    if rfk is None:
-        rot_angle_from_key = ansa_rots
-    else:
-        # Check to make sure we have exactly the keys we want, no more
-        rfk = rfk.split()
-        check_rots = [k in ansa_rots for k in rfk]
-        if (len(check_rots) != len(ansa_rots)
-            or len(rfk) > len(ansa_rots)):
-            rot_angle_from_key = ansa_rots
-        else:
-            rot_angle_from_key = []
-    if len(rot_angle_from_key) > 0:
-        print('before corrective rotation')
-        ccd.write('/tmp/before.fits', overwrite=True)
-        simple_show(ccd)
-        print(f'rot_angle_from_key {rot_angle_from_key}')
-        ccd = rot_to(ccd, rot_angle_from_key=rot_angle_from_key)
-        ccd.write('/tmp/after.fits', overwrite=True)
-        simple_show(ccd)
+    ccd = rot_to(ccd_in, rot_angle_from_key=['Jupiter_NPole_ang',
+                                             'IPT_NPole_ang'])
+    ccd = objctradec_to_obj_center(ccd)
+    ccd = mask_galsats(ccd)
     bmp_meta = bmp_meta or {}
     bmp_meta['tavg'] = ccd.tavg
     for side in ['left', 'right']:
         ccd = ansa_parameters(ccd, bmp_meta=bmp_meta,
                               ansa_side=side, **kwargs)
-    return ccd
+    return ccd_in
+
+    #### This behavior is a little unexpected and inconsistent given how
+    #### I wrote rot_to.  I expect rot_to to start with celestial N time
+    #### I do a rotation, so I have to rotate by all rotations to get to
+    #### the desired rotation.  But switching to using shapley calculates
+    #### incremental rotation, which actually simplifies this logic
+    ###rfk = ccd.meta.get('ROT_FROM_KEYS')
+    ###
+    ###
+    #### Make sure we are rotated in the correct direction.  Since rot_to
+    #### always reorients and rotates relative to celestial N, we just
+    #### have to make sure all our keys are already in ROT_FROM_KEYS.
+    ###ansa_rots = ['Jupiter_NPole_ang', 'IPT_NPole_ang']
+    ###rfk = ccd.meta.get('ROT_FROM_KEYS')
+    ###if rfk is None:
+    ###    rot_angle_from_key = ansa_rots
+    ###else:
+    ###    # Check to make sure we have exactly the keys we want, no more
+    ###    rfk = rfk.split()
+    ###    check_rots = [k in ansa_rots for k in rfk]
+    ###    if (len(check_rots) != len(ansa_rots)
+    ###        or len(rfk) > len(ansa_rots)):
+    ###        rot_angle_from_key = ansa_rots
+    ###    else:
+    ###        rot_angle_from_key = []
+    ###if len(rot_angle_from_key) > 0:
+    ###    print('before corrective rotation')
+    ###    ccd.write('/tmp/before.fits', overwrite=True)
+    ###    simple_show(ccd)
+    ###    print(f'rot_angle_from_key {rot_angle_from_key}')
+    ###    ccd = rot_to(ccd, rot_angle_from_key=rot_angle_from_key)
+    ###    ccd.write('/tmp/after.fits', overwrite=True)
+    ###    simple_show(ccd)
+    ###bmp_meta = bmp_meta or {}
+    ###bmp_meta['tavg'] = ccd.tavg
+    ###for side in ['left', 'right']:
+    ###    ccd = ansa_parameters(ccd, bmp_meta=bmp_meta,
+    ###                          ansa_side=side, **kwargs)
+    ###return ccd
 
 calibration=None
 photometry=None
@@ -311,7 +318,9 @@ log.setLevel('DEBUG')
 #directory = '/data/IoIO/raw/2017-05-02'
 directory = '/data/IoIO/raw/2018-05-08/'
 
-standard_star_obj = standard_star_obj or StandardStar(reduce=True)
+#standard_star_obj = standard_star_obj or StandardStar(reduce=True)
+standard_star_obj = standard_star_obj or StandardStar(stop='2022-01-01',
+                                                      reduce=True)
 
 ##pout = on_off_pipeline(directory,
 ##                       glob_include=TORUS_NA_NEB_GLOB_LIST,
@@ -343,11 +352,11 @@ pout = on_off_pipeline(directory,
                        band='SII',
                        standard_star_obj=standard_star_obj,
                        add_ephemeris=galsat_ephemeris,
+                       pre_offsub=small_filter_crop,
                        rot_angle_from_key=['Jupiter_NPole_ang'],
                        post_offsub=[extinction_correct, rayleigh_convert,
-                                    rot_to, objctradec_to_obj_center,
-                                    mask_galsats, characterize_ansas,
-                                    as_single],
+                                    characterize_ansas,
+                                    rot_to, as_single],
                        outdir_root=outdir_root,
                        fits_fixed_ignore=fits_fixed_ignore)
 

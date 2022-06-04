@@ -668,7 +668,13 @@ def standard_star_directory(directory,
         dec = objdf['objctdec'][row1]
         detflux_unit = objdf['detflux_unit'][row1]
         detflux_unit = u.Unit(detflux_unit)
-        obj_coords = SkyCoord(ra, dec)
+        try:
+            # Prefer whatever is written in explicitly
+            obj_coords = SkyCoord(ra, dec)
+        except u.UnitsError:
+            # Assume RA reads in hours
+            obj_coords = SkyCoord(ra, dec, unit=(u.hour, u.degree))
+
         simbad_coords = SkyCoord(simbad_entry['RA'],
                                  simbad_entry['DEC'],
                                  unit=(u.hour, u.deg))
@@ -935,8 +941,11 @@ def standard_star_directory(directory,
                 star_mag = np.NAN*u.mag(filt_flux.unit)
                 star_flux = np.NAN*filt_flux.unit
 
-            # http://sirius.bu.edu/planetary/obstools/starflux/starcalib/starcalib.htm                
-            star_sb = 4*np.pi * star_flux / pix_solid_angle
+            # http://sirius.bu.edu/planetary/obstools/starflux/starcalib/starcalib.htm
+            # noting that the 4 pi should be tucked inside the
+            # rayleigh definition!
+            ##star_sb = 4*np.pi * star_flux / pix_solid_angle
+            star_sb = star_flux / pix_solid_angle
             star_sb = star_sb.to(u.R)
             # Convert our measurement back to flux units for
             # comparison to integral
@@ -1352,6 +1361,9 @@ class StandardStar():
     # closely linked
     @pgproperty
     def reduction_products(self):
+        # --> This is where I would like to just get the current
+        # --> reduction products rather than reduce everything, but
+        # --> that might not be consistent
         lock = Lockfile(self._lockfile)
         lock.create()
         rp = standard_star_tree(raw_data_root=self.raw_data_root,
@@ -1876,7 +1888,7 @@ if __name__ == '__main__':
 #my_star = SkyCoord('18h 36m 56.33635s', '+38d 47m 01.2802s')
 #my_star = SkyCoord(f'12h23m42.2s', f'-26d18m22.2s')
 
-# b = CorBurnashev()
+# ob = CorBurnashev()
 # name, dist, coord = b.closest_name_to(my_star)
 # spec = b.get_spec(name)
 # spec_med_dlambda = np.median(spec.spectral_axis[1:]

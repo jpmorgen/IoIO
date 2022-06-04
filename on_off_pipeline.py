@@ -89,7 +89,8 @@ def off_band_subtract(ccd_in,
     if bmp_meta is None:
         bmp_meta = {}
     if off_on_ratio is None and calibration is None:
-        calibration = Calibration(reduce=True)
+        #calibration = Calibration(reduce=True)
+        calibration = Calibration()
     on_ccd_fname, off_ccd_fname = [
         (ccd, fname)
         for oo_regexp in [ON_REGEXP, OFF_REGEXP]
@@ -168,7 +169,8 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
         raise ValueError('specify either collection of glob_include to make sure the correct files are selected')
     if PipeObj is None:
         PipeObj = CorMultiPipeBase
-    calibration = calibration or Calibration(reduce=True)
+    #calibration = calibration or Calibration(reduce=True)
+    calibration = calibration or Calibration()
     photometry = photometry or CorPhotometry()
     add_ephemeris = assure_list(add_ephemeris)
     pre_process_list = assure_list(pre_process_list)
@@ -225,10 +227,10 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
         num_processes=num_processes,
         process_expand_factor=process_expand_factor,
         **kwargs)
-    print(f_pairs[0])
-    pout = cmp.pipeline([f_pairs[0]], outdir=outdir, overwrite=True)
+    #print(f_pairs[0])
+    #pout = cmp.pipeline([f_pairs[0]], outdir=outdir, overwrite=True)
     #pout = cmp.pipeline([f_pairs[6]], outdir=outdir, overwrite=True)
-    #pout = cmp.pipeline(f_pairs, outdir=outdir, overwrite=True)
+    pout = cmp.pipeline(f_pairs, outdir=outdir, overwrite=True)
     pout, _ = prune_pout(pout, f_pairs)
     return pout
 

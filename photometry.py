@@ -290,9 +290,11 @@ def rot_to(ccd_in,
         for k in rot_angle_from_key:
             rot_to_angle += ccd.meta[k] * rot_angle_key_unit
             docstring += f'{k} '
-    # North up, east left
+    # North up, east left.  auto_rotate=True prefers rotation with
+    # minimal image area, so force it to be False, though that is the
+    # current default
     ne_wcs, _ = find_optimal_celestial_wcs([(ccd.data, ccd.wcs)],
-                                           auto_rotate=True)
+                                           auto_rotate=False)
     # Clockwise rotation
     r_wcs = rot_wcs(ne_wcs, -rot_to_angle)
     ccd = wcs_project(ccd, r_wcs)

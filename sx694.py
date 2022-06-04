@@ -90,7 +90,11 @@ dark_mask_threshold = 3
 # This is unique to the SX Universal CCD drivers in MaxIm 
 max_accurate_exposure = 0.7 # s
 
-latency_change_dates = ['2020-06-01', '2020-11-01']
+# Fri Jun 03 11:58:12 2022 EDT  jpmorgen@snipe
+# Old version of Photometry gave different answers probably because of
+# low threshold
+#latency_change_dates = ['2020-06-01', '2020-11-01']
+latency_change_dates = ['2020-11-01']
 
 # Amplitude of typical wander of Meinburg loopstats thought the day.
 # Primarily due to lack of temperature control of crystal oscillator
@@ -154,19 +158,27 @@ def exp_correct_value(date_obs):
     """Provides the measured extra exposure correction time for
     exposures > max_accurate_exposure.  See detailed discussion in
     IoIO_reduction.notebk on 
-    Sat May 15 22:42:42 2021 EDT  jpmorgen@snipe
+    Fri Jun 03 11:56:20 2022 EDT  jpmorgen@snipe
     KEEP THE TABLE IN THIS CODE UP TO DATE
 """
 
     if date_obs < latency_change_dates[0]:
-        exposure_correct = 2.10 # s
-        exposure_correct_uncertainty = 0.33 # s 
-    elif date_obs < latency_change_dates[1]:
-        exposure_correct = 1.87 # s
-        exposure_correct_uncertainty = 0.18 # s 
+        exposure_correct = 2.19 # s
+        exposure_correct_uncertainty = 0.31 # s 
     else:
-        exposure_correct = 2.40 # s
-        exposure_correct_uncertainty = 0.18 # s
+        exposure_correct = 2.71 # s
+        exposure_correct_uncertainty = 0.47 # s
+    #Sat May 15 22:42:42 2021 EDT  jpmorgen@snipe
+    # Old photometry code
+    #if date_obs < latency_change_dates[0]:
+    #    exposure_correct = 2.10 # s
+    #    exposure_correct_uncertainty = 0.33 # s 
+    #elif date_obs < latency_change_dates[1]:
+    #    exposure_correct = 1.87 # s
+    #    exposure_correct_uncertainty = 0.18 # s 
+    #else:
+    #    exposure_correct = 2.40 # s
+    #    exposure_correct_uncertainty = 0.18 # s
 
     # Soften exposure_correct_uncertainty a bit, since the MAD ended
     # up giving the true minimum latency value because of all the
