@@ -20,7 +20,6 @@ HORIZONS_WAIT_MIN = 10
 HORIZONS_WAIT_MAX = 100
 
 # https://ssd.jpl.nasa.gov/horizons/manual.html
-
 # HORIZONS associations
 GALSATS = {
     'Jupiter': 599,
@@ -51,65 +50,6 @@ GALSAT_OBS_COL_TO_META = ['RA', 'DEC', 'ang_width', 'r', 'r_rate',
                           'SubSol_dist', 'NPole_ang', 'NPole_dist',
                           'sysIII', 'phi']
 
-@async_to_sync
-class RateLimitedHorizonsClass(HorizonsClass):
-    """Define a class AND method to handle HORIZONS returning a server
-    error when the rate of queries is too large.  Waits a random time
-    and tries again.
-
-    """
-    # Tried to override the ephemerides and ephemerides_async methods
-    # and that caused too many problems because of all of the nested
-    # decorators: the try at this level was never triggered.
-    def rate_limited_ephemerides(self, *args, **kwargs):
-        try:
-            return self.ephemerides(*args, **kwargs)
-        except ValueError as e:
-            if not 'There was an unexpected problem with server. Please wait a minute or so and try again.' in str(e):
-                raise e
-            log.warning(f'JPL throttling connection')
-            sleep(randint(HORIZONS_WAIT_MIN, HORIZONS_WAIT_MAX))
-            return self.rate_limited_ephemerides(*args, **kwargs)
-RateLimitedHorizons = RateLimitedHorizonsClass()
-
-#@async_to_sync
-#class CorHorizonsClass(HorizonsClass):
-#    def ephemerides_async(self, *args, **kwargs):
-#        """Horizons """
-#        try:
-#            print('HERE I AM')
-#            return super().ephemerides_async(*args, **kwargs)
-#            # Recursion error because of decorator overwriting
-#            # whatever ephemerides is 
-#            #return super().ephemerides(*args, **kwargs)
-#            # Didn't properly init
-#            #return HorizonsClass(self).ephemerides(*args, **kwargs)
-#        except ValueError as e:
-#            if 'There was an unexpected problem with server. Please wait a minute or so and try again.' in str(e):
-#                print('SUCCESS IN SPOTTING EXCEPTION')
-#            log.warning(f'JPL throttling connection')
-#            print(e)
-#            sleep(randint(10,100))
-#            return self.ephemerides_async(*args, **kwargs)
-## Try definition as per Horizons
-#CorHorizons = CorHorizonsClass()
-
-#    raise ValueError('time range ({:s}) requires start, stop, '
-#ValueError: time range ({'__module__': 'IoIO.horizons', '__qualname__': 'CorHorizons', 'ephemerides': <function CorHorizons.ephemerides at 0x7f0160fa5280>, '__classcell__': <cell at 0x7f0161079730: empty>}) requires start, stop, and step
-#class CorHorizons(Horizons):
-#    def ephemerides(*args, **kwargs):
-#        try:
-#            retval = super().ephemerides(*args, **kwargs)
-#        except Exception as e:
-#            log.warning(f'JPL throttling connection')
-#            print(e)
-#            sleep(randint(10,100))
-#            retval = self.ephemerides(*args, **kwargs)
-#        return retval            
-
-
-#GALSAT_COL_TO_META = ['PDObsLon', 'PDObsLat', 'PDSunLon', 'SubSol_ang']
-
 # https://lasp.colorado.edu/home/mop/files/2015/02/CoOrd_systems7.pdf
 # sysIII is confusing because it is a left-handed coordinate system.
 # JUNO_JMAG_VIP4 defines a right-handed coordinates system with X-axis
@@ -121,6 +61,29 @@ RateLimitedHorizons = RateLimitedHorizonsClass()
 # equator of the IPT is less than that [woudl like a reference]
 JUNO_JMAG_VIP4 = 290.8*u.deg
 CENTRIFUGAL_EQUATOR_AMPLITUDE = 6.8*u.deg
+
+@async_to_sync
+class RateLimitedHorizonsClass(HorizonsClass):
+    """Define a class AND method to handle HORIZONS returning a server
+    error when the rate of queries is too large.  Waits a random time
+    and tries again.
+
+    """
+    # Tried to override the ephemerides and ephemerides_async methods
+    # and that never worked because of all of the nested decorators:
+    # the try at this level was never triggered properly.  Making a
+    # separate method that calls the properly decorated top-level
+    # ephemerides method seems to be the only way I can get it to work
+    def rate_limited_ephemerides(self, *args, **kwargs):
+        try:
+            return self.ephemerides(*args, **kwargs)
+        except ValueError as e:
+            if not 'There was an unexpected problem with server. Please wait a minute or so and try again.' in str(e):
+                raise e
+            log.warning(f'JPL throttling connection')
+            sleep(randint(HORIZONS_WAIT_MIN, HORIZONS_WAIT_MAX))
+            return self.rate_limited_ephemerides(*args, **kwargs)
+RateLimitedHorizons = RateLimitedHorizonsClass()
 
 def location_to_dict(loc):
     """Useful for JPL horizons"""

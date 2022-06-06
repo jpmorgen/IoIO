@@ -86,8 +86,7 @@ def off_band_subtract(ccd_in,
     from on-band
 
     """
-    if bmp_meta is None:
-        bmp_meta = {}
+    bmp_meta = bmp_meta or {}
     if off_on_ratio is None and calibration is None:
         #calibration = Calibration(reduce=True)
         calibration = Calibration()
@@ -116,7 +115,8 @@ def off_band_subtract(ccd_in,
     shift_off = on.obj_center - off.obj_center
     d_on_off = np.linalg.norm(shift_off)
     if d_on_off > max_shift_off:
-        bmp_meta.clear
+        log.warning(f'Giving up: d_on_off = {d_on_off} > {max_shift_off} = max_shift_off {in_name}')
+        bmp_meta.clear()
         return None
     off = ccdp.transform_image(off, shift, shift=shift_off)
     if d_on_off > 5:
@@ -141,6 +141,7 @@ def off_band_subtract(ccd_in,
     tmeta = {'band': band,
              'off_on_ratio': off_on_ratio,
              'shift_off': shift_off,
+             'd_on_off': d_on_off,
              'outname': outname}
     bmp_meta.update(tmeta)
 
@@ -227,9 +228,9 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
         num_processes=num_processes,
         process_expand_factor=process_expand_factor,
         **kwargs)
-    #print(f_pairs[0])
+    #print(f_pairs)
     #pout = cmp.pipeline([f_pairs[0]], outdir=outdir, overwrite=True)
-    #pout = cmp.pipeline([f_pairs[6]], outdir=outdir, overwrite=True)
+    #pout = cmp.pipeline([f_pairs[15]], outdir=outdir, overwrite=True)
     pout = cmp.pipeline(f_pairs, outdir=outdir, overwrite=True)
     pout, _ = prune_pout(pout, f_pairs)
     return pout

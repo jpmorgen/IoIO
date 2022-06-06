@@ -22,8 +22,8 @@ from ccdmultipipe import CCDMultiPipe, CCDArgparseMixin
 import IoIO.sx694 as sx694
 from IoIO.utils import add_history, im_med_min_max
 
-from IoIO.cordata_base import (SMALL_FILT_CROP, overscan_estimate,
-                               CorDataBase, CorDataNDparams)
+from IoIO.cordata_base import (overscan_estimate, CorDataBase,
+                               CorDataNDparams)
 from IoIO.cordata import CorData
 from IoIO.cor_process import cor_process, standardize_filt_name
 
@@ -250,8 +250,9 @@ def mask_above_key(ccd_in, bmp_meta=None, key=None, margin=0.1, **kwargs):
         h = 'HIERARCH '
     else:
         h = ''
-    n_masked_key = h + 'N_' + key
-    ccd.meta[n_masked_key] = (n_masked, f'masked pixels > {key}')
+    n_masked_key = 'N_' + key
+    meta_key = h + n_masked_key
+    ccd.meta[meta_key] = (n_masked, f'masked pixels > {key}')
     # Avoid creating a mask of all Falses & supplement any existing mask
     if n_masked > 0:
         if ccd.mask is None:
@@ -356,8 +357,8 @@ def detflux(ccd_in, exptime_unit=None, **kwargs):
                           uncertainty=exptime_uncertainty_std,
                           unit=exptime_unit)
         ccd = ccd.divide(exp_ccd, handle_meta='first_found')
-    # Make sure to scale rdnoise, which doesn't participate in
-    # additive operations
+        # Make sure to scale rdnoise, which doesn't participate in
+        # additive operations
     rdnoise = ccd.meta.get('rdnoise')
     if rdnoise is not None:
         rdnoise /= exptime.value
@@ -395,33 +396,75 @@ def objctradec_to_obj_center(ccd_in, bmp_meta=None, **kwargs):
         # Calculate
         ocenter = ccd.obj_center.copy()
         oquality = ccd.center_quality
-    ccd.obj_center = (y, x)
-    ccd.center_quality = 10
-    dcent = ccd.obj_center - ocenter
-    norm_dcent = np.linalg.norm(dcent)
-    ccd.meta['OOBJ_CR0'] = (ocenter[1], 'Old OBJ_CR0')
-    ccd.meta['OOBJ_CR1'] = (ocenter[0], 'Old OBJ_CR1')
-    ccd.meta['HIERARCH OCENTER_QUALITY'] = (
-        oquality, 'Old center quality')
-    ccd.meta['DOBJ_CR0'] = (dcent[1], 'Delta original to current OBJ_CR0')
-    ccd.meta['DOBJ_CR1'] = (dcent[0], 'Delta original to current OBJ_CR1')
-    ccd.meta['DOBJ_CRN'] = (norm_dcent, 'norm of DOBJ_CR0 and DOBJ_CR1')
-    add_history(ccd.meta, 'Used OBJCTRA and OBJCTDEC keywords to calculate obj_cent')
-    bmp_meta['dobj_center'] = dcent
+        ccd.obj_center = (y, x)
+        ccd.center_quality = 10
+        dcent = ccd.obj_center - ocenter
+        norm_dcent = np.linalg.norm(dcent)
+        ccd.meta['OOBJ_CR0'] = (ocenter[1], 'Old OBJ_CR0')
+        ccd.meta['OOBJ_CR1'] = (ocenter[0], 'Old OBJ_CR1')
+        ccd.meta['HIERARCH OCENTER_QUALITY'] = (
+            oquality, 'Old center quality')
+        ccd.meta['DOBJ_CR0'] = (dcent[1], 'Delta original to current OBJ_CR0')
+        ccd.meta['DOBJ_CR1'] = (dcent[0], 'Delta original to current OBJ_CR1')
+        ccd.meta['DOBJ_CRN'] = (norm_dcent, 'norm of DOBJ_CR0 and DOBJ_CR1')
+        add_history(ccd.meta, 'Used OBJCTRA and OBJCTDEC keywords to calculate obj_cent')
+        bmp_meta['dobj_center'] = dcent
     return ccd
 
-def small_filter_crop(ccd_in, small_filt_crop=SMALL_FILT_CROP, **kwargs):
-    """Crops ccd image to ((y0, y1), (x0, x1)) set in small_filt_crop,
-which defaults to the same values used for CorDataNDparams"""
+def crop_ccd(ccd_in, crop_ccd_coord=None,
+             crop_from_center=None,
+             crop_from_desired_center=None, # This seems to be a bridge too far
+             **kwargs):
+    """Crops ccd image
+
+    Parameters
+    ----------
+    ccd_in : ccd
+
+    crop_ccd_coord : tuple of tuple or None
+        Coordinates of crop vertices ((y0, x0), (y1, x1)) 
+
+    crop_from_center : tuple or None
+        Pixels +/- from center of image used to create crop_ccd_coord
+
+    crop_from_desired_center : tuple or None
+        Pixels from desired center used to create crop_ccd_coord
+
+    """
     if isinstance(ccd_in, list):
-        result = [small_filter_crop(
-            ccd, small_filt_crop=small_filt_crop, **kwargs)
+        result = [crop_ccd(ccd,
+                           crop_ccd_coord=crop_ccd_coord,
+                           crop_from_center=crop_from_center,
+                           crop_from_desired_center=crop_from_desired_center,
+                           **kwargs)
                   for ccd in ccd_in]
         return result
     if full_frame(ccd_in) is None:
         raise ValueError(f'Input ccd is not full-frame')
-    vert = np.asarray(small_filt_crop)
-    ccd = ccd_in[vert[0,0]:vert[1,0], vert[0,1]:vert[1,1]]
+    if ((crop_ccd_coord is not None)
+        + (crop_from_center is not None)
+        + (crop_from_desired_center is not None) != 1):
+        raise ValueError('Specify only one of crop_ccd_coord or crop_from_center')
+    if crop_from_desired_center is not None:
+        c = np.round(ccd_in.desired_center).astype(int)
+        crop_ccd_coord = ((c[0] - crop_from_desired_center[0],
+                           c[0] + crop_from_desired_center[0]),
+                          (c[1] - crop_from_desired_center[1],
+                           c[1] + crop_from_desired_center[1]))
+        return crop_ccd(ccd_in, crop_ccd_coord=crop_ccd_coord)
+    if crop_from_center is not None:
+        s = np.asarray(ccd.shape)
+        c = np.round(s/2).astype(int)
+        crop_ccd_coord = ((c[0] - crop_from_center[0],
+                           c[0] + crop_from_center[0]),
+                          (c[1] - crop_from_center[1],
+                           c[1] + crop_from_center[1]))
+        return crop_ccd(ccd_in, crop_ccd_coord=crop_ccd_coord)
+    
+    vert = np.asarray(crop_ccd_coord)
+    print(vert)
+    ccd = ccd_in[vert[0,0]:vert[0,1], vert[1,0]:vert[1,1]]
+    
     return ccd    
 
 ######### Argparse mixin
@@ -489,3 +532,10 @@ class CorArgparseHandler(CorArgparseMixin, CCDArgparseMixin,
     def cmd(self, args):
         log.setLevel(args.log_level)
 
+if __name__ == '__main__':
+    from calibration import Calibration
+    ccd = CorData.read('/data/IoIO/raw/2018-05-08/SII_on-band_022.fits')
+    c = Calibration(reduce=True)
+    #ccd = cor_process(ccd, calibration=c, auto=True)
+    ccd.obj_center
+    ccd = crop_ccd(ccd, crop_from_desired_center=(150, 300))

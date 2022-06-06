@@ -77,18 +77,19 @@ def bad_ansa(ccd, bmp_meta=None, ansa_side=None, **kwargs):
     if side not in ['right', 'left']:
         raise ValueError(f'ansa_side must be right or left: {side}')    
     bmp_meta = bmp_meta or {}
-    ansa_meta = {f'ansa_{side}_r_peak': np.NAN,
-                 f'ansa_{side}_r_peak_err': np.NAN,
-                 f'ansa_{side}_r_stddev': np.NAN,
-                 f'ansa_{side}_r_stddev_err': np.NAN,
-                 f'ansa_{side}_r_amplitude': np.NAN,
-                 f'ansa_{side}_r_amplitude_err': np.NAN,
-                 f'ansa_{side}_y_peak': np.NAN,
-                 f'ansa_{side}_y_peak_err': np.NAN,
-                 f'ansa_{side}_y_stddev': np.NAN,
-                 f'ansa_{side}_y_stddev_err': np.NAN,
-                 f'ansa_{side}_surf_bright': np.NAN,
-                 f'ansa_{side}_surf_bright_err': np.NAN}
+    masked = np.ma.masked_array(mask=True)
+    ansa_meta = {f'ansa_{side}_r_peak': masked,
+                 f'ansa_{side}_r_peak_err': masked,
+                 f'ansa_{side}_r_stddev': masked,
+                 f'ansa_{side}_r_stddev_err': masked,
+                 f'ansa_{side}_r_amplitude': masked,
+                 f'ansa_{side}_r_amplitude_err': masked,
+                 f'ansa_{side}_y_peak': masked,
+                 f'ansa_{side}_y_peak_err': masked,
+                 f'ansa_{side}_y_stddev': masked,
+                 f'ansa_{side}_y_stddev_err': masked,
+                 f'ansa_{side}_surf_bright': masked,
+                 f'ansa_{side}_surf_bright_err': masked}
     for k in ansa_meta.keys():
         ccd.meta[f'HIERARCH {k}'] = 'NAN'
     bmp_meta.update(ansa_meta)
@@ -174,6 +175,12 @@ def ansa_parameters(ccd_in,
                                               'stddev': (0.1, 0.4)})
                     + models.Polynomial1D(1, c0=np.min(r_prof)))
     r_fit = fit(r_model_init, r_Rj, r_prof, weights=r_dev**-0.5)
+    if r_fit.mean_0.std is None:
+        return bad_ansa(ccd, bmp_meta=bmp_meta, ansa_side=side)
+    # Not sure why this didn't work.  fit_info is no longer property of fit
+    #if r_fit.fit_info['ierr'] not in [1, 2, 3, 4]:
+    #    log.debug('fit failed: ', r_fit.fit_info['message'])
+    #    return bad_ansa(ccd, bmp_meta=bmp_meta, ansa_side=side)
     r_ansa = r_fit.mean_0.value
     dRj = r_fit.stddev_0.value
 
@@ -208,6 +215,11 @@ def ansa_parameters(ccd_in,
                                       amplitude=amplitude)
                     + models.Polynomial1D(0, c0=np.min(y_prof)))
     y_fit = fit(y_model_init, y_Rj, y_prof, weights=y_dev**-0.5)
+    if y_fit.mean_0.std is None:
+        return bad_ansa(ccd, bmp_meta=bmp_meta, ansa_side=side)
+    #if y_fit.fit_info['ierr'] not in [1, 2, 3, 4]:
+    #    log.debug('fit failed: ', y_fit.fit_info['message'])
+    #    return bad_ansa(ccd, bmp_meta=bmp_meta, ansa_side=side)
 
     #plt.plot(y_Rj, y_prof)
     #plt.plot(y_Rj, y_fit(y_Rj))
@@ -263,45 +275,6 @@ def characterize_ansas(ccd_in, bmp_meta=None,
         ccd = ansa_parameters(ccd, bmp_meta=bmp_meta,
                               ansa_side=side, **kwargs)
     return ccd_in
-
-    #### This behavior is a little unexpected and inconsistent given how
-    #### I wrote rot_to.  I expect rot_to to start with celestial N time
-    #### I do a rotation, so I have to rotate by all rotations to get to
-    #### the desired rotation.  But switching to using shapley calculates
-    #### incremental rotation, which actually simplifies this logic
-    ###rfk = ccd.meta.get('ROT_FROM_KEYS')
-    ###
-    ###
-    #### Make sure we are rotated in the correct direction.  Since rot_to
-    #### always reorients and rotates relative to celestial N, we just
-    #### have to make sure all our keys are already in ROT_FROM_KEYS.
-    ###ansa_rots = ['Jupiter_NPole_ang', 'IPT_NPole_ang']
-    ###rfk = ccd.meta.get('ROT_FROM_KEYS')
-    ###if rfk is None:
-    ###    rot_angle_from_key = ansa_rots
-    ###else:
-    ###    # Check to make sure we have exactly the keys we want, no more
-    ###    rfk = rfk.split()
-    ###    check_rots = [k in ansa_rots for k in rfk]
-    ###    if (len(check_rots) != len(ansa_rots)
-    ###        or len(rfk) > len(ansa_rots)):
-    ###        rot_angle_from_key = ansa_rots
-    ###    else:
-    ###        rot_angle_from_key = []
-    ###if len(rot_angle_from_key) > 0:
-    ###    print('before corrective rotation')
-    ###    ccd.write('/tmp/before.fits', overwrite=True)
-    ###    simple_show(ccd)
-    ###    print(f'rot_angle_from_key {rot_angle_from_key}')
-    ###    ccd = rot_to(ccd, rot_angle_from_key=rot_angle_from_key)
-    ###    ccd.write('/tmp/after.fits', overwrite=True)
-    ###    simple_show(ccd)
-    ###bmp_meta = bmp_meta or {}
-    ###bmp_meta['tavg'] = ccd.tavg
-    ###for side in ['left', 'right']:
-    ###    ccd = ansa_parameters(ccd, bmp_meta=bmp_meta,
-    ###                          ansa_side=side, **kwargs)
-    ###return ccd
 
 calibration=None
 photometry=None
@@ -360,3 +333,7 @@ pout = on_off_pipeline(directory,
                        outdir_root=outdir_root,
                        fits_fixed_ignore=fits_fixed_ignore)
 
+from astropy.table import QTable
+
+_ , pipe_meta = zip(*pout)
+t = QTable(rows=pipe_meta)

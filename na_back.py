@@ -100,6 +100,8 @@ def na_back_process(data,
     raoff0 = ccd.meta.get('RAOFF') or 0
     decoff0 = ccd.meta.get('DECOFF') or 0
     fluxes = []
+    # --> If we are going to use this for comets, what we really want
+    # --> is just angular distance from Jupiter via the astropy ephemerides
     for ccd in data:
         raoff = ccd.meta.get('RAOFF') or 0
         decoff = ccd.meta.get('DECOFF') or 0
@@ -225,6 +227,8 @@ def na_back_pipeline(directory=None, # raw directory
                                 n_back_boxes=n_back_boxes,
                                 **kwargs)
         
+    # --> We are going to want add_ephemeris here with a CorPhotometry
+    # --> to build up astormetric solutions
     cmp = CorMultiPipeBase(
         auto=True,
         calibration=calibration,

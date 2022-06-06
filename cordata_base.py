@@ -243,6 +243,8 @@ def overscan_estimate(ccd_in, meta=None, master_bias=None,
     hist_method = im_hist_centers[im_peak_idx[0]]
     overscan_methods = ['corners', 'histogram']
     overscan_values = np.asarray((corners_method, hist_method))
+    if np.isnan(corners_method): corners_method = 'NAN'
+    if np.isnan(hist_method): hist_method = 'NAN'
     meta['HIERARCH OVERSCAN_CORNERS'] = (corners_method, 'ADU')
     meta['HIERARCH OVERSCAN_HISTOGRAM'] = (hist_method, 'ADU')
     o_idx = np.argmin(overscan_values)
@@ -831,6 +833,7 @@ class CorDataNDparams(CorDataBase):
 
         small_filt_crop = self.coord_binned(self.small_filt_crop,
                                             limit_edges=True)
+        # Thinking in C graphics/MaxIm terms where y0, x0 is at the top
         ytop = small_filt_crop[0,0]
         ybot = small_filt_crop[1,0]
         # x_filt_width has to be an odd integer
