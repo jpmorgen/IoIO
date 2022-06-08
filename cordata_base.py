@@ -394,7 +394,7 @@ class CorDataBase(FitsKeyArithmeticMixin, ACPPGD):
         kwargs['default_ND_params'] = self.default_ND_params
         kwargs['ND_ref_y'] = self.ND_ref_y
         return kwargs
-        
+
     @pgproperty
     def obs_location(self):
         """Return `~astropy.coordinates.EarthLocation` of observatory 

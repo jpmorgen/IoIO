@@ -388,32 +388,38 @@ def objctradec_to_obj_center(ccd_in, bmp_meta=None, **kwargs):
     bmp_meta = bmp_meta or {}
     cent = SkyCoord(objctra, objctdec, unit=(u.hour, u.deg))
     x, y = ccd.wcs.world_to_pixel(cent)
-    # Check for pre-processed ccd
-    ocenter = (ccd.meta.get('OBJ_CR1'), ccd.meta.get('OBJ_CR0'))
-    ocenter = np.asarray(ocenter)
-    oquality = ccd.meta.get('CENTER_QUALITY')
-    if ocenter.all() == None:
-        # Calculate
-        ocenter = ccd.obj_center.copy()
-        oquality = ccd.center_quality
-        ccd.obj_center = (y, x)
-        ccd.center_quality = 10
-        dcent = ccd.obj_center - ocenter
-        norm_dcent = np.linalg.norm(dcent)
-        ccd.meta['OOBJ_CR0'] = (ocenter[1], 'Old OBJ_CR0')
-        ccd.meta['OOBJ_CR1'] = (ocenter[0], 'Old OBJ_CR1')
-        ccd.meta['HIERARCH OCENTER_QUALITY'] = (
-            oquality, 'Old center quality')
-        ccd.meta['DOBJ_CR0'] = (dcent[1], 'Delta original to current OBJ_CR0')
-        ccd.meta['DOBJ_CR1'] = (dcent[0], 'Delta original to current OBJ_CR1')
-        ccd.meta['DOBJ_CRN'] = (norm_dcent, 'norm of DOBJ_CR0 and DOBJ_CR1')
-        add_history(ccd.meta, 'Used OBJCTRA and OBJCTDEC keywords to calculate obj_cent')
-        bmp_meta['dobj_center'] = dcent
+    ccd.obj_center = (y, x)
+    ccd.center_quality = 10
+    add_history(ccd.meta, 'Used OBJCTRA and OBJCTDEC keywords to calculate obj_cent')
+    # This is causing more trouble than it is worth.  There are
+    # several special cases here that just aren't worth pursuing 
+    ## Check for pre-processed ccd
+    #ocenter = (ccd.meta.get('OBJ_CR1'), ccd.meta.get('OBJ_CR0'))
+    #ocenter = np.asarray(ocenter)
+    #oquality = ccd.meta.get('CENTER_QUALITY')
+    #if ocenter.all() == None:
+    #    # Calculate
+    #    ocenter = ccd.obj_center.copy()
+    #    oquality = ccd.center_quality
+    #    ccd.obj_center = (y, x)
+    #    ccd.center_quality = 10
+    #    dcent = ccd.obj_center - ocenter
+    #    norm_dcent = np.linalg.norm(dcent)
+    #    ccd.meta['OOBJ_CR0'] = (ocenter[1], 'Old OBJ_CR0')
+    #    ccd.meta['OOBJ_CR1'] = (ocenter[0], 'Old OBJ_CR1')
+    #    ccd.meta['HIERARCH OCENTER_QUALITY'] = (
+    #        oquality, 'Old center quality')
+    #    ccd.meta['DOBJ_CR0'] = (dcent[1], 'Delta original to current OBJ_CR0')
+    #    ccd.meta['DOBJ_CR1'] = (dcent[0], 'Delta original to current OBJ_CR1')
+    #    ccd.meta['DOBJ_CRN'] = (norm_dcent, 'norm of DOBJ_CR0 and DOBJ_CR1')
+    #    add_history(ccd.meta, 'Used OBJCTRA and OBJCTDEC keywords to calculate obj_cent')
+    #    bmp_meta['dobj_center'] = dcent
     return ccd
 
 def crop_ccd(ccd_in, crop_ccd_coord=None,
              crop_from_center=None,
-             crop_from_desired_center=None, # This seems to be a bridge too far
+             crop_from_desired_center=None,
+             crop_from_obj_center=None,
              **kwargs):
     """Crops ccd image
 
@@ -436,6 +442,7 @@ def crop_ccd(ccd_in, crop_ccd_coord=None,
                            crop_ccd_coord=crop_ccd_coord,
                            crop_from_center=crop_from_center,
                            crop_from_desired_center=crop_from_desired_center,
+                           crop_from_obj_center=crop_from_obj_center,
                            **kwargs)
                   for ccd in ccd_in]
         return result
@@ -443,8 +450,18 @@ def crop_ccd(ccd_in, crop_ccd_coord=None,
         raise ValueError(f'Input ccd is not full-frame')
     if ((crop_ccd_coord is not None)
         + (crop_from_center is not None)
-        + (crop_from_desired_center is not None) != 1):
+        + (crop_from_desired_center is not None)
+        + (crop_from_obj_center is not None) != 1):
         raise ValueError('Specify only one of crop_ccd_coord or crop_from_center')
+    if crop_from_obj_center is not None:
+        s = np.asarray(ccd.shape)
+        c = np.round(ccd_in.obj_center).astype(int)
+        crop_ccd_coord = ((c[0] - crop_from_center[0],
+                           c[0] + crop_from_center[0]),
+                          (c[1] - crop_from_center[1],
+                           c[1] + crop_from_center[1]))
+        return crop_ccd(ccd_in, crop_ccd_coord=crop_ccd_coord)
+    
     if crop_from_desired_center is not None:
         c = np.round(ccd_in.desired_center).astype(int)
         crop_ccd_coord = ((c[0] - crop_from_desired_center[0],
@@ -460,10 +477,8 @@ def crop_ccd(ccd_in, crop_ccd_coord=None,
                           (c[1] - crop_from_center[1],
                            c[1] + crop_from_center[1]))
         return crop_ccd(ccd_in, crop_ccd_coord=crop_ccd_coord)
-    
     vert = np.asarray(crop_ccd_coord)
-    print(vert)
-    ccd = ccd_in[vert[0,0]:vert[0,1], vert[1,0]:vert[1,1]]
+    ccd = ccd_in[vert[0,0]:vert[1,0], vert[0,1]:vert[1,1]]
     
     return ccd    
 

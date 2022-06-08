@@ -5,6 +5,7 @@
 import os
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 
 import numpy as np
 
@@ -14,10 +15,11 @@ import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.modeling import models, fitting
 
-from bigmultipipe import cached_pout
+from bigmultipipe import cached_pout, outname_creator
 
-from ccdmultipipe import as_single
+from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 
+from IoIO.utils import (nan_biweight, nan_mad, savefig_overwrite)
 from IoIO.simple_show import simple_show
 from IoIO.utils import reduced_dir
 from IoIO.cordata_base import SMALL_FILT_CROP
@@ -26,7 +28,9 @@ from IoIO.cormultipipe import (IoIO_ROOT, objctradec_to_obj_center,
 from IoIO.calibration import Calibration
 from IoIO.photometry import SOLVE_TIMEOUT, JOIN_TOLERANCE, rot_to
 from IoIO.cor_photometry import CorPhotometry
-from IoIO.on_off_pipeline import TORUS_NA_NEB_GLOB_LIST, on_off_pipeline
+from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
+                                  TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
+                                  on_off_pipeline)
 from IoIO.standard_star import (StandardStar, extinction_correct,
                                 rayleigh_convert)
 from IoIO.horizons import GALSATS, galsat_ephemeris
@@ -44,12 +48,22 @@ RIGHT_INNER = 4.75 * u.R_jup
 RIGHT_OUTER = 6.75 * u.R_jup
 LEFT_OUTER = -6.75 * u.R_jup
 LEFT_INNER = -4.75 * u.R_jup
-DELTA_R_MAX = 0.25 * u.R_jup
+# Defines a buffer zone inside of the *_INNER *_OUTER ansa box in
+# which the ansa peak can wander during the fit
+DR_BOUNDS_BUFFER = 0.25 * u.R_jup
+# Width wander.  Upper limit at 0.4 was a little too tight when there
+# is a big slope
+ANSA_WIDTH_BOUNDS = (0.1*u.R_jup, 0.5*u.R_jup)
+
 # How much above and below the centripetal plane to extract from our image.
 # There is a conflict between too much open torus and not allowing for
 # distortion in the IPT due to the magnetic field. +/- 1.75 is too
 # broad.  +/- 1.25 is about right
 ANSA_DY = 1.25 * u.R_jup
+
+IO_ORBIT_R = 421700 * u.km 
+IO_ORBIT_R = IO_ORBIT_R.to(u.R_jup)
+
 
 def mask_galsats(ccd_in, galsat_mask_side=GALSAT_MASK_SIDE, **kwargs):
     assert galsat_mask_side.unit == u.pixel
@@ -93,9 +107,7 @@ def pixel_per_Rj(ccd):
     pixscale = pixscale.to(u.arcsec) / u.pixel
     return Rj_arcsec / pixscale / u.R_jup 
    
-def bad_ansa(ccd, side=None):
-    if side not in ['right', 'left']:
-        raise ValueError(f'ansa_side must be right or left: {side}')
+def bad_ansa(side):
     # numpy.ma don't work with astropy units, astropy Masked doesn't
     # work with pickle
     #masked = Masked(np.NAN, mask=True)
@@ -120,8 +132,10 @@ def ansa_parameters(ccd,
                     ansa_right_outer=RIGHT_OUTER,
                     ansa_left_outer=LEFT_OUTER,
                     ansa_left_inner=LEFT_INNER,
-                    ansa_dr_max=DELTA_R_MAX,
+                    ansa_dr_bounds_buffer=DR_BOUNDS_BUFFER,
+                    ansa_width_bounds=ANSA_WIDTH_BOUNDS,
                     ansa_dy=ANSA_DY,
+                    show=False,
                     **kwargs):
     if side not in ['right', 'left']:
         raise ValueError(f'ansa_side must be right or left: {side}')    
@@ -131,22 +145,22 @@ def ansa_parameters(ccd,
     fit = fitting.LevMarLSQFitter(calc_uncertainties=True)
 
     # Start with a basic fix on the ansa r position
-    if side == 'right':
-        left = center[1] + ansa_right_inner*pix_per_Rj
-        right = center[1] + ansa_right_outer*pix_per_Rj
-        left = int(round(left.value))
-        right = int(round(right.value))
-        side_mult = +1
-        mean_bounds = (ansa_right_inner + ansa_dr_max,
-                       ansa_right_outer - ansa_dr_max)
-    elif side == 'left':
+    if side == 'left':
         left = center[1] + ansa_left_outer*pix_per_Rj
         right = center[1] + ansa_left_inner*pix_per_Rj
         left = int(round(left.value))
         right = int(round(right.value))
         side_mult = -1
-        mean_bounds = (ansa_left_outer + ansa_dr_max,
-                       ansa_left_inner - ansa_dr_max)
+        mean_bounds = (ansa_left_outer + ansa_dr_bounds_buffer,
+                       ansa_left_inner - ansa_dr_bounds_buffer)
+    elif side == 'right':
+        left = center[1] + ansa_right_inner*pix_per_Rj
+        right = center[1] + ansa_right_outer*pix_per_Rj
+        left = int(round(left.value))
+        right = int(round(right.value))
+        side_mult = +1
+        mean_bounds = (ansa_right_inner + ansa_dr_bounds_buffer,
+                       ansa_right_outer - ansa_dr_bounds_buffer)
     cold_mean_bounds = np.asarray((5.0, 5.5)) * u.R_jup
 
     top = center[0] + ansa_dy * pix_per_Rj
@@ -154,12 +168,15 @@ def ansa_parameters(ccd,
     top = int(round(top.value))
     bottom = int(round(bottom.value))
 
-    mask_check = ccd.mask[bottom:top, left:right]
-    if np.sum(mask_check) > ansa_max_n_mask:
-        return bad_ansa(ccd, side=side)
-
     ansa = ccd[bottom:top, left:right]
-    #simple_show(ansa)
+
+    if show:
+        simple_show(ansa)
+
+    mask_check = ansa.mask
+    if np.sum(mask_check) > ansa_max_n_mask:
+        return bad_ansa(side)
+
 
     # Calculate profile along centripetal equator, keeping it in units
     # of rayleighs
@@ -192,21 +209,23 @@ def ansa_parameters(ccd,
                           stddev=0.3*u.R_jup,
                           amplitude=amplitude,
                           bounds={'mean': mean_bounds,
-                                  'stddev': (0.1*u.R_jup, 0.4*u.R_jup)})
+                                  'stddev': ansa_width_bounds})
         + models.Polynomial1D(1, c0=np.min(r_prof)))
     # The weights need to read in the same unit as the thing being
     # fitted for the std to come back with sensible units.
     r_fit = fit(r_model_init, r_Rj, r_prof, weights=r_dev**-0.5)
-    if r_fit.mean_0.std is None:
-        return bad_ansa(ccd, side=side)
     r_ansa = r_fit.mean_0.quantity
     dRj = r_fit.stddev_0.quantity
     r_amp = r_fit.amplitude_0.quantity
 
-    #plt.plot(r_Rj, r_prof)
-    #plt.plot(r_Rj, r_fit(r_Rj))
-    #plt.show()
+    if show:
+        plt.plot(r_Rj, r_prof)
+        plt.plot(r_Rj, r_fit(r_Rj))
+        plt.ylabel(r_prof.unit)
+        plt.show()
 
+    if r_fit.mean_0.std is None:
+        return bad_ansa(side)
 
     # Refine our left and right based on the above fit
     narrow_left = center[1] + (r_ansa - dRj) * pix_per_Rj
@@ -233,35 +252,44 @@ def ansa_parameters(ccd,
                                       amplitude=amplitude)
                     + models.Polynomial1D(0, c0=np.min(y_prof)))
     y_fit = fit(y_model_init, y_Rj, y_prof, weights=y_dev**-0.5)
+
+    if show:
+        plt.plot(y_Rj, y_prof)
+        plt.plot(y_Rj, y_fit(y_Rj))
+        plt.xlabel(y_Rj.unit)
+        plt.ylabel(y_prof.unit)
+        plt.show()
+
     if y_fit.mean_0.std is None:
-        return bad_ansa(ccd, side=side)
+        return bad_ansa(side)
 
-    #plt.plot(y_Rj, y_prof)
-    #plt.plot(y_Rj, y_fit(y_Rj))
-    #plt.xlabel(y_Rj.unit)
-    #plt.ylabel(y_prof.unit)
-    #plt.show()
-
+    y_pos = y_fit.mean_0.quantity
+    dy_pos = r_fit.stddev_0.quantity
+    y_amplitude_std = y_fit.amplitude_0.std or np.NAN
+    r_ansa_std = r_fit.mean_0.std or np.NAN
+    dRj_std = r_fit.stddev_0.std or np.NAN
+    r_amp_std = r_fit.amplitude_0.std or np.NAN
+    y_pos_std = y_fit.mean_0.std or np.NAN
+    dy_pos_std = r_fit.stddev_0.std or np.NAN
+    
     # Units of amplitude are already in rayleigh.  When we do the
     # integral, we technically should multiply the amplitude by the
     # peak stddev.  But that gives us an intensity meausrement.  To
     # convert that to sb, we divide again by the stddev.
     sb = (2 * np.pi)**-0.5 * y_fit.amplitude_0.quantity
-    sb_err = (2 * np.pi)**-0.5 * y_fit.amplitude_0.std
+    sb_err = (2 * np.pi)**-0.5 * y_amplitude_std
 
-    y_pos = y_fit.mean_0.quantity
-    dy_pos = r_fit.stddev_0.quantity
     # Update bad_ansa when changing these
     return {f'ansa_{side}_r_peak': r_ansa,
-            f'ansa_{side}_r_peak_err': r_fit.mean_0.std * r_ansa.unit,
+            f'ansa_{side}_r_peak_err': r_ansa_std * r_ansa.unit,
             f'ansa_{side}_r_stddev': dRj,
-            f'ansa_{side}_r_stddev_err': r_fit.stddev_0.std * dRj.unit,
+            f'ansa_{side}_r_stddev_err': dRj_std * dRj.unit,
             f'ansa_{side}_r_amplitude': r_amp,
-            f'ansa_{side}_r_amplitude_err': r_fit.amplitude_0.std * r_amp.unit,
+            f'ansa_{side}_r_amplitude_err': r_amp_std * r_amp.unit,
             f'ansa_{side}_y_peak': y_pos,
-            f'ansa_{side}_y_peak_err': y_fit.mean_0.std * y_pos.unit,
+            f'ansa_{side}_y_peak_err': y_pos_std * y_pos.unit,
             f'ansa_{side}_y_stddev': dy_pos,
-            f'ansa_{side}_y_stddev_err': r_fit.stddev_0.std * dy_pos.unit,
+            f'ansa_{side}_y_stddev_err': dy_pos_std * dy_pos.unit,
             f'ansa_{side}_surf_bright': sb,
             f'ansa_{side}_surf_bright_err': sb_err * sb.unit}
 
@@ -280,6 +308,11 @@ def characterize_ansas(ccd_in, bmp_meta=None,
     ccd = ccd_in.copy()
     bmp_meta = bmp_meta or {}
     bmp_meta['tavg'] = ccd.tavg
+    ccd = ccd_meta_to_bmp_meta(ccd, bmp_meta=bmp_meta,
+                               ccd_meta_to_bmp_meta_keys=
+                               [('Jupiter_PDObsLon', u.deg),
+                                ('Jupiter_PDObsLat', u.deg),
+                                ('Jupiter_PDSunLon', u.deg)])
     for side in ['left', 'right']:
         ansa_meta = ansa_parameters(rccd, side=side, **kwargs)
         bmp_meta.update(ansa_meta)
@@ -293,6 +326,58 @@ def characterize_ansas(ccd_in, bmp_meta=None,
             else:
                 ccd.meta[f'HIERARCH {k}'] = ansa_meta[k]
     return ccd
+
+def plot_planet_subim(ccd_in,
+                      plot_planet_rot_from_key=None,
+                      pix_per_planet_radius=pixel_per_Rj,
+                      in_name=None,
+                      outname=None,
+                      planet_subim_axis_label=r'R$\mathrm{_j}$',
+                      planet_subim_dx=10*u.R_jup,
+                      planet_subim_dy=5*u.R_jup,
+                      planet_subim_vmin=30,
+                      planet_subim_vmax=5000,
+                      planet_subim_figsize=[5, 2.5],
+                      plot_planet_cmap='gist_heat',
+                      **kwargs):
+    in_name = os.path.basename(ccd_in.meta['RAWFNAME'])
+    # This will pick up outdir, if specified
+    outname = outname_creator(in_name, outname=outname, **kwargs)
+    if outname is None:
+        raise ValueError('in_name or outname must be specified')
+    ccd = rot_to(ccd_in, rot_angle_from_key=plot_planet_rot_from_key)
+    pix_per_Rp = pix_per_planet_radius(ccd)
+    center = ccd.wcs.world_to_pixel(ccd.sky_coord)*u.pixel
+    l = np.round(center[0] - planet_subim_dx * pix_per_Rp).astype(int)
+    r = np.round(center[0] + planet_subim_dx * pix_per_Rp).astype(int)
+    b = np.round(center[1] - planet_subim_dy * pix_per_Rp).astype(int)
+    t = np.round(center[1] + planet_subim_dy * pix_per_Rp).astype(int)
+    subim = ccd[b.value:t.value, l.value:r.value]
+    nr, nc = subim.shape
+    subim.data[subim.data < planet_subim_vmin] = planet_subim_vmin
+    x = (np.arange(nc)*u.pixel - (center[0] - l)) / pix_per_Rp
+    y = (np.arange(nr)*u.pixel - (center[1] - b)) / pix_per_Rp
+    X, Y = np.meshgrid(x.value, y.value)
+    f = plt.figure(figsize=planet_subim_figsize)
+    plt.pcolormesh(X, Y, subim,
+                   norm=LogNorm(vmin=planet_subim_vmin,
+                                vmax=planet_subim_vmax),
+                   cmap=plot_planet_cmap)
+    Rp_name = planet_subim_dx.unit.long_names[0]
+    plt.ylabel(planet_subim_axis_label)
+    plt.xlabel(planet_subim_axis_label)
+    plt.axis('scaled')
+    cbar = plt.colorbar()
+    cbar.ax.set_xlabel(ccd.unit.to_string())
+    date_obs, _ = ccd.meta['DATE-OBS'].split('T')
+    plt.title(f'{date_obs} {os.path.basename(outname)}')
+    plt.tight_layout()
+    outroot, _ = os.path.splitext(outname)
+    d = os.path.dirname(outname)
+    os.makedirs(d, exist_ok=True)
+    savefig_overwrite(outroot + '.png')
+    plt.close()
+    return ccd_in
 
 calibration=None
 photometry=None
@@ -308,9 +393,14 @@ write_pout=True
 
 log.setLevel('DEBUG')
 
+# Crumy night (hopefully rare in this time!)
 #directory = '/data/IoIO/raw/20210607/'
+# Hmm.  Bad in a similar way
+#directory = '/data/IoIO/raw/20210610/'
 
+# OK
 #directory = '/data/IoIO/raw/2017-05-02'
+## Good with ANSA_WIDTH_BOUNDS = (0.1*u.R_jup, 0.5*u.R_jup)
 directory = '/data/IoIO/raw/2018-05-08/'
 
 #standard_star_obj = standard_star_obj or StandardStar(reduce=True)
@@ -324,15 +414,16 @@ pout = cached_pout(on_off_pipeline,
                    write_pout=write_pout,
                    directory=directory,
                    glob_include=TORUS_NA_NEB_GLOB_LIST,
+                   glob_exclude_list=TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
                    band='SII',
                    standard_star_obj=standard_star_obj,
                    add_ephemeris=galsat_ephemeris,
                    crop_ccd_coord=SMALL_FILT_CROP,
                    pre_offsub=crop_ccd,
-                   rot_angle_from_key=['Jupiter_NPole_ang'],
+                   plot_planet_rot_from_key=['Jupiter_NPole_ang'],
                    post_offsub=[extinction_correct, rayleigh_convert,
                                 characterize_ansas,
-                                rot_to, as_single],
+                                plot_planet_subim, as_single],
                    outdir=outdir,
                    fits_fixed_ignore=fits_fixed_ignore)
 
@@ -341,8 +432,107 @@ from astropy.table import QTable
 _ , pipe_meta = zip(*pout)
 t = QTable(rows=pipe_meta)
 
-from IoIO.cordata import CorData
-ccd = CorData.read('/data/IoIO/Torus/2018-05-08/SII_on-band_024-back-sub.fits')
+#from IoIO.cordata import CorData
+#ccd = CorData.read('/data/IoIO/Torus/2018-05-08/SII_on-band_024-back-sub.fits')
+##ccd = CorData.read('/data/IoIO/Torus/2018-05-08/SII_on-band_017-back-sub.fits')
+#ccd.obj_center = np.asarray((ccd.meta['obj_cr1'], ccd.meta['obj_cr0']))
+##                                      
 #bmp_meta = {}
-#ccd = characterize_ansas(ccd, bmp_meta=bmp_meta)
+#ccd = characterize_ansas(ccd, bmp_meta=bmp_meta, show=True)
 
+#plot_planet_subim(ccd, outname='/tmp/test.fits')
+
+#plt.plot(t['tavg'].datetime, t['ansa_left_r_peak'])
+
+tlim = (np.min(t['tavg'].datetime), np.max(t['tavg'].datetime))
+epsilon = (t['ansa_right_r_peak']
+           + t['ansa_left_r_peak']) / IO_ORBIT_R
+epsilon_err = (t['ansa_left_r_peak_err']**2
+               + t['ansa_right_r_peak_err']**2)**0.5 / IO_ORBIT_R
+right_r_peak_biweight = nan_biweight(t['ansa_right_r_peak'])
+right_r_peak_mad = nan_mad(t['ansa_right_r_peak'])
+left_r_peak_biweight = nan_biweight(t['ansa_left_r_peak'])
+left_r_peak_mad = nan_mad(t['ansa_left_r_peak'])
+right_sb_biweight = nan_biweight(t['ansa_right_surf_bright'])
+right_sb_mad = nan_mad(t['ansa_right_surf_bright'])
+left_sb_biweight = nan_biweight(t['ansa_left_surf_bright'])
+left_sb_mad = nan_mad(t['ansa_left_surf_bright'])
+epsilon_biweight = nan_biweight(epsilon)
+epsilon_mad = nan_mad(epsilon)
+
+f = plt.figure(figsize=[8.5, 11])
+date, _ = t['tavg'][0].fits.split('T')
+plt.suptitle(f"{date}")
+
+# Get E = positive to left sign correct now that I am not thinking in
+# literal image left and right terms
+
+ax = plt.subplot(5, 1, 1)
+plt.errorbar(t['tavg'].datetime,
+             -t['ansa_left_r_peak'].value,
+             t['ansa_left_r_peak_err'].value, fmt='k.')
+plt.ylabel(r'East ansa (R$_\mathrm{J}$)')
+plt.axhline(IO_ORBIT_R.value, color='r', label='Io orbit')
+ax.legend()
+ax.set_xlim(tlim)
+ax.set_ylim(5.5, 6.0)
+
+ax = plt.subplot(5, 1, 2)
+plt.errorbar(t['tavg'].datetime,
+             t['ansa_left_surf_bright'].value,
+             t['ansa_left_surf_bright_err'].value, fmt='k.')
+plt.ylabel(f'East SB ({t["ansa_left_surf_bright"].unit})')
+plt.hlines(np.asarray((left_sb_biweight.value,
+                       left_sb_biweight.value - left_sb_mad.value,
+                       left_sb_biweight.value + left_sb_mad.value)),
+           *tlim,
+           linestyles=('-', '--', '--'),
+           label=(f'{left_sb_biweight:.0f} '
+                  f'+/- {left_sb_mad:.0f}'))
+ax.legend()
+ax.set_xlim(tlim)
+
+ax = plt.subplot(5, 1, 3)
+plt.errorbar(t['tavg'].datetime,
+             t['ansa_right_surf_bright'].value,
+             t['ansa_right_surf_bright_err'].value, fmt='k.')
+plt.ylabel(f'West SB ({t["ansa_right_surf_bright"].unit})')
+plt.hlines(np.asarray((right_sb_biweight.value,
+                       right_sb_biweight.value - right_sb_mad.value,
+                       right_sb_biweight.value + right_sb_mad.value)),
+           *tlim,
+           linestyles=('-', '--', '--'),
+           label=(f'{right_sb_biweight:.0f} '
+                  f'+/- {right_sb_mad:.0f}'))
+ax.legend()
+ax.set_xlim(tlim)
+
+ax = plt.subplot(5, 1, 4)
+plt.errorbar(t['tavg'].datetime,
+             -t['ansa_right_r_peak'].value,
+             t['ansa_right_r_peak_err'].value, fmt='k.')
+plt.ylabel(r'West ansa (R$_\mathrm{J}$)')
+plt.axhline(-IO_ORBIT_R.value, color='r', label='Io orbit')
+ax.legend()
+ax.set_xlim(tlim)
+ax.set_ylim(-6.0, -5.5)
+
+ax = plt.subplot(5, 1, 5)
+plt.errorbar(t['tavg'].datetime,
+             epsilon.value,
+             epsilon_err.value, fmt='k.')
+ax.set_ylim(-0.010, 0.050)
+plt.ylabel(r'Sky plane $|\vec\epsilon|$')
+plt.hlines(np.asarray((epsilon_biweight,
+                       epsilon_biweight - epsilon_mad,
+                       epsilon_biweight + epsilon_mad)),
+           *tlim,
+           linestyles=('-', '--', '--'),
+           label=f'{epsilon_biweight:.3f} +/- {epsilon_mad:.3f}')
+plt.axhline(0.025, color='r', label='Nominal 0.025')
+ax.legend()
+ax.set_xlim(tlim)
+
+f.autofmt_xdate()
+
+plt.show()

@@ -68,6 +68,7 @@ TORUS_NA_NEB_GLOB_LIST = ['IPT*',
                           'Na*', 
                           'SII*', 
                           'Jupiter*']
+TORUS_NA_NEB_GLOB_EXCLUDE_LIST = '*_cal_*'
 
 def off_band_subtract(ccd_in,
                       in_name=None,
@@ -152,6 +153,7 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
                     band=None,
                     collection=None,
                     glob_include=None, # Used if collection is None
+                    glob_exclude_list=None,
                     PipeObj=None,
                     calibration=None,
                     photometry=None,
@@ -196,7 +198,7 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
         outdir_root = os.path.join(IoIO_ROOT, band)
     outdir = outdir or reduced_dir(directory, outdir_root, create=False)
     if collection is None:
-        flist = multi_glob(directory, glob_include)
+        flist = multi_glob(directory, glob_include, glob_exclude_list)
         collection = ccdp.ImageFileCollection(directory, filenames=flist)
     standardize_filt_name(collection)
     f_pairs = closest_in_time(collection, (f'{band}_on', f'{band}_off'),

@@ -1,6 +1,7 @@
 """Utilities for the IoIO data collection and reduction system"""
 
 import inspect
+import fnmatch
 import glob
 import os
 import time
@@ -15,9 +16,9 @@ from numpy.polynomial import Polynomial
 import matplotlib.pyplot as plt
 
 from astropy import log
-
 import astropy.units as u
 from astropy.time import Time
+from astropy.stats import biweight_location, mad_std
 
 from bigmultipipe import assure_list
 
@@ -57,7 +58,27 @@ class Lockfile():
     def clear(self):
         os.remove(self._fname)
 
-def multi_glob(directory, glob_list=None):
+def nan_biweight(a):
+    """Fix special case of `~astropy.stats.biweight_location` where NAN
+    return value ignores units
+
+    """
+    b = biweight_location(a, ignore_nan=True)
+    if np.isnan(b) and isinstance(a, u.Quantity):
+        b *= a.unit
+    return b
+
+def nan_mad(a):
+    """Fix special case of `~astropy.stats.mad_std` where NAN return value
+    ignores units
+
+    """
+    b = mad_std(a, ignore_nan=True)
+    if np.isnan(b) and isinstance(a, u.Quantity):
+        b *= a.unit
+    return b
+
+def multi_glob(directory, glob_list=None, glob_exclude_list=None):
     """Returns list of files matching one or more regexp
 
     Parameters
@@ -68,6 +89,9 @@ def multi_glob(directory, glob_list=None):
     glob_list : str or list
         (list of) regexp to pass to `glob.glob` used to construct flist
 
+    glob_exclude_list : str or list
+        (list of) regexp to use to exclude from final list of filenames
+
     Returns
     -------
     flist : list
@@ -77,8 +101,12 @@ def multi_glob(directory, glob_list=None):
     flist = []
     for gi in glob_list:
         flist += glob.glob(os.path.join(directory, gi))
+    glob_exclude_list = assure_list(glob_exclude_list)
+    for ge in glob_exclude_list:
+        flist = [f for f in flist
+                 if not fnmatch.fnmatch(f, ge)]
     return flist
-    
+
 def datetime_dir(directory,
                  date_formats=DATE_FORMATS):
     """Returns datetime object corresponding to date found in directory

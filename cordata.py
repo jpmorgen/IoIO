@@ -397,6 +397,9 @@ if __name__ == "__main__":
     #fname = '/data/IoIO/raw/2021-10-28/Mercury-0008_Na_on.fit'
     fname = '/data/IoIO/raw/2021-10-28/Mercury-0003_Na_off.fit'
 
-    ccd = CorData.read(fname, show=True)
+    ccd = CorData.read(fname)#, show=True)
+    print(ccd.center_quality)
+    print(ccd.obj_center)
+    ccd = ccd[600:1500, 200:1500]
     print(ccd.center_quality)
     print(ccd.obj_center)
