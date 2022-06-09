@@ -3,15 +3,18 @@
 """Reduce IoIO Io plamsa torus observations"""
 
 import os
+from datetime import timedelta
+
+import numpy as np
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
-
-import numpy as np
+import matplotlib.dates as mdates
 
 from astropy import log
 import astropy.units as u
 #from astropy.utils.masked import Masked
+from astropy.table import QTable
 from astropy.coordinates import SkyCoord
 from astropy.modeling import models, fitting
 
@@ -19,9 +22,9 @@ from bigmultipipe import cached_pout, outname_creator
 
 from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 
-from IoIO.utils import (nan_biweight, nan_mad, savefig_overwrite)
+from IoIO.utils import (reduced_dir, nan_biweight, nan_mad,
+                        cached_csv, savefig_overwrite)
 from IoIO.simple_show import simple_show
-from IoIO.utils import reduced_dir
 from IoIO.cordata_base import SMALL_FILT_CROP
 from IoIO.cormultipipe import (IoIO_ROOT, objctradec_to_obj_center,
                                crop_ccd)
@@ -108,8 +111,8 @@ def pixel_per_Rj(ccd):
     return Rj_arcsec / pixscale / u.R_jup 
    
 def bad_ansa(side):
-    # numpy.ma don't work with astropy units, astropy Masked doesn't
-    # work with pickle
+    # numpy.ma don't work with astropy units, 
+    # astropy.utils.masked.Masked doesn't work with pickle
     #masked = Masked(np.NAN, mask=True)
     masked = np.NAN
     return {f'ansa_{side}_r_peak': masked*u.R_jup,
@@ -185,6 +188,7 @@ def ansa_parameters(ccd,
     r_prof = np.sum(ansa, 0) * ansa.unit
     r_prof /= ansa.shape[1]
 
+    # Fit is definitly better
     #r_ansa = (np.argmax(r_prof)*u.pixel
     #          + left*u.pixel - center[1]) / pix_per_Rj
     #dRj = 0.5
@@ -379,17 +383,143 @@ def plot_planet_subim(ccd_in,
     plt.close()
     return ccd_in
 
-calibration=None
-photometry=None
-standard_star_obj=None
-solve_timeout=None
-join_tolerance=JOIN_TOLERANCE
-outdir = None
-outdir_root=TORUS_ROOT
-fits_fixed_ignore=True
-read_pout=True
-#read_pout=False
-write_pout=True
+def torus_directory(directory,
+                    outdir=None,
+                    outdir_root=TORUS_ROOT,
+                    standard_star_obj=None,
+                    read_pout=True,
+                    write_pout=True,
+                    **kwargs):
+    standard_star_obj = standard_star_obj or StandardStar(reduce=True)
+    #standard_star_obj = standard_star_obj or StandardStar(stop='2022-01-01',
+    #                                                      reduce=True)
+    outdir = outdir or reduced_dir(directory, outdir_root, create=False)
+    poutname = os.path.join(outdir, 'Torus.pout')
+    pout = cached_pout(on_off_pipeline,
+                       poutname=poutname,
+                       read_pout=read_pout,
+                       write_pout=write_pout,
+                       directory=directory,
+                       glob_include=TORUS_NA_NEB_GLOB_LIST,
+                       glob_exclude_list=TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
+                       band='SII',
+                       standard_star_obj=standard_star_obj,
+                       add_ephemeris=galsat_ephemeris,
+                       crop_ccd_coord=SMALL_FILT_CROP,
+                       pre_offsub=crop_ccd,
+                       plot_planet_rot_from_key=['Jupiter_NPole_ang'],
+                       post_offsub=[extinction_correct, rayleigh_convert,
+                                    characterize_ansas,
+                                    plot_planet_subim, as_single],
+                       outdir=outdir,
+                       **kwargs)
+
+    _ , pipe_meta = zip(*pout)
+    t = QTable(rows=pipe_meta)
+
+    time_expand = timedelta(minutes=5)
+    tlim = (np.min(t['tavg'].datetime) - time_expand,
+            np.max(t['tavg'].datetime) + time_expand)
+    r_peak = t['ansa_right_r_peak']
+    l_peak = t['ansa_left_r_peak']
+    av_peak = (np.abs(r_peak) + np.abs(l_peak)) / 2
+    epsilon = (r_peak + l_peak) / av_peak
+    denom_var = t['ansa_left_r_peak_err']**2 + t['ansa_right_r_peak_err']**2
+    num_var = denom_var / 2
+    epsilon_err = epsilon * ((denom_var / (r_peak + l_peak)**2)
+                             + (num_var / av_peak**2))**0.5
+    right_r_peak_biweight = nan_biweight(t['ansa_right_r_peak'])
+    right_r_peak_mad = nan_mad(t['ansa_right_r_peak'])
+    left_r_peak_biweight = nan_biweight(t['ansa_left_r_peak'])
+    left_r_peak_mad = nan_mad(t['ansa_left_r_peak'])
+    right_sb_biweight = nan_biweight(t['ansa_right_surf_bright'])
+    right_sb_mad = nan_mad(t['ansa_right_surf_bright'])
+    left_sb_biweight = nan_biweight(t['ansa_left_surf_bright'])
+    left_sb_mad = nan_mad(t['ansa_left_surf_bright'])
+    epsilon_biweight = nan_biweight(epsilon)
+    epsilon_mad = nan_mad(epsilon)
+
+    f = plt.figure(figsize=[8.5, 11])
+    date, _ = t['tavg'][0].fits.split('T')
+    plt.suptitle('Torus Ansa Characteristics')
+
+    # Get E = positive to left sign correct now that I am not thinking in
+    # literal image left and right terms
+
+    ax = plt.subplot(5, 1, 1)
+    plt.errorbar(t['tavg'].datetime,
+                 -t['ansa_left_r_peak'].value,
+                 t['ansa_left_r_peak_err'].value, fmt='k.')
+    plt.ylabel(r'East ansa (R$_\mathrm{J}$)')
+    plt.axhline(IO_ORBIT_R.value, color='r', label='Io orbit')
+    ax.legend()
+    ax.set_xlim(tlim)
+    ax.set_ylim(5.5, 6.0)
+
+    ax = plt.subplot(5, 1, 2)
+    plt.errorbar(t['tavg'].datetime,
+                 t['ansa_left_surf_bright'].value,
+                 t['ansa_left_surf_bright_err'].value, fmt='k.')
+    plt.ylabel(f'East SB ({t["ansa_left_surf_bright"].unit})')
+    plt.hlines(np.asarray((left_sb_biweight.value,
+                           left_sb_biweight.value - left_sb_mad.value,
+                           left_sb_biweight.value + left_sb_mad.value)),
+               *tlim,
+               linestyles=('-', '--', '--'),
+               label=(f'{left_sb_biweight:.0f} '
+                      f'+/- {left_sb_mad:.0f}'))
+    ax.legend()
+    ax.set_xlim(tlim)
+
+    ax = plt.subplot(5, 1, 3)
+    plt.errorbar(t['tavg'].datetime,
+                 t['ansa_right_surf_bright'].value,
+                 t['ansa_right_surf_bright_err'].value, fmt='k.')
+    plt.ylabel(f'West SB ({t["ansa_right_surf_bright"].unit})')
+    plt.hlines(np.asarray((right_sb_biweight.value,
+                           right_sb_biweight.value - right_sb_mad.value,
+                           right_sb_biweight.value + right_sb_mad.value)),
+               *tlim,
+               linestyles=('-', '--', '--'),
+               label=(f'{right_sb_biweight:.0f} '
+                      f'+/- {right_sb_mad:.0f}'))
+    ax.legend()
+    ax.set_xlim(tlim)
+
+    ax = plt.subplot(5, 1, 4)
+    plt.errorbar(t['tavg'].datetime,
+                 -t['ansa_right_r_peak'].value,
+                 t['ansa_right_r_peak_err'].value, fmt='k.')
+    plt.ylabel(r'West ansa (R$_\mathrm{J}$)')
+    plt.axhline(-IO_ORBIT_R.value, color='r', label='Io orbit')
+    ax.legend()
+    ax.set_xlim(tlim)
+    ax.set_ylim(-6.0, -5.5)
+
+    ax = plt.subplot(5, 1, 5)
+    plt.errorbar(t['tavg'].datetime,
+                 epsilon.value,
+                 epsilon_err.value, fmt='k.')
+    ax.set_ylim(-0.010, 0.050)
+    plt.ylabel(r'Sky plane $|\vec\epsilon|$')
+    plt.hlines(np.asarray((epsilon_biweight,
+                           epsilon_biweight - epsilon_mad,
+                           epsilon_biweight + epsilon_mad)),
+               *tlim,
+               linestyles=('-', '--', '--'),
+               label=f'{epsilon_biweight:.3f} +/- {epsilon_mad:.3f}')
+    plt.axhline(0.025, color='r', label='Nominal 0.025')
+    ax.legend()
+    ax.set_xlim(tlim)
+
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    f.autofmt_xdate()
+    plt.xlabel(f'UT {date}')
+    plt.tight_layout()
+
+    savefig_overwrite(os.path.join(outdir, 'Characterize_Ansas.png'))
+
+    return t
 
 log.setLevel('DEBUG')
 
@@ -403,34 +533,29 @@ log.setLevel('DEBUG')
 ## Good with ANSA_WIDTH_BOUNDS = (0.1*u.R_jup, 0.5*u.R_jup)
 directory = '/data/IoIO/raw/2018-05-08/'
 
-#standard_star_obj = standard_star_obj or StandardStar(reduce=True)
-standard_star_obj = standard_star_obj or StandardStar(stop='2022-01-01',
-                                                      reduce=True)
-outdir = outdir or reduced_dir(directory, outdir_root, create=False)
-poutname = os.path.join(outdir, 'Torus.pout')
-pout = cached_pout(on_off_pipeline,
-                   poutname=poutname,
-                   read_pout=read_pout,
-                   write_pout=write_pout,
-                   directory=directory,
-                   glob_include=TORUS_NA_NEB_GLOB_LIST,
-                   glob_exclude_list=TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
-                   band='SII',
-                   standard_star_obj=standard_star_obj,
-                   add_ephemeris=galsat_ephemeris,
-                   crop_ccd_coord=SMALL_FILT_CROP,
-                   pre_offsub=crop_ccd,
-                   plot_planet_rot_from_key=['Jupiter_NPole_ang'],
-                   post_offsub=[extinction_correct, rayleigh_convert,
-                                characterize_ansas,
-                                plot_planet_subim, as_single],
-                   outdir=outdir,
-                   fits_fixed_ignore=fits_fixed_ignore)
+outdir_root=TORUS_ROOT
+rd = reduced_dir(directory, outdir_root, create=False)
+t = cached_csv(torus_directory,
+               csvnames=os.path.join(rd, 'Characterize_Ansas.ecsv'),
+               directory=directory,
+               standard_star_obj=None,
+               read_csvs=False,
+               write_csvs=True,
+               read_pout=False,
+               write_pout=True,
+               fits_fixed_ignore=True,
+               outdir=rd,
+               create_outdir=True)
+#t = torus_directory(directory,
+#                    standard_star_obj=None,
+#                    read_pout=True,
+#                    write_pout=True,
+#                    fits_fixed_ignore=True,
+#                    create_outdir=True)
+                    
+#_ , pipe_meta = zip(*pout)
+#t = QTable(rows=pipe_meta)
 
-from astropy.table import QTable
-
-_ , pipe_meta = zip(*pout)
-t = QTable(rows=pipe_meta)
 
 #from IoIO.cordata import CorData
 #ccd = CorData.read('/data/IoIO/Torus/2018-05-08/SII_on-band_024-back-sub.fits')
@@ -443,96 +568,3 @@ t = QTable(rows=pipe_meta)
 #plot_planet_subim(ccd, outname='/tmp/test.fits')
 
 #plt.plot(t['tavg'].datetime, t['ansa_left_r_peak'])
-
-tlim = (np.min(t['tavg'].datetime), np.max(t['tavg'].datetime))
-epsilon = (t['ansa_right_r_peak']
-           + t['ansa_left_r_peak']) / IO_ORBIT_R
-epsilon_err = (t['ansa_left_r_peak_err']**2
-               + t['ansa_right_r_peak_err']**2)**0.5 / IO_ORBIT_R
-right_r_peak_biweight = nan_biweight(t['ansa_right_r_peak'])
-right_r_peak_mad = nan_mad(t['ansa_right_r_peak'])
-left_r_peak_biweight = nan_biweight(t['ansa_left_r_peak'])
-left_r_peak_mad = nan_mad(t['ansa_left_r_peak'])
-right_sb_biweight = nan_biweight(t['ansa_right_surf_bright'])
-right_sb_mad = nan_mad(t['ansa_right_surf_bright'])
-left_sb_biweight = nan_biweight(t['ansa_left_surf_bright'])
-left_sb_mad = nan_mad(t['ansa_left_surf_bright'])
-epsilon_biweight = nan_biweight(epsilon)
-epsilon_mad = nan_mad(epsilon)
-
-f = plt.figure(figsize=[8.5, 11])
-date, _ = t['tavg'][0].fits.split('T')
-plt.suptitle(f"{date}")
-
-# Get E = positive to left sign correct now that I am not thinking in
-# literal image left and right terms
-
-ax = plt.subplot(5, 1, 1)
-plt.errorbar(t['tavg'].datetime,
-             -t['ansa_left_r_peak'].value,
-             t['ansa_left_r_peak_err'].value, fmt='k.')
-plt.ylabel(r'East ansa (R$_\mathrm{J}$)')
-plt.axhline(IO_ORBIT_R.value, color='r', label='Io orbit')
-ax.legend()
-ax.set_xlim(tlim)
-ax.set_ylim(5.5, 6.0)
-
-ax = plt.subplot(5, 1, 2)
-plt.errorbar(t['tavg'].datetime,
-             t['ansa_left_surf_bright'].value,
-             t['ansa_left_surf_bright_err'].value, fmt='k.')
-plt.ylabel(f'East SB ({t["ansa_left_surf_bright"].unit})')
-plt.hlines(np.asarray((left_sb_biweight.value,
-                       left_sb_biweight.value - left_sb_mad.value,
-                       left_sb_biweight.value + left_sb_mad.value)),
-           *tlim,
-           linestyles=('-', '--', '--'),
-           label=(f'{left_sb_biweight:.0f} '
-                  f'+/- {left_sb_mad:.0f}'))
-ax.legend()
-ax.set_xlim(tlim)
-
-ax = plt.subplot(5, 1, 3)
-plt.errorbar(t['tavg'].datetime,
-             t['ansa_right_surf_bright'].value,
-             t['ansa_right_surf_bright_err'].value, fmt='k.')
-plt.ylabel(f'West SB ({t["ansa_right_surf_bright"].unit})')
-plt.hlines(np.asarray((right_sb_biweight.value,
-                       right_sb_biweight.value - right_sb_mad.value,
-                       right_sb_biweight.value + right_sb_mad.value)),
-           *tlim,
-           linestyles=('-', '--', '--'),
-           label=(f'{right_sb_biweight:.0f} '
-                  f'+/- {right_sb_mad:.0f}'))
-ax.legend()
-ax.set_xlim(tlim)
-
-ax = plt.subplot(5, 1, 4)
-plt.errorbar(t['tavg'].datetime,
-             -t['ansa_right_r_peak'].value,
-             t['ansa_right_r_peak_err'].value, fmt='k.')
-plt.ylabel(r'West ansa (R$_\mathrm{J}$)')
-plt.axhline(-IO_ORBIT_R.value, color='r', label='Io orbit')
-ax.legend()
-ax.set_xlim(tlim)
-ax.set_ylim(-6.0, -5.5)
-
-ax = plt.subplot(5, 1, 5)
-plt.errorbar(t['tavg'].datetime,
-             epsilon.value,
-             epsilon_err.value, fmt='k.')
-ax.set_ylim(-0.010, 0.050)
-plt.ylabel(r'Sky plane $|\vec\epsilon|$')
-plt.hlines(np.asarray((epsilon_biweight,
-                       epsilon_biweight - epsilon_mad,
-                       epsilon_biweight + epsilon_mad)),
-           *tlim,
-           linestyles=('-', '--', '--'),
-           label=f'{epsilon_biweight:.3f} +/- {epsilon_mad:.3f}')
-plt.axhline(0.025, color='r', label='Nominal 0.025')
-ax.legend()
-ax.set_xlim(tlim)
-
-f.autofmt_xdate()
-
-plt.show()

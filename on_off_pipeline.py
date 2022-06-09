@@ -164,7 +164,6 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
                     num_processes=None,
                     outdir=None,
                     outdir_root=None,
-                    create_outdir=True,
                     process_expand_factor=ON_OFF_PROCESS_EXPAND_FACTOR,
                     **kwargs):
 
@@ -224,7 +223,6 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
         mask_ND_before_astrometry=True, 
         outname_append='-back-sub',
         outname_ext='.fits', 
-        create_outdir=create_outdir,
         pre_process_list=pre_process_list,
         post_process_list=post_process_list,
         num_processes=num_processes,
