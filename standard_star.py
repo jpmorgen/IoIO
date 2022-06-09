@@ -1264,10 +1264,8 @@ def standard_star_tree(raw_data_root=RAW_DATA_ROOT,
     if len(dirs) == 0:
         log.warning('No directories found')
         return
-    if calibration is None:
-        calibration = Calibration(reduce=True)
-    if photometry is None:
-        photometry = Photometry(precalc=True, **kwargs)
+    calibration = calibration or Calibration(reduce=True)
+    photometry = Photometry(precalc=True, **kwargs)
 
     extinction_data = []
     exposure_correct_data = []

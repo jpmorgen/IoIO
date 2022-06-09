@@ -23,8 +23,7 @@ from IoIO.simple_show import simple_show
 from IoIO.cor_process import standardize_filt_name
 from IoIO.calibration import Calibration
 from IoIO.cordata import CorData
-from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
-                               COR_PROCESS_EXPAND_FACTOR,
+from IoIO.cormultipipe import (IoIO_ROOT, COR_PROCESS_EXPAND_FACTOR,
                                CorMultiPipeBase,
                                reject_center_quality_below,
                                mask_nonlin_sat, combine_masks,

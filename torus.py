@@ -13,8 +13,7 @@ import matplotlib.dates as mdates
 
 from astropy import log
 import astropy.units as u
-#from astropy.utils.masked import Masked
-from astropy.table import QTable
+from astropy.table import QTable, vstack
 from astropy.coordinates import SkyCoord
 from astropy.modeling import models, fitting
 
@@ -22,12 +21,12 @@ from bigmultipipe import cached_pout, outname_creator
 
 from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 
-from IoIO.utils import (reduced_dir, nan_biweight, nan_mad,
-                        cached_csv, savefig_overwrite)
+from IoIO.utils import (get_dirs_dates, reduced_dir, nan_biweight,
+                        nan_mad, cached_csv, savefig_overwrite)
 from IoIO.simple_show import simple_show
 from IoIO.cordata_base import SMALL_FILT_CROP
-from IoIO.cormultipipe import (IoIO_ROOT, objctradec_to_obj_center,
-                               crop_ccd)
+from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
+                               objctradec_to_obj_center, crop_ccd)
 from IoIO.calibration import Calibration
 from IoIO.photometry import SOLVE_TIMEOUT, JOIN_TOLERANCE, rot_to
 from IoIO.cor_photometry import CorPhotometry
@@ -521,7 +520,54 @@ def torus_directory(directory,
 
     return t
 
+def torus_tree(raw_data_root=RAW_DATA_ROOT,
+               start=None,
+               stop=None,
+               calibration=None,
+               photometry=None,
+               standard_star_obj=None,
+               read_csvs=True,
+               write_csvs=True,
+               create_outdir=True,                       
+               show=False,
+               outdir_root=TORUS_ROOT,
+               **kwargs):
+
+    dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
+    dirs, _ = zip(*dirs_dates)
+    if len(dirs) == 0:
+        log.warning('No directories found')
+        return
+    calibration = calibration or Calibration()
+    photometry = photometry or CorPhotometry()
+    standard_star_obj = standard_star_obj or StandardStar(reduce=True)
+
+    summary_table = QTable()
+    for directory in dirs:
+        rd = reduced_dir(directory, outdir_root, create=False)
+        t = cached_csv(torus_directory,
+                       csvnames=os.path.join(rd, 'Characterize_Ansas.ecsv'),
+                       directory=directory,
+                       standard_star_obj=standard_star_obj,
+                       read_csvs=read_csvs,
+                       write_csvs=write_csvs,
+                       outdir=rd,
+                       create_outdir=True,
+                       **kwargs)
+        # Hack to get around astropy vstack bug with location
+        if len(t) == 0:
+            continue
+        loc = t['tavg'][0].location.copy()
+        t['tavg'].location = None
+        summary_table = vstack([summary_table, t])
+    if len(summary_table) > 0:
+        summary_table['tavg'].location = loc
+    return summary_table
+
 log.setLevel('DEBUG')
+t = torus_tree(start='2018-05-08',
+               stop='2018-05-09',
+               fits_fixed_ignore=True)
 
 # Crumy night (hopefully rare in this time!)
 #directory = '/data/IoIO/raw/20210607/'
@@ -533,19 +579,19 @@ log.setLevel('DEBUG')
 ## Good with ANSA_WIDTH_BOUNDS = (0.1*u.R_jup, 0.5*u.R_jup)
 directory = '/data/IoIO/raw/2018-05-08/'
 
-outdir_root=TORUS_ROOT
-rd = reduced_dir(directory, outdir_root, create=False)
-t = cached_csv(torus_directory,
-               csvnames=os.path.join(rd, 'Characterize_Ansas.ecsv'),
-               directory=directory,
-               standard_star_obj=None,
-               read_csvs=False,
-               write_csvs=True,
-               read_pout=False,
-               write_pout=True,
-               fits_fixed_ignore=True,
-               outdir=rd,
-               create_outdir=True)
+#outdir_root=TORUS_ROOT
+#rd = reduced_dir(directory, outdir_root, create=False)
+#t = cached_csv(torus_directory,
+#               csvnames=os.path.join(rd, 'Characterize_Ansas.ecsv'),
+#               directory=directory,
+#               standard_star_obj=None,
+#               read_csvs=False,
+#               write_csvs=True,
+#               read_pout=False,
+#               write_pout=True,
+#               fits_fixed_ignore=True,
+#               outdir=rd,
+#               create_outdir=True)
 #t = torus_directory(directory,
 #                    standard_star_obj=None,
 #                    read_pout=True,
