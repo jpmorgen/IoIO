@@ -149,10 +149,8 @@ def obj_ephemeris(ccd_in,
                                   **kwargs)
                 for ccd in ccd_in]
     ccd = ccd_in.copy()
-    if obs_loc is None:
-        obs_loc = IOIO_1_LOCATION
-    if obs_col_to_meta is None:
-        obs_col_to_meta = OBJ_COL_TO_META
+    obs_loc = obs_loc or IOIO_1_LOCATION
+    obs_col_to_meta = obs_col_to_meta or OBJ_COL_TO_META
     obs_name = obs_loc.info.name
     h = RateLimitedHorizons(id=horizons_id,
                     epochs=ccd.tavg.jd,
@@ -204,7 +202,9 @@ def galsat_ephemeris(ccd_in,
                                      obs_col_to_meta=obs_col_to_meta,
                                      **kwargs)
                 for ccd in ccd_in]
-    if ccd_in.meta['OBJECT'] != 'Jupiter':
+    object = ccd_in.meta['OBJECT']
+    if object != 'Jupiter':
+        log.warning(f'Called galsat_ephemeris on OBJECT {object}')
         return ccd_in
     ccd = ccd_in.copy()
     if obs_loc is None:

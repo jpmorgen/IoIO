@@ -13,7 +13,7 @@ from astropy import log
 from astropy import units as u
 from astropy.nddata import CCDData, StdDevUncertainty
 from astropy.time import Time
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord, solar_system_ephemeris, get_body
 
 from bigmultipipe.argparse_handler import ArgparseHandler, BMPArgparseMixin
 
@@ -96,10 +96,12 @@ obj_center calculations by using CorDataBase as CCDData
 
     # --> This might fail with multi files
     def pre_process(self, data, **kwargs):
-        """Add full-frame check permanently to pipeline."""
+        """Add full-frame and check for filter name permanently to pipeline."""
         kwargs = self.kwargs_merge(**kwargs)
+        if has_filter(data, **kwargs) is None:
+            return (None, {})            
         if full_frame(data, **kwargs) is None:
-                return (None, {})
+            return (None, {})
         return super().pre_process(data, **kwargs)
 
     def data_process(self, data,
@@ -148,6 +150,16 @@ class CorMultiPipeBinnedOK(CorMultiPipeBase, CCDMultiPipe):
         return CCDMultiPipe(self).pre_process(*args, **kwargs)
 
 ######### CorMultiPipe prepossessing routines
+def has_filter(ccd_in, **kwargs):
+    if isinstance(ccd_in, list):
+        result = [has_filter(ccd, kwargs=kwargs) for ccd in ccd_in]
+        if None in result:
+            return None
+        return ccd_in
+    if ccd_in.meta.get('filter') is None:
+        return None
+    return ccd_in
+
 def full_frame(data,
                naxis1=sx694.naxis1,
                naxis2=sx694.naxis2,
@@ -192,28 +204,6 @@ def light_image(im, light_tolerance=3, **kwargs):
     return im
 
 ######### CorMultiPipe post-processing routines
-def reject_center_quality_below(ccd_in, bmp_meta=None,
-                                min_center_quality=MIN_CENTER_QUALITY,
-                                **kwargs):
-    # NOTE: unlike the general pattern of post-processing routines,
-    # this does not return a copy of the ccd and it expects to
-    # sometimes return None
-    if bmp_meta is None:
-        bmp_meta = {}
-    if isinstance(ccd_in, list):
-        result = [reject_center_quality_below(
-            ccd, bmp_meta=bmp_meta,
-            min_center_quality=min_center_quality, **kwargs)
-                  for ccd in ccd_in]
-        if None in result:
-            bmp_meta.clear()
-            return None
-        return result
-    if ccd_in.center_quality >= min_center_quality:
-        return ccd_in
-    bmp_meta.clear()
-    return None
-    
 def add_raw_fname(ccd_in, in_name=None, **kwargs):
     ccd = ccd_in.copy()
     if isinstance(in_name, str):
@@ -416,6 +406,18 @@ def objctradec_to_obj_center(ccd_in, bmp_meta=None, **kwargs):
     #    bmp_meta['dobj_center'] = dcent
     return ccd
 
+def calc_obj_to_ND(ccd_in, **kwargs):
+    """obj_to_ND gets messed up when rotating unless it is calculated
+ahead of time.  Put this early in the pipeline
+
+    """
+    if isinstance(ccd_in, list):
+        return [calc_obj_to_ND(ccd, **kwargs) for ccd in ccd_in]
+    # This does everything
+    ccd = ccd_in.copy()
+    _ = ccd.obj_to_ND
+    return ccd
+
 def crop_ccd(ccd_in, crop_ccd_coord=None,
              crop_from_center=None,
              crop_from_desired_center=None,
@@ -425,7 +427,7 @@ def crop_ccd(ccd_in, crop_ccd_coord=None,
 
     Parameters
     ----------
-    ccd_in : ccd
+    ccd_in : ccd or list
 
     crop_ccd_coord : tuple of tuple or None
         Coordinates of crop vertices ((y0, x0), (y1, x1)) 
@@ -453,8 +455,9 @@ def crop_ccd(ccd_in, crop_ccd_coord=None,
         + (crop_from_desired_center is not None)
         + (crop_from_obj_center is not None) != 1):
         raise ValueError('Specify only one of crop_ccd_coord or crop_from_center')
+    #_ = ccd_in.obj_center
     if crop_from_obj_center is not None:
-        s = np.asarray(ccd.shape)
+        s = np.asarray(ccd_in.shape)
         c = np.round(ccd_in.obj_center).astype(int)
         crop_ccd_coord = ((c[0] - crop_from_center[0],
                            c[0] + crop_from_center[0]),
@@ -470,7 +473,7 @@ def crop_ccd(ccd_in, crop_ccd_coord=None,
                            c[1] + crop_from_desired_center[1]))
         return crop_ccd(ccd_in, crop_ccd_coord=crop_ccd_coord)
     if crop_from_center is not None:
-        s = np.asarray(ccd.shape)
+        s = np.asarray(ccd_in.shape)
         c = np.round(s/2).astype(int)
         crop_ccd_coord = ((c[0] - crop_from_center[0],
                            c[0] + crop_from_center[0]),
@@ -481,6 +484,88 @@ def crop_ccd(ccd_in, crop_ccd_coord=None,
     ccd = ccd_in[vert[0,0]:vert[1,0], vert[0,1]:vert[1,1]]
     
     return ccd    
+
+def reject_center_quality_below(ccd_in, bmp_meta=None,
+                                min_center_quality=MIN_CENTER_QUALITY,
+                                **kwargs):
+    bmp_meta = bmp_meta or {}
+    if isinstance(ccd_in, list):
+        result = [reject_center_quality_below(
+            ccd, bmp_meta=bmp_meta,
+            min_center_quality=min_center_quality, **kwargs)
+                  for ccd in ccd_in]
+        if None in result:
+            bmp_meta.clear()
+            return None
+        return result
+    if ccd_in.center_quality is None:
+        rawfname = ccd_in.meta.get('RAWFNAME')
+        log.error(f'center_quality was None for {rawfname}')
+        bmp_meta.clear()
+        return None
+    if ccd_in.center_quality < min_center_quality:
+        bmp_meta.clear()
+        return None
+    return ccd_in
+    
+def angle_to_major_body(ccd, body_str):
+    """Returns angle between pointing direction and solar system major
+    body
+
+    Build-in astropy geocentric ephemeris is used for the solar system
+    major body (moon, planets, sun).  The ccd.sky_coord is used to
+    construct the CCD's pointing.  The angle between these two
+    directions is returned.  For a more accurate pointing direction
+    from the perspective of the observatory, the astroquery.horizons
+    module can be used.
+
+    Parameters
+    ----------
+    ccd : astropy.nddata.CCDData
+
+    body : str
+        solar system major body name
+
+    Returns
+    -------
+    angle : astropy.units.Quantity
+        angle between pointing direction and major body
+
+    """
+    with solar_system_ephemeris.set('builtin'):
+        body_coord = get_body(body_str, ccd.tavg, ccd.obs_location)
+    # https://docs.astropy.org/en/stable/coordinates/common_errors.html
+    # notes that separation is order dependent, with the calling
+    # object's frame (e.g., body_coord) used as the reference frame
+    # into which the argument (e.g., ccd.sky_coord) is transformed
+    return body_coord.separation(ccd.sky_coord)
+
+def planet_to_object(ccd_in, bmp_meta=None, planet=None, **kwargs):
+    """Update OBJECT keyword if CCD RA and DEC point at planet, reject otherwise"""
+    # OBJECT was not always set and sometimes set wrong in the early
+    # Jupiter observations.  Similarly with Mercury.  This is designed
+    # to be called on a per-planet pipeline basis so that it doesn't
+    # take resources in other pipelines
+    if planet is None:
+        return ccd_in
+    bmp_meta = bmp_meta or {}
+    if isinstance(ccd_in, list):
+        result = [planet_to_object(ccd, bmp_meta=bmp_meta,
+                                   planet=planet, **kwargs)
+                  for ccd in ccd_in]
+        if None in result:
+            bmp_meta.clear()
+            return None
+        return result
+    a = angle_to_major_body(ccd_in, planet.lower())
+    if a > 1*u.deg:
+        # This should be accurate enough for our pointing
+        log.warning(f'Expected planet {planet} not found within 1 deg of {ccd_in.sky_coord}')
+        bmp_meta.clear()
+        return None
+    ccd = ccd_in.copy()
+    ccd.meta['object'] = planet.capitalize()
+    return ccd
 
 ######### Argparse mixin
 class CorArgparseMixin:
@@ -542,6 +627,8 @@ class CorArgparseHandler(CorArgparseMixin, CCDArgparseMixin,
         self.add_create_outdir(default=True) 
         self.add_outname_append()
         self.add_fits_fixed_ignore(default=True)
+        self.add_num_processes(default=MAX_NUM_PROCESSES)
+        self.add_mem_frac(default=MAX_MEM_FRAC)
         super().add_all()
 
     def cmd(self, args):

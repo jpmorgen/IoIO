@@ -255,8 +255,19 @@ class CorData(CorDataNDparams, NoCenterPGD):
         NDstd = np.std(patch.data[patch.ND_coords])
         log.debug(f'ND median, std {NDmed}, {NDstd}, 6*self.readnoise= {6*self.readnoise}')
         boost_ND_coords = patch.ND_coords_above(NDmed + 6*self.readnoise)
-        if boost_ND_coords is not None:
-            patch.data[boost_ND_coords] *= boost_factor
+        if boost_ND_coords is not None and len(boost_ND_coords) != 0:
+            try:
+                patch.data[boost_ND_coords] *= boost_factor
+            except Exception as e:
+                # Weird case where boost_ND_coords returns what looks
+                # like a 0-len array but is really a tuple
+                # /data/IoIO/raw/2018-05-03/SII_on-band_029.fits
+                rawfname = ccd.meta.get('RAWFNAME')
+                log.error(f'Problem with {rawfname} boost_ND_coords = '
+                          f'{boost_ND_coords}, len = {len(boost_ND_coords)}: '
+                          f'{e}')
+                return NoCenterPGD(self).obj_center
+
             patch.data[patch.data < boost_factor] = 0
             patch = patch.divide(boost_factor*u.dimensionless_unscaled,
                                  handle_meta='first_found')
@@ -395,11 +406,13 @@ if __name__ == "__main__":
     #print(ccd.center_quality)
     
     #fname = '/data/IoIO/raw/2021-10-28/Mercury-0008_Na_on.fit'
-    fname = '/data/IoIO/raw/2021-10-28/Mercury-0003_Na_off.fit'
-
+    #fname = '/data/IoIO/raw/2021-10-28/Mercury-0003_Na_off.fit'
+    #fname = '/data/IoIO/raw/2018-05-30_cloudy/SII_on-band_037.fits'
+    fname = '/data/IoIO/raw/2018-05-03/SII_on-band_029.fits'
     ccd = CorData.read(fname)#, show=True)
     print(ccd.center_quality)
     print(ccd.obj_center)
-    ccd = ccd[600:1500, 200:1500]
+    #ccd = ccd[600:1500, 200:1500]
+    ccd = ccd[350:1900, 550:2100]
     print(ccd.center_quality)
     print(ccd.obj_center)

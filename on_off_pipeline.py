@@ -142,6 +142,8 @@ def off_band_subtract(ccd_in,
              'off_on_ratio': off_on_ratio,
              'shift_off': shift_off,
              'd_on_off': d_on_off,
+             'on_solved': on.meta['ASTROMETRY_NET_SOLVED'],
+             'off_solved': off.meta['ASTROMETRY_NET_SOLVED'],
              'outname': outname}
     bmp_meta.update(tmeta)
 
@@ -158,6 +160,7 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
                     photometry=None,
                     add_ephemeris=None,
                     pre_process_list=None,
+                    post_process_list=None, # Processed before on_off stuff
                     pre_offsub=None,
                     post_offsub=None,
                     num_processes=None,
@@ -175,21 +178,22 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
     photometry = photometry or CorPhotometry()
     add_ephemeris = assure_list(add_ephemeris)
     pre_process_list = assure_list(pre_process_list)
+    post_process_list = assure_list(post_process_list)
     pre_offsub = assure_list(pre_offsub)
     if len(add_ephemeris) > 0:
         # This is safe because objctradec_to_obj_center doesn't muck
         # with obj_center if there is no wcs
         pre_offsub.insert(0, objctradec_to_obj_center)
     post_offsub = assure_list(post_offsub)
-    post_process_list = [reject_center_quality_below,
-                         combine_masks,
-                         mask_nonlin_sat,
-                         *add_ephemeris,
-                         add_astrometry,
-                         *pre_offsub,
-                         detflux,
-                         off_band_subtract,
-                         *post_offsub]
+    post_process_list.extend([reject_center_quality_below,
+                              combine_masks,
+                              mask_nonlin_sat,
+                              *add_ephemeris,
+                              add_astrometry,
+                              *pre_offsub,
+                              detflux,
+                              off_band_subtract,
+                              *post_offsub])
     if outdir is None and outdir_root is None:
         # Right now, dump Na and SII into separate top-level reduction
         # directories
@@ -197,6 +201,9 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
     outdir = outdir or reduced_dir(directory, outdir_root, create=False)
     if collection is None:
         flist = multi_glob(directory, glob_include, glob_exclude_list)
+        if len(flist) == 0:
+            # Otherwise collection gets all the files in the directory!
+            return []
         collection = ccdp.ImageFileCollection(directory, filenames=flist)
     standardize_filt_name(collection)
     f_pairs = closest_in_time(collection, (f'{band}_on', f'{band}_off'),

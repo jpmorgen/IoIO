@@ -584,6 +584,11 @@ def cached_csv(code,
             for csvname in csvnames:
                 _, ext = os.path.splitext(csvname)
                 if ext == '.ecsv':
+                    if os.path.getsize(csvname) == 0:
+                        # [Q]Table.read generates an error rather than
+                        # an empty table when an empty file is read.
+                        # To us, an empty file means an empty table
+                        continue
                     list_of_table_or_dicts.append(QTable.read(csvname))
                 else:
                     dict_list = []
@@ -592,11 +597,12 @@ def cached_csv(code,
                         for row in csvr:
                             dict_list.append(row)
                     list_of_table_or_dicts.append(dict_list)
-            if single_table_or_dictlist:
+            if single_table_or_dictlist and len(list_of_table_or_dicts) > 0:
                 list_of_table_or_dicts = list_of_table_or_dicts[0]
             return list_of_table_or_dicts
         except Exception as e:
-            log.debug(f'Running code because received exception {e}')
+            d = os.path.dirname(csvname)
+            log.debug(f'Running code on {d} because received exception {e}')
             pass
 
     # If we made it here, we need to generate our list(s) of dicts

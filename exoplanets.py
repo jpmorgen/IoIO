@@ -209,7 +209,8 @@ def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
                             photometry=photometry,
                             create_outdir=create_outdir,
                             keep_intermediate=keep_intermediate,
-                            keep_fits=keep_fits)
+                            keep_fits=keep_fits,
+                            **kwargs)
 
 def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
                     glob_include=GLOB_INCLUDE,
@@ -357,7 +358,9 @@ class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
                        keep_intermediate=args.keep_intermediate,
                        join_tolerance=join_tolerance,
                        create_outdir=args.create_outdir,
-                       keep_fits=args.keep_fits)
+                       keep_fits=args.keep_fits,
+                       num_processes=args.num_processes,
+                       mem_frac=args.mem_frac)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(

@@ -1933,8 +1933,6 @@ class CalArgparseHandler(CalArgparseMixin, CorArgparseHandler):
         self.add_calibration_root()
         self.add_calibration_start()
         self.add_calibration_stop()
-        self.add_num_processes(default=MAX_NUM_PROCESSES)
-        self.add_mem_frac(default=MAX_MEM_FRAC)
         super().add_all()
 
     def cmd(self, args):

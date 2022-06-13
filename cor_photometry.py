@@ -7,6 +7,8 @@ import os
 import glob
 import warnings
 import argparse
+from random import randint
+from time import sleep
 from tempfile import TemporaryDirectory
 import subprocess
 
@@ -119,8 +121,40 @@ PIERSIDE_WEST_FILE = os.path.join(RAW_DATA_ROOT,
                                   '2018-04_Astrometry',
                                   'PinPointSolutionWestofPier.fit')
 
+
+# --> This is going away
 # Necessary for trying to construct PIERSIDE
 MIN_PIERFLIP_TIME = 8*u.min
+
+def mask_galsats(ccd_in, galsat_mask_side=GALSAT_MASK_SIDE, **kwargs):
+    assert galsat_mask_side.unit == u.pixel
+    ccd = ccd_in.copy()
+    galsat_mask = np.zeros_like(ccd.mask)
+    galsats = list(GALSATS.keys())
+    galsats = galsats[1:]
+    for g in galsats:
+        ra = ccd.meta[f'{g}_RA']
+        dec = ccd.meta[f'{g}_DEC']
+        sc = SkyCoord(ra, dec, unit=u.deg)
+        try:
+            pix = ccd.wcs.world_to_array_index(sc)
+            hs = int(round(galsat_mask_side.value/2))
+            bot = pix[0] - hs
+            top = pix[0] + hs
+            left = pix[1] - hs
+            right = pix[1] + hs
+            galsat_mask[bot:top, left:right] = True
+        except Exception as e:
+            # The wcs method may fail or the array index might fail.
+            # Not sure yet would the Exception would be.  Either way,
+            # we just want to skip it
+            log.debug(f'Problem masking galsat: {e}')
+            continue
+        ccd.mask = np.ma.mask_or(ccd.mask, galsat_mask)
+    return ccd
+
+def pierside_from_galsats(ccd_in, wcs):
+    pass
 
 def read_wcs(fname):
     """Avoid annoying messages for WCSs not written by wcslib"""
@@ -138,7 +172,7 @@ def cardinal_directions(wcs):
     out, hence the 0s
 
     """
-    # Avoid pass byt reference bug by copying cd/pc to mat
+    # Avoid pass by reference bug by copying cd/pc to mat
     if wcs.wcs.has_cd():
         mat = wcs.wcs.cd.copy()
     elif wcs.wcs.has_pc():
@@ -250,6 +284,7 @@ class CorPhotometry(Photometry):
         self.wcs
         return self._proxy_wcs_file
 
+    # --> This is going away
     @property
     def pierside(self):
         if self.ccd is not None:
@@ -373,9 +408,9 @@ class CorPhotometry(Photometry):
             self._solved = False
             return None
         
-        # First, find the closest astrometry directory before our
-        # observation.  Below, we handle the case where the directory
-        # is after our observation.
+        # First, find the closest astrometry directory before or equal
+        # to our observation.  Below, we handle the case where the
+        # directory is after our observation.
         date_obs = self.ccd.meta['date-obs']
         best_dir = self.astrometry_best_dir(date_obs)
         wcs_collect = ccdp.ImageFileCollection(
@@ -395,6 +430,15 @@ class CorPhotometry(Photometry):
                 ybinning=ccd_xy_binning[1])
         except FileNotFoundError:
             wcs_collect = wcs_collect
+
+        # --> working here
+        #if self.ccd.meta['pierside'] == 'UNKNOWN':
+        #    # Read any old WCS as our first-pass WCS with which to
+        #    # check pierside
+        #    twcs_file = wcs_collect.files_filtered(
+        #        include_path=True)[0]
+        #    wcs = WCS(twcs_file)
+        #self.ccd = 
 
         # Avoid UNKNOWN PIERSIDE, if possible
         # https://stackoverflow.com/questions/406230/regular-expression-to-match-a-line-that-doesnt-contain-a-word
@@ -428,7 +472,15 @@ class CorPhotometry(Photometry):
         ibest = np.argmin(np.abs(dts))
         best_wcs_file = wcs_collect.files_filtered(
             include_path=True)[ibest]
-        wcs = WCS(best_wcs_file)
+        try:
+            wcs = WCS(best_wcs_file)
+        except OSError as e:
+            rawfname = ccd.meta.get('RAWFNAME')
+            log.warning(f'Likely process collision.  Trying again to read '
+                        f'best_wcs_file {best_wcs_file} '
+                        f'for {rawname}: {e}')
+            sleep(randint(1,5))
+            return self.proxy_wcs
         # Reference original WCS file in our header if this is a chain
         # of proxies
         phdr = getheader(best_wcs_file)
@@ -983,6 +1035,9 @@ def add_astrometry(ccd_in, bmp_meta=None,
     else:
         nsources = len(photometry.source_table)
         ccd.meta['HIERARCH PHOTUTILS_NSOURCES'] = nsources
+
+    # --> This might go away
+
     ccd_pierside = ccd.meta['PIERSIDE']
     if (ccd_pierside != 'UNKNOWN'
         and ccd_pierside != photometry.pierside):

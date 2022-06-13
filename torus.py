@@ -2,6 +2,7 @@
 
 """Reduce IoIO Io plamsa torus observations"""
 
+import gc
 import os
 from datetime import timedelta
 
@@ -14,7 +15,7 @@ import matplotlib.dates as mdates
 from astropy import log
 import astropy.units as u
 from astropy.table import QTable, vstack
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import Angle, SkyCoord
 from astropy.modeling import models, fitting
 
 from bigmultipipe import cached_pout, outname_creator
@@ -26,10 +27,12 @@ from IoIO.utils import (get_dirs_dates, reduced_dir, nan_biweight,
 from IoIO.simple_show import simple_show
 from IoIO.cordata_base import SMALL_FILT_CROP
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
-                               objctradec_to_obj_center, crop_ccd)
+                               calc_obj_to_ND, crop_ccd,
+                               planet_to_object,
+                               objctradec_to_obj_center, )
 from IoIO.calibration import Calibration
 from IoIO.photometry import SOLVE_TIMEOUT, JOIN_TOLERANCE, rot_to
-from IoIO.cor_photometry import CorPhotometry
+from IoIO.cor_photometry import CorPhotometry, mask_galsats
 from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
                                   TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
                                   on_off_pipeline)
@@ -66,33 +69,6 @@ ANSA_DY = 1.25 * u.R_jup
 IO_ORBIT_R = 421700 * u.km 
 IO_ORBIT_R = IO_ORBIT_R.to(u.R_jup)
 
-
-def mask_galsats(ccd_in, galsat_mask_side=GALSAT_MASK_SIDE, **kwargs):
-    assert galsat_mask_side.unit == u.pixel
-    ccd = ccd_in.copy()
-    galsat_mask = np.zeros_like(ccd.mask)
-    galsats = list(GALSATS.keys())
-    galsats = galsats[1:]
-    for g in galsats:
-        ra = ccd.meta[f'{g}_RA']
-        dec = ccd.meta[f'{g}_DEC']
-        sc = SkyCoord(ra, dec, unit=u.deg)
-        try:
-            pix = ccd.wcs.world_to_array_index(sc)
-            hs = int(round(galsat_mask_side.value/2))
-            bot = pix[0] - hs
-            top = pix[0] + hs
-            left = pix[1] - hs
-            right = pix[1] + hs
-            galsat_mask[bot:top, left:right] = True
-        except Exception as e:
-            # The wcs method may fail or the array index might fail.
-            # Not sure yet would the Exception would be.  Either way,
-            # we just want to skip it
-            log.debug(f'Problem masking galsat: {e}')
-            continue
-        ccd.mask = np.ma.mask_or(ccd.mask, galsat_mask)
-    return ccd
 
 def IPT_NPole_ang(ccd, **kwargs):
     sysIII = ccd.meta['Jupiter_PDObsLon']
@@ -206,9 +182,14 @@ def ansa_parameters(ccd,
                     #                            'stddev': (0.05, 0.15),
                     #                            'amplitude': (0, amplitude)})
 
-    amplitude = np.max(r_prof) - np.min(r_prof)
+    try:
+        amplitude = np.max(r_prof) - np.min(r_prof)
+    except Exception as e:
+        log.error(f'RAWFNAME of problem: {ccd.meta["RAWFNAME"]} {e}')
+        return bad_ansa(side)
+    
     r_model_init = (
-        models.Gaussian1D(mean=side_mult*5.9*u.R_jup,
+        models.Gaussian1D(mean=side_mult*IO_ORBIT_R,
                           stddev=0.3*u.R_jup,
                           amplitude=amplitude,
                           bounds={'mean': mean_bounds,
@@ -220,6 +201,8 @@ def ansa_parameters(ccd,
     r_ansa = r_fit.mean_0.quantity
     dRj = r_fit.stddev_0.quantity
     r_amp = r_fit.amplitude_0.quantity
+
+    #print(r_fit.fit_deriv(r_Rj))
 
     if show:
         plt.plot(r_Rj, r_prof)
@@ -296,6 +279,33 @@ def ansa_parameters(ccd,
             f'ansa_{side}_surf_bright': sb,
             f'ansa_{side}_surf_bright_err': sb_err * sb.unit}
 
+# --> I need a closest_galsat_to_jupiter or equivalent that puts into
+# --> the metadata that distance in Rj
+def closest_galsat_to_jupiter(ccd_in, bmp_meta=None, **kwargs):
+    bmp_meta = bmp_meta or None
+    ccd = ccd_in.copy()
+    galsats = list(GALSATS.keys())
+    g = galsats[0]
+    ra = ccd.meta[f'{g}_RA']
+    dec = ccd.meta[f'{g}_DEC']
+    jup_sc = SkyCoord(ra, dec, unit=u.deg)
+    galsats = galsats[1:]
+    min_ang = 90*u.deg
+    for g in galsats:
+        ra = ccd.meta[f'{g}_RA']
+        dec = ccd.meta[f'{g}_DEC']
+        sc = SkyCoord(ra, dec, unit=u.deg)
+        if sc.separation(jup_sc) < min_ang:
+            min_ang = sc.separation(jup_sc)
+            closest_galsat = g
+            Rj_arcsec = ccd.meta['Jupiter_ang_width'] * u.arcsec / 2
+            closest_Rj = min_ang.to(u.arcsec) / Rj_arcsec * u.R_jup
+            ccd.meta['HIERARCH CLOSEST_GALSAT'] = closest_galsat
+            ccd.meta['HIERARCH CLOSEST_GALSAT_DIST'] = (
+                closest_Rj.value, closest_Rj.unit)
+            bmp_meta['closest_galsat'] = closest_Rj
+    return ccd        
+
 def characterize_ansas(ccd_in, bmp_meta=None,
                        **kwargs):
     # MAKE SURE THIS IS CALLED BEFORE ANY ROTATIONS The underlying
@@ -303,8 +313,14 @@ def characterize_ansas(ccd_in, bmp_meta=None,
     # multiple rotations.  When autorotate is used, N is not always
     # up.  If it is not used, the CCD image can get shoved off to one
     # side in a weird way.
-    rccd = rot_to(ccd_in, rot_angle_from_key=['Jupiter_NPole_ang',
-                                              'IPT_NPole_ang'])
+    try:
+        rccd = rot_to(ccd_in, rot_angle_from_key=['Jupiter_NPole_ang',
+                                                  'IPT_NPole_ang'])
+    except Exception as e:
+        # This helped me spot that I had OBJECT set improperly, but
+        # might as well leave it in
+        log.error(f'RAWFNAME of problem: {ccd_in.meta["RAWFNAME"]}')
+        raise e
     rccd = objctradec_to_obj_center(rccd)
     rccd = mask_galsats(rccd)
     # We only  want to mess with our original CCD metadata
@@ -335,7 +351,7 @@ def plot_planet_subim(ccd_in,
                       pix_per_planet_radius=pixel_per_Rj,
                       in_name=None,
                       outname=None,
-                      planet_subim_axis_label=r'R$\mathrm{_j}$',
+                      planet_subim_axis_label=r'R$\mathrm{_J}$',
                       planet_subim_dx=10*u.R_jup,
                       planet_subim_dy=5*u.R_jup,
                       planet_subim_vmin=30,
@@ -362,10 +378,15 @@ def plot_planet_subim(ccd_in,
     y = (np.arange(nr)*u.pixel - (center[1] - b)) / pix_per_Rp
     X, Y = np.meshgrid(x.value, y.value)
     f = plt.figure(figsize=planet_subim_figsize)
-    plt.pcolormesh(X, Y, subim,
-                   norm=LogNorm(vmin=planet_subim_vmin,
-                                vmax=planet_subim_vmax),
-                   cmap=plot_planet_cmap)
+    try:
+        plt.pcolormesh(X, Y, subim,
+                       norm=LogNorm(vmin=planet_subim_vmin,
+                                    vmax=planet_subim_vmax),
+                       cmap=plot_planet_cmap,
+                       shading='auto')
+    except Exception as e:
+        log.error(f'RAWFNAME of problem: {ccd.meta["RAWFNAME"]} {e}')
+        return ccd_in
     Rp_name = planet_subim_dx.unit.long_names[0]
     plt.ylabel(planet_subim_axis_label)
     plt.xlabel(planet_subim_axis_label)
@@ -379,50 +400,24 @@ def plot_planet_subim(ccd_in,
     d = os.path.dirname(outname)
     os.makedirs(d, exist_ok=True)
     savefig_overwrite(outroot + '.png')
+    # See note in standard_star.py about the gc.collect().  Hoping
+    # that this solves X freeze-ups
     plt.close()
+    gc.collect()
+
     return ccd_in
 
-def torus_directory(directory,
-                    outdir=None,
-                    outdir_root=TORUS_ROOT,
-                    standard_star_obj=None,
-                    read_pout=True,
-                    write_pout=True,
-                    **kwargs):
-    standard_star_obj = standard_star_obj or StandardStar(reduce=True)
-    #standard_star_obj = standard_star_obj or StandardStar(stop='2022-01-01',
-    #                                                      reduce=True)
-    outdir = outdir or reduced_dir(directory, outdir_root, create=False)
-    poutname = os.path.join(outdir, 'Torus.pout')
-    pout = cached_pout(on_off_pipeline,
-                       poutname=poutname,
-                       read_pout=read_pout,
-                       write_pout=write_pout,
-                       directory=directory,
-                       glob_include=TORUS_NA_NEB_GLOB_LIST,
-                       glob_exclude_list=TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
-                       band='SII',
-                       standard_star_obj=standard_star_obj,
-                       add_ephemeris=galsat_ephemeris,
-                       crop_ccd_coord=SMALL_FILT_CROP,
-                       pre_offsub=crop_ccd,
-                       plot_planet_rot_from_key=['Jupiter_NPole_ang'],
-                       post_offsub=[extinction_correct, rayleigh_convert,
-                                    characterize_ansas,
-                                    plot_planet_subim, as_single],
-                       outdir=outdir,
-                       **kwargs)
-
-    _ , pipe_meta = zip(*pout)
-    t = QTable(rows=pipe_meta)
-
-    time_expand = timedelta(minutes=5)
-    tlim = (np.min(t['tavg'].datetime) - time_expand,
-            np.max(t['tavg'].datetime) + time_expand)
+def torus_stripchart(t, outdir):
     r_peak = t['ansa_right_r_peak']
     l_peak = t['ansa_left_r_peak']
     av_peak = (np.abs(r_peak) + np.abs(l_peak)) / 2
-    epsilon = (r_peak + l_peak) / av_peak
+    # Current values for epsilon are messed up because peaks are not
+    # coming in at the right places presumably due to the simple
+    # Gaussian modeling.  The offset should be to the left (east,
+    # dawn) such that Io dips inside the IPT on that side.  To prepare
+    # for a sensible answer, cast my r_peak in left-handed coordinate
+    # system so epsilon is positive if l_peak is larger
+    epsilon = -(r_peak + l_peak) / av_peak
     denom_var = t['ansa_left_r_peak_err']**2 + t['ansa_right_r_peak_err']**2
     num_var = denom_var / 2
     epsilon_err = epsilon * ((denom_var / (r_peak + l_peak)**2)
@@ -438,6 +433,17 @@ def torus_directory(directory,
     epsilon_biweight = nan_biweight(epsilon)
     epsilon_mad = nan_mad(epsilon)
 
+    time_expand = timedelta(minutes=5)
+    tlim = (np.min(t['tavg'].datetime) - time_expand,
+            np.max(t['tavg'].datetime) + time_expand)
+    mean_surf_bright = np.mean((left_sb_biweight.value,
+                                right_sb_biweight.value))
+    max_sb_mad = np.max((left_sb_mad.value, right_sb_mad.value))
+    ylim_surf_bright = (mean_surf_bright - 5*max_sb_mad,
+                        mean_surf_bright + 5*max_sb_mad)
+    if not np.isfinite(ylim_surf_bright[0]):
+        ylim_surf_bright = None
+
     f = plt.figure(figsize=[8.5, 11])
     date, _ = t['tavg'][0].fits.split('T')
     plt.suptitle('Torus Ansa Characteristics')
@@ -447,10 +453,21 @@ def torus_directory(directory,
 
     ax = plt.subplot(5, 1, 1)
     plt.errorbar(t['tavg'].datetime,
-                 -t['ansa_left_r_peak'].value,
-                 t['ansa_left_r_peak_err'].value, fmt='k.')
-    plt.ylabel(r'East ansa (R$_\mathrm{J}$)')
-    plt.axhline(IO_ORBIT_R.value, color='r', label='Io orbit')
+                 np.abs(t['ansa_left_r_peak'].value),
+                 t['ansa_left_r_peak_err'].value, fmt='r.',
+                 label='East')
+    #plt.plot(t['tavg'].datetime,
+    #         np.abs(t['ansa_left_r_peak']) + t['ansa_left_r_stddev'],
+    #         'r^')
+    plt.errorbar(t['tavg'].datetime,
+                 np.abs(t['ansa_right_r_peak'].value),
+                 t['ansa_right_r_peak_err'].value, fmt='g.',
+                 label='West')
+    #plt.plot(t['tavg'].datetime,
+    #         np.abs(t['ansa_right_r_peak']) + t['ansa_right_r_stddev'],
+    #         'g^')
+    plt.ylabel(r'Ansa position (R$_\mathrm{J}$)')
+    plt.axhline(IO_ORBIT_R.value, color='y', label='Io orbit')
     ax.legend()
     ax.set_xlim(tlim)
     ax.set_ylim(5.5, 6.0)
@@ -458,48 +475,36 @@ def torus_directory(directory,
     ax = plt.subplot(5, 1, 2)
     plt.errorbar(t['tavg'].datetime,
                  t['ansa_left_surf_bright'].value,
-                 t['ansa_left_surf_bright_err'].value, fmt='k.')
-    plt.ylabel(f'East SB ({t["ansa_left_surf_bright"].unit})')
+                 t['ansa_left_surf_bright_err'].value, fmt='r.')
+    plt.errorbar(t['tavg'].datetime,
+                 t['ansa_right_surf_bright'].value,
+                 t['ansa_right_surf_bright_err'].value, fmt='g.')
+    plt.ylabel(f'Av. Surf. Bright ({t["ansa_left_surf_bright"].unit})')
     plt.hlines(np.asarray((left_sb_biweight.value,
                            left_sb_biweight.value - left_sb_mad.value,
                            left_sb_biweight.value + left_sb_mad.value)),
                *tlim,
+               colors='r',
                linestyles=('-', '--', '--'),
-               label=(f'{left_sb_biweight:.0f} '
+               label=(f'East {left_sb_biweight:.0f} '
                       f'+/- {left_sb_mad:.0f}'))
-    ax.legend()
-    ax.set_xlim(tlim)
-
-    ax = plt.subplot(5, 1, 3)
-    plt.errorbar(t['tavg'].datetime,
-                 t['ansa_right_surf_bright'].value,
-                 t['ansa_right_surf_bright_err'].value, fmt='k.')
-    plt.ylabel(f'West SB ({t["ansa_right_surf_bright"].unit})')
     plt.hlines(np.asarray((right_sb_biweight.value,
                            right_sb_biweight.value - right_sb_mad.value,
                            right_sb_biweight.value + right_sb_mad.value)),
                *tlim,
                linestyles=('-', '--', '--'),
-               label=(f'{right_sb_biweight:.0f} '
+               colors='g',
+               label=(f'West {right_sb_biweight:.0f} '
                       f'+/- {right_sb_mad:.0f}'))
     ax.legend()
     ax.set_xlim(tlim)
+    ax.set_ylim(ylim_surf_bright)
 
-    ax = plt.subplot(5, 1, 4)
-    plt.errorbar(t['tavg'].datetime,
-                 -t['ansa_right_r_peak'].value,
-                 t['ansa_right_r_peak_err'].value, fmt='k.')
-    plt.ylabel(r'West ansa (R$_\mathrm{J}$)')
-    plt.axhline(-IO_ORBIT_R.value, color='r', label='Io orbit')
-    ax.legend()
-    ax.set_xlim(tlim)
-    ax.set_ylim(-6.0, -5.5)
-
-    ax = plt.subplot(5, 1, 5)
+    ax = plt.subplot(5, 1, 3)
     plt.errorbar(t['tavg'].datetime,
                  epsilon.value,
                  epsilon_err.value, fmt='k.')
-    ax.set_ylim(-0.010, 0.050)
+    #ax.set_ylim(-0.010, 0.050)
     plt.ylabel(r'Sky plane $|\vec\epsilon|$')
     plt.hlines(np.asarray((epsilon_biweight,
                            epsilon_biweight - epsilon_mad,
@@ -507,17 +512,87 @@ def torus_directory(directory,
                *tlim,
                linestyles=('-', '--', '--'),
                label=f'{epsilon_biweight:.3f} +/- {epsilon_mad:.3f}')
-    plt.axhline(0.025, color='r', label='Nominal 0.025')
+    plt.axhline(0.025, color='y', label='Nominal 0.025')
     ax.legend()
     ax.set_xlim(tlim)
 
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-    f.autofmt_xdate()
+    ax = plt.subplot(5, 1, 4)
+    plt.plot(t['tavg'].datetime, t['closest_galsat'], 'k.')
+    ax.set_xlim(tlim)
+    plt.ylabel(r'Closest galsat (R$_\mathrm{J}$)')
+
+    #plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    #f.autofmt_xdate()
     plt.xlabel(f'UT {date}')
+
+    east_sysIII = Angle(t['Jupiter_PDObsLon'] + 90*u.deg)
+    west_sysIII = Angle(t['Jupiter_PDObsLon'] - 90*u.deg)
+    east_sysIII = east_sysIII.wrap_at(360*u.deg)
+    west_sysIII = west_sysIII.wrap_at(360*u.deg)
+
+    ax = plt.subplot(5, 1, 5)
+    plt.errorbar(east_sysIII.value,
+                 t['ansa_left_surf_bright'].value,
+                 t['ansa_left_surf_bright_err'].value, fmt='r.',
+                 label='East')
+    plt.errorbar(west_sysIII.value,
+                 t['ansa_right_surf_bright'].value,
+                 t['ansa_right_surf_bright_err'].value, fmt='g.',
+                 label='West')
+    plt.ylabel(f'Surf. Bright ({t["ansa_left_surf_bright"].unit})')
+    plt.xlabel(r'Ansa $\lambda{\mathrm{III}}$')
+    plt.xticks(np.arange(0,360,45))
+    plt.minorticks_on()
+    ax.set_xlim(0, 360)
+    ax.set_ylim(ylim_surf_bright)
+    ax.legend()
+
     plt.tight_layout()
 
     savefig_overwrite(os.path.join(outdir, 'Characterize_Ansas.png'))
+    plt.close()
 
+def torus_directory(directory,
+                    outdir=None,
+                    outdir_root=TORUS_ROOT,
+                    standard_star_obj=None,
+                    read_pout=True,
+                    write_pout=True,
+                    create_outdir=True,
+                    **kwargs):
+    standard_star_obj = standard_star_obj or StandardStar(reduce=True)
+    #standard_star_obj = standard_star_obj or StandardStar(stop='2022-01-01',
+    #                                                      reduce=True)
+    outdir = outdir or reduced_dir(directory, outdir_root, create=False)
+    poutname = os.path.join(outdir, 'Torus.pout')
+    pout = cached_pout(on_off_pipeline,
+                       poutname=poutname,
+                       read_pout=read_pout,
+                       write_pout=write_pout,
+                       create_outdir=create_outdir,
+                       directory=directory,
+                       glob_include=TORUS_NA_NEB_GLOB_LIST,
+                       glob_exclude_list=TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
+                       band='SII',
+                       standard_star_obj=standard_star_obj,
+                       add_ephemeris=galsat_ephemeris,
+                       crop_ccd_coord=SMALL_FILT_CROP,
+                       planet='Jupiter',
+                       post_process_list=[calc_obj_to_ND, crop_ccd,
+                                          planet_to_object],
+                       plot_planet_rot_from_key=['Jupiter_NPole_ang'],
+                       post_offsub=[extinction_correct, rayleigh_convert,
+                                    characterize_ansas,
+                                    closest_galsat_to_jupiter,
+                                    plot_planet_subim, as_single],
+                       outdir=outdir,
+                       **kwargs)
+    if pout is None or len(pout) == 0:
+        return QTable()
+
+    _ , pipe_meta = zip(*pout)
+    t = QTable(rows=pipe_meta)
+    torus_stripchart(t, outdir)
     return t
 
 def torus_tree(raw_data_root=RAW_DATA_ROOT,
@@ -552,7 +627,7 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
                        read_csvs=read_csvs,
                        write_csvs=write_csvs,
                        outdir=rd,
-                       create_outdir=True,
+                       create_outdir=create_outdir,
                        **kwargs)
         # Hack to get around astropy vstack bug with location
         if len(t) == 0:
@@ -560,13 +635,18 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
         loc = t['tavg'][0].location.copy()
         t['tavg'].location = None
         summary_table = vstack([summary_table, t])
-    if len(summary_table) > 0:
-        summary_table['tavg'].location = loc
+    if len(summary_table) == 0:
+        return summary_table
+
+    summary_table['tavg'].location = loc
+    torus_stripchart(summary_table, outdir_root)
+
     return summary_table
 
 log.setLevel('DEBUG')
-t = torus_tree(start='2018-05-08',
-               stop='2018-05-09',
+t = torus_tree(start='2019-01-01',
+               stop='2020-01-01',
+               read_csvs=True,
                fits_fixed_ignore=True)
 
 # Crumy night (hopefully rare in this time!)
@@ -604,10 +684,10 @@ directory = '/data/IoIO/raw/2018-05-08/'
 
 
 #from IoIO.cordata import CorData
-#ccd = CorData.read('/data/IoIO/Torus/2018-05-08/SII_on-band_024-back-sub.fits')
-##ccd = CorData.read('/data/IoIO/Torus/2018-05-08/SII_on-band_017-back-sub.fits')
-#ccd.obj_center = np.asarray((ccd.meta['obj_cr1'], ccd.meta['obj_cr0']))
-##                                      
+#ccd = CorData.read('/data/IoIO/Torus/2018-05-08/SII_on-band_026-back-sub.fits')
+###ccd = CorData.read('/data/IoIO/Torus/2018-05-08/SII_on-band_017-back-sub.fits')
+##ccd.obj_center = np.asarray((ccd.meta['obj_cr1'], ccd.meta['obj_cr0']))
+###                                      
 #bmp_meta = {}
 #ccd = characterize_ansas(ccd, bmp_meta=bmp_meta, show=True)
 

@@ -21,7 +21,8 @@ JUPITER_SYNONYMS = ['IPT', 'Na', 'Na_IPT', 'Na_IPT_R']
 
 # ACK!  I really should have connected and disconnected the telescope
 # during the ACP shell-out.  See comments in code where this is used
-ACP_TRACK_PAST_MERIDIAN = 45*u.min
+ACP_TRACK_PAST_MERIDIAN = 45*u.min/(24*u.hr)*360*u.deg
+ACP_TRACK_PAST_MERIDIAN = ACP_TRACK_PAST_MERIDIAN.to(u.deg)
 
 def get_filt_name(f, date_obs):
     """Used in standardize_filt_name.  Returns standarized filter name
@@ -152,6 +153,9 @@ def standardize_filt_name(hdr_or_collection):
     """
     if isinstance(hdr_or_collection, ccdp.ImageFileCollection):
         st = hdr_or_collection.summary
+        if 'filter' not in st.colnames:
+            # Nothing to be done, possibly biases or darks
+            return hdr_or_collection
         st['ofilter'] = st['filter']
         for row in st:
             row['filter'] = get_filt_name(row['ofilter'],
@@ -231,41 +235,6 @@ def obs_location_to_hdr(hdr_in, location=None):
     if hdr.get('SITELAT'):
         del hdr['SITELAT'] # MaxIm
     return hdr
-
-def angle_to_major_body(ccd, body_str):
-    """Returns angle between pointing direction and solar system major
-    body
-
-    Build-in astropy geocentric ephemeris is used for each planet and
-    the moon and the ccd.sky_coord is used to construct a similarly
-    geocentric pointing direction.  The angle between these two
-    directions is returned.  For a more accurate pointing direction
-    from the perspective of the observatory, the astroquery.horizons
-    module can be used
-
-, so results are not as accurate
-    as possible, but more than good enough for rough calculations
-
-    Parameters
-    ----------
-    ccd : astropy.nddata.CCDData
-
-    body : str
-        solar system major body name
-
-    Returns
-    -------
-    angle : astropy.units.Quantity
-        angle between pointing direction and major body
-
-    """
-    with solar_system_ephemeris.set('builtin'):
-        body_coord = get_body(body_str, ccd.tavg, ccd.obs_location)
-    # https://docs.astropy.org/en/stable/coordinates/common_errors.html
-    # notes that separation is order dependent, with the calling
-    # object's frame (e.g., body_coord) used as the reference frame
-    # into which the argument (e.g., ccd.sky_coord) is transformed
-    return body_coord.separation(ccd.sky_coord)
 
 def fix_obj_and_coord(ccd_in, **kwargs):
     """Fixes missing/incorrect OBJECT and standardizes coordinate keywords:
@@ -353,18 +322,6 @@ def fix_obj_and_coord(ccd_in, **kwargs):
             '[hms J2000] Telescope declination'
         
     obj = ccd.meta.get('object') 
-    if obj is None or obj == '':
-        # OBJECT was not always set in the early Jupiter observations.
-        # Also took some Mercury observations with MaxIm without
-        # specifying object.  Check for all just for the heck of it
-        # --> This might be more appropriate in mercury.py
-        for body in solar_system_ephemeris.bodies:
-            a = angle_to_major_body(ccd, body)
-            # This should be accurate enough for our pointing
-            if a < 1*u.deg:
-                ccd.meta['object'] = body.capitalize()
-                break
-
     if obj in JUPITER_SYNONYMS:
         # I named MaxIm autosave sequences after the filters rather
         # than the object
