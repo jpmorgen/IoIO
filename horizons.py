@@ -207,10 +207,8 @@ def galsat_ephemeris(ccd_in,
         log.warning(f'Called galsat_ephemeris on OBJECT {object}')
         return ccd_in
     ccd = ccd_in.copy()
-    if obs_loc is None:
-        obs_loc = IOIO_1_LOCATION
-    if obs_col_to_meta is None:
-        obs_col_to_meta = GALSAT_OBS_COL_TO_META
+    obs_loc = obs_loc or IOIO_1_LOCATION
+    obs_col_to_meta = obs_col_to_meta or GALSAT_OBS_COL_TO_META
     obs_name = obs_loc.info.name
 
     # Get our ephemerides from the perspective of the observatory

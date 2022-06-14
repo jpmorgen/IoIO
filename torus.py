@@ -47,7 +47,6 @@ TORUS_ROOT = os.path.join(IoIO_ROOT, 'Torus')
 # That means tilt is toward 200.8, which is my basic recollection
 CENTRIFUGAL_EQUATOR_AMPLITUDE = 6.8*u.deg
 JUPITER_MAG_SYSIII = 290.8*u.deg
-GALSAT_MASK_SIDE = 20 * u.pixel
 MAX_N_MASK = 10
 RIGHT_INNER = 4.75 * u.R_jup
 RIGHT_OUTER = 6.75 * u.R_jup

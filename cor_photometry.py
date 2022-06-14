@@ -20,8 +20,7 @@ from astropy import log
 from astropy import units as u
 from astropy.coordinates import Angle, SkyCoord
 from astropy.io.fits import getheader
-from astropy.table import Table, MaskedColumn, Column, join, join_skycoord
-from astropy import table
+from astropy.table import Table, join, join_skycoord
 from astropy.time import Time
 from astropy.wcs import WCS, FITSFixedWarning
 
@@ -37,13 +36,13 @@ from precisionguide import PGData
 
 import IoIO.sx694 as sx694
 from IoIO.utils import FITS_GLOB_LIST, multi_glob, savefig_overwrite
-from IoIO.cordata_base import SMALL_FILT_CROP
 from IoIO.cordata import CorData
-from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE, rot_wcs,
+from IoIO.photometry import (SOLVE_TIMEOUT, rot_wcs,
                              Photometry, PhotometryArgparseMixin)
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                CorMultiPipeBinnedOK, nd_filter_mask)
 from IoIO.calibration import Calibration
+from IoIO.horizons import GALSATS
 
 MIN_SOURCES_TO_SOLVE = 5
 MAX_SOURCES_TO_SOLVE = 500
@@ -61,6 +60,9 @@ PHOTOMETRY_ROOT = os.path.join(IoIO_ROOT, 'FieldStar')
 
 # Proxy WCS settings.  
 MIN_CENTER_QUALITY = 5
+
+# Galsat mask for determining pierside via galsats
+GALSAT_MASK_SIDE = 20 * u.pixel
 
 # MaxIm provides output as below whenever a PinPoint solution is
 # successful.  
@@ -121,41 +123,6 @@ PIERSIDE_WEST_FILE = os.path.join(RAW_DATA_ROOT,
                                   '2018-04_Astrometry',
                                   'PinPointSolutionWestofPier.fit')
 
-
-# --> This is going away
-# Necessary for trying to construct PIERSIDE
-MIN_PIERFLIP_TIME = 8*u.min
-
-def mask_galsats(ccd_in, galsat_mask_side=GALSAT_MASK_SIDE, **kwargs):
-    assert galsat_mask_side.unit == u.pixel
-    ccd = ccd_in.copy()
-    galsat_mask = np.zeros_like(ccd.mask)
-    galsats = list(GALSATS.keys())
-    galsats = galsats[1:]
-    for g in galsats:
-        ra = ccd.meta[f'{g}_RA']
-        dec = ccd.meta[f'{g}_DEC']
-        sc = SkyCoord(ra, dec, unit=u.deg)
-        try:
-            pix = ccd.wcs.world_to_array_index(sc)
-            hs = int(round(galsat_mask_side.value/2))
-            bot = pix[0] - hs
-            top = pix[0] + hs
-            left = pix[1] - hs
-            right = pix[1] + hs
-            galsat_mask[bot:top, left:right] = True
-        except Exception as e:
-            # The wcs method may fail or the array index might fail.
-            # Not sure yet would the Exception would be.  Either way,
-            # we just want to skip it
-            log.debug(f'Problem masking galsat: {e}')
-            continue
-        ccd.mask = np.ma.mask_or(ccd.mask, galsat_mask)
-    return ccd
-
-def pierside_from_galsats(ccd_in, wcs):
-    pass
-
 def read_wcs(fname):
     """Avoid annoying messages for WCSs not written by wcslib"""
     with warnings.catch_warnings():
@@ -199,6 +166,79 @@ def pierside(wcs):
     log.error(f'WCS solution not consistent with '
               f'IoIO coronagraph {wcs}')
     return 'ERROR'
+
+def pierflip(wcs):
+    """Pierflip rotates the FOV by 180 deg"""
+    return rot_wcs(wcs, 180*u.deg)
+
+def mask_galsats(ccd_in, galsat_mask_side=GALSAT_MASK_SIDE, **kwargs):
+    assert galsat_mask_side.unit == u.pixel
+    ccd = ccd_in.copy()
+    galsat_mask = np.zeros_like(ccd.mask)
+    galsats = list(GALSATS.keys())
+    galsats = galsats[1:]
+    for g in galsats:
+        ra = ccd.meta[f'{g}_RA']
+        dec = ccd.meta[f'{g}_DEC']
+        sc = SkyCoord(ra, dec, unit=u.deg)
+        try:
+            pix = ccd.wcs.world_to_array_index(sc)
+            hs = int(round(galsat_mask_side.value/2))
+            bot = pix[0] - hs
+            top = pix[0] + hs
+            left = pix[1] - hs
+            right = pix[1] + hs
+            galsat_mask[bot:top, left:right] = True
+        except Exception as e:
+            # The wcs method may fail or the array index might fail.
+            # Not sure yet would the Exception would be.  Either way,
+            # we just want to skip it
+            log.debug(f'Problem masking galsat: {e}')
+            continue
+        ccd.mask = np.ma.mask_or(ccd.mask, galsat_mask)
+    return ccd
+
+def sum_ccddata(ccd):
+    """Annoying that sum and np.ma.sum don't work out of the box"""
+    a = np.ma.array(ccd.data, mask=ccd.mask)
+    return np.ma.sum(a)
+
+def sum_galsat_positions(ccd_in, wcs):
+    ccd = ccd_in.copy()
+    ccd.wcs = wcs
+    ccd = mask_galsats(ccd)
+    ccd.mask = ~ccd.mask
+    return sum_ccddata(ccd)
+    
+def pierside_from_galsats(ccd_in, wcs):
+    """Use alignment of Galilean satellites to determine pierflip.  NOTE:
+    this does not (yet) include any check for cases where the sums may
+    be close
+
+    Parameters
+    ----------
+    ccd_in : ccd
+
+    wcs : WCS
+        wcs centered on ccd
+
+    Returns
+    -------
+    pierside : str
+
+    """
+    sum_no_flip = sum_galsat_positions(ccd_in, wcs)
+    sum_with_flip = sum_galsat_positions(ccd_in, pierflip(wcs))
+    ratio = sum_no_flip / sum_with_flip
+    if 0.5 < ratio and ratio < 2:
+        rawfname = ccd_in.meta['RAWFNAME']
+        log.warning(f'PIERSIDE not determined from galsats, '
+                    f'no_flip/flip ratio = {ratio}: {rawfname}')
+        return 'UNKNOWN'
+    #print(f'sum_no_flip = {sum_no_flip}, sum_with_flip = {sum_with_flip}')
+    if sum_with_flip > sum_no_flip:
+        return pierside(pierflip(wcs))
+    return pierside(wcs)
 
 def astrometry_outname(fname, date_obs):
     """Returns full pathname to centralized location into which a
@@ -268,6 +308,10 @@ class CorPhotometry(Photometry):
         self.solve_by_proxy = solve_by_proxy
         self.min_center_quality = min_center_quality
         self._raw_wcs_flist = None
+        # We have to do this on instantiation or else we get
+        # AssertionError: daemonic processes are not allowed to have children
+        # when its pipeline runs while we are in a pipeline process
+        self.reduce_base_astrometry()
 
     def init_calc(self):
         super().init_calc()
@@ -284,9 +328,12 @@ class CorPhotometry(Photometry):
         self.wcs
         return self._proxy_wcs_file
 
-    # --> This is going away
     @property
     def pierside(self):
+        """Property used to get pierside out of photometry into ccd in
+        add_astrometry
+
+        """
         if self.ccd is not None:
             self._pierside = self.ccd.meta.get('pierside')
         return self._pierside
@@ -368,7 +415,6 @@ class CorPhotometry(Photometry):
         dir and we use position_angle to rotate the WCS.
 
         """
-        self.reduce_base_astrometry()
         dirlist = os.listdir(ASTROMETRY_ROOT)
         dirlist.sort()
         if date_obs < dirlist[0]:
@@ -398,6 +444,85 @@ class CorPhotometry(Photometry):
                 return angle
         _, angle= POSITION_ANGLES[-1]
         return angle
+
+    def match_wcs_scale_and_cr_to_ccd(self, wcs_file):
+        """Helper method that is called more than once.  NOTE: This does not
+        handle pierflip
+
+        Parameters
+        ----------
+        wcs_file : str
+            full path to proxy wcs file
+
+        Returns
+        -------
+        (wcs, wcs_hdr) : tuple
+            wcs with scale matched to ccd and wcs FITS header
+
+        """
+
+        try:
+            wcs_hdr = getheader(wcs_file)
+        except OSError as e:
+            rawfname = self.ccd.meta.get('RAWFNAME')
+            log.warning(f'Likely process collision.  Trying again to read '
+                        f'wcs_file {wcs_file} '
+                        f'for {rawfname}: {e}')
+            sleep(randint(1,5))
+            return self.match_wcs_scale_and_cr_to_ccd(wcs_file)
+        wcs = WCS(wcs_hdr)
+
+        # Scale WCS transformations to match ccd pixel size.  All of
+        # our Astrometry solutions have run through the astropy wcslib
+        # stuff, which translates older CD matrices to PC-style.
+        # https://stackoverflow.com/questions/36384760/transforming-a-row-vector-into-a-column-vector-in-numpy
+        # Calabretta and Greisen (2002) define the PC
+        ccd_xy_binning = self.ccd.binning[::-1]
+        wcs_xy_binning = np.asarray((wcs_hdr['xbinning'],
+                                     wcs_hdr['ybinning']))
+
+        wcs_to_ccd_scale = ccd_xy_binning / wcs_xy_binning
+        wcs_to_ccd_scale_col = wcs_to_ccd_scale[..., None]
+        wcs.wcs.pc *= wcs_to_ccd_scale_col
+        #wcs._naxis /= wcs_to_ccd_scale
+        #wcs.wcs.cdelt *= wcs_to_ccd_scale
+
+        # SIP distortion is present when astrometry.net code has
+        # solved the proxy image, but I find that SIP is not
+        # consistent across pier flips, so just turn it off.  Turning
+        # SIP off also makes it easier to deal with crpix and crval,
+        # since SIP is referenced to a particular crpix which may not
+        # be obj_center+1.  That means that if we were to propagate
+        # SIP to a new WCS, we would have to somehow iteratively find
+        # the crval that resulted in OBJCTRA,OBJCTDEC at obj_center.
+        # Shupe et al. (2005) define the SIP
+        wcs.sip = None
+
+        #if wcs.has_distortion:
+        #    for iu in np.arange(wcs.sip.a_order):
+        #        for iv in np.arange(wcs.sip.a_order):
+        #            if iu + iv > wcs.sip.a_order:
+        #                continue
+        #            # This is a little dangerous for anything but an
+        #            # anti-diagonal matrix and equal binning in both
+        #            # axes.  But all our binning are always equal in
+        #            # both axes and a spot-check of matrices suggests
+        #            # they all anti-diagonal, so don't worry about it
+        #            wcs_wcs.sip.a[iu, iv] *= (
+        #                wcs_to_ccd_scale[0]**iu
+        #                * wcs_to_ccd_scale[1]**iv)
+
+        # Point the WCS to our object.  Note C ordering and zero
+        # reference of obj_center.  CRPIX is FORTRAN order and 1
+        # reference
+        wcs.wcs.crval = np.asarray((self.ccd.sky_coord.ra.deg,
+                                    self.ccd.sky_coord.dec.deg))
+        wcs.wcs.crpix = self.ccd.obj_center[::-1] + 1
+        wcs.wcs.dateobs = self.ccd.meta['DATE-OBS']
+        wcs.wcs.mjdobs = self.ccd.meta['MJD-OBS']
+        wcs.wcs.dateavg = self.ccd.meta['DATE-AVG']
+        wcs.wcs.mjdavg = self.ccd.meta['MJD-AVG']
+        return wcs, wcs_hdr
 
     @property
     def proxy_wcs(self):
@@ -430,105 +555,46 @@ class CorPhotometry(Photometry):
                 ybinning=ccd_xy_binning[1])
         except FileNotFoundError:
             wcs_collect = wcs_collect
+        except TypeError:
+            rawfname = self.ccd.meta.get('RAWFNAME')
+            log.warning(f'Likely process collision.  '
+                        f'Trying again to read collection from '
+                        f'wcs_file {best_dir} '
+                        f'for {rawfname}: {e}')
+            sleep(randint(1,5))
+            return self.proxy_wcs
 
-        # --> working here
-        #if self.ccd.meta['pierside'] == 'UNKNOWN':
-        #    # Read any old WCS as our first-pass WCS with which to
-        #    # check pierside
-        #    twcs_file = wcs_collect.files_filtered(
-        #        include_path=True)[0]
-        #    wcs = WCS(twcs_file)
-        #self.ccd = 
+        # Fix unknown pierside issue using cute trick with Galsats
+        if self.ccd.meta['pierside'] == 'UNKNOWN':
+            # Read any old WCS as our first-pass WCS with which to
+            # check pierside
+            twcs_file = wcs_collect.files_filtered(
+                include_path=True)[0]
+            wcs, _ = self.match_wcs_scale_and_cr_to_ccd(twcs_file)
+            self.ccd.meta['pierside'] = pierside_from_galsats(self.ccd, wcs)
+            if self.ccd.meta['pierside'] == 'UNKNOWN':
+                # We failed in our galsat attempt, which is hopefully
+                # rare, so don't work harder at trying to succeed.
+                # Log message is produce in pierside_from_galsats
+                self._solved = False
+                return None
 
-        # Avoid UNKNOWN PIERSIDE, if possible
-        # https://stackoverflow.com/questions/406230/regular-expression-to-match-a-line-that-doesnt-contain-a-word
+        ccd_pierside = self.ccd.meta['pierside']
+        # Match PIERSIDE, if possible
         try:
             wcs_collect = wcs_collect.filter(
-                pierside='^((?!unknown).)*$',
-                regex_match=True)
+                pierside=ccd_pierside)
         except FileNotFoundError:
             wcs_collect = wcs_collect
 
-        ## pierside is a little more complex
-        #st = wcs_collect.summary
-        #ew_mask = st['pierside'] != 'UNKNOWN'
-        #if np.any(ew_mask):
-        #    wcs_collect = ccdp.ImageFileWcs_Collect(
-        #        best_dir, keywords=['date-obs',
-        #                            'pierside',
-        #                            'xbinning',
-        #                            'ybinning'])
-
-        # Match PIERSIDE after filtering UNKNOWN cases
-        try:
-            wcs_collect = wcs_collect.filter(
-                pierside=self.ccd.meta['pierside'])
-        except FileNotFoundError:
-            wcs_collect = wcs_collect
-
+        # Get our best wcs and scale and center it
         wcs_tobs = Time(wcs_collect.values('date-obs'))
         tobs = Time(date_obs)
         dts = tobs - wcs_tobs
         ibest = np.argmin(np.abs(dts))
         best_wcs_file = wcs_collect.files_filtered(
             include_path=True)[ibest]
-        try:
-            wcs = WCS(best_wcs_file)
-        except OSError as e:
-            rawfname = ccd.meta.get('RAWFNAME')
-            log.warning(f'Likely process collision.  Trying again to read '
-                        f'best_wcs_file {best_wcs_file} '
-                        f'for {rawname}: {e}')
-            sleep(randint(1,5))
-            return self.proxy_wcs
-        # Reference original WCS file in our header if this is a chain
-        # of proxies
-        phdr = getheader(best_wcs_file)
-        proxy_wcs_file = phdr.get('PROXYWCS')
-        if proxy_wcs_file:
-            self._proxy_wcs_file = proxy_wcs_file
-        else:
-            self._proxy_wcs_file = best_wcs_file
-        wcs_xy_binning = np.asarray(
-            (wcs_collect.values('xbinning')[ibest],
-             wcs_collect.values('ybinning')[ibest]))
-        wcs_raw_pierside = wcs_collect.values('pierside')[ibest]
-
-        # Scale WCS transformations to match ccd pixel size.  All of
-        # our Astrometry solutions have run through the wcslib stuff,
-        # which translates older CD matrices to PC-style.  
-        # https://stackoverflow.com/questions/36384760/transforming-a-row-vector-into-a-column-vector-in-numpy
-        # Calabretta and Greisen (2002) define the PC
-        wcs_to_ccd_scale = ccd_xy_binning / wcs_xy_binning
-        wcs_to_ccd_scale_col = wcs_to_ccd_scale[..., None]
-        wcs.wcs.pc *= wcs_to_ccd_scale_col
-        #wcs._naxis /= wcs_to_ccd_scale
-        #wcs.wcs.cdelt *= wcs_to_ccd_scale
-
-        # SIP distortion is present when astrometry.net code has
-        # solved the proxy image, but I find that SIP is not
-        # consistent across pier flips, so just turn it off.  Turning
-        # SIP off also makes it easier to deal with crpix and crval,
-        # since SIP is referenced to a particular crpix which may not
-        # be obj_center+1.  That means that if we were to propagate
-        # SIP to a new WCS, we would have to somehow iteratively find
-        # the crval that resulted in OBJCTRA,OBJCTDEC at obj_center.
-        # Shupe et al. (2005) define the SIP
-        wcs.sip = None
-
-        #if wcs.has_distortion:
-        #    for iu in np.arange(wcs.sip.a_order):
-        #        for iv in np.arange(wcs.sip.a_order):
-        #            if iu + iv > wcs.sip.a_order:
-        #                continue
-        #            # This is a little dangerous for anything but an
-        #            # anti-diagonal matrix and equal binning in both
-        #            # axes.  But all our binning are always equal in
-        #            # both axes and a spot-check of matrices suggests
-        #            # they all anti-diagonal, so don't worry about it
-        #            wcs_wcs.sip.a[iu, iv] *= (
-        #                wcs_to_ccd_scale[0]**iu
-        #                * wcs_to_ccd_scale[1]**iv)
+        wcs, phdr = self.match_wcs_scale_and_cr_to_ccd(best_wcs_file)
 
         # Handle pier flip
         _, earlist_raw_wcs = self.raw_wcs_flist[0]
@@ -543,19 +609,9 @@ class CorPhotometry(Photometry):
             wcs_pierside = pierside(wcs)
         else:
             # In the case that pierside is unknown
-            wcs_pierside = wcs_collect.values('pierside')[ibest]
+            wcs_pierside = phdr['pierside']
             
-        ccd_pierside = self.ccd.meta['pierside']
-        if ccd_pierside == 'UNKNOWN':
-            # The best we can do in this case is just propagate our
-            # close wcs pierside if it is known.  We just
-            # don't have the information necessary to prescribe a wcs
-            # pier flip
-            if (dts[ibest] < MIN_PIERFLIP_TIME
-                and wcs_raw_pierside != 'UNKNOWN'):
-                ccd_pierside = wcs_pierside
-            flip = False
-        elif ccd_pierside != 'EAST' and ccd_pierside != 'WEST':
+        if ccd_pierside != 'EAST' and ccd_pierside != 'WEST':
             log.error(f'Unexpected ccd PIERSIDE = {ccd_pierside}')
             flip = False
         elif wcs_pierside != 'EAST' and wcs_pierside != 'WEST':
@@ -565,22 +621,21 @@ class CorPhotometry(Photometry):
             flip = False
         else:
             flip = True
-        self._pierside = ccd_pierside
         if flip:
-            wcs = rot_wcs(wcs, 180*u.deg)
+            wcs = pierflip(wcs)
 
-        # Point the WCS to our object.  Note C ordering and zero
-        # reference of obj_center.  CRPIX is FORTRAN order and 1
-        # reference
-        wcs.wcs.crval = np.asarray((self.ccd.sky_coord.ra.deg,
-                                    self.ccd.sky_coord.dec.deg))
-        wcs.wcs.crpix = self.ccd.obj_center[::-1] + 1
-        wcs.wcs.dateobs = self.ccd.meta['DATE-OBS']
-        wcs.wcs.mjdobs = self.ccd.meta['MJD-OBS']
-        wcs.wcs.dateavg = self.ccd.meta['DATE-AVG']
-        wcs.wcs.mjdavg = self.ccd.meta['MJD-AVG']
-        # Setting solved=True allows accumulated solves to extend
-        # PIERSIDE during times of PIERSIDE = UNKNOWN
+        # Stash ccd pierside in property for add_astrometry
+        self._pierside = ccd_pierside
+
+        # Reference original WCS file in our header if this is a chain
+        # of proxies
+        phdr = getheader(best_wcs_file)
+        proxy_wcs_file = phdr.get('PROXYWCS')
+        if proxy_wcs_file:
+            self._proxy_wcs_file = proxy_wcs_file
+        else:
+            self._proxy_wcs_file = best_wcs_file
+        
         self._solved = True
         return wcs        
 
@@ -694,16 +749,14 @@ class CorPhotometry(Photometry):
                 self._solved = True
                 log.debug(f'SOLVED {self.ccd.meta["rawfname"]}')
             elif not self.solve_by_proxy:
+                # For the Astrometry base files just in case one
+                # doesn't get solved.  Initial trouble I had with
+                # images not getting solved has been fixed
                 # PinPoint WCS does get read, so might as well put it
                 # in our object, since this gives us a way to get
                 # astrometry in a pinch
                 wcs = self.ccd.wcs
                 self._pierside = pierside(wcs)
-                # For the Astrometry base files.  Not marking them as
-                # solved lets us find them easier in the
-                # ASTROMETRY_ROOT sytem, not that I have been able to
-                # figure out how to get astrometry.net to solve
-                # them....
                 self._solved = False
                 log.debug(f'NOT SOLVED {self.ccd.meta["rawfname"]}')
             else:
@@ -963,9 +1016,10 @@ def add_astrometry(ccd_in, bmp_meta=None,
         Default is ``False``
 
     """
+    bmp_meta = bmp_meta or {}
     if isinstance(ccd_in, list):
         if isinstance(in_name, list):
-            return [add_astrometry(
+            result =  [add_astrometry(
                 ccd, bmp_meta=bmp_meta, photometry=photometry,
                 in_name=fname, outdir=outdir,
                 create_outdir=create_outdir,
@@ -974,9 +1028,9 @@ def add_astrometry(ccd_in, bmp_meta=None,
                 write_to_central_photometry=write_to_central_photometry,
                 write_local_photometry=write_local_photometry,
                 **kwargs)
-                    for ccd, fname in zip(ccd_in, in_name)]
+                       for ccd, fname in zip(ccd_in, in_name)]                
         else:
-            return [add_astrometry(
+            result = [add_astrometry(
                 ccd, bmp_meta=bmp_meta, photometry=photometry,
                 in_name=in_name, outdir=outdir,
                 create_outdir=create_outdir,
@@ -986,6 +1040,11 @@ def add_astrometry(ccd_in, bmp_meta=None,
                 write_local_photometry=write_local_photometry
                 **kwargs)
                     for ccd in ccd_in]
+        if None in result:
+            bmp_meta.clear()
+            return None
+        return result
+
     ccd = ccd_in.copy()
     photometry = photometry or CorPhotometry()
 
@@ -1022,11 +1081,13 @@ def add_astrometry(ccd_in, bmp_meta=None,
     else:
         outname = None
     photometry.outname = outname or photometry.outname
-    if photometry.wcs is None:
-        # Pathological case: no wcs solution and no proxy solutiion
-        return ccd
-    
+
     ccd.wcs = photometry.wcs
+    if photometry.wcs is None:
+        # Pathological case: no wcs solution and no proxy solution
+        bmp_meta.clear()
+        return None
+    
     ccd.meta['HIERARCH ASTROMETRY_NET_SOLVED'] = (
         photometry.solved and photometry.proxy_wcs_file is None)
     ccd.meta['PROXYWCS'] = photometry.proxy_wcs_file
@@ -1036,20 +1097,21 @@ def add_astrometry(ccd_in, bmp_meta=None,
         nsources = len(photometry.source_table)
         ccd.meta['HIERARCH PHOTUTILS_NSOURCES'] = nsources
 
-    # --> This might go away
-
     ccd_pierside = ccd.meta['PIERSIDE']
-    if (ccd_pierside != 'UNKNOWN'
-        and ccd_pierside != photometry.pierside):
+    if ccd_pierside == 'UNKNOWN':
+        # Set PIERSIDE to value found in proxy_wcs.  If no pierside
+        # was found, proxy_wcs fails
+        ccd.meta['PIERSIDE'] = photometry.pierside
+    elif ccd_pierside != photometry.pierside:
         raise ValueError(f'CCD pierside and photometry pierside do not '
                          f'agree {ccd_pierside}, {photometry.pierside}')
-    # Reset PIERSIDE in case proxy wcs was able to fill in a missing
-    # pierside
-    ccd.meta['PIERSIDE'] = photometry.pierside
 
     # Permanently install centralized astrometry and photometry
-    # writing, though user can override
-    write_astrometry(ccd, in_name=in_name, **kwargs)
+    # writing, though user can override.  Note that astrometry is only
+    # saved if astrometry.net solved, but write photometry, since that
+    # should be close enough
+    if ccd.meta['HIERARCH ASTROMETRY_NET_SOLVED']:
+        write_astrometry(ccd, in_name=in_name, **kwargs)
     if write_to_central_photometry:
         # Slighly different logic, since write_photometry also handles
         # case where local progressing pipeline writes photometry
@@ -1130,26 +1192,28 @@ if __name__ == '__main__':
     from IoIO.simple_show import simple_show
     from IoIO.cordata import CorData
     from IoIO.cor_process import cor_process
-    from IoIO.cormultipipe import add_raw_fname, detflux
+    from IoIO.cormultipipe import add_raw_fname, detflux, planet_to_object
     from IoIO.calibration import Calibration
     from IoIO.horizons import obj_ephemeris, galsat_ephemeris
     from astropy.wcs.utils import proj_plane_pixel_scales
     c = Calibration(reduce=True)
-    fname = '/data/IoIO/raw/2021-10-28/Mercury-0001_Na_on.fit'
-    rccd = CorData.read(fname)
-    ccd = cor_process(rccd, calibration=c, auto=True)
-    ccd = add_raw_fname(ccd, in_name=fname)
-    ccd = obj_ephemeris(ccd, horizons_id='199',
-                        horizons_id_type='majorbody',
-                        obj_ephm_prefix='Mercury')
-    ccd = detflux(ccd)
-    photometry = CorPhotometry(ccd, seeing=10, back_rms_scale=2)
-    #wcs = photometry.wcs
-    #photometry.wide_source_table.show_in_browser()
-    ccd = add_astrometry(ccd, in_name=fname, photometry=photometry,
-                         mask_ND_before_astrometry=True,
-                         write_to_central_photometry=False)
-    ccd.write('/data/Mercury/2021-10-28/Mercury-0001_Na_hand.fits', overwrite=True)
+    #fname = '/data/IoIO/raw/2021-10-28/Mercury-0001_Na_on.fit'
+    #rccd = CorData.read(fname)
+    #ccd = cor_process(rccd, calibration=c, auto=True)
+    #ccd = add_raw_fname(ccd, in_name=fname)
+    #ccd = obj_ephemeris(ccd, horizons_id='199',
+    #                    horizons_id_type='majorbody',
+    #                    obj_ephm_prefix='Mercury')
+    #ccd = detflux(ccd)
+    ##photometry = CorPhotometry(ccd, seeing=10, back_rms_scale=2)
+    #photometry = CorPhotometry(ccd)
+    ##wcs = photometry.wcs
+    ##photometry.wide_source_table.show_in_browser()
+    #ccd = add_astrometry(ccd, in_name=fname, photometry=photometry,
+    #                     mask_ND_before_astrometry=True,
+    #                     write_to_central_photometry=False)
+    ##ccd.write('/data/Mercury/2021-10-28/Mercury-0001_Na_hand.fits', overwrite=True)
+    #ccd.write('/tmp/test.fits', overwrite=True)
 
     ##fname = '/data/IoIO/raw/20211028/0029P-S001-R001-C001-Na_off_dupe-1.fts'
     #rccd = CorData.read(fname)
@@ -1159,15 +1223,19 @@ if __name__ == '__main__':
     #wcs = photometry.wcs
     #print(wcs)
     ###fname = '/data/IoIO/raw/20220414/KPS-1b-S001-R001-C001-R.fts'
-    ##directory = '/data/IoIO/raw/2018-05-08/'
-    ##fname = os.path.join(directory, 'SII_on-band_007.fits')
+    directory = '/data/IoIO/raw/2018-05-08/'
+    fname = os.path.join(directory, 'SII_on-band_007.fits')
     ##fname = '/data/IoIO/raw/2018-05-08/SII_on-band_007.fits'
     ##fname = '/data/IoIO/raw/2020-09_Astrometry/Main_Astrometry_East_of_Pier.fit'
-    #rccd = CorData.read(fname)
-    #ccd = cor_process(rccd, calibration=c, auto=True)
-    #ccd = galsat_ephemeris(ccd)
-    #ccd = object_to_objctradec(ccd)
-    #photometry = CorPhotometry(ccd)
+    rccd = CorData.read(fname)
+    ccd = cor_process(rccd, calibration=c, auto=True)
+    ccd = add_raw_fname(ccd, in_name=fname)
+    ccd = planet_to_object(ccd, planet='Jupiter')
+    ccd = galsat_ephemeris(ccd)
+    photometry = CorPhotometry(ccd)
+    ccd = add_astrometry(ccd, in_name=fname, photometry=photometry,
+                         mask_ND_before_astrometry=True,
+                         write_to_central_photometry=False)
     ##photometry.source_table.show_in_browser()
     #wcs = photometry.proxy_wcs
     #print(wcs)
