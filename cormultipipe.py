@@ -58,9 +58,13 @@ COR_PROCESS_EXPAND_FACTOR = 3.5
 
 IoIO_ROOT = '/data/IoIO'
 RAW_DATA_ROOT = os.path.join(IoIO_ROOT, 'raw')
+# This is not intended for production use.  Everything should go into
+# its own specific directory (e.g. Calibration, StandardStar, etc.)
+REDUCED_ROOT = os.path.join(IoIO_ROOT, 'reduced')
 
 # string to append to processed files to avoid overwrite of raw data
-OUTNAME_APPEND = "_p"
+OUTNAME_APPEND = '_p'
+OUTNAME_EXT = '.fits'
 
 # Number of pixels to expand the ND filter over what CorData finds.
 # This is the negative of the CorData edge_mask parameter, since
@@ -82,6 +86,7 @@ obj_center calculations by using CorDataBase as CCDData
                  calibration=None,
                  auto=False,
                  outname_append=OUTNAME_APPEND,
+                 outname_ext=OUTNAME_EXT,
                  naxis1=sx694.naxis1,
                  naxis2=sx694.naxis2,
                  process_expand_factor=COR_PROCESS_EXPAND_FACTOR,
@@ -89,6 +94,7 @@ obj_center calculations by using CorDataBase as CCDData
         self.calibration = calibration
         self.auto = auto
         super().__init__(outname_append=outname_append,
+                         outname_ext=outname_ext,
                          naxis1=naxis1,
                          naxis2=naxis2,
                          process_expand_factor=process_expand_factor,
@@ -572,32 +578,61 @@ class CorArgparseMixin:
     # This modifies BMPArgparseMixin outname_append
     outname_append = OUTNAME_APPEND
 
-    def add_log_level(self, 
+    def add_log_level(self,
+                      option='log_level',
                       default='DEBUG',
                       help=None,
                       **kwargs):
-        option = 'log_level'
         if help is None:
             help = f'astropy.log level (default: {default})'
         self.parser.add_argument('--' + option, 
                             default=default, help=help, **kwargs)
 
+    def add_reduced_root(self,
+                         option='reduced_root',
+                         default=REDUCED_ROOT,
+                         help=None,
+                         **kwargs):
+        if help is None:
+            help = f'root of reduced file directory tree (default: {default})'
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
+
+    def add_start(self,
+                  option='start',
+                  default=None,
+                  help=None,
+                  **kwargs):
+        if help is None:
+            help = 'start directory/date (default: earliest)'
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
+
+    def add_stop(self, 
+                 option='stop',
+                 default=None,
+                 help=None,
+                 **kwargs):
+        if help is None:
+            help = 'stop directory/date (default: latest)'
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
+
     def add_raw_data_root(self, 
+                          option='raw_data_root',
                           default=RAW_DATA_ROOT,
                           help=None,
                           **kwargs):
-        option = 'raw_data_root'
         if help is None:
             help = f'raw data root (default: {default})'
         self.parser.add_argument('--' + option, 
                             default=default, help=help, **kwargs)
         
-    # These might go away or morph if I use astropy Tables exclusively
     def add_read_csvs(self, 
+                      option='read_csvs',
                       default=False,
                       help=None,
                       **kwargs):
-        option = 'read_csvs'
         if help is None:
             help = (f'Read CSV files')
         self.parser.add_argument('--' + option,
@@ -606,12 +641,24 @@ class CorArgparseMixin:
                                  help=help, **kwargs)
 
     def add_write_csvs(self, 
-                      default=False,
-                      help=None,
-                      **kwargs):
-        option = 'write_csvs'
+                       option='write_csvs',
+                       default=False,
+                       help=None,
+                       **kwargs):
         if help is None:
             help = (f'Write CSV files')
+        self.parser.add_argument('--' + option,
+                                 action=argparse.BooleanOptionalAction,
+                                 default=default,
+                                 help=help, **kwargs)
+
+    def add_show(self, 
+                 option='show',
+                 default=False,
+                 help=None,
+                 **kwargs):
+        if help is None:
+            help = (f'Show plots interactively')
         self.parser.add_argument('--' + option,
                                  action=argparse.BooleanOptionalAction,
                                  default=default,
@@ -621,17 +668,22 @@ class CorArgparseHandler(CorArgparseMixin, CCDArgparseMixin,
                          BMPArgparseMixin, ArgparseHandler):
     """Adds basic argparse options relevant to cormultipipe system""" 
 
+    # This modifies CCDArgparseMixin outname_ext
+    outname_ext = OUTNAME_EXT
+
     def add_all(self):
         """Add options used in cmd"""
         self.add_log_level()
         self.add_create_outdir(default=True) 
         self.add_outname_append()
+        self.add_outname_ext()
         self.add_fits_fixed_ignore(default=True)
         self.add_num_processes(default=MAX_NUM_PROCESSES)
         self.add_mem_frac(default=MAX_MEM_FRAC)
         super().add_all()
 
     def cmd(self, args):
+        # This is the base of all cormultipipe cmd super() calls
         log.setLevel(args.log_level)
 
 if __name__ == '__main__':

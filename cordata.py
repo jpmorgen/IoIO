@@ -233,6 +233,7 @@ class CorData(CorDataNDparams, NoCenterPGD):
 
         # Use the peak on the ND filter to extract a patch over
         # which we calculate the COM
+        # --> NOTE: This does not preserve original subframe origin properly yet
         _, xmax = ccd.ND_edges(ymax_idx, ccd.ND_params, ccd.ND_ref_y)
         iy_x = np.asarray((ymax_idx, xmax)).astype(int)
         patch_half_width = ND_width
@@ -327,7 +328,10 @@ class CorData(CorDataNDparams, NoCenterPGD):
         #print(ll[::-1])
         #print(pcenter[::-1])
         #print(xpcentrd, ypcentrd)
-        photometry_y_x = np.asarray((ypcentrd, xpcentrd)) + ll
+        # Keep center relative to unbinned CCD coordinates
+        photometry_y_x = (np.asarray((ypcentrd, xpcentrd))
+                          + ll
+                          + self.subframe_origin)
         log.debug(f'Patch COM = {self.coord_binned(y_x)[::-1]} (X, Y; binned); Photometry brightest centroid {self.coord_binned(photometry_y_x)[::-1]}; center_quality = {self.center_quality}')        
         return photometry_y_x
 

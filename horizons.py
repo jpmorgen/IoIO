@@ -204,7 +204,9 @@ def galsat_ephemeris(ccd_in,
                 for ccd in ccd_in]
     object = ccd_in.meta['OBJECT']
     if object != 'Jupiter':
-        log.warning(f'Called galsat_ephemeris on OBJECT {object}')
+        raise ValueError(f'Called galsat_ephemeris on OBJECT = {object} '
+                         f'Did you forget planet_to_object '
+                         f'*and* planet="Jupiter"?')
         return ccd_in
     ccd = ccd_in.copy()
     obs_loc = obs_loc or IOIO_1_LOCATION

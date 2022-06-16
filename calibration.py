@@ -1882,16 +1882,6 @@ class Calibration():
         return tflat_ratio['biweight_ratio'], tflat_ratio['mad_std_ratio']
 
 class CalArgparseMixin:
-    def add_calibration_root(self, 
-                             default=CALIBRATION_ROOT,
-                             help=None,
-                             **kwargs):
-        option = 'calibration_root'
-        if help is None:
-            help = f'calibration root (default: {default})'
-        self.parser.add_argument('--' + option, 
-                                 default=default, help=help, **kwargs)
-
     def add_calibration_start(self, 
                               default=None,
                               help=None,
@@ -1930,9 +1920,10 @@ class CalArgparseHandler(CalArgparseMixin, CorArgparseHandler):
         """Add options used in cmd"""
         self.add_plot_flat_ratios(default=plot_flat_ratios)
         self.add_raw_data_root()
-        self.add_calibration_root()
-        self.add_calibration_start()
-        self.add_calibration_stop()
+        self.add_reduced_root(option='calibration_root',
+                                default=CALIBRATION_ROOT)
+        self.add_start(option='calibration_start')
+        self.add_stop(option='calibration_stop')
         super().add_all()
 
     def cmd(self, args):

@@ -4,6 +4,7 @@
 
 import gc
 import os
+import argparse
 from datetime import timedelta
 
 import numpy as np
@@ -29,15 +30,17 @@ from IoIO.cordata_base import SMALL_FILT_CROP
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                calc_obj_to_ND, crop_ccd,
                                planet_to_object,
-                               objctradec_to_obj_center, )
-from IoIO.calibration import Calibration
-from IoIO.photometry import SOLVE_TIMEOUT, JOIN_TOLERANCE, rot_to
-from IoIO.cor_photometry import CorPhotometry, mask_galsats
+                               objctradec_to_obj_center)
+from IoIO.calibration import Calibration, CalArgparseHandler
+from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE,
+                             JOIN_TOLERANCE_UNIT, rot_to)
+from IoIO.cor_photometry import (CorPhotometry, mask_galsats,
+                                 CorPhotometryArgparseMixin)
 from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
                                   TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
                                   on_off_pipeline)
-from IoIO.standard_star import (StandardStar, extinction_correct,
-                                rayleigh_convert)
+from IoIO.standard_star import (StandardStar, SSArgparseHandler,
+                                extinction_correct, rayleigh_convert)
 from IoIO.horizons import GALSATS, galsat_ephemeris
 
 TORUS_ROOT = os.path.join(IoIO_ROOT, 'Torus')
@@ -69,12 +72,12 @@ IO_ORBIT_R = 421700 * u.km
 IO_ORBIT_R = IO_ORBIT_R.to(u.R_jup)
 
 
-def IPT_NPole_ang(ccd, **kwargs):
-    sysIII = ccd.meta['Jupiter_PDObsLon']
-    ccd.meta['HIERARCH IPT_NPole_ang'] = (
-        CENTRIFUGAL_EQUATOR_AMPLITUDE * np.sin(sysIII - JUPITER_MAG_SYSIII),
-        '[degree]')
-    return ccd
+#def IPT_NPole_ang(ccd, **kwargs):
+#    sysIII = ccd.meta['Jupiter_PDObsLon']
+#    ccd.meta['HIERARCH IPT_NPole_ang'] = (
+#        CENTRIFUGAL_EQUATOR_AMPLITUDE * np.sin(sysIII - JUPITER_MAG_SYSIII),
+#        '[degree]')
+#    return ccd
 
 def pixel_per_Rj(ccd):
     Rj_arcsec = ccd.meta['Jupiter_ang_width'] * u.arcsec / 2
@@ -114,12 +117,9 @@ def ansa_parameters(ccd,
                     ansa_dy=ANSA_DY,
                     show=False,
                     **kwargs):
-    if side not in ['right', 'left']:
-        raise ValueError(f'ansa_side must be right or left: {side}')    
     center = ccd.obj_center*u.pixel
     # Work in Rj for our model
     pix_per_Rj = pixel_per_Rj(ccd)
-    fit = fitting.LevMarLSQFitter(calc_uncertainties=True)
 
     # Start with a basic fix on the ansa r position
     if side == 'left':
@@ -138,6 +138,9 @@ def ansa_parameters(ccd,
         side_mult = +1
         mean_bounds = (ansa_right_inner + ansa_dr_bounds_buffer,
                        ansa_right_outer - ansa_dr_bounds_buffer)
+    else:
+        raise ValueError(f'ansa_side must be right or left: {side}')    
+        
     cold_mean_bounds = np.asarray((5.0, 5.5)) * u.R_jup
 
     top = center[0] + ansa_dy * pix_per_Rj
@@ -153,7 +156,6 @@ def ansa_parameters(ccd,
     mask_check = ansa.mask
     if np.sum(mask_check) > ansa_max_n_mask:
         return bad_ansa(side)
-
 
     # Calculate profile along centripetal equator, keeping it in units
     # of rayleighs
@@ -187,6 +189,8 @@ def ansa_parameters(ccd,
         log.error(f'RAWFNAME of problem: {ccd.meta["RAWFNAME"]} {e}')
         return bad_ansa(side)
     
+    # This is the fit object for both horizontal and vertical
+    fit = fitting.LevMarLSQFitter(calc_uncertainties=True)
     r_model_init = (
         models.Gaussian1D(mean=side_mult*IO_ORBIT_R,
                           stddev=0.3*u.R_jup,
@@ -358,6 +362,12 @@ def plot_planet_subim(ccd_in,
                       planet_subim_figsize=[5, 2.5],
                       plot_planet_cmap='gist_heat',
                       **kwargs):
+    # https://stackoverflow.com/questions/4931376/generating-matplotlib-graphs-without-a-running-x-server
+    # --> This might help with the X crashes, but it has to be
+    # imported before import matplotlib.pyplot 
+    # import matplotlib as mpl
+    # mpl.use('Agg')
+
     in_name = os.path.basename(ccd_in.meta['RAWFNAME'])
     # This will pick up outdir, if specified
     outname = outname_creator(in_name, outname=outname, **kwargs)
@@ -575,8 +585,8 @@ def torus_directory(directory,
                        band='SII',
                        standard_star_obj=standard_star_obj,
                        add_ephemeris=galsat_ephemeris,
-                       crop_ccd_coord=SMALL_FILT_CROP,
                        planet='Jupiter',
+                       crop_ccd_coord=SMALL_FILT_CROP,
                        post_process_list=[calc_obj_to_ND, crop_ccd,
                                           planet_to_object],
                        plot_planet_rot_from_key=['Jupiter_NPole_ang'],
@@ -599,11 +609,14 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
                stop=None,
                calibration=None,
                photometry=None,
+               keep_intermediate=None,
+               solve_timeout=SOLVE_TIMEOUT,
+               join_tolerance=JOIN_TOLERANCE*JOIN_TOLERANCE_UNIT,
                standard_star_obj=None,
                read_csvs=True,
                write_csvs=True,
-               create_outdir=True,                       
                show=False,
+               create_outdir=True,                       
                outdir_root=TORUS_ROOT,
                **kwargs):
 
@@ -613,7 +626,11 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
         log.warning('No directories found')
         return
     calibration = calibration or Calibration()
-    photometry = photometry or CorPhotometry()
+    if photometry is None:
+        photometry = CorPhotometry(
+            precalc=True,
+            solve_timeout=solve_timeout,
+            join_tolerance=join_tolerance)
     standard_star_obj = standard_star_obj or StandardStar(reduce=True)
 
     summary_table = QTable()
@@ -642,11 +659,80 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
 
     return summary_table
 
-log.setLevel('DEBUG')
-t = torus_tree(start='2019-01-01',
-               stop='2020-01-01',
-               read_csvs=True,
-               fits_fixed_ignore=True)
+class TorusArgparseMixin:
+    def add_torus_root(self,
+                       default=TORUS_ROOT,
+                       help=None,
+                       **kwargs):
+        option = 'torus_root'
+        if help is None:
+            help = f'root for reduced files (default: {default})'
+        self.parser.add_argument('--' + option, 
+                                 default=default, help=help, **kwargs)
+
+class TorusArgparseHandler(TorusArgparseMixin, SSArgparseHandler,
+                           CorPhotometryArgparseMixin, CalArgparseHandler):
+    def add_all(self):
+        """Add options used in cmd"""
+        self.add_torus_root()
+        self.add_start()
+        self.add_stop()
+        self.add_show()
+        self.add_read_pout(default=True)
+        self.add_write_pout(default=True)        
+        self.add_read_csvs(default=True)
+        self.add_write_csvs(default=True)
+        self.add_solve_timeout()
+        self.add_join_tolerance()
+        self.add_join_tolerance_unit()
+        self.add_keep_intermediate()
+        super().add_all()
+
+    def cmd(self, args):
+        # For now Cal sets log level
+        c, ss = super().cmd(args)
+        #StandardStar(reduce=True,
+        #                     raw_data_root=args.raw_data_root,
+        #                     outdir_root=args.standard_star_root,
+        #                     start=args.standard_star_start,
+        #                     stop=args.standard_star_stop,
+        #                     calibration=c,
+        #                     read_csvs=args.standard_star_read_csvs,
+        #                     write_csvs=args.standard_star_write_csvs,
+        #                     read_pout=args.standard_star_read_pout,
+        #                     write_pout=args.standard_star_write_pout,
+        #                     show=args.standard_star_show,
+        #                     write_summary_plots=args.write_summary_plots,
+        #                     num_processes=args.num_processes,
+        #                     fits_fixed_ignore=args.fits_fixed_ignore)
+        t = torus_tree(raw_data_root=args.raw_data_root,
+                       start=args.start,
+                       stop=args.stop,
+                       calibration=c,
+                       keep_intermediate=args.keep_intermediate,
+                       solve_timeout=args.solve_timeout,
+                       join_tolerance=(
+                           args.join_tolerance*args.join_tolerance_unit),
+                       standard_star_obj=ss,
+                       read_csvs=args.read_csvs,
+                       write_csvs=args.write_csvs,
+                       read_pout=args.read_pout,
+                       write_pout=args.write_pout,
+                       show=args.show,
+                       create_outdir=args.create_outdir,
+                       outdir_root=args.torus_root,
+                       num_processes=args.num_processes,
+                       mem_frac=args.mem_frac,
+                       fits_fixed_ignore=args.fits_fixed_ignore)
+        
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Run torus reduction')
+    aph = TorusArgparseHandler(parser)
+    aph.add_all()
+    args = parser.parse_args()
+    aph.cmd(args)
+
 
 # Crumy night (hopefully rare in this time!)
 #directory = '/data/IoIO/raw/20210607/'

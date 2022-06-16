@@ -1535,48 +1535,6 @@ class StandardStar():
         return extinction_correct(instr_mag, airmass, ext_coef, **kwargs)
 
 class SSArgparseMixin:
-    def add_standard_star_root(self, 
-                               default=STANDARD_STAR_ROOT,
-                               help=None,
-                               **kwargs):
-        option = 'standard_star_root'
-        if help is None:
-            help = f'standard star root (default: {default})'
-        self.parser.add_argument('--' + option, 
-                                 default=default, help=help, **kwargs)
-
-    def add_standard_star_start(self, 
-                                default=None,
-                                help=None,
-                                **kwargs):
-        option = 'standard_star_start'
-        if help is None:
-            help = 'start directory/date (default: earliest)'
-        self.parser.add_argument('--' + option, 
-                                 default=default, help=help, **kwargs)
-
-    def add_standard_star_stop(self, 
-                               default=None,
-                               help=None,
-                               **kwargs):
-        option = 'standard_star_stop'
-        if help is None:
-            help = 'stop directory/date (default: latest)'
-        self.parser.add_argument('--' + option, 
-                                 default=default, help=help, **kwargs)
-
-    def add_show(self, 
-                 default=False,
-                 help=None,
-                 **kwargs):
-        option = 'show'
-        if help is None:
-            help = (f'Show plots interactively')
-        self.parser.add_argument('--' + option,
-                                 action=argparse.BooleanOptionalAction,
-                                 default=default,
-                                 help=help, **kwargs)
-
     def add_write_summary_plots(self, 
                                 default=False,
                                 help=None,
@@ -1592,30 +1550,34 @@ class SSArgparseMixin:
 class SSArgparseHandler(SSArgparseMixin, CalArgparseHandler):
     def add_all(self):
         """Add options used in cmd"""
-        super().add_all()
-        self.add_standard_star_root()
-        self.add_standard_star_start()
-        self.add_standard_star_stop()
-        self.add_read_pout(default=True)
-        self.add_write_pout(default=True)        
-        self.add_read_csvs(default=True)
-        self.add_write_csvs(default=True)
-        self.add_show()
+        self.add_reduced_root(option='standard_star_root',
+                              default=STANDARD_STAR_ROOT)
+        self.add_start(option='standard_star_start')
+        self.add_stop(option='standard_star_stop')
+        # Eventually I might make these standard_star unique
+        self.add_read_pout(option='read_standard_star_pout', default=True)
+        self.add_write_pout(option='write_standard_star_pout',default=True)
+        self.add_read_csvs(option='read_standard_star_csvs', default=True)
+        self.add_write_csvs(option='write_standard_star_csvs', default=True)
+        self.add_show(option='standard_star_show')
         self.add_write_summary_plots()
+        super().add_all()
 
     def cmd(self, args):
-        c = CalArgparseHandler.cmd(self, args)
+        # For now Cal sets log level
+        #c = CalArgparseHandler.cmd(self, args)
+        c = super().cmd(args)
         ss = StandardStar(reduce=True,
                           raw_data_root=args.raw_data_root,
                           outdir_root=args.standard_star_root,
                           start=args.standard_star_start,
                           stop=args.standard_star_stop,
                           calibration=c,
-                          read_csvs=args.read_csvs,
-                          write_csvs=args.write_csvs,
-                          read_pout=args.read_pout,
-                          write_pout=args.write_pout,
-                          show=args.show,
+                          read_csvs=args.read_standard_star_csvs,
+                          write_csvs=args.write_standard_star_csvs,
+                          read_pout=args.read_standard_star_pout,
+                          write_pout=args.write_standard_star_pout,
+                          show=args.standard_star_show,
                           write_summary_plots=args.write_summary_plots,
                           num_processes=args.num_processes,
                           fits_fixed_ignore=args.fits_fixed_ignore)

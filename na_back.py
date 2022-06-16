@@ -33,11 +33,10 @@ from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates,
                         add_history, cached_csv, iter_polyfit, 
                         savefig_overwrite)
 from IoIO.simple_show import simple_show
-from IoIO.cor_process import angle_to_major_body
 from IoIO.cordata_base import CorDataBase
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
-                               CorMultiPipeBase, nd_filter_mask,
-                               combine_masks)
+                               CorMultiPipeBase, angle_to_major_body,
+                               nd_filter_mask, combine_masks)
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.standard_star import (extinction_correct,
                                 StandardStar, SSArgparseHandler)

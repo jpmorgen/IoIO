@@ -174,7 +174,7 @@ def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
                    stop=None,
                    calibration=None,
                    photometry=None,
-                   solve_timeout=None,
+                   solve_timeout=SOLVE_TIMEOUT,
                    keep_intermediate=None,
                    join_tolerance=JOIN_TOLERANCE,
                    keys_to_source_table=KEYS_TO_SOURCE_TABLE,
@@ -282,27 +282,7 @@ class ExoArgparseMixin:
                            **kwargs):
         option = 'exoplanet_root'
         if help is None:
-            help = f'exoplanet root (default: {default})'
-        self.parser.add_argument('--' + option, 
-                                 default=default, help=help, **kwargs)
-
-    def add_start(self, 
-                  default=None,
-                  help=None,
-                  **kwargs):
-        option = 'start'
-        if help is None:
-            help = 'start directory/date (default: earliest)'
-        self.parser.add_argument('--' + option, 
-                                 default=default, help=help, **kwargs)
-
-    def add_stop(self, 
-                 default=None,
-                 help=None,
-                 **kwargs):
-        option = 'stop'
-        if help is None:
-            help = 'stop directory/date (default: latest)'
+            help = f'root for reduced files (default: {default})'
         self.parser.add_argument('--' + option, 
                                  default=default, help=help, **kwargs)
 
