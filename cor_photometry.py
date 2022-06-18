@@ -35,7 +35,8 @@ from bigmultipipe import outname_creator
 from precisionguide import PGData
 
 import IoIO.sx694 as sx694
-from IoIO.utils import FITS_GLOB_LIST, multi_glob, savefig_overwrite
+from IoIO.utils import (FITS_GLOB_LIST, sum_ccddata, multi_glob,
+                        savefig_overwrite)
 from IoIO.cordata import CorData
 from IoIO.photometry import (SOLVE_TIMEOUT, rot_wcs,
                              Photometry, PhotometryArgparseMixin)
@@ -198,22 +199,16 @@ def mask_galsats(ccd_in, galsat_mask_side=GALSAT_MASK_SIDE, **kwargs):
         ccd.mask = np.ma.mask_or(ccd.mask, galsat_mask)
     return ccd
 
-def sum_ccddata(ccd):
-    """Annoying that sum and np.ma.sum don't work out of the box"""
-    a = np.ma.array(ccd.data, mask=ccd.mask)
-    return np.ma.sum(a)
-
 def sum_galsat_positions(ccd_in, wcs):
     ccd = ccd_in.copy()
     ccd.wcs = wcs
     ccd = mask_galsats(ccd)
     ccd.mask = ~ccd.mask
-    return sum_ccddata(ccd)
+    cts, _ = sum_ccddata(ccd)
+    return cts
     
 def pierside_from_galsats(ccd_in, wcs):
-    """Use alignment of Galilean satellites to determine pierflip.  NOTE:
-    this does not (yet) include any check for cases where the sums may
-    be close
+    """Use alignment of Galilean satellites to determine pierflip.
 
     Parameters
     ----------
@@ -230,7 +225,9 @@ def pierside_from_galsats(ccd_in, wcs):
     sum_no_flip = sum_galsat_positions(ccd_in, wcs)
     sum_with_flip = sum_galsat_positions(ccd_in, pierflip(wcs))
     ratio = sum_no_flip / sum_with_flip
-    if 0.5 < ratio and ratio < 2:
+    # Initial run of torus data with 0.5 and 2 showed that these are
+    # probably OK
+    if 0.85 < ratio and ratio < 1.15:
         rawfname = ccd_in.meta['RAWFNAME']
         log.warning(f'PIERSIDE not determined from galsats, '
                     f'no_flip/flip ratio = {ratio}: {rawfname}')

@@ -588,6 +588,16 @@ class CorArgparseMixin:
         self.parser.add_argument('--' + option, 
                             default=default, help=help, **kwargs)
 
+    def add_raw_data_root(self, 
+                          option='raw_data_root',
+                          default=RAW_DATA_ROOT,
+                          help=None,
+                          **kwargs):
+        if help is None:
+            help = f'raw data root (default: {default})'
+        self.parser.add_argument('--' + option, 
+                            default=default, help=help, **kwargs)
+        
     def add_reduced_root(self,
                          option='reduced_root',
                          default=REDUCED_ROOT,
@@ -618,16 +628,6 @@ class CorArgparseMixin:
         self.parser.add_argument('--' + option, 
                                  default=default, help=help, **kwargs)
 
-    def add_raw_data_root(self, 
-                          option='raw_data_root',
-                          default=RAW_DATA_ROOT,
-                          help=None,
-                          **kwargs):
-        if help is None:
-            help = f'raw data root (default: {default})'
-        self.parser.add_argument('--' + option, 
-                            default=default, help=help, **kwargs)
-        
     def add_read_csvs(self, 
                       option='read_csvs',
                       default=False,

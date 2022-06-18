@@ -276,16 +276,6 @@ class ExoArgparseMixin:
                                  action=argparse.BooleanOptionalAction,
                                  default=default, help=help, **kwargs)
 
-    def add_exoplanet_root(self,
-                           default=EXOPLANET_ROOT,
-                           help=None,
-                           **kwargs):
-        option = 'exoplanet_root'
-        if help is None:
-            help = f'root for reduced files (default: {default})'
-        self.parser.add_argument('--' + option, 
-                                 default=default, help=help, **kwargs)
-
     def add_keep_fits(self, 
                  default=KEEP_FITS,
                  help=None,
@@ -302,7 +292,7 @@ class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
         """Add options used in cmd"""
         self.add_expo_calc()
         self.add_list_exoplanets()
-        self.add_exoplanet_root()
+        self.add_reduced_root(default=EXOPLANET_ROOT)
         self.add_start()
         self.add_stop()
         self.add_solve_timeout()
@@ -330,7 +320,7 @@ class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
         c = CalArgparseHandler.cmd(self, args)
         join_tolerance = args.join_tolerance*u.Unit(args.join_tolerance_unit)
         exoplanet_tree(raw_data_root=args.raw_data_root,
-                       outdir_root=args.exoplanet_root,
+                       outdir_root=args.reduced_root,
                        start=args.start,
                        stop=args.stop,
                        calibration=c,

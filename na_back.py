@@ -62,8 +62,9 @@ def sun_angle(ccd,
     """cormultipipe post-processing routine that inserts angle between
     pointing direction and sun"""
     sa = angle_to_major_body(ccd, 'sun')
-    bmp_meta['sun_angle'] = sa.value
-    bmp_meta['sun_angle_unit'] = sa.unit
+    # --> Eventually just have this be a Quantity for a QTable
+    bmp_meta['sun_angle'] = sa
+    bmp_meta['sun_angle_unit'] = sa.unit.to_string()
     ccd.meta['HIERARCH SUN_ANGLE'] = (sa.value, f'[{sa.unit}]')
     return ccd
 
@@ -440,7 +441,7 @@ class NaBack():
                  stop=None,
                  calibration=None,
                  photometry=None,
-                 standard_star=None,
+                 standard_star_obj=None,
                  read_csvs=True,
                  write_csvs=True,
                  read_pout=True,
@@ -458,7 +459,7 @@ class NaBack():
         self.stop = stop
         self.calibration = calibration
         self.photometry = photometry
-        self.standard_star = standard_star
+        self.standard_star_obj = standard_star_obj
         self.read_csvs = read_csvs
         self.write_csvs = write_csvs
         self.read_pout = read_pout
@@ -484,7 +485,7 @@ class NaBack():
         return Calibration(reduce=True)
 
     @pgproperty
-    def standard_star(self):
+    def standard_star_obj(self):
         return StandardStar(calibration=self.calibration, reduce=True)
     
     @pgproperty
@@ -558,7 +559,7 @@ class NaBack():
     @pgproperty
     def ext_coef(self):
         ext_coef, self.ext_coef_err = \
-            self.standard_star.extinction_coef('Na_on')
+            self.standard_star_obj.extinction_coef('Na_on')
         return ext_coef
 
     @pgproperty
@@ -579,7 +580,9 @@ class NaBack():
         # --> This might eventually get a date on it
         instr_mag = to_numpy(instr_mag)
         airmass =  to_numpy(airmass)
-        return extinction_correct(instr_mag, airmass, self.ext_coef,
+        return extinction_correct(instr_mag,
+                                  airmass=airmass,
+                                  ext_coef=self.ext_coef,
                                   inverse=inverse)
 
     @pgproperty
@@ -643,8 +646,9 @@ class NaBack():
         """
         meso_mag = to_numpy(meso_mag)
         airmass = to_numpy(airmass)
-        return extinction_correct(meso_mag, airmass,
-                                  self.meso_vol_per_airmass,
+        return extinction_correct(meso_mag,
+                                  airmass=airmass,
+                                  ext_coef=self.meso_vol_per_airmass,
                                   inverse=inverse)
         
     @pgproperty
@@ -677,8 +681,8 @@ class NaBack():
         """Returns predicted mesospheric volumetric density in
         magnitudes corrected for solar illumination"""
         return extinction_correct(meso_vol,
-                                  self.angle_sin(sun_angle),
-                                  self.sun_stim_per_sin_sun_angle,
+                                  airmass=self.angle_sin(sun_angle),
+                                  ext_coef=self.sun_stim_per_sin_sun_angle,
                                   inverse=inverse)        
 
     @pgproperty
@@ -720,8 +724,8 @@ class NaBack():
 
         """
         return extinction_correct(sun_stim_corrected,
-                                  self.chemilum_sin(sun_angle),
-                                  self.chemilum_per_sin_sun_angle,
+                                  airmass=self.chemilum_sin(sun_angle),
+                                  ext_coef=self.chemilum_per_sin_sun_angle,
                                   inverse=inverse)
 
     @pgproperty
@@ -1082,10 +1086,7 @@ def na_meso_sub(ccd_in, bmp_meta=None, na_meso_obj=None, **kwargs):
     ----------
     na_meso_obj : NaBack object
     """
-    filt = ccd_in.meta['FILTER'] 
-    if filt != 'Na_on':
-        log.warning(f'na_meso_sub called {filt} not Na_on')
-        return ccd_in
+    assert ccd_in.meta['FILTER'] == 'Na_on'
     bmp_meta = {}
     ccd = ccd_in.copy()
     meso, meso_err = na_meso_obj.best_back(ccd.meta['DATE-AVG'],
@@ -1170,7 +1171,7 @@ def na_meso_sub(ccd_in, bmp_meta=None, na_meso_obj=None, **kwargs):
     #
     #    """
     #    
-    #    ext_corrected_mag = self.standard_star(
+    #    ext_corrected_mag = self.standard_star_obj(
     #        extinction_correct(self.instr_mag, self.airmass, 'Na_on'))
     #
     #    airmass_poly = iter_polyfit(self.airmass, ext_corrected_mag,
@@ -1205,12 +1206,12 @@ def na_meso_sub(ccd_in, bmp_meta=None, na_meso_obj=None, **kwargs):
     #
     #@pgproperty
     #def tropospheric_ext(self):
-    #    return self.standard_star(
+    #    return self.standard_star_obj(
     #        extinction_correct(self.instr_mag, self.airmass, 'Na_on'))
 
     #@pgproperty
     #def ext_corrected_mag(self):
-    #    return self.standard_star(
+    #    return self.standard_star_obj(
     #        extinction_correct(self.instr_mag, self.airmass, 'Na_on'))
     #
     #@pgproperty

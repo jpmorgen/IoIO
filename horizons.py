@@ -83,6 +83,11 @@ class RateLimitedHorizonsClass(HorizonsClass):
             log.warning(f'JPL throttling connection')
             sleep(randint(HORIZONS_WAIT_MIN, HORIZONS_WAIT_MAX))
             return self.rate_limited_ephemerides(*args, **kwargs)
+        except ConnectTimeout as e:
+            log.warning(f'JPL not responding.  Waiting a few minutes')
+            sleep(randint(120, 800))
+            return self.rate_limited_ephemerides(*args, **kwargs)
+            
 RateLimitedHorizons = RateLimitedHorizonsClass()
 
 def location_to_dict(loc):

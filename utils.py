@@ -59,6 +59,30 @@ class Lockfile():
     def clear(self):
         os.remove(self._fname)
 
+def dict_to_ccd_meta(ccd_in, d):
+    ccd = ccd_in.copy()
+    for k in d.keys():
+        if np.isnan(d[k]):
+            ccd.meta[f'HIERARCH {k}'] = 'NAN'
+        elif isinstance(d[k], u.Quantity):
+            ccd.meta[f'HIERARCH {k}'] = (d[k].value,
+                                         f'[{d[k].unit}]')
+        else:
+            ccd.meta[f'HIERARCH {k}'] = d[k]
+    return ccd
+
+def sum_ccddata(ccd):
+    """Annoying that sum and np.ma.sum don't work out of the box, but
+    understandable given the various choices.  This returns a tuple
+    with units of the sum of the ccd pixel values (e.g. flux) and
+    the number unmasked pixels which can be used to calculate surface
+    brightness (flux/solid angle)
+
+    """
+    a = np.ma.array(ccd.data, mask=ccd.mask)
+    return (np.ma.sum(a) * ccd.unit * u.pixel**2,
+            np.sum(~ccd.mask * u.pixel**2))
+
 def nan_biweight(a):
     """Fix special case of `~astropy.stats.biweight_location` where NAN
     return value ignores units

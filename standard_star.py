@@ -43,7 +43,8 @@ from burnashev import Burnashev
 
 import IoIO.sx694 as sx694
 from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates,
-                        cached_csv, iter_polyfit, savefig_overwrite)
+                        cached_csv, iter_polyfit, dict_to_ccd_meta,
+                        savefig_overwrite)
 from IoIO.cordata_base import CorDataBase
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                CorMultiPipeBase,
@@ -1110,9 +1111,9 @@ def filt_quantity(filt, data):
     return (filt_data['biweight_loc']*unit,
             filt_data['mad_std']*unit)
 
-def extinction_correct(flex_input, airmass=None, ext_coef=None,
-                       inverse=False, standard_star_obj=None,
-                       **kwargs):
+def extinction_correct(flex_input, airmass=None,
+                       ext_coef=None, inverse=False,
+                       standard_star_obj=None, bmp_meta=None, **kwargs):
     """Returns atmospheric extinction corrected instr_mag
 
     Parameters
@@ -1161,7 +1162,7 @@ def extinction_correct(flex_input, airmass=None, ext_coef=None,
     if isinstance(flex_input, list):
         return [extinction_correct(fi, airmass=airmass,
                                    ext_coef=ext_coef, inverse=inverse,
-                                   standard_star_obj=None,
+                                   standard_star_obj=None, bmp_meta=bmp_meta,
                                    **kwargs)
                 for fi in flex_input]
     if (isinstance(flex_input, CCDData)):
@@ -1169,6 +1170,7 @@ def extinction_correct(flex_input, airmass=None, ext_coef=None,
             raise ValueError('ERROR: airmass and/or ext_coef supplied.  '
                              'CCDData metadata are used for these quantities')
         ccd = flex_input.copy()
+        bmp_meta = bmp_meta or {}
         old_ext_corr_val = ccd.meta.get('EXT_CORR_VAL')
         if inverse and (old_ext_corr_val is None
                         or old_ext_corr_val == 1):
@@ -1179,7 +1181,7 @@ def extinction_correct(flex_input, airmass=None, ext_coef=None,
         ext_coef, ext_coef_err = standard_star_obj.extinction_coef(filt)
         mag = u.Magnitude(1*ccd.unit)
         ecmag = extinction_correct(mag, airmass, ext_coef,
-                                    inverse=inverse)
+                                   inverse=inverse)
         ecphys = ecmag.physical
         # Make sure we are explicitly in dimensionless units or else
         # default ccd unit of adu is applied during multiplication
@@ -1187,13 +1189,19 @@ def extinction_correct(flex_input, airmass=None, ext_coef=None,
         
         ccd = ccd.multiply(ec,
                            handle_meta='first_found')
-        ccd.meta['EXT_COEF'] = (
-            ext_coef.value,
-            f'extinction coefficient ({ext_coef.unit})')
-        ccd.meta['HIERARCH EXT_COEF_ERR'] = (
-            ext_coef_err.value, f'[{ext_coef.unit}]')
-        ccd.meta['HIERARCH EXT_CORR_VAL'] = (
-            ecphys.value, 'extinction cor. factor applied')
+        ec_dict = {'extinction_coef': ext_coef,
+                   'extinction_coef_err': ext_coef_err,
+                   'airmass': airmass,
+                   'extinction_correction_value': ecphys.value}
+        bmp_meta.update(ec_dict)
+        ccd = dict_to_ccd_meta(ccd, ec_dict)
+        #ccd.meta['EXT_COEF'] = (
+        #    ext_coef.value,
+        #    f'extinction coefficient ({ext_coef.unit})')
+        #ccd.meta['HIERARCH EXT_COEF_ERR'] = (
+        #    ext_coef_err.value, f'[{ext_coef.unit}]')
+        #ccd.meta['HIERARCH EXT_CORR_VAL'] = (
+        #    ecphys.value, 'extinction cor. factor applied')
         return ccd
 
     instr_mag = flex_input
@@ -1222,29 +1230,35 @@ def extinction_correct(flex_input, airmass=None, ext_coef=None,
     ac = instr_mag - ext_coef*airmass
     return ac*unit
         
-def rayleigh_convert(ccd_in, standard_star_obj=None, inverse=False, **kwargs):
+def rayleigh_convert(ccd_in, bmp_meta=None,
+                     standard_star_obj=None, inverse=False, **kwargs):
     """cormultipipe post-processing routine to convert to rayleighs"""
     if isinstance(ccd_in, list):
         return [to_rayleigh(ccd, inverse=inverse,
                             standard_star_obj=None,
                             **kwargs)
                 for ccd in ccd_in]
-    ext_corr_val = ccd_in.meta.get('ext_corr_val')
+    ext_corr_val = ccd_in.meta.get('extinction_correction_value')
     if not inverse and (ext_corr_val is None
                         or ext_corr_val == 1):
         raise ValueError('Extinction correction needs to be done first')
     if inverse and ext_corr_val is not None and ext_corr_val > 1:
         raise ValueError('Extinction correction still applied.  Invert that first')
     ccd = ccd_in.copy()
+    bmp_meta = bmp_meta or {}
     rc, rc_err = standard_star_obj.rayleigh_conversion(ccd.meta['FILTER'])
     if inverse:
         ccd = ccd.divide(rc, handle_meta='first_found')
     else:
         ccd = ccd.multiply(rc, handle_meta='first_found')
-    ccd.meta['HIERARCH RAYLEIGH_CONVERSION'] = (
-        rc.value, f'[{rc.unit}]')
-    ccd.meta['HIERARCH RAYLEIGH_CONVERSION_ERR'] = (
-        rc_err.value, f'[{rc_err.unit}]')
+    rc_dict = {'rayleigh_conversion': rc,
+               'rayleigh_conversion_err': rc_err}
+    bmp_meta.update(rc_dict)
+    ccd = dict_to_ccd_meta(ccd, rc_dict)
+    #ccd.meta['HIERARCH RAYLEIGH_CONVERSION'] = (
+    #    rc.value, f'[{rc.unit}]')
+    #ccd.meta['HIERARCH RAYLEIGH_CONVERSION_ERR'] = (
+    #    rc_err.value, f'[{rc_err.unit}]')
     return ccd
     
 def standard_star_tree(raw_data_root=RAW_DATA_ROOT,
@@ -1580,6 +1594,7 @@ class SSArgparseHandler(SSArgparseMixin, CalArgparseHandler):
                           show=args.standard_star_show,
                           write_summary_plots=args.write_summary_plots,
                           num_processes=args.num_processes,
+                          mem_frac=args.mem_frac,
                           fits_fixed_ignore=args.fits_fixed_ignore)
         return c, ss
 

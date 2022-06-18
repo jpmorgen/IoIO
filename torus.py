@@ -23,8 +23,9 @@ from bigmultipipe import cached_pout, outname_creator
 
 from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 
-from IoIO.utils import (get_dirs_dates, reduced_dir, nan_biweight,
-                        nan_mad, cached_csv, savefig_overwrite)
+from IoIO.utils import (dict_to_ccd_meta, nan_biweight, nan_mad,
+                        get_dirs_dates, reduced_dir, cached_csv,
+                        savefig_overwrite)
 from IoIO.simple_show import simple_show
 from IoIO.cordata_base import SMALL_FILT_CROP
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
@@ -34,8 +35,9 @@ from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE,
                              JOIN_TOLERANCE_UNIT, rot_to)
-from IoIO.cor_photometry import (CorPhotometry, mask_galsats,
-                                 CorPhotometryArgparseMixin)
+from IoIO.cor_photometry import (CorPhotometry,
+                                 CorPhotometryArgparseMixin,
+                                 mask_galsats)
 from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
                                   TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
                                   on_off_pipeline)
@@ -282,10 +284,8 @@ def ansa_parameters(ccd,
             f'ansa_{side}_surf_bright': sb,
             f'ansa_{side}_surf_bright_err': sb_err * sb.unit}
 
-# --> I need a closest_galsat_to_jupiter or equivalent that puts into
-# --> the metadata that distance in Rj
 def closest_galsat_to_jupiter(ccd_in, bmp_meta=None, **kwargs):
-    bmp_meta = bmp_meta or None
+    bmp_meta = bmp_meta or {}
     ccd = ccd_in.copy()
     galsats = list(GALSATS.keys())
     g = galsats[0]
@@ -337,16 +337,8 @@ def characterize_ansas(ccd_in, bmp_meta=None,
                                 ('Jupiter_PDSunLon', u.deg)])
     for side in ['left', 'right']:
         ansa_meta = ansa_parameters(rccd, side=side, **kwargs)
+        ccd = dict_to_ccd_meta(ccd, ansa_meta)
         bmp_meta.update(ansa_meta)
-        for k in ansa_meta.keys():
-            #if np.ma.is_masked(ansa_meta[k]):
-            if np.isnan(ansa_meta[k]):
-                ccd.meta[f'HIERARCH {k}'] = 'NAN'
-            elif isinstance(ansa_meta[k], u.Quantity):
-                ccd.meta[f'HIERARCH {k}'] = (ansa_meta[k].value,
-                                             f'[{ansa_meta[k].unit}]')
-            else:
-                ccd.meta[f'HIERARCH {k}'] = ansa_meta[k]
     return ccd
 
 def plot_planet_subim(ccd_in,
@@ -355,8 +347,8 @@ def plot_planet_subim(ccd_in,
                       in_name=None,
                       outname=None,
                       planet_subim_axis_label=r'R$\mathrm{_J}$',
-                      planet_subim_dx=10*u.R_jup,
-                      planet_subim_dy=5*u.R_jup,
+                      planet_subim_dx=None,
+                      planet_subim_dy=None,
                       planet_subim_vmin=30,
                       planet_subim_vmax=5000,
                       planet_subim_figsize=[5, 2.5],
@@ -376,15 +368,25 @@ def plot_planet_subim(ccd_in,
     ccd = rot_to(ccd_in, rot_angle_from_key=plot_planet_rot_from_key)
     pix_per_Rp = pix_per_planet_radius(ccd)
     center = ccd.wcs.world_to_pixel(ccd.sky_coord)*u.pixel
-    l = np.round(center[0] - planet_subim_dx * pix_per_Rp).astype(int)
-    r = np.round(center[0] + planet_subim_dx * pix_per_Rp).astype(int)
-    b = np.round(center[1] - planet_subim_dy * pix_per_Rp).astype(int)
-    t = np.round(center[1] + planet_subim_dy * pix_per_Rp).astype(int)
-    subim = ccd[b.value:t.value, l.value:r.value]
+    if planet_subim_dx is None:
+        l, r = 0, ccd.shape[1]
+    else:
+        l = np.round(center[0] - planet_subim_dx * pix_per_Rp).astype(int)
+        r = np.round(center[0] + planet_subim_dx * pix_per_Rp).astype(int)
+        l = np.max((l.value, 0))
+        r = np.min((r.value, ccd.shape[1]))
+    if planet_subim_dy is None:
+        b, t = 0, ccd.shape[0]
+    else:
+        b = np.round(center[1] - planet_subim_dy * pix_per_Rp).astype(int)
+        t = np.round(center[1] + planet_subim_dy * pix_per_Rp).astype(int)
+        b = np.max((b.value, 0))
+        t = np.min((t.value, ccd.shape[0]))
+    subim = ccd[b:t, l:r]
     nr, nc = subim.shape
     subim.data[subim.data < planet_subim_vmin] = planet_subim_vmin
-    x = (np.arange(nc)*u.pixel - (center[0] - l)) / pix_per_Rp
-    y = (np.arange(nr)*u.pixel - (center[1] - b)) / pix_per_Rp
+    x = (np.arange(nc)*u.pixel - (center[0] - l*u.pixel)) / pix_per_Rp
+    y = (np.arange(nr)*u.pixel - (center[1] - b*u.pixel)) / pix_per_Rp
     X, Y = np.meshgrid(x.value, y.value)
     f = plt.figure(figsize=planet_subim_figsize)
     try:
@@ -396,7 +398,6 @@ def plot_planet_subim(ccd_in,
     except Exception as e:
         log.error(f'RAWFNAME of problem: {ccd.meta["RAWFNAME"]} {e}')
         return ccd_in
-    Rp_name = planet_subim_dx.unit.long_names[0]
     plt.ylabel(planet_subim_axis_label)
     plt.xlabel(planet_subim_axis_label)
     plt.axis('scaled')
@@ -590,6 +591,8 @@ def torus_directory(directory,
                        post_process_list=[calc_obj_to_ND, crop_ccd,
                                           planet_to_object],
                        plot_planet_rot_from_key=['Jupiter_NPole_ang'],
+                       planet_subim_dx=10*u.R_jup,
+                       planet_subim_dy=5*u.R_jup,                       
                        post_offsub=[extinction_correct, rayleigh_convert,
                                     characterize_ansas,
                                     closest_galsat_to_jupiter,
@@ -659,22 +662,11 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
 
     return summary_table
 
-class TorusArgparseMixin:
-    def add_torus_root(self,
-                       default=TORUS_ROOT,
-                       help=None,
-                       **kwargs):
-        option = 'torus_root'
-        if help is None:
-            help = f'root for reduced files (default: {default})'
-        self.parser.add_argument('--' + option, 
-                                 default=default, help=help, **kwargs)
-
-class TorusArgparseHandler(TorusArgparseMixin, SSArgparseHandler,
+class TorusArgparseHandler(SSArgparseHandler,
                            CorPhotometryArgparseMixin, CalArgparseHandler):
     def add_all(self):
         """Add options used in cmd"""
-        self.add_torus_root()
+        self.add_reduced_root(default=TORUS_ROOT)
         self.add_start()
         self.add_stop()
         self.add_show()
@@ -689,22 +681,7 @@ class TorusArgparseHandler(TorusArgparseMixin, SSArgparseHandler,
         super().add_all()
 
     def cmd(self, args):
-        # For now Cal sets log level
         c, ss = super().cmd(args)
-        #StandardStar(reduce=True,
-        #                     raw_data_root=args.raw_data_root,
-        #                     outdir_root=args.standard_star_root,
-        #                     start=args.standard_star_start,
-        #                     stop=args.standard_star_stop,
-        #                     calibration=c,
-        #                     read_csvs=args.standard_star_read_csvs,
-        #                     write_csvs=args.standard_star_write_csvs,
-        #                     read_pout=args.standard_star_read_pout,
-        #                     write_pout=args.standard_star_write_pout,
-        #                     show=args.standard_star_show,
-        #                     write_summary_plots=args.write_summary_plots,
-        #                     num_processes=args.num_processes,
-        #                     fits_fixed_ignore=args.fits_fixed_ignore)
         t = torus_tree(raw_data_root=args.raw_data_root,
                        start=args.start,
                        stop=args.stop,
@@ -714,13 +691,13 @@ class TorusArgparseHandler(TorusArgparseMixin, SSArgparseHandler,
                        join_tolerance=(
                            args.join_tolerance*args.join_tolerance_unit),
                        standard_star_obj=ss,
-                       read_csvs=args.read_csvs,
-                       write_csvs=args.write_csvs,
                        read_pout=args.read_pout,
                        write_pout=args.write_pout,
+                       read_csvs=args.read_csvs,
+                       write_csvs=args.write_csvs,
                        show=args.show,
                        create_outdir=args.create_outdir,
-                       outdir_root=args.torus_root,
+                       outdir_root=args.reduced_root,
                        num_processes=args.num_processes,
                        mem_frac=args.mem_frac,
                        fits_fixed_ignore=args.fits_fixed_ignore)
