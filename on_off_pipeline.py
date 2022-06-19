@@ -8,10 +8,7 @@ import numpy as np
 
 from scipy.ndimage import shift
 
-from matplotlib.colors import LogNorm
-
 from astropy import log
-import astropy.units as u
 
 import ccdproc as ccdp
 
@@ -19,7 +16,6 @@ from bigmultipipe import assure_list, outname_creator, prune_pout
 
 from IoIO.utils import (reduced_dir, multi_glob, closest_in_time,
                         valid_long_exposure, add_history)
-from IoIO.simple_show import simple_show
 from IoIO.cor_process import standardize_filt_name
 from IoIO.calibration import Calibration
 from IoIO.cordata import CorData
@@ -127,6 +123,8 @@ def off_band_subtract(ccd_in,
                      handle_meta='first_found')
     
     on = on.subtract(off, handle_meta='first_found')
+    # --> Consider some figure-of-merit on overall negative value to
+    # --> determine if we should discard a file
     on.meta['OFF_BAND'] = off_fname
     on.meta['OFF_SCL'] = (1/off_on_ratio, 'scale factor applied to OFF_BAND')
     if smooth_off:

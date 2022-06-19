@@ -150,23 +150,28 @@ def na_nebula_directory(directory,
                         create_outdir=True,
                         **kwargs):
      
-    # I will want this in the cached_pout somehow
     flist = multi_glob(directory, glob_include, glob_exclude_list)    
     if len(flist) == 0:
         return []
     outdir = outdir or reduced_dir(directory, outdir_root, create=False)
-    poutname = os.path.join(outdir, 'Torus.pout')
+    poutname = os.path.join(outdir, 'Na_nebula.pout')
     collection = ccdp.ImageFileCollection(directory, filenames=flist)
-    standardize_filt_name(collection)
-    # Get rid of off-Jupiter pointings
+    # Get rid of off-Jupiter pointings, since they match our
+    # glob_include file regexp
     st = collection.summary
-    if 'raoff' in st.colnames or 'decoff' in st.colnames:
-        good_mask = np.logical_and(st['raoff'].mask, st['decoff'].mask)
-        fbases = st['file'][good_mask]
-        nflist = [os.path.join(directory, f) for f in fbases]
-        if len(nflist) == 0:
-            return []
-        collection = ccdp.ImageFileCollection(directory, filenames=nflist)
+    if 'raoff' in st.colnames:
+        pointed_at_jupiter = st['raoff'].mask
+    else:
+        pointed_at_jupiter = np.full(len(flist), True)
+    if 'decoff' in st.colnames:
+        pointed_at_jupiter = np.logical_and(pointed_at_jupiter,
+                                            st['decoff'].mask)
+    if np.all(~pointed_at_jupiter):
+        return []
+    if np.any(~pointed_at_jupiter):
+        fbases = st['file'][pointed_at_jupiter]
+        flist = [os.path.join(directory, f) for f in fbases]
+        collection = ccdp.ImageFileCollection(directory, filenames=flist)
     standard_star_obj = standard_star_obj or StandardStar(reduce=True)
     na_meso_obj = na_meso_obj or NaBack(standard_star_obj=standard_star_obj,
                                         reduce=True)

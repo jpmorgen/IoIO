@@ -10,7 +10,6 @@ import numpy as np
 from astropy import log
 from astropy import units as u
 from astropy.time import Time
-from astropy.coordinates import SkyCoord
 from astroquery.simbad import Simbad
 
 import ccdproc as ccdp

@@ -3,7 +3,6 @@
 """IoIO CCD bias, dark and flat calibration system"""
 
 import os
-import re
 import psutil
 import datetime
 import glob
@@ -983,7 +982,7 @@ def flat_combine_one_fdict(fdict,
     outbase = os.path.join(outdir, this_dateb1)
     bad_fname = outbase + '_' + this_filter + '_flat_bad.fits'
 
-    if len(fnames) < min_num_flats:
+    if num_files < min_num_flats:
         log.warning(f"Not enough good flats found for filter {this_filter} in {directory}")
         Path(bad_fname).touch()
         return False
@@ -1166,7 +1165,7 @@ def flat_flux(fname_or_ccd):
     if isinstance(fname_or_ccd, str):
         hdr = getheader(fname_or_ccd)
     else:
-        hdr = ccd.meta
+        hdr = fname_or_ccd.meta
     maxval = hdr['FLATDIV']
     exptime = hdr['EXPTIME']
     flux = maxval/exptime
@@ -1262,7 +1261,7 @@ class Calibration():
         if start_date is None:
             self._start_date = datetime.datetime(1,1,1)
         else:
-            self._start_date = datetime.datetime.strptime(calibration_start,
+            self._start_date = datetime.datetime.strptime(start_date,
                                                           "%Y-%m-%d")
         if stop_date is None:
             # Make stop time tomorrow in case we are analyzing on the
@@ -1270,7 +1269,7 @@ class Calibration():
             self._stop_date = (datetime.datetime.today()
                                + datetime.timedelta(days=1))
         else:
-            self._stop_date = datetime.datetime.strptime(calibration_stop,
+            self._stop_date = datetime.datetime.strptime(stop_date,
                                                          "%Y-%m-%d")
         assert self._start_date <= self._stop_date
         # These need to be on a per-instantiation basis, since they

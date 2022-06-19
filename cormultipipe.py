@@ -12,7 +12,6 @@ import numpy as np
 from astropy import log
 from astropy import units as u
 from astropy.nddata import CCDData, StdDevUncertainty
-from astropy.time import Time
 from astropy.coordinates import SkyCoord, solar_system_ephemeris, get_body
 
 from bigmultipipe.argparse_handler import ArgparseHandler, BMPArgparseMixin
@@ -22,10 +21,9 @@ from ccdmultipipe import CCDMultiPipe, CCDArgparseMixin
 import IoIO.sx694 as sx694
 from IoIO.utils import add_history, im_med_min_max
 
-from IoIO.cordata_base import (overscan_estimate, CorDataBase,
-                               CorDataNDparams)
+from IoIO.cordata_base import CorDataBase
 from IoIO.cordata import CorData
-from IoIO.cor_process import cor_process, standardize_filt_name
+from IoIO.cor_process import cor_process
 
 # Processing global variables.  Since I avoid use of the global
 # statement and don't reassign these at global scope, they stick to
@@ -129,11 +127,14 @@ obj_center calculations by using CorDataBase as CCDData
             return data
         # Allow processing of individual CCDData in the case where an
         # input file is actually a list (of lists...) of input files
-        return [self.data_process(d,
-                                  calibration=calibration,
-                                  auto=auto,
-                                  **kwargs)
-                for d in data]
+        result = [self.data_process(d,
+                                    calibration=calibration,
+                                    auto=auto,
+                                    **kwargs)
+                  for d in data]
+        if None in result:
+            return None
+        return result
 
     def outname_create(self, *args,
                        outname_ext='.fits',

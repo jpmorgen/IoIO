@@ -2,6 +2,7 @@
 
 from random import randint
 from time import sleep
+from requests.exceptions import ConnectTimeout
 
 import numpy as np
 

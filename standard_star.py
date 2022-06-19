@@ -20,13 +20,12 @@ from astropy import log
 from astropy import units as u
 from astropy.time import Time
 from astropy.stats import mad_std, biweight_location
-from astropy.coordinates import Angle, SkyCoord
+from astropy.coordinates import SkyCoord
 # Rainy day project to get rid of pandas
 #from astropy.table import QTable
 from astropy.modeling import models, fitting
 from astropy.visualization import quantity_support
 from astropy.nddata import CCDData
-from astropy.nddata.nduncertainty import StdDevUncertainty
 
 from astroquery.simbad import Simbad
 

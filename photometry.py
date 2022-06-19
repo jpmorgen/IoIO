@@ -11,7 +11,7 @@ from astropy.stats import gaussian_fwhm_to_sigma, sigma_clipped_stats
 from astropy.coordinates import Angle, SkyCoord
 
 from photutils import (make_source_mask, detect_sources,
-                       detect_threshold, deblend_sources)
+                       deblend_sources)
 from photutils import SourceCatalog
 from photutils.background import Background2D
 from photutils.utils import calc_total_error

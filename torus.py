@@ -11,7 +11,6 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
-import matplotlib.dates as mdates
 
 from astropy import log
 import astropy.units as u
@@ -531,6 +530,7 @@ def torus_stripchart(t, outdir):
     ax.set_xlim(tlim)
     plt.ylabel(r'Closest galsat (R$_\mathrm{J}$)')
 
+    # import matplotlib.dates as mdates
     #plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
     #f.autofmt_xdate()
     plt.xlabel(f'UT {date}')
@@ -571,8 +571,6 @@ def torus_directory(directory,
                     create_outdir=True,
                     **kwargs):
     standard_star_obj = standard_star_obj or StandardStar(reduce=True)
-    #standard_star_obj = standard_star_obj or StandardStar(stop='2022-01-01',
-    #                                                      reduce=True)
     outdir = outdir or reduced_dir(directory, outdir_root, create=False)
     poutname = os.path.join(outdir, 'Torus.pout')
     pout = cached_pout(on_off_pipeline,

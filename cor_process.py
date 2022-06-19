@@ -750,10 +750,9 @@ def cor_process(ccd,
             dark_frame = calibration.best_dark(nccd)
         if master_flat is True:
             master_flat = calibration.best_flat(nccd.meta)
-
     except Exception as e:
         log.error(f'No calibration available: calibration system problem {e}')
-        raise
+        return None
 
     # Apply overscan correction unique to the IoIO SX694 CCD.  This
     # uses the string version of master_bias, if available for
