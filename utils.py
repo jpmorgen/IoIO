@@ -391,10 +391,13 @@ def closest_in_time(collection, value_pair,
 
 def valid_long_exposure(r):
     """Inspects FITS header or ImageFileCollection row for condition"""
-    return (r['imagetyp'].lower() == 'light'
-            and r['xbinning'] == 1
-            and r['ybinning'] == 1
-            and r['exptime'] > 10)
+    valid = np.logical_and(r['imagetyp'] == 'LIGHT',
+                           r['xbinning'] == 1)
+    valid = np.logical_and(valid,
+                           r['ybinning'] == 1)
+    valid = np.logical_and(valid,
+                           r['exptime'] > 10)
+    return valid
 
 def im_med_min_max(im):
     """Returns median values of representative dark and light patches
@@ -544,7 +547,8 @@ def add_history(header, text='', caller=1):
     header['HISTORY'] = towrite
     return
 
-def cached_csv(code,
+def cached_csv(*args,
+               code=None,
                csvnames=None,
                read_csvs=False,
                write_csvs=False,
@@ -562,9 +566,10 @@ def cached_csv(code,
         of dict(s) if `read_csvs` is ``False`` or `poutname` cannot be
         read
 
-    csvnames : str or list of str
+    csvnames : str, list of str or callable
         Filename(s) to be read/written.  There must be on filename per
-        astropy table or list of dict returned by code
+        astropy table or list of dict returned by code.  If callable,
+        takes *args and **kwargs passed to cached_csv
 
     read_csvs : bool
         If `True` read [e]csv(s) from `csvnames`.  If there is an
@@ -598,6 +603,9 @@ def cached_csv(code,
 
     """
     
+    if callable(csvnames):
+        csvnames = csvnames(*args, **kwargs)
+
     single_table_or_dictlist = isinstance(csvnames, str)
     if single_table_or_dictlist:
         csvnames = [csvnames]
@@ -630,29 +638,32 @@ def cached_csv(code,
             pass
 
     # If we made it here, we need to generate our list(s) of dicts
-    list_of_table_or_dicts = code(**kwargs)
+    list_of_table_or_dicts = code(*args, **kwargs)
 
-    if write_csvs:
-        if single_table_or_dictlist:
-            list_of_table_or_dicts = [list_of_table_or_dicts]
-        for csvname, table_or_dict_list \
-            in zip(csvnames, list_of_table_or_dicts):
-            if create_outdir:
-                os.makedirs(os.path.dirname(csvname), exist_ok=True)
-            if len(table_or_dict_list) == 0:
-                # Signal we have been here and found nothing
-                Path(csvname).touch()
-                continue
-            _, ext = os.path.splitext(csvname)
-            if ext == '.ecsv':
-                table_or_dict_list.write(csvname, overwrite=True)
-            else:
-                fieldnames = list(table_or_dict_list[0].keys())
-                with open(csvname, 'w', newline=newline) as csvfile:
-                    csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
-                                           quoting=quoting)
-                    csvdw.writeheader()
-                    for d in table_or_dict_list:
+    if not write_csvs:
+        return list_of_table_or_dicts
+
+    # If we made it here, we want to write our list(s) of dicts
+    if single_table_or_dictlist:
+        list_of_table_or_dicts = [list_of_table_or_dicts]
+    for csvname, table_or_dict_list \
+        in zip(csvnames, list_of_table_or_dicts):
+        if create_outdir:
+            os.makedirs(os.path.dirname(csvname), exist_ok=True)
+        if len(table_or_dict_list) == 0:
+            # Signal we have been here and found nothing
+            Path(csvname).touch()
+            continue
+        _, ext = os.path.splitext(csvname)
+        if ext == '.ecsv':
+            table_or_dict_list.write(csvname, overwrite=True)
+        else:
+            fieldnames = list(table_or_dict_list[0].keys())
+            with open(csvname, 'w', newline=newline) as csvfile:
+                csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
+                                       quoting=quoting)
+                csvdw.writeheader()
+                for d in table_or_dict_list:
                             csvdw.writerow(d)
     if single_table_or_dictlist:
         list_of_table_or_dicts = list_of_table_or_dicts[0]

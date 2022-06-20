@@ -637,9 +637,9 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
     summary_table = QTable()
     for directory in dirs:
         rd = reduced_dir(directory, outdir_root, create=False)
-        t = cached_csv(torus_directory,
+        t = cached_csv(directory,
+                       code=torus_directory,
                        csvnames=os.path.join(rd, 'Characterize_Ansas.ecsv'),
-                       directory=directory,
                        standard_star_obj=standard_star_obj,
                        read_csvs=read_csvs,
                        write_csvs=write_csvs,
@@ -656,6 +656,8 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
         return summary_table
 
     summary_table['tavg'].location = loc
+    summary_table.write(os.path.join(outdir_root, 'Torus.ecsv'),
+                                     overwrite=True)
     torus_stripchart(summary_table, outdir_root)
 
     return summary_table

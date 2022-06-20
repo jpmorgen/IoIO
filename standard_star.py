@@ -1287,13 +1287,13 @@ def standard_star_tree(raw_data_root=RAW_DATA_ROOT,
         extinct_csv = os.path.join(rd, 'extinction.csv')
         expo_cor_csv = os.path.join(rd, 'exposure_correction.csv')
         csvnames = (extinct_csv, expo_cor_csv)
-        extinct, expo = cached_csv(standard_star_directory,
+        extinct, expo = cached_csv(directory,
+                                   code=standard_star_directory,
                                    csvnames=csvnames,
                                    read_csvs=read_csvs,
                                    write_csvs=write_csvs,
                                    outdir=rd,
                                    create_outdir=create_outdir,
-                                   directory=directory,
                                    calibration=calibration,
                                    photometry=photometry,
                                    ccddata_cls=ccddata_cls,
@@ -1451,8 +1451,10 @@ class StandardStar():
             plotname = outbase+'.png'
         else:
             plotname = None
-        self._zero_points = cached_csv(filter_stripchart, outbase+'.csv',
-                                       read_csvs=False, write_csvs=True,
+        self._zero_points = cached_csv(code=filter_stripchart,
+                                       csvnames=outbase+'.csv',
+                                       read_csvs=False,
+                                       write_csvs=True,
                                        show=self.show,
                                        df=self.extinction_data_frame,
                                        title=(f'Vega zero point magnitiudes '
@@ -1477,7 +1479,8 @@ class StandardStar():
         rayleigh_conversion_unit = \
             self.extinction_data_frame.iloc[0]['rayleigh_conversion_unit']
         self._rayleigh_conversions = \
-            cached_csv(filter_stripchart, outbase+'.csv',
+            cached_csv(code=filter_stripchart,
+                       csvnames=outbase+'.csv',
                        read_csvs=False,
                        write_csvs=True,
                        show=self.show,
@@ -1502,7 +1505,8 @@ class StandardStar():
         else:
             plotname = None
         self._extinction_coefs = \
-            cached_csv(filter_stripchart, outbase+'.csv',
+            cached_csv(code=filter_stripchart,
+                       csvnames=outbase+'.csv',
                        read_csvs=False,
                        write_csvs=True,
                        show=self.show,

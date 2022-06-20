@@ -16,15 +16,19 @@ from astropy.table import QTable, vstack
 
 import ccdproc as ccdp
 
-from bigmultipipe import cached_pout
+from bigmultipipe import WorkerWithKwargs, NestablePool, cached_pout
 
 from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 
-from IoIO.utils import (get_dirs_dates, reduced_dir, dict_to_ccd_meta,
+from IoIO.utils import (get_dirs_dates, reduced_dir,
+                        valid_long_exposure, dict_to_ccd_meta,
                         multi_glob, sum_ccddata, cached_csv,
                         savefig_overwrite)
 from IoIO.cor_process import standardize_filt_name
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
+                               MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
+                               MAX_MEM_FRAC,
+                               COR_PROCESS_EXPAND_FACTOR,
                                calc_obj_to_ND, #crop_ccd,
                                planet_to_object,
                                objctradec_to_obj_center,
@@ -136,9 +140,9 @@ def na_nebula_plot(t, outdir):
 
     savefig_overwrite(os.path.join(outdir, 'Na_nebula_apertures.png'))
     plt.close()
-
-
-def na_nebula_directory(directory,
+    
+def na_nebula_directory(directory_or_collection,
+                        return_collection=False,
                         glob_include=TORUS_NA_NEB_GLOB_LIST,
                         glob_exclude_list=TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
                         outdir=None,
@@ -149,29 +153,43 @@ def na_nebula_directory(directory,
                         write_pout=True,
                         create_outdir=True,
                         **kwargs):
-     
-    flist = multi_glob(directory, glob_include, glob_exclude_list)    
-    if len(flist) == 0:
-        return []
+
+    if isinstance(directory_or_collection, ccdp.ImageFileCollection):
+        # We are passed a collection when running multiple directories
+        # in parallel
+        directory = directory_or_collection.location
+        collection = directory_or_collection
+    else:
+        # We are running by hand or we want to generate our collection
+        # to see how many files we have --> this could be a separate
+        # collection_creator passable
+        directory = directory_or_collection
+        flist = multi_glob(directory, glob_include, glob_exclude_list)
+        if len(flist) == 0:
+            return []
+        # Create a collection of valid long Na exposures that are
+        # pointed at Jupiter (not offset for mesospheric foreground
+        # observations)
+        collection = ccdp.ImageFileCollection(directory, filenames=flist)
+        st = collection.summary
+        valid = ['Na' in f for f in st['filter']]
+        valid = np.logical_and(valid, valid_long_exposure(st))
+        if 'raoff' in st.colnames:
+            valid = np.logical_and(valid, st['raoff'].mask)
+        if 'decoff' in st.colnames:
+            valid = np.logical_and(valid, st['decoff'].mask)
+        if np.all(~valid):
+            return []
+        if np.any(~valid):
+            fbases = st['file'][valid]
+            flist = [os.path.join(directory, f) for f in fbases]
+        collection = ccdp.ImageFileCollection(directory, filenames=flist)
+
+    if return_collection:
+        return collection
+
     outdir = outdir or reduced_dir(directory, outdir_root, create=False)
     poutname = os.path.join(outdir, 'Na_nebula.pout')
-    collection = ccdp.ImageFileCollection(directory, filenames=flist)
-    # Get rid of off-Jupiter pointings, since they match our
-    # glob_include file regexp
-    st = collection.summary
-    if 'raoff' in st.colnames:
-        pointed_at_jupiter = st['raoff'].mask
-    else:
-        pointed_at_jupiter = np.full(len(flist), True)
-    if 'decoff' in st.colnames:
-        pointed_at_jupiter = np.logical_and(pointed_at_jupiter,
-                                            st['decoff'].mask)
-    if np.all(~pointed_at_jupiter):
-        return []
-    if np.any(~pointed_at_jupiter):
-        fbases = st['file'][pointed_at_jupiter]
-        flist = [os.path.join(directory, f) for f in fbases]
-        collection = ccdp.ImageFileCollection(directory, filenames=flist)
     standard_star_obj = standard_star_obj or StandardStar(reduce=True)
     na_meso_obj = na_meso_obj or NaBack(standard_star_obj=standard_star_obj,
                                         reduce=True)
@@ -194,15 +212,25 @@ def na_nebula_directory(directory,
                                     extinction_correct, rayleigh_convert,
                                     na_apertures, closest_galsat_to_jupiter,
                                     plot_planet_subim, as_single],
+                       outdir=outdir,
                        outdir_root=outdir_root,
                        **kwargs)
     if pout is None or len(pout) == 0:
-        return QTable()
+        return []
 
     _ , pipe_meta = zip(*pout)
     t = QTable(rows=pipe_meta)
     na_nebula_plot(t, outdir)
     return t
+
+def csvname_creator(directory_or_collection, *args,
+                    outdir_root=None, **kwargs,):
+    if isinstance(directory_or_collection, ccdp.ImageFileCollection):
+        directory = directory_or_collection.location
+    else:
+        directory = directory_or_collection
+    rd = reduced_dir(directory, outdir_root, create=False)
+    return os.path.join(rd, 'Na_nebula.ecsv')
 
 def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
                    start=None,
@@ -218,13 +246,14 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
                    show=False,
                    create_outdir=True,                       
                    outdir_root=NA_NEBULA_ROOT,
+                   max_num_processes=MAX_NUM_PROCESSES,
                    **kwargs):
 
     dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
     dirs, _ = zip(*dirs_dates)
     if len(dirs) == 0:
         log.warning('No directories found')
-        return
+        return []
     calibration = calibration or Calibration()
     if photometry is None:
         photometry = CorPhotometry(
@@ -235,29 +264,111 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
     na_meso_obj = na_meso_obj or NaBack(calibration=calibration,
                                         standard_star_obj=standard_star_obj,
                                         reduce=True)
+    cached_csv_args = {
+        'code': na_nebula_directory,
+        'csvnames': csvname_creator,
+        'read_csvs': read_csvs,
+        'write_csvs': write_csvs,
+        'standard_star_obj': standard_star_obj,
+        'na_meso_obj': na_meso_obj,
+        'outdir_root': outdir_root,
+        'create_outdir': create_outdir}
+    cached_csv_args.update(**kwargs)
 
-    summary_table = QTable()
+    # --> This might be separable function that is passed
+    # --> cached_csv_args (or maybe just a regular set of kwargs!)  #
+    # --> could be parallelize_tree with arg dirs.  A little work
+    # --> could generalize it to csv case too
+
+    wwk = WorkerWithKwargs(cached_csv, **cached_csv_args)
+    # Pass return_collection=True to na_nebula_directory to prepare
+    # for multi-directory processing
+    return_collection_args = cached_csv_args.copy()
+    return_collection_args['return_collection'] = True
+    return_collection_args['write_csvs'] = False
+
+    # vstack of [] with a QTable returns the QTable, so standardize
+    # all our empty/starter QTable values to []
+    summary_table = []
+    running_nfiles = 0
+    collection_list = []
     for directory in dirs:
-        rd = reduced_dir(directory, outdir_root, create=False)
-        t = cached_csv(na_nebula_directory,
-                       csvnames=os.path.join(rd, 'Na_nebula.ecsv'),
-                       directory=directory,
-                       standard_star_obj=standard_star_obj,
-                       read_csvs=read_csvs,
-                       write_csvs=write_csvs,
-                       outdir=rd,
-                       create_outdir=create_outdir,
-                       **kwargs)
-        # Hack to get around astropy vstack bug with location
-        if len(t) == 0:
+        # Try to read cache.  It it fails this time, return collection
+        # only (remembering not to try to cache that!)
+        t = cached_csv(directory, **return_collection_args)
+        if isinstance(t, list) and len(t) == 0:
+            # QTable.read returns [] when the cache file is empty
             continue
-        loc = t['tavg'][0].location.copy()
-        t['tavg'].location = None
-        summary_table = vstack([summary_table, t])
+        if isinstance(t, QTable):
+            # We really read the cache
+            # Hack to get around astropy vstack bug with location
+            loc = t['tavg'][0].location.copy()
+            t['tavg'].location = None
+            summary_table = vstack([summary_table, t])
+            continue
+
+        collection = t
+        # If we made it here, we were handed back a collection so we
+        # can look inside to see how many files are there & and
+        # process them in parallel
+        assert isinstance(collection, ccdp.ImageFileCollection)
+        # Accomodate our current on_off_pipeline arrangement which
+        # processes in pairs
+        nfiles = int(len(collection.files) / 2)
+        if nfiles >= max_num_processes:
+            # Let cormultipipe regulate the number of processes
+            t = cached_csv(directory, **cached_csv_args)
+            loc = t['tavg'][0].location.copy()
+            t['tavg'].location = None
+            summary_table = vstack([summary_table, t])
+            continue
+            
+        if nfiles + running_nfiles < max_num_processes:
+            # Keep building our list
+            running_nfiles += nfiles
+            collection_list.append(collection)
+            continue
+
+        if nfiles + running_nfiles == max_num_processes:
+            # We hit is just right
+            collection_list.append(collection)
+            to_process = collection_list
+            running_nfiles = 0
+            collection_list = []
+        else:
+            # We went over a bit.  Process what we have & start at the
+            # current directory
+            to_process = collection_list
+            running_nfiles = nfiles
+            collection_list = [collection]
+
+        with NestablePool(processes=max_num_processes) as p:
+            tlist = p.map(wwk.worker, to_process)
+        # Combine QTables into one big one
+        for t in tlist:
+            loc = t['tavg'][0].location.copy()
+            t['tavg'].location = None
+            summary_table = vstack([summary_table, t])
+            
+    if len(collection_list) > 0:
+        to_process = collection_list
+        # Handle last (set of) directories
+        with NestablePool(processes=max_num_processes) as p:
+            tlist = p.map(wwk.worker, to_process)
+        # Combine QTables into one big one
+        for t in tlist:
+            if len(t) == 0:
+                continue
+            loc = t['tavg'][0].location.copy()
+            t['tavg'].location = None
+            summary_table = vstack([summary_table, t])
+        
     if len(summary_table) == 0:
         return summary_table
-
+    
     summary_table['tavg'].location = loc
+    summary_table.write(os.path.join(outdir_root, 'Na_nebula.ecsv'),
+                                     overwrite=True)
     na_nebula_plot(summary_table, outdir_root)
 
     return summary_table
