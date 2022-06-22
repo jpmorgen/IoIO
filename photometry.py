@@ -37,7 +37,9 @@ SOURCE_TABLE_COLS = ['label',
                      'max_value',
                      'segment_flux',
                      'segment_fluxerr']
-SOLVE_TIMEOUT = 60 # s
+# This is documented as seconds in solve-field, but is timed as
+# minutes on snipe!
+SOLVE_TIMEOUT = 1 # m
 VOTABLE_FIELDS = ['flux(U)', 'flux(B)', 'flux(V)', 'flux(R)',
                   'flux(I)']
 PHOTOOBJ_FIELDS = ['ra', 'dec', 'probPSF', 'aperFlux7_u',
@@ -953,6 +955,16 @@ image
         return None
 
 class PhotometryArgparseMixin:
+    def add_solve_timeout(self, 
+                 default=SOLVE_TIMEOUT,
+                 help=None,
+                 **kwargs):
+        option = 'solve_timeout'
+        if help is None:
+            help = (f'max plate solve time in seconds (default: {default})')
+        self.parser.add_argument('--' + option, type=float,
+                                 default=default, help=help, **kwargs)
+
     def add_join_tolerance(self, 
                  default=JOIN_TOLERANCE,
                  help=None,

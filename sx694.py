@@ -154,6 +154,21 @@ def metadata(hdr_in,
         hdr['PIXSCALE'] = (plate_scale.value, '[arcsec] approximate binned pixel scale')    
     return hdr
 
+def approx_pix_solid_angle(ccd):
+    """Returns pixel solid angle using basic telescope properties.
+    Refinement requires photometric solution and proj_plane_pixel_scales
+
+    """
+    # After binning pixel size 
+    pixsz = np.asarray((ccd.meta['XPIXSZ'], ccd.meta['YPIXSZ']))
+    pix_area = np.prod(pixsz)
+    pix_area *= u.micron**2
+    focal_length = ccd.meta['FOCALLEN']*u.mm
+    pix_solid_angle = pix_area / focal_length**2
+    pix_solid_angle *= u.rad**2
+    pix_solid_angle = pix_solid_angle.to(u.arcsec**2)
+    return pix_solid_angle
+
 def exp_correct_value(date_obs):
     """Provides the measured extra exposure correction time for
     exposures > max_accurate_exposure.  See detailed discussion in

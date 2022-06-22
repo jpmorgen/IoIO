@@ -389,14 +389,7 @@ def standard_star_process(ccd,
     max_frac_nonlin = max_val/nonlin
 
     # --> Ideally I use the closest astrometry solution
-    # After binning pixel size 
-    pixsz = np.asarray((ccd.meta['XPIXSZ'], ccd.meta['YPIXSZ']))
-    pix_area = np.prod(pixsz)
-    pix_area *= u.micron**2
-    focal_length = ccd.meta['FOCALLEN']*u.mm
-    pix_solid_angle = pix_area / focal_length**2
-    pix_solid_angle *= u.rad**2
-    pix_solid_angle = pix_solid_angle.to(u.arcsec**2)    
+    pix_solid_angle = sx694.approx_pix_solid_angle(ccd)
 
     # We are going to turn this into a Pandas dataframe, which does
     # not do well with units, so just return everything

@@ -43,6 +43,8 @@ class CorData(CorDataNDparams, NoCenterPGD):
                  profile_peak_threshold=PROFILE_PEAK_THRESHOLD,
                  bright_sat_threshold=BRIGHT_SAT_THRESHOLD,
                  min_source_threshold=MIN_SOURCE_THRESHOLD,
+                 obj_flux=None,
+                 obj_flux_err=None,
                  copy=False,
                  **kwargs):
         # Pattern after NDData init but skip all the tests
@@ -52,12 +54,16 @@ class CorData(CorDataNDparams, NoCenterPGD):
             profile_peak_threshold = data.profile_peak_threshold
             bright_sat_threshold = data.bright_sat_threshold
             min_source_threshold = data.min_source_threshold
+            obj_flux = data._obj_flux
+            obj_flux_err = data._obj_flux_err
         if copy:
             y_center_offset = deepcopy(y_center_offset)
             show = deepcopy(show)
             profile_peak_threshold = deepcopy(profile_peak_threshold)
             bright_sat_threshold = deepcopy(bright_sat_threshold)
             min_source_threshold = deepcopy(min_source_threshold)
+            obj_flux = deepcopy(obj_flux)
+            obj_flux_err = deepcopy(obj_flux_err)
 
         super().__init__(data, copy=copy, **kwargs)
         # Define y pixel value along ND filter where we want our
@@ -68,6 +74,8 @@ class CorData(CorDataNDparams, NoCenterPGD):
         self.profile_peak_threshold = profile_peak_threshold
         self.bright_sat_threshold = bright_sat_threshold
         self.min_source_threshold = min_source_threshold
+        self._obj_flux = obj_flux
+        self._obj_flux_err = obj_flux_err
 
     def _init_args_copy(self, kwargs):
         kwargs = super()._init_args_copy(kwargs)
@@ -76,6 +84,8 @@ class CorData(CorDataNDparams, NoCenterPGD):
         kwargs['profile_peak_threshold'] = self.profile_peak_threshold
         kwargs['bright_sat_threshold'] = self.bright_sat_threshold
         kwargs['min_source_threshold'] = self.min_source_threshold
+        kwargs['obj_flux'] = self._obj_flux
+        kwargs['obj_flux_err'] = self._obj_flux_err
         return kwargs
         
     @pgcoordproperty
@@ -333,6 +343,9 @@ class CorData(CorDataNDparams, NoCenterPGD):
                           + ll
                           + self.subframe_origin)
         log.debug(f'Patch COM = {self.coord_binned(y_x)[::-1]} (X, Y; binned); Photometry brightest centroid {self.coord_binned(photometry_y_x)[::-1]}; center_quality = {self.center_quality}')        
+        self._obj_flux = tbl['segment_flux'][0]
+        self._obj_flux_err = tbl['segment_fluxerr'][0]
+        
         return photometry_y_x
 
     @pgcoordproperty
@@ -363,6 +376,31 @@ class CorData(CorDataNDparams, NoCenterPGD):
             raise ValueError('Desired center is too far from center of image.  In original image coordinates:' + str(self.coord_binned(desired_center)))
         return desired_center
 
+    @property
+    def obj_flux(self):
+        if self._obj_flux is None:
+            self.obj_center
+        return self._obj_flux
+
+    @property
+    def obj_flux_err(self):
+        if self._obj_flux_err is None:
+            self.obj_center
+        return self._obj_flux_err
+
+    #def _card_write(self):
+    #    """Write FITS card unique to CorData"""
+    #    # Priorities ND_params as first-written, since they, together
+    #    # with the boundaries set up by the flats (which initialize
+    #    # the ND_params) provide critical context for all other views
+    #    # of the data
+    #    super()._card_write()
+    #    self.meta['HIERARCH OBJ_FLUX'] = (
+    #        self.obj_flux.value,
+    #        f'[{self.obj_flux.unit}]')
+    #    self.meta['HIERARCH OBJ_FLUX_ERR'] = (
+    #        self.obj_flux_err.value,
+    #        f'[{self.obj_flux_err.unit}]')
 
 if __name__ == "__main__":
     log.setLevel('DEBUG')

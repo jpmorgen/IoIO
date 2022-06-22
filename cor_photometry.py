@@ -37,7 +37,7 @@ from precisionguide import PGData
 import IoIO.sx694 as sx694
 from IoIO.utils import (FITS_GLOB_LIST, sum_ccddata, multi_glob,
                         savefig_overwrite)
-from IoIO.cordata import CorData
+from IoIO.cordata_base import CorDataBase
 from IoIO.photometry import (SOLVE_TIMEOUT, rot_wcs,
                              Photometry, PhotometryArgparseMixin)
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
@@ -125,6 +125,7 @@ PIERSIDE_WEST_FILE = os.path.join(RAW_DATA_ROOT,
                                   'PinPointSolutionWestofPier.fit')
 
 def read_wcs(fname):
+
     """Avoid annoying messages for WCSs not written by wcslib"""
     with warnings.catch_warnings():
         warnings.filterwarnings(
@@ -1055,7 +1056,7 @@ def add_astrometry(ccd_in, bmp_meta=None,
     if mask_ND_before_astrometry:
         # Subtle order bug if obj_center isn't called before we blank
         # out the info it uses to to find itself
-        if isinstance(ccd, CorData):
+        if isinstance(ccd, CorDataBase):
             ccd.obj_center
         photometry.ccd = nd_filter_mask(ccd)
     else:
@@ -1132,16 +1133,6 @@ def add_astrometry(ccd_in, bmp_meta=None,
     return ccd    
 
 class CorPhotometryArgparseMixin(PhotometryArgparseMixin):
-    def add_solve_timeout(self, 
-                 default=SOLVE_TIMEOUT,
-                 help=None,
-                 **kwargs):
-        option = 'solve_timeout'
-        if help is None:
-            help = (f'max plate solve time in seconds (default: {default})')
-        self.parser.add_argument('--' + option, type=float,
-                                 default=default, help=help, **kwargs)
-
     def add_keep_intermediate(self, 
                       default=False,
                       help=None,

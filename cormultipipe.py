@@ -12,14 +12,17 @@ import numpy as np
 from astropy import log
 from astropy import units as u
 from astropy.nddata import CCDData, StdDevUncertainty
+from astropy.table import QTable, vstack
 from astropy.coordinates import SkyCoord, solar_system_ephemeris, get_body
 
+from bigmultipipe import WorkerWithKwargs, NestablePool
 from bigmultipipe.argparse_handler import ArgparseHandler, BMPArgparseMixin
 
 from ccdmultipipe import CCDMultiPipe, CCDArgparseMixin
 
 import IoIO.sx694 as sx694
-from IoIO.utils import add_history, im_med_min_max
+from IoIO.utils import (add_history, im_med_min_max, sum_ccddata, cached_csv,
+                        dict_to_ccd_meta)
 
 from IoIO.cordata_base import CorDataBase
 from IoIO.cordata import CorData
@@ -573,6 +576,133 @@ def planet_to_object(ccd_in, bmp_meta=None, planet=None, **kwargs):
     ccd = ccd_in.copy()
     ccd.meta['object'] = planet.capitalize()
     return ccd
+
+def pixel_per_Rj(ccd):
+    Rj_arcsec = ccd.meta['Jupiter_ang_width'] * u.arcsec / 2
+    cdelt = ccd.wcs.proj_plane_pixel_scales() # tuple
+    lcdelt = [c.value for c in cdelt]
+    pixscale = np.mean(lcdelt) * cdelt[0].unit
+    pixscale = pixscale.to(u.arcsec) / u.pixel
+    return Rj_arcsec / pixscale / u.R_jup 
+   
+def obj_surface_bright(ccd_in, bmp_meta=None, **kwargs):
+    """Calculates Jupiter surface brightness using a box 0.5 Rj on a side"""
+    bmp_meta = bmp_meta or {}
+    ccd = ccd_in.copy()
+    center = ccd.obj_center*u.pixel
+    pix_per_Rj = pixel_per_Rj(ccd)
+    side = 0.5 * u.R_jup
+    b = np.round(center[0] - side/2 * pix_per_Rj).astype(int)
+    t = np.round(center[0] + side/2 * pix_per_Rj).astype(int)
+    l = np.round(center[1] - side/2 * pix_per_Rj).astype(int)
+    r = np.round(center[1] + side/2 * pix_per_Rj).astype(int)
+    subim = ccd[b.value:t.value, l.value:r.value]
+    jup_sum, jup_area = sum_ccddata(subim)
+    sb = jup_sum / jup_area
+    if ccd.uncertainty.uncertainty_type == 'std':
+        dev = np.sum(subim.uncertainty.array**2)
+    else:
+        dev = np.sum(subim.uncertainty.array)
+    sb_err = dev**-0.5*ccd.unit*u.pixel**2 / jup_area
+    osb_dict = {'obj_surf_bright': sb,
+                'obj_surf_bright_err': sb_err}
+    ccd = dict_to_ccd_meta(ccd, osb_dict)
+    bmp_meta.update(osb_dict)
+    return ccd
+
+def parallel_cached_csvs(dirs,
+                         files_per_process=1,
+                         max_num_processes=MAX_NUM_PROCESSES,
+                         **cached_csv_args):
+    wwk = WorkerWithKwargs(cached_csv, **cached_csv_args)
+    ## Pass return_collection=True to na_nebula_directory to prepare
+    ## for multi-directory processing
+    #return_collection_args = cached_csv_args.copy()
+    #return_collection_args['return_collection'] = True
+    ##return_collection_args['write_csvs'] = False
+
+    # vstack of [] with a QTable returns the QTable, so standardize
+    # all our empty/starter QTable values to []
+    summary_table = []
+    running_nfiles = 0
+    collection_list = []
+    for directory in dirs:
+        # Try to read cache.  It it fails this time, return collection
+        # only (remembering not to try to cache that!)
+        t = cached_csv(directory, return_collection=True, **cached_csv_args)
+        if isinstance(t, list) and len(t) == 0:
+            # QTable.read returns [] when the cache file is empty
+            continue
+        if isinstance(t, QTable):
+            # We really read the cache
+            # Hack to get around astropy vstack bug with location
+            loc = t['tavg'][0].location.copy()
+            t['tavg'].location = None
+            summary_table = vstack([summary_table, t])
+            continue
+
+        collection = t
+        # If we made it here, we were handed back a collection so we
+        # can look inside to see how many files are there & and
+        # process them in parallel
+        # Accomodate our current on_off_pipeline arrangement which
+        # processes in pairs
+        nfiles = int(len(collection.files) / files_per_process)
+        if nfiles >= max_num_processes:
+            # Let cormultipipe regulate the number of processes
+            t = cached_csv(directory, **cached_csv_args)
+            loc = t['tavg'][0].location.copy()
+            t['tavg'].location = None
+            summary_table = vstack([summary_table, t])
+            continue
+            
+        if nfiles + running_nfiles < max_num_processes:
+            # Keep building our list
+            running_nfiles += nfiles
+            collection_list.append(collection)
+            continue
+
+        if nfiles + running_nfiles == max_num_processes:
+            # We hit is just right
+            collection_list.append(collection)
+            to_process = collection_list
+            running_nfiles = 0
+            collection_list = []
+        else:
+            # We went over a bit.  Process what we have & start at the
+            # current directory
+            to_process = collection_list
+            running_nfiles = nfiles
+            collection_list = [collection]
+
+        with NestablePool(processes=max_num_processes) as p:
+            tlist = p.map(wwk.worker, to_process)
+        # Combine QTables into one big one
+        for t in tlist:
+            if isinstance(t, list) and len(t) == 0:
+                continue
+            loc = t['tavg'][0].location.copy()
+            t['tavg'].location = None
+            summary_table = vstack([summary_table, t])
+            
+    if len(collection_list) > 0:
+        to_process = collection_list
+        # Handle last (set of) directories
+        with NestablePool(processes=max_num_processes) as p:
+            tlist = p.map(wwk.worker, to_process)
+        # Combine QTables into one big one
+        for t in tlist:
+            if len(t) == 0:
+                continue
+            loc = t['tavg'][0].location.copy()
+            t['tavg'].location = None
+            summary_table = vstack([summary_table, t])
+        
+    if len(summary_table) == 0:
+        return summary_table
+    
+    summary_table['tavg'].location = loc
+    return summary_table
 
 ######### Argparse mixin
 class CorArgparseMixin:

@@ -29,7 +29,7 @@ from IoIO.simple_show import simple_show
 from IoIO.cordata_base import SMALL_FILT_CROP
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                calc_obj_to_ND, crop_ccd,
-                               planet_to_object,
+                               planet_to_object, pixel_per_Rj, 
                                objctradec_to_obj_center)
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE,
@@ -80,14 +80,6 @@ IO_ORBIT_R = IO_ORBIT_R.to(u.R_jup)
 #        '[degree]')
 #    return ccd
 
-def pixel_per_Rj(ccd):
-    Rj_arcsec = ccd.meta['Jupiter_ang_width'] * u.arcsec / 2
-    cdelt = ccd.wcs.proj_plane_pixel_scales() # tuple
-    lcdelt = [c.value for c in cdelt]
-    pixscale = np.mean(lcdelt) * cdelt[0].unit
-    pixscale = pixscale.to(u.arcsec) / u.pixel
-    return Rj_arcsec / pixscale / u.R_jup 
-   
 def bad_ansa(side):
     # numpy.ma don't work with astropy units, 
     # astropy.utils.masked.Masked doesn't work with pickle

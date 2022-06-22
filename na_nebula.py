@@ -12,19 +12,18 @@ import matplotlib.pyplot as plt
 
 from astropy import log
 import astropy.units as u
-from astropy.table import QTable, vstack
+from astropy.table import QTable
 
 import ccdproc as ccdp
 
-from bigmultipipe import WorkerWithKwargs, NestablePool, cached_pout
+from bigmultipipe import cached_pout
 
 from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 
 from IoIO.utils import (get_dirs_dates, reduced_dir,
                         valid_long_exposure, dict_to_ccd_meta,
-                        multi_glob, sum_ccddata, cached_csv,
+                        multi_glob, sum_ccddata, 
                         savefig_overwrite)
-from IoIO.cor_process import standardize_filt_name
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
                                MAX_MEM_FRAC,
@@ -32,22 +31,22 @@ from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                calc_obj_to_ND, #crop_ccd,
                                planet_to_object,
                                objctradec_to_obj_center,
-                               nd_filter_mask)
+                               nd_filter_mask, parallel_cached_csvs,
+                               pixel_per_Rj, obj_surface_bright)
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE,
                              JOIN_TOLERANCE_UNIT, rot_to)
 from IoIO.cor_photometry import (CorPhotometry,
                                  CorPhotometryArgparseMixin,
                                  mask_galsats)
-from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
-                                  TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
-                                  on_off_pipeline)
 from IoIO.standard_star import (StandardStar, SSArgparseHandler,
                                 extinction_correct, rayleigh_convert)
 from IoIO.horizons import galsat_ephemeris
 from IoIO.na_back import sun_angle, NaBack, na_meso_sub
-from IoIO.torus import (pixel_per_Rj, plot_planet_subim,
-                        closest_galsat_to_jupiter)
+from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
+                                  TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
+                                  on_off_pipeline)
+from IoIO.torus import plot_planet_subim, closest_galsat_to_jupiter
 
 NA_NEBULA_ROOT = os.path.join(IoIO_ROOT, 'Na_nebula')
 
@@ -79,6 +78,7 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     # We only  want to mess with our original CCD metadata
     bmp_meta = bmp_meta or {}
     bmp_meta['tavg'] = ccd.tavg
+
     ccd = ccd_meta_to_bmp_meta(ccd_in, bmp_meta=bmp_meta,
                                ccd_meta_to_bmp_meta_keys=
                                [('Jupiter_PDObsLon', u.deg),
@@ -100,7 +100,12 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     bmp_meta.update(na_aps)
     return ccd
 
-def na_nebula_plot(t, outdir):
+def na_nebula_plot(t, outdir,
+                   min_sb=0,
+                   max_sb=1000,
+                   min_av_ap_dist=0,
+                   max_av_ap_dist=np.inf,
+                   show=False):
     sum_regexp = re.compile('Na_ap_.*_sum')
     area_regexp = re.compile('Na_ap_.*_area')
     sum_colnames = filter(sum_regexp.match, t.colnames)
@@ -111,34 +116,71 @@ def na_nebula_plot(t, outdir):
     last_sum = 0
     last_area = 0
     last_ap_bound = 0
-    plt.suptitle('Na nebula rectangular aperture surface brightesses')
-    ax = plt.subplot()
+    sb_list = []
+    ap_list = []
+    plt.suptitle('Na nebula rectangular aperture surface brightesses above & below torus centrifugal plane')
+    ax = plt.subplot(3,1,1)
+    plt.title('Telluric Na empirical model subtracted')
     for sum_colname, area_colname in zip(sum_colnames, area_colnames):
-        cts = t[sum_colname] - last_sum
-        area = t[area_colname] - last_area
-        sb = cts / area
         ap_bound = sum_colname.split('_')
         ap_bound = int(ap_bound[2])
         av_ap = np.mean((ap_bound, last_ap_bound))
         last_ap_bound = ap_bound
-        plt.plot(t['tavg'].datetime, sb, '.', label=f'{av_ap:.0f} Rj')
+        cts = t[sum_colname] - last_sum
+        area = t[area_colname] - last_area
+        sb = cts / area
+        if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
+            continue
+        ap_list.append(av_ap)
+        sb_list.append(sb)
+        plt.plot(t['tavg'].datetime, sb, '.', label=f'+/- {av_ap:.0f} Rj')
         #plt.plot(t['tavg'].datetime, cts, '.', label=sum_colname)
         #plt.plot(t['tavg'].datetime, area, '.', label=area_colname)
         last_sum = t[sum_colname]
         last_area = t[area_colname]
-
-    plt.errorbar(t['tavg'].datetime,
-                 t['MESO'].value,
-                 t['MESO_ERR'].value, fmt='k.', label='Model mesosphere')
-    ax.set_ylim(1, 1000)
+    meso = t['MESO']
+    meso_err = t['MESO_ERR']
+    plt.errorbar(t['tavg'].datetime, meso.value, meso_err.value,
+                 fmt='k.', label='Telluric Na model')
+    ax.set_ylim(min_sb, max_sb)
     #plt.yscale('log')
     plt.ylabel(f'Surf. Bright ({sb.unit})')
-    f.autofmt_xdate()
-    plt.xlabel(f'UT {date}')
     plt.legend()
+
+    ax = plt.subplot(3,1,2)
+    plt.title('Most distant aperture subtracted')
+    for sb, av_ap in zip(sb_list, ap_list):
+        plt.plot(t['tavg'].datetime, sb - sb_list[-1], '.',
+                 label=f'{av_ap:.0f} Rj')
+    ax.set_ylim(0, max_sb/2)
+    plt.ylabel(f'Surf. Bright ({sb.unit})')
+    plt.legend()
+
+    obj_sb = t['obj_surf_bright']
+    obj_sb_err = t['obj_surf_bright_err']
+    ax = plt.subplot(3,1,3)
+    plt.title('Jupiter attenuated surface brightness')
+    plt.errorbar(t['tavg'].datetime, obj_sb.value, obj_sb_err.value,
+                 fmt='k.')#, label='Telluric Na model')
+    plt.ylabel(f'Surf. Bright ({obj_sb.unit})')
+
+
+    #ax = plt.subplot(3,1,3)
+    #plt.plot(t['tavg'].datetime, sb_list[-1]/meso, '.',
+    #         label=f'{ap_list[-1]:.0f} Rj')
+    #plt.axhline(1)
+    #plt.yscale('log')
+    #ax.set_ylim(0.03, 30)
+    #plt.ylabel(f'{av_ap:.0f} Rj / telluric')
+    #plt.legend()
+    
+    f.autofmt_xdate()
+    plt.xlabel(f'UT')# {date}')
     plt.tight_layout()
 
     savefig_overwrite(os.path.join(outdir, 'Na_nebula_apertures.png'))
+    if show:
+        plt.show()
     plt.close()
     
 def na_nebula_directory(directory_or_collection,
@@ -210,7 +252,8 @@ def na_nebula_directory(directory_or_collection,
                        planet_subim_figsize=[6, 4],
                        post_offsub=[sun_angle, na_meso_sub,
                                     extinction_correct, rayleigh_convert,
-                                    na_apertures, closest_galsat_to_jupiter,
+                                    obj_surface_bright, na_apertures,
+                                    closest_galsat_to_jupiter,
                                     plot_planet_subim, as_single],
                        outdir=outdir,
                        outdir_root=outdir_root,
@@ -246,7 +289,6 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
                    show=False,
                    create_outdir=True,                       
                    outdir_root=NA_NEBULA_ROOT,
-                   max_num_processes=MAX_NUM_PROCESSES,
                    **kwargs):
 
     dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
@@ -269,108 +311,19 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
         'csvnames': csvname_creator,
         'read_csvs': read_csvs,
         'write_csvs': write_csvs,
+        'photometry': photometry,
         'standard_star_obj': standard_star_obj,
         'na_meso_obj': na_meso_obj,
         'outdir_root': outdir_root,
         'create_outdir': create_outdir}
     cached_csv_args.update(**kwargs)
-
-    # --> This might be separable function that is passed
-    # --> cached_csv_args (or maybe just a regular set of kwargs!)  #
-    # --> could be parallelize_tree with arg dirs.  A little work
-    # --> could generalize it to csv case too
-
-    wwk = WorkerWithKwargs(cached_csv, **cached_csv_args)
-    # Pass return_collection=True to na_nebula_directory to prepare
-    # for multi-directory processing
-    return_collection_args = cached_csv_args.copy()
-    return_collection_args['return_collection'] = True
-    return_collection_args['write_csvs'] = False
-
-    # vstack of [] with a QTable returns the QTable, so standardize
-    # all our empty/starter QTable values to []
-    summary_table = []
-    running_nfiles = 0
-    collection_list = []
-    for directory in dirs:
-        # Try to read cache.  It it fails this time, return collection
-        # only (remembering not to try to cache that!)
-        t = cached_csv(directory, **return_collection_args)
-        if isinstance(t, list) and len(t) == 0:
-            # QTable.read returns [] when the cache file is empty
-            continue
-        if isinstance(t, QTable):
-            # We really read the cache
-            # Hack to get around astropy vstack bug with location
-            loc = t['tavg'][0].location.copy()
-            t['tavg'].location = None
-            summary_table = vstack([summary_table, t])
-            continue
-
-        collection = t
-        # If we made it here, we were handed back a collection so we
-        # can look inside to see how many files are there & and
-        # process them in parallel
-        assert isinstance(collection, ccdp.ImageFileCollection)
-        # Accomodate our current on_off_pipeline arrangement which
-        # processes in pairs
-        nfiles = int(len(collection.files) / 2)
-        if nfiles >= max_num_processes:
-            # Let cormultipipe regulate the number of processes
-            t = cached_csv(directory, **cached_csv_args)
-            loc = t['tavg'][0].location.copy()
-            t['tavg'].location = None
-            summary_table = vstack([summary_table, t])
-            continue
-            
-        if nfiles + running_nfiles < max_num_processes:
-            # Keep building our list
-            running_nfiles += nfiles
-            collection_list.append(collection)
-            continue
-
-        if nfiles + running_nfiles == max_num_processes:
-            # We hit is just right
-            collection_list.append(collection)
-            to_process = collection_list
-            running_nfiles = 0
-            collection_list = []
-        else:
-            # We went over a bit.  Process what we have & start at the
-            # current directory
-            to_process = collection_list
-            running_nfiles = nfiles
-            collection_list = [collection]
-
-        with NestablePool(processes=max_num_processes) as p:
-            tlist = p.map(wwk.worker, to_process)
-        # Combine QTables into one big one
-        for t in tlist:
-            loc = t['tavg'][0].location.copy()
-            t['tavg'].location = None
-            summary_table = vstack([summary_table, t])
-            
-    if len(collection_list) > 0:
-        to_process = collection_list
-        # Handle last (set of) directories
-        with NestablePool(processes=max_num_processes) as p:
-            tlist = p.map(wwk.worker, to_process)
-        # Combine QTables into one big one
-        for t in tlist:
-            if len(t) == 0:
-                continue
-            loc = t['tavg'][0].location.copy()
-            t['tavg'].location = None
-            summary_table = vstack([summary_table, t])
-        
-    if len(summary_table) == 0:
-        return summary_table
-    
-    summary_table['tavg'].location = loc
+    # Not sure why I am not getting a full house with files_per_process=2
+    summary_table = parallel_cached_csvs(dirs,
+                                         files_per_process=3,
+                                         **cached_csv_args)
     summary_table.write(os.path.join(outdir_root, 'Na_nebula.ecsv'),
                                      overwrite=True)
-    na_nebula_plot(summary_table, outdir_root)
-
+    na_nebula_plot(summary_table, outdir_root, show=show)
     return summary_table
 
 class NaNebulaArgparseHandler(SSArgparseHandler,
@@ -405,7 +358,8 @@ class NaNebulaArgparseHandler(SSArgparseHandler,
                            keep_intermediate=args.keep_intermediate,
                            solve_timeout=args.solve_timeout,
                            join_tolerance=(
-                               args.join_tolerance*args.join_tolerance_unit),
+                               args.join_tolerance
+                               *u.Unit(args.join_tolerance_unit)),
                            standard_star_obj=ss,
                            na_meso_obj=na_meso_obj,
                            read_pout=args.read_pout,
@@ -427,6 +381,10 @@ if __name__ == '__main__':
     args = parser.parse_args()
     aph.cmd(args)
 
+
+t = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
+na_nebula_plot(t, '/tmp', min_av_ap_dist=10, min_sb=-100, max_sb=600, show=True)
+#na_nebula_plot(t, '/tmp', max_sb=200, show=True)
 
 #log.setLevel('DEBUG')
 #

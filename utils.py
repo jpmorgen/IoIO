@@ -64,6 +64,8 @@ def dict_to_ccd_meta(ccd_in, d):
     for k in d.keys():
         if np.isnan(d[k]):
             ccd.meta[f'HIERARCH {k}'] = 'NAN'
+        elif np.isinf(d[k]):
+            ccd.meta[f'HIERARCH {k}'] = 'INF'
         elif isinstance(d[k], u.Quantity):
             ccd.meta[f'HIERARCH {k}'] = (d[k].value,
                                          f'[{d[k].unit}]')
@@ -640,34 +642,40 @@ def cached_csv(*args,
     # If we made it here, we need to generate our list(s) of dicts
     list_of_table_or_dicts = code(*args, **kwargs)
 
-    if not write_csvs:
-        return list_of_table_or_dicts
-
-    # If we made it here, we want to write our list(s) of dicts
-    if single_table_or_dictlist:
-        list_of_table_or_dicts = [list_of_table_or_dicts]
-    for csvname, table_or_dict_list \
-        in zip(csvnames, list_of_table_or_dicts):
-        if create_outdir:
-            os.makedirs(os.path.dirname(csvname), exist_ok=True)
-        if len(table_or_dict_list) == 0:
-            # Signal we have been here and found nothing
-            Path(csvname).touch()
-            continue
-        _, ext = os.path.splitext(csvname)
-        if ext == '.ecsv':
-            table_or_dict_list.write(csvname, overwrite=True)
-        else:
-            fieldnames = list(table_or_dict_list[0].keys())
-            with open(csvname, 'w', newline=newline) as csvfile:
-                csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
-                                       quoting=quoting)
-                csvdw.writeheader()
-                for d in table_or_dict_list:
-                            csvdw.writerow(d)
-    if single_table_or_dictlist:
-        list_of_table_or_dicts = list_of_table_or_dicts[0]
-    return list_of_table_or_dicts    
+    if (write_csvs
+        and (isinstance(list_of_table_or_dicts, list)
+             or isinstance(list_of_table_or_dicts, QTable))):
+        # Make sure we have a cacheable return result, e.g. not the
+        # ImageFileCollection that is returned for processing multiple
+        # directories in parallel.  We can't turn off caching
+        # entirely, since then zero caches aren't written properly
+        if single_table_or_dictlist:
+            list_of_table_or_dicts = [list_of_table_or_dicts]
+        for csvname, table_or_dict_list \
+            in zip(csvnames, list_of_table_or_dicts):
+            if create_outdir:
+                os.makedirs(os.path.dirname(csvname), exist_ok=True)
+            if len(table_or_dict_list) == 0:
+                # Signal we have been here and found nothing
+                Path(csvname).touch()
+                continue
+            _, ext = os.path.splitext(csvname)
+            if ext == '.ecsv':
+                table_or_dict_list.write(csvname, overwrite=True)
+            else:
+                fieldnames = list(table_or_dict_list[0].keys())
+                with open(csvname, 'w', newline=newline) as csvfile:
+                    csvdw = csv.DictWriter(csvfile, fieldnames=fieldnames,
+                                           quoting=quoting)
+                    csvdw.writeheader()
+                    for d in table_or_dict_list:
+                        csvdw.writerow(d)
+        if single_table_or_dictlist:
+            list_of_table_or_dicts = list_of_table_or_dicts[0]
+    elif write_csvs:
+        log.debug(f'Uncachable code return value of type '
+                  f'{type(list_of_table_or_dicts)}')
+    return list_of_table_or_dicts
 
 def savefig_overwrite(fname, **kwargs):
     if os.path.exists(fname):
