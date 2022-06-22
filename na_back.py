@@ -1092,6 +1092,8 @@ def na_meso_sub(ccd_in, bmp_meta=None, na_meso_obj=None, **kwargs):
     meso, meso_err = na_meso_obj.best_back(ccd.meta['DATE-AVG'],
                                            ccd.meta['AIRMASS'],
                                            ccd.meta['SUN_ANGLE'])
+    # --> may want to mask the ND filter and put it back in again,
+    # --> since this over-subtracts
     ccd = ccd.subtract(meso, handle_meta='first_found')
 
     ccd.meta['MESO'] = (

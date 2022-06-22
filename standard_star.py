@@ -1029,7 +1029,7 @@ def standard_star_directory(directory,
     # https://mail.python.org/pipermail/tkinter-discuss/2019-December/004153.html
     # suggests might be solved by just GCing occationally
     # This might be because I didn't close plots properly when I
-    # didn't find any excintqion data.  Well, that didn't take long to fail!
+    # didn't find any extinction data.  Well, that didn't take long to fail!
     gc.collect()
 
     return [extinction_data, exposure_correct_data]
@@ -1171,6 +1171,12 @@ def extinction_correct(flex_input, airmass=None,
         filt = ccd.meta['FILTER']
         airmass = ccd.meta['AIRMASS']
         ext_coef, ext_coef_err = standard_star_obj.extinction_coef(filt)
+        if filt == 'Na_on':
+            # Na_on is not coming in with a good exctinction coef --
+            # it is too high.
+            ext_coef, ext_coef_err = standard_star_obj.extinction_coef('Na_off')
+            ccd.meta['HIERARCH SUBSTITUTE_EXTINCTION_COEF'] = 'Na_off'
+        
         mag = u.Magnitude(1*ccd.unit)
         ecmag = extinction_correct(mag, airmass, ext_coef,
                                    inverse=inverse)
@@ -1187,7 +1193,6 @@ def extinction_correct(flex_input, airmass=None,
                    'extinction_correction_value': ecphys.value}
         bmp_meta.update(ec_dict)
         ccd = dict_to_ccd_meta(ccd, ec_dict)
-        #ccd.meta['EXT_COEF'] = (
         #    ext_coef.value,
         #    f'extinction coefficient ({ext_coef.unit})')
         #ccd.meta['HIERARCH EXT_COEF_ERR'] = (
