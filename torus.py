@@ -284,7 +284,8 @@ def ansa_parameters(ccd,
             f'ansa_{side}_surf_bright_err': sb_err * sb.unit}
 
 def closest_galsat_to_jupiter(ccd_in, bmp_meta=None, **kwargs):
-    bmp_meta = bmp_meta or {}
+    if bmp_meta is None:
+        bmp_meta = {}
     ccd = ccd_in.copy()
     galsats = list(GALSATS.keys())
     g = galsats[0]
@@ -327,7 +328,8 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
     rccd = mask_galsats(rccd, galsat_mask_side=galsat_mask_side)
     # We only  want to mess with our original CCD metadata
     ccd = ccd_in.copy()
-    bmp_meta = bmp_meta or {}
+    if bmp_meta is None:
+        bmp_meta = {}
     bmp_meta['tavg'] = ccd.tavg
     ccd = ccd_meta_to_bmp_meta(ccd, bmp_meta=bmp_meta,
                                ccd_meta_to_bmp_meta_keys=

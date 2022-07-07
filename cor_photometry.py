@@ -956,9 +956,11 @@ def write_astrometry(ccd_in, in_name=None, outname=None,
     except Exception as e:
         log.debug(f'Problem writing file: {e}')
         # This might be a race condition when multi-processing
-        # directories.  But not sure why more than one copy of
-        # astrometry would be running per file
-        raise
+        # directories when two processes are calling makedirs at the
+        # same time
+        write_astrometry(ccd_in, in_name=in_name, outname=outname,
+                     write_to_central_astrometry=write_to_central_astrometry,
+                     **kwargs)
     return
 
 def write_photometry(in_name=None, outname=None, photometry=None,
@@ -1004,6 +1006,7 @@ def add_astrometry(ccd_in, bmp_meta=None,
                    create_outdir=None,
                    solve_timeout=None,
                    keep_intermediate=False,
+                   fail_if_no_wcs=True,
                    write_to_central_photometry=True,
                    write_local_photometry=False,
                    **kwargs):
@@ -1021,7 +1024,8 @@ def add_astrometry(ccd_in, bmp_meta=None,
         Default is ``False``
 
     """
-    bmp_meta = bmp_meta or {}
+    if bmp_meta is None:
+        bmp_meta = {}
     if isinstance(ccd_in, list):
         if isinstance(in_name, list):
             result =  [add_astrometry(
@@ -1088,7 +1092,7 @@ def add_astrometry(ccd_in, bmp_meta=None,
     photometry.outname = outname or photometry.outname
 
     ccd.wcs = photometry.wcs
-    if photometry.wcs is None:
+    if photometry.wcs is None and fail_if_no_wcs:
         # Pathological case: no wcs solution and no proxy solution
         bmp_meta.clear()
         return None
@@ -1118,6 +1122,7 @@ def add_astrometry(ccd_in, bmp_meta=None,
     if ccd.meta['HIERARCH ASTROMETRY_NET_SOLVED']:
         write_astrometry(ccd, in_name=in_name, **kwargs)
     if write_to_central_photometry:
+
         # Slighly different logic, since write_photometry also handles
         # case where local progressing pipeline writes photometry
         bname = os.path.basename(in_name)

@@ -82,7 +82,8 @@ def off_band_subtract(ccd_in,
     from on-band
 
     """
-    bmp_meta = bmp_meta or {}
+    if bmp_meta is None:
+        bmp_meta = {}
     if off_on_ratio is None and calibration is None:
         #calibration = Calibration(reduce=True)
         calibration = Calibration()

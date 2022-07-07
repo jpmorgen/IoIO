@@ -79,7 +79,8 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
         na_aps[f'{ap_key}_sum'] = ap_sum
         na_aps[f'{ap_key}_area'] = ap_area
     # We only  want to mess with our original CCD metadata
-    bmp_meta = bmp_meta or {}
+    if bmp_meta is None:
+        bmp_meta = {}
     bmp_meta['tavg'] = ccd.tavg
 
     ccd = ccd_meta_to_bmp_meta(ccd_in, bmp_meta=bmp_meta,

@@ -1162,7 +1162,8 @@ def extinction_correct(flex_input, airmass=None,
             raise ValueError('ERROR: airmass and/or ext_coef supplied.  '
                              'CCDData metadata are used for these quantities')
         ccd = flex_input.copy()
-        bmp_meta = bmp_meta or {}
+        if bmp_meta is None:
+        bmp_meta = {}
         old_ext_corr_val = ccd.meta.get('EXT_CORR_VAL')
         if inverse and (old_ext_corr_val is None
                         or old_ext_corr_val == 1):
@@ -1242,7 +1243,8 @@ def rayleigh_convert(ccd_in, bmp_meta=None,
     if inverse and ext_corr_val is not None and ext_corr_val > 1:
         raise ValueError('Extinction correction still applied.  Invert that first')
     ccd = ccd_in.copy()
-    bmp_meta = bmp_meta or {}
+    if bmp_meta is None:
+        bmp_meta = {}
     rc, rc_err = standard_star_obj.rayleigh_conversion(ccd.meta['FILTER'])
     if inverse:
         ccd = ccd.divide(rc, handle_meta='first_found')

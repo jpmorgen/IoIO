@@ -385,7 +385,8 @@ def objctradec_to_obj_center(ccd_in, bmp_meta=None, **kwargs):
     if objctra is None or objctdec is None:
         return ccd_in        
     ccd = ccd_in.copy()
-    bmp_meta = bmp_meta or {}
+    if bmp_meta is None:
+        bmp_meta = {}
     cent = SkyCoord(objctra, objctdec, unit=(u.hour, u.deg))
     x, y = ccd.wcs.world_to_pixel(cent)
     ccd.obj_center = (y, x)
@@ -498,7 +499,8 @@ def crop_ccd(ccd_in, crop_ccd_coord=None,
 def reject_center_quality_below(ccd_in, bmp_meta=None,
                                 min_center_quality=MIN_CENTER_QUALITY,
                                 **kwargs):
-    bmp_meta = bmp_meta or {}
+    if bmp_meta is None:
+        bmp_meta = {}
     if isinstance(ccd_in, list):
         result = [reject_center_quality_below(
             ccd, bmp_meta=bmp_meta,
@@ -558,7 +560,8 @@ def planet_to_object(ccd_in, bmp_meta=None, planet=None, **kwargs):
     # take resources in other pipelines
     if planet is None:
         return ccd_in
-    bmp_meta = bmp_meta or {}
+    if bmp_meta is None:
+        bmp_meta = {}
     if isinstance(ccd_in, list):
         result = [planet_to_object(ccd, bmp_meta=bmp_meta,
                                    planet=planet, **kwargs)
@@ -587,7 +590,8 @@ def pixel_per_Rj(ccd):
    
 def obj_surface_bright(ccd_in, bmp_meta=None, **kwargs):
     """Calculates Jupiter surface brightness using a box 0.5 Rj on a side"""
-    bmp_meta = bmp_meta or {}
+    if bmp_meta is None:
+        bmp_meta = {}
     ccd = ccd_in.copy()
     center = ccd.obj_center*u.pixel
     pix_per_Rj = pixel_per_Rj(ccd)
@@ -631,6 +635,10 @@ def parallel_cached_csvs(dirs,
         # only (remembering not to try to cache that!)
         t = cached_csv(directory, return_collection=True, **cached_csv_args)
         if isinstance(t, list):
+            if len(t) == 0:
+                # Covers tricky bug case where summary_table is QTable
+                # but t is [] due to no files
+                continue
             # Covers both the csv case and QTable case.  QTable.read
             # returns [] when the cache file is empty.  Appending []
             # to QTable or list does nothing
