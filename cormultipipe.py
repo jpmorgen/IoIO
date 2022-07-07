@@ -611,7 +611,7 @@ def obj_surface_bright(ccd_in, bmp_meta=None, **kwargs):
     return ccd
 
 def parallel_cached_csvs(dirs,
-                         files_per_process=1,
+                         files_per_process=1, # set to 2--3 for on_off_pipeline
                          max_num_processes=MAX_NUM_PROCESSES,
                          **cached_csv_args):
     wwk = WorkerWithKwargs(cached_csv, **cached_csv_args)
@@ -630,8 +630,11 @@ def parallel_cached_csvs(dirs,
         # Try to read cache.  It it fails this time, return collection
         # only (remembering not to try to cache that!)
         t = cached_csv(directory, return_collection=True, **cached_csv_args)
-        if isinstance(t, list) and len(t) == 0:
-            # QTable.read returns [] when the cache file is empty
+        if isinstance(t, list):
+            # Covers both the csv case and QTable case.  QTable.read
+            # returns [] when the cache file is empty.  Appending []
+            # to QTable or list does nothing
+            summary_table.append(t)
             continue
         if isinstance(t, QTable):
             # We really read the cache
@@ -641,16 +644,17 @@ def parallel_cached_csvs(dirs,
             summary_table = vstack([summary_table, t])
             continue
 
-        collection = t
         # If we made it here, we were handed back a collection so we
         # can look inside to see how many files are there & and
         # process them in parallel
-        # Accomodate our current on_off_pipeline arrangement which
-        # processes in pairs
+        collection = t
         nfiles = int(len(collection.files) / files_per_process)
         if nfiles >= max_num_processes:
             # Let cormultipipe regulate the number of processes
             t = cached_csv(directory, **cached_csv_args)
+            if isinstance(t, list):
+                summary_table.append(t)
+                continue
             loc = t['tavg'][0].location.copy()
             t['tavg'].location = None
             summary_table = vstack([summary_table, t])
@@ -677,9 +681,10 @@ def parallel_cached_csvs(dirs,
 
         with NestablePool(processes=max_num_processes) as p:
             tlist = p.map(wwk.worker, to_process)
-        # Combine QTables into one big one
+        # Combine QTables or lists of dict into one big one
         for t in tlist:
-            if isinstance(t, list) and len(t) == 0:
+            if isinstance(t, list):
+                summary_table.append(t)
                 continue
             loc = t['tavg'][0].location.copy()
             t['tavg'].location = None
@@ -690,18 +695,19 @@ def parallel_cached_csvs(dirs,
         # Handle last (set of) directories
         with NestablePool(processes=max_num_processes) as p:
             tlist = p.map(wwk.worker, to_process)
-        # Combine QTables into one big one
+        # Combine QTables or lists into one big one
         for t in tlist:
-            if len(t) == 0:
+            if isinstance(t, list):
+                summary_table.append(t)
                 continue
             loc = t['tavg'][0].location.copy()
             t['tavg'].location = None
             summary_table = vstack([summary_table, t])
         
-    if len(summary_table) == 0:
-        return summary_table
-    
-    summary_table['tavg'].location = loc
+    if isinstance(t, QTable) and len(summary_table) > 0:
+        # Complete our hack
+        summary_table['tavg'].location = loc
+        
     return summary_table
 
 ######### Argparse mixin

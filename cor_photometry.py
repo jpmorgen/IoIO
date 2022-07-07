@@ -949,9 +949,16 @@ def write_astrometry(ccd_in, in_name=None, outname=None,
     # ccd.to_hdu needs at least some data to work
     hdul = ccd.to_hdu()
     hdul[0].data = None
-    d = os.path.dirname(aoutname)
-    os.makedirs(d, exist_ok=True)
-    hdul.writeto(aoutname, overwrite=True)
+    try:
+        d = os.path.dirname(aoutname)
+        os.makedirs(d, exist_ok=True)
+        hdul.writeto(aoutname, overwrite=True)
+    except Exception as e:
+        log.debug(f'Problem writing file: {e}')
+        # This might be a race condition when multi-processing
+        # directories.  But not sure why more than one copy of
+        # astrometry would be running per file
+        raise
     return
 
 def write_photometry(in_name=None, outname=None, photometry=None,

@@ -9,6 +9,7 @@ import argparse
 import numpy as np
 
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
 from astropy import log
 import astropy.units as u
@@ -23,7 +24,7 @@ from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 from IoIO.utils import (get_dirs_dates, reduced_dir,
                         valid_long_exposure, dict_to_ccd_meta,
                         multi_glob, sum_ccddata, 
-                        savefig_overwrite)
+                        savefig_overwrite, finish_stripchart)
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
                                MAX_MEM_FRAC,
@@ -58,7 +59,9 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     # We don't rotate obj_center either, so just put that back with
     # the WCS
     ccd = objctradec_to_obj_center(ccd)
-    ccd = mask_galsats(ccd)
+    # default of 20 doesn't always get the emission.  This might not
+    # be enough either
+    ccd = mask_galsats(ccd, galsat_mask_side=30)
     center = ccd.obj_center*u.pixel
     pix_per_Rj = pixel_per_Rj(ccd)
     # --> These may need to be tweaked
@@ -105,22 +108,19 @@ def na_nebula_plot(t, outdir,
                    max_sb=1000,
                    min_av_ap_dist=0,
                    max_av_ap_dist=np.inf,
+                   n_plots=2,
                    show=False):
+    outbase = 'Na_nebula_apertures.png'
     sum_regexp = re.compile('Na_ap_.*_sum')
     area_regexp = re.compile('Na_ap_.*_area')
     sum_colnames = filter(sum_regexp.match, t.colnames)
     area_colnames = filter(area_regexp.match, t.colnames)
 
-    f = plt.figure(figsize=[11, 8.5])
-    date, _ = t['tavg'][0].fits.split('T')
     last_sum = 0
     last_area = 0
     last_ap_bound = 0
     sb_list = []
     ap_list = []
-    plt.suptitle('Na nebula rectangular aperture surface brightesses above & below torus centrifugal plane')
-    ax = plt.subplot(3,1,1)
-    plt.title('Telluric Na empirical model subtracted')
     for sum_colname, area_colname in zip(sum_colnames, area_colnames):
         ap_bound = sum_colname.split('_')
         ap_bound = int(ap_bound[2])
@@ -133,55 +133,85 @@ def na_nebula_plot(t, outdir,
             continue
         ap_list.append(av_ap)
         sb_list.append(sb)
+        last_sum = t[sum_colname]
+        last_area = t[area_colname]
+
+    if n_plots == 1:
+        f = plt.figure(figsize=[8.5, 11/2])
+    else:
+        f = plt.figure(figsize=[8.5, 11])
+    date, _ = t['tavg'][0].fits.split('T')
+    plt.suptitle('Na nebula rectangular aperture surface brightesses above & below torus centrifugal plane')
+    ax = plt.subplot(n_plots,1,1)
+    plt.title('Most distant aperture subtracted')
+    for sb, av_ap in zip(sb_list, ap_list):
+        plt.plot(t['tavg'].datetime, sb - sb_list[-1], '.',
+                 label=f'+/- {av_ap:.0f} Rj')
+    ax.set_ylim(0, max_sb/2)
+    plt.ylabel(f'Surf. Bright ({sb.unit})')
+    plt.legend()
+
+    f.autofmt_xdate()
+
+    if n_plots == 1:
+        finish_stripchart(outdir, outbase, show=show)
+        return
+    
+    ax = plt.subplot(n_plots,1,2)
+    plt.title('Telluric Na empirical model subtracted')
+    for sb, av_ap in zip(sb_list, ap_list):
         plt.plot(t['tavg'].datetime, sb, '.', label=f'+/- {av_ap:.0f} Rj')
         #plt.plot(t['tavg'].datetime, cts, '.', label=sum_colname)
         #plt.plot(t['tavg'].datetime, area, '.', label=area_colname)
-        last_sum = t[sum_colname]
-        last_area = t[area_colname]
     meso = t['MESO']
     meso_err = t['MESO_ERR']
     plt.errorbar(t['tavg'].datetime, meso.value, meso_err.value,
-                 fmt='k.', label='Telluric Na model')
+                 fmt='.', color=mcolors.to_rgb('grey'), alpha=0.2,
+                 label='Telluric Na model')
     ax.set_ylim(min_sb, max_sb)
     #plt.yscale('log')
     plt.ylabel(f'Surf. Bright ({sb.unit})')
     plt.legend()
 
-    ax = plt.subplot(3,1,2)
-    plt.title('Most distant aperture subtracted')
-    for sb, av_ap in zip(sb_list, ap_list):
-        plt.plot(t['tavg'].datetime, sb - sb_list[-1], '.',
-                 label=f'{av_ap:.0f} Rj')
-    ax.set_ylim(0, max_sb/2)
-    plt.ylabel(f'Surf. Bright ({sb.unit})')
-    plt.legend()
+    if n_plots == 2:
+        finish_stripchart(outdir, outbase, show=show)
+        return
 
     obj_sb = t['obj_surf_bright']
     obj_sb_err = t['obj_surf_bright_err']
-    ax = plt.subplot(3,1,3)
+    ax = plt.subplot(n_plots,1,3)
     plt.title('Jupiter attenuated surface brightness')
     plt.errorbar(t['tavg'].datetime, obj_sb.value, obj_sb_err.value,
                  fmt='k.')#, label='Telluric Na model')
-    plt.ylabel(f'Surf. Bright ({obj_sb.unit})')
-
-
-    #ax = plt.subplot(3,1,3)
-    #plt.plot(t['tavg'].datetime, sb_list[-1]/meso, '.',
-    #         label=f'{ap_list[-1]:.0f} Rj')
-    #plt.axhline(1)
-    #plt.yscale('log')
-    #ax.set_ylim(0.03, 30)
-    #plt.ylabel(f'{av_ap:.0f} Rj / telluric')
-    #plt.legend()
+    ax.set_ylim(0, 200000)
+    plt.ylabel(f'Atten. Surf. Bright ({obj_sb.unit})')
     
-    f.autofmt_xdate()
-    plt.xlabel(f'UT')# {date}')
-    plt.tight_layout()
+    ax = plt.subplot(n_plots,1,4)
+    plt.plot(t['tavg'].datetime, t['extinction_correction_value'], '.')
+    plt.title('Extinction correction factor')
+    ax.set_ylim(1, 5)
+    plt.ylabel(f'Extinction correction')
 
-    savefig_overwrite(os.path.join(outdir, 'Na_nebula_apertures.png'))
-    if show:
-        plt.show()
-    plt.close()
+    if n_plots == 3:
+        finish_stripchart(outdir, outbase, show=show)
+        return
+
+    ax = plt.subplot(n_plots,1,5)
+    plt.plot(t['tavg'].datetime, sb_list[-1]/meso, '.',
+             label=f'{ap_list[-1]:.0f} Rj')
+    plt.axhline(1)
+    plt.yscale('log')
+    ax.set_ylim(0.03, 30)
+    plt.ylabel(f'{av_ap:.0f} Rj / telluric')
+    plt.legend()
+    
+    if n_plots == 4:
+        finish_stripchart(outdir, outbase, show=show)
+        return
+
+    plt.xlabel(f'UT')# {date}')
+
+    finish_stripchart(outdir, outbase, show=show)
     
 def na_nebula_directory(directory_or_collection,
                         return_collection=False,
@@ -381,10 +411,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     aph.cmd(args)
 
-
-t = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
-na_nebula_plot(t, '/tmp', min_av_ap_dist=10, min_sb=-100, max_sb=600, show=True)
-#na_nebula_plot(t, '/tmp', max_sb=200, show=True)
 
 #log.setLevel('DEBUG')
 #

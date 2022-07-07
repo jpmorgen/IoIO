@@ -681,3 +681,11 @@ def savefig_overwrite(fname, **kwargs):
     if os.path.exists(fname):
         os.remove(fname)
     plt.savefig(fname, **kwargs)
+
+def finish_stripchart(outdir, outbase, show=False):
+    plt.tight_layout()
+    savefig_overwrite(os.path.join(outdir, outbase))
+    if show:
+        plt.show()
+    plt.close()
+

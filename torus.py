@@ -24,7 +24,7 @@ from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 
 from IoIO.utils import (dict_to_ccd_meta, nan_biweight, nan_mad,
                         get_dirs_dates, reduced_dir, cached_csv,
-                        savefig_overwrite)
+                        savefig_overwrite, finish_stripchart)
 from IoIO.simple_show import simple_show
 from IoIO.cordata_base import SMALL_FILT_CROP
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
@@ -109,6 +109,8 @@ def ansa_parameters(ccd,
                     ansa_width_bounds=ANSA_WIDTH_BOUNDS,
                     ansa_dy=ANSA_DY,
                     show=False,
+                    in_name=None,
+                    outname=None,                    
                     **kwargs):
     center = ccd.obj_center*u.pixel
     # Work in Rj for our model
@@ -201,9 +203,15 @@ def ansa_parameters(ccd,
     #print(r_fit.fit_deriv(r_Rj))
 
     if show:
+        f = plt.figure(figsize=[5, 5])
+        date_obs, _ = ccd.meta['DATE-OBS'].split('T') 
+        outname = outname_creator(in_name, outname=outname, **kwargs)
+        #plt.title(f'{date_obs} {os.path.basename(outname)}')
         plt.plot(r_Rj, r_prof)
         plt.plot(r_Rj, r_fit(r_Rj))
-        plt.ylabel(r_prof.unit)
+        plt.xlabel(r'Jovicentric radial distance (R$\mathrm{_J}$)')
+        plt.ylabel(f'Surface brightness ({r_prof.unit})')
+        plt.tight_layout()
         plt.show()
 
     if r_fit.mean_0.std is None:
@@ -300,7 +308,7 @@ def closest_galsat_to_jupiter(ccd_in, bmp_meta=None, **kwargs):
             bmp_meta['closest_galsat'] = closest_Rj
     return ccd        
 
-def characterize_ansas(ccd_in, bmp_meta=None,
+def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None, 
                        **kwargs):
     # MAKE SURE THIS IS CALLED BEFORE ANY ROTATIONS The underlying
     # reproject stuff in rot_to is a little unstable when it comes to
@@ -316,7 +324,7 @@ def characterize_ansas(ccd_in, bmp_meta=None,
         log.error(f'RAWFNAME of problem: {ccd_in.meta["RAWFNAME"]}')
         raise e
     rccd = objctradec_to_obj_center(rccd)
-    rccd = mask_galsats(rccd)
+    rccd = mask_galsats(rccd, galsat_mask_side=galsat_mask_side)
     # We only  want to mess with our original CCD metadata
     ccd = ccd_in.copy()
     bmp_meta = bmp_meta or {}
@@ -408,7 +416,11 @@ def plot_planet_subim(ccd_in,
 
     return ccd_in
 
-def torus_stripchart(t, outdir):
+def torus_stripchart(t, outdir, n_plots=5,
+                     min_sb=0,
+                     max_sb=300,
+                     show=False):
+    outbase = 'Characterize_Ansas.png'
     r_peak = t['ansa_right_r_peak']
     l_peak = t['ansa_left_r_peak']
     av_peak = (np.abs(r_peak) + np.abs(l_peak)) / 2
@@ -434,6 +446,8 @@ def torus_stripchart(t, outdir):
     epsilon_biweight = nan_biweight(epsilon)
     epsilon_mad = nan_mad(epsilon)
 
+    # This was a not-so-successful bid at getting something like
+    # f.autofmt_xdate() running but with my own definitions of things
     time_expand = timedelta(minutes=5)
     tlim = (np.min(t['tavg'].datetime) - time_expand,
             np.max(t['tavg'].datetime) + time_expand)
@@ -452,7 +466,63 @@ def torus_stripchart(t, outdir):
     # Get E = positive to left sign correct now that I am not thinking in
     # literal image left and right terms
 
-    ax = plt.subplot(5, 1, 1)
+    ax = plt.subplot(n_plots, 1, 1)
+    plt.errorbar(t['tavg'].datetime,
+                 t['ansa_left_surf_bright'].value,
+                 t['ansa_left_surf_bright_err'].value, fmt='r.', alpha=0.5,
+                 label='East')
+    plt.errorbar(t['tavg'].datetime,
+                 t['ansa_right_surf_bright'].value,
+                 t['ansa_right_surf_bright_err'].value, fmt='g.', alpha=0.5,
+                 label='West')
+    plt.ylabel(f'Av. Surf. Bright ({t["ansa_left_surf_bright"].unit})')
+    #plt.hlines(np.asarray((left_sb_biweight.value,
+    #                       left_sb_biweight.value - left_sb_mad.value,
+    #                       left_sb_biweight.value + left_sb_mad.value)),
+    #           *tlim,
+    #           colors='r',
+    #           linestyles=('-', '--', '--'),
+    #           label=(f'East {left_sb_biweight:.0f} '
+    #                  f'+/- {left_sb_mad:.0f}'))
+    #plt.hlines(np.asarray((right_sb_biweight.value,
+    #                       right_sb_biweight.value - right_sb_mad.value,
+    #                       right_sb_biweight.value + right_sb_mad.value)),
+    #           *tlim,
+    #           linestyles=('-', '--', '--'),
+    #           colors='g',
+    #           label=(f'West {right_sb_biweight:.0f} '
+    #                  f'+/- {right_sb_mad:.0f}'))
+    ax.legend()
+    #ax.set_xlim(tlim)
+    #ax.set_ylim(ylim_surf_bright)
+    ax.set_ylim(min_sb, max_sb)
+    f.autofmt_xdate()
+
+    if n_plots == 1:
+        finish_stripchart(outdir, outbase, show=show)
+        return
+        
+    ax = plt.subplot(n_plots, 1, 2)
+    plt.errorbar(t['tavg'].datetime,
+                 epsilon.value,
+                 epsilon_err.value, fmt='k.')
+    ax.set_ylim(-0.05, 0.08)
+    plt.ylabel(r'Sky plane $|\vec\epsilon|$')
+    plt.hlines(np.asarray((epsilon_biweight,
+                           epsilon_biweight - epsilon_mad,
+                           epsilon_biweight + epsilon_mad)),
+               *tlim,
+               linestyles=('-', '--', '--'),
+               label=f'{epsilon_biweight:.3f} +/- {epsilon_mad:.3f}')
+    plt.axhline(0.025, color='y', label='Nominal 0.025')
+    ax.legend()
+    #ax.set_xlim(tlim)
+
+    if n_plots == 2:
+        finish_stripchart(outdir, outbase, show=show)
+        return
+
+    ax = plt.subplot(n_plots, 1, 3)
     plt.errorbar(t['tavg'].datetime,
                  np.abs(t['ansa_left_r_peak'].value),
                  t['ansa_left_r_peak_err'].value, fmt='r.',
@@ -470,60 +540,22 @@ def torus_stripchart(t, outdir):
     plt.ylabel(r'Ansa position (R$_\mathrm{J}$)')
     plt.axhline(IO_ORBIT_R.value, color='y', label='Io orbit')
     ax.legend()
-    ax.set_xlim(tlim)
+    #ax.set_xlim(tlim)
     ax.set_ylim(5.5, 6.0)
 
-    ax = plt.subplot(5, 1, 2)
-    plt.errorbar(t['tavg'].datetime,
-                 t['ansa_left_surf_bright'].value,
-                 t['ansa_left_surf_bright_err'].value, fmt='r.')
-    plt.errorbar(t['tavg'].datetime,
-                 t['ansa_right_surf_bright'].value,
-                 t['ansa_right_surf_bright_err'].value, fmt='g.')
-    plt.ylabel(f'Av. Surf. Bright ({t["ansa_left_surf_bright"].unit})')
-    plt.hlines(np.asarray((left_sb_biweight.value,
-                           left_sb_biweight.value - left_sb_mad.value,
-                           left_sb_biweight.value + left_sb_mad.value)),
-               *tlim,
-               colors='r',
-               linestyles=('-', '--', '--'),
-               label=(f'East {left_sb_biweight:.0f} '
-                      f'+/- {left_sb_mad:.0f}'))
-    plt.hlines(np.asarray((right_sb_biweight.value,
-                           right_sb_biweight.value - right_sb_mad.value,
-                           right_sb_biweight.value + right_sb_mad.value)),
-               *tlim,
-               linestyles=('-', '--', '--'),
-               colors='g',
-               label=(f'West {right_sb_biweight:.0f} '
-                      f'+/- {right_sb_mad:.0f}'))
-    ax.legend()
-    ax.set_xlim(tlim)
-    ax.set_ylim(ylim_surf_bright)
-
-    ax = plt.subplot(5, 1, 3)
-    plt.errorbar(t['tavg'].datetime,
-                 epsilon.value,
-                 epsilon_err.value, fmt='k.')
-    #ax.set_ylim(-0.010, 0.050)
-    plt.ylabel(r'Sky plane $|\vec\epsilon|$')
-    plt.hlines(np.asarray((epsilon_biweight,
-                           epsilon_biweight - epsilon_mad,
-                           epsilon_biweight + epsilon_mad)),
-               *tlim,
-               linestyles=('-', '--', '--'),
-               label=f'{epsilon_biweight:.3f} +/- {epsilon_mad:.3f}')
-    plt.axhline(0.025, color='y', label='Nominal 0.025')
-    ax.legend()
-    ax.set_xlim(tlim)
-
-    ax = plt.subplot(5, 1, 4)
+    if n_plots == 3:
+        finish_stripchart(outdir, outbase, show=show)
+        return
+        
+    ax = plt.subplot(n_plots, 1, 4)
     plt.plot(t['tavg'].datetime, t['closest_galsat'], 'k.')
-    ax.set_xlim(tlim)
+    #ax.set_xlim(tlim)
     plt.ylabel(r'Closest galsat (R$_\mathrm{J}$)')
 
     # import matplotlib.dates as mdates
     #plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    #--> still would like to get this nicer, but for now do it this
+    #way for the summary plot
     #f.autofmt_xdate()
     plt.xlabel(f'UT {date}')
 
@@ -532,7 +564,11 @@ def torus_stripchart(t, outdir):
     east_sysIII = east_sysIII.wrap_at(360*u.deg)
     west_sysIII = west_sysIII.wrap_at(360*u.deg)
 
-    ax = plt.subplot(5, 1, 5)
+    if n_plots == 4:
+        finish_stripchart(outdir, outbase, show=show)
+        return
+
+    ax = plt.subplot(n_plots, 1, 5)
     plt.errorbar(east_sysIII.value,
                  t['ansa_left_surf_bright'].value,
                  t['ansa_left_surf_bright_err'].value, fmt='r.',
@@ -548,11 +584,6 @@ def torus_stripchart(t, outdir):
     ax.set_xlim(0, 360)
     ax.set_ylim(ylim_surf_bright)
     ax.legend()
-
-    plt.tight_layout()
-
-    savefig_overwrite(os.path.join(outdir, 'Characterize_Ansas.png'))
-    plt.close()
 
 def torus_directory(directory,
                     outdir=None,
@@ -650,7 +681,7 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
     summary_table['tavg'].location = loc
     summary_table.write(os.path.join(outdir_root, 'Torus.ecsv'),
                                      overwrite=True)
-    torus_stripchart(summary_table, outdir_root)
+    torus_stripchart(summary_table, outdir_root, n_plots=3, show=show)
 
     return summary_table
 
