@@ -1244,7 +1244,7 @@ def na_meso_sub(ccd_in, bmp_meta=None, na_meso_obj=None, **kwargs):
 #bmp_meta = {}
 #ccd = na_back_process([on, off], in_name=[on_fname, off_fname],
 #                      bmp_meta=bmp_meta)#, show=True)
-pout = na_back_pipeline('/data/IoIO/raw/20210617')
+#pout = na_back_pipeline('/data/IoIO/raw/20210617')
 #pout = na_back_directory('/data/IoIO/raw/20210617', outdir='/tmp', read_pout=True, fits_fixed_ignore=True)#, show=True)
 #na_back_list = na_back_tree(fits_fixed_ignore=True)#, read_pout=False)
 

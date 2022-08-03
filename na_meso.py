@@ -8,6 +8,7 @@ from astropy import log
 from astropy import units as u
 from astropy.nddata import CCDData
 from astropy.table import QTable
+from astropy.coordinates import SkyCoord, solar_system_ephemeris, get_body
 
 from ccdproc import ImageFileCollection
 
@@ -21,11 +22,15 @@ from IoIO.simple_show import simple_show
 from IoIO.cordata_base import CorDataBase
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                CorMultiPipeBase, angle_to_major_body,
-                               nd_filter_mask, combine_masks)
+                               nd_filter_mask, combine_masks,
+                               parallel_cached_csvs)
 from IoIO.calibration import Calibration, CalArgparseHandler
+from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE,
+                             JOIN_TOLERANCE_UNIT)
 from IoIO.cor_photometry import CorPhotometry, add_astrometry
-
-NA_MESO_ROOT = os.path.join(IoIO_ROOT, 'Na_meso')
+ 
+BASE = 'Na_meso'  
+OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
 LOCKFILE = '/tmp/na_meso_reduce.lock'
 
 # For Photometry -- number of boxes for background calculation
@@ -105,11 +110,9 @@ def na_meso_process(data,
     objctaz = ccd.meta['OBJCTAZ']
     airmass = ccd.meta.get('AIRMASS')
 
-    # Add sun angle
-    _ = sun_angle(data[0], bmp_meta=bmp_meta, **kwargs)
-
     tmeta = {'tavg': ccd.tavg,
-             'sky_coord': ccd.sky_coord,
+             'ra': ccd.sky_coord.ra,
+             'dec': ccd.sky_coord.dec,
              'raoff': raoff0*u.arcmin,
              'decoff': decoff0*u.arcmin,
              'best_back': best_back,
@@ -117,6 +120,7 @@ def na_meso_process(data,
              'alt': objctalt*u.deg,
              'az': objctaz*u.deg,
              'airmass': airmass}
+    _ = sun_angle(data[0], bmp_meta=tmeta, **kwargs)
     
     bmp_meta.update(tmeta)
 
@@ -143,7 +147,7 @@ def na_meso_pipeline(directory=None, # raw directory
                      n_back_boxes=N_BACK_BOXES,
                      num_processes=None,
                      outdir=None,
-                     outdir_root=NA_MESO_ROOT,
+                     outdir_root=OUTDIR_ROOT,
                      create_outdir=True,
                      **kwargs):
 
@@ -175,12 +179,11 @@ def na_meso_pipeline(directory=None, # raw directory
                     f'in {directory}')
         return []
 
-    if calibration is None:
-        calibration = Calibration(reduce=True)
-    if photometry is None:
-        photometry = CorPhotometry(precalc=True,
-                                   n_back_boxes=n_back_boxes,
-                                   **kwargs)
+    calibration = calibration or Calibration(reduce=True)
+    photometry = photometry or CorPhotometry(
+        precalc=True,
+        n_back_boxes=n_back_boxes,
+        **kwargs)
         
     # --> We are going to want add_ephemeris here with a CorPhotometry
     # --> to build up astormetric solutions
@@ -192,8 +195,8 @@ def na_meso_pipeline(directory=None, # raw directory
         create_outdir=create_outdir,
         post_process_list=[nd_filter_mask,
                            combine_masks,
-                           na_meso_process],
-                           #no_outfile],                           
+                           na_meso_process,
+                           no_outfile],                           
         num_processes=num_processes,
         **kwargs)
 
@@ -202,6 +205,138 @@ def na_meso_pipeline(directory=None, # raw directory
     pout = cmp.pipeline(f_pairs, outdir=outdir, overwrite=True)
     pout, _ = prune_pout(pout, f_pairs)
     return pout
+
+def na_meso_collection(directory,
+                       glob_include='Jupiter*'): # add comets
+
+    # I think the best thing to do is here make sure we are a valid
+    # long exposure, offset from Jupiter, and that the on- and off
+    # centers are within some tolerance of each other, since they
+    # should nominally be identical.
+
+    flist = multi_glob(directory, glob_include)
+    if len(flist) == 0:
+        return []
+    # Create a collection of valid long Na exposures that are
+    # pointed away from Jupiter
+    collection = ImageFileCollection(directory, filenames=flist)
+    st = collection.summary
+    valid = ['Na' in f for f in st['filter']]
+    valid = np.logical_and(valid, valid_long_exposure(st))
+    # angle_to_major_body(ccd, 'jupiter') would do some good here, but
+    # it is designed to work on the ccd CorData level.  So use the
+    # innards of that code
+    # --> Might be nice to restructure those innards to be available
+    # to collections
+    ras = st['objctra']
+    decs = st['objctdec']
+    # This is not the exact tavg, but we are just getting close to
+    # make sure we are not pointed at Juptier
+    dateobs_strs = st['data-obs']
+    scs = SkyCoord(ras, decs, unit=(u.hourangle, u.deg))
+    times = Time(dateobs_strs, format='fits')
+    with solar_system_ephemeris.set('builtin'):
+        body_coords = get_body('jupiter', times, ccd.obs_location)
+
+
+    
+    if 'raoff' in st.colnames:
+        valid = np.logical_and(valid, not st['raoff'].mask)
+    if 'decoff' in st.colnames:
+        valid = np.logical_and(valid, not st['decoff'].mask)
+    if np.all(~valid):
+        return []
+    if np.any(~valid):
+        fbases = st['file'][valid]
+        flist = [os.path.join(directory, f) for f in fbases]
+    collection = ImageFileCollection(directory, filenames=flist)
+    
+
+def na_meso_directory(directory,
+                      read_pout=True,
+                      write_pout=True,
+                      write_plot=True,
+                      outdir=None,
+                      outdir_root=OUTDIR_ROOT,
+                      create_outdir=True,
+                      show=False,
+                      **kwargs):
+
+    outdir = outdir or reduced_dir(directory, outdir_root, create=False)
+    poutname = os.path.join(outdir, BASE + '.pout')
+    pout = cached_pout(na_meso_pipeline,
+                       poutname=poutname,
+                       read_pout=read_pout,
+                       write_pout=write_pout,
+                       directory=directory,
+                       outdir=outdir,
+                       create_outdir=create_outdir,
+                       **kwargs)
+    if pout is None or len(pout) == 0:
+        return QTable()
+
+    _ , pipe_meta = zip(*pout)
+    t = QTable(rows=pipe_meta)
+    return t
+
+def csvname_creator(directory_or_collection, *args,
+                    outdir_root=None,
+                    csv_base=None,
+                    **kwargs):
+    assert outdir_root is not None and csv_base is not None
+    if isinstance(directory_or_collection, ImageFileCollection):
+        directory = directory_or_collection.location
+    else:
+        directory = directory_or_collection
+    rd = reduced_dir(directory, outdir_root, create=False)
+    return os.path.join(rd, csv_base)
+
+def na_back_tree(data_root=RAW_DATA_ROOT,
+                 start=None,
+                 stop=None,
+                 calibration=None,
+                 photometry=None,
+                 keep_intermediate=None,
+                 solve_timeout=SOLVE_TIMEOUT,
+                 join_tolerance=JOIN_TOLERANCE*JOIN_TOLERANCE_UNIT,
+                 read_csvs=True,
+                 write_csvs=True,
+                 create_outdir=True,                       
+                 show=False,
+                 ccddata_cls=None,
+                 outdir_root=OUTDIR_ROOT,                 
+                 **kwargs):
+    dirs_dates = get_dirs_dates(data_root, start=start, stop=stop)
+    dirs, _ = zip(*dirs_dates)
+    if len(dirs) == 0:
+        log.warning('No directories found')
+        return
+    calibration = calibration or Calibration()
+    if photometry is None:
+        photometry = CorPhotometry(
+            precalc=True,
+            solve_timeout=solve_timeout,
+            join_tolerance=join_tolerance)
+
+    cached_csv_args = {
+        'code': na_meso_directory,
+        'csvnames': csvname_creator,
+        'csv_base': BASE + '.ecsv',
+        'read_csvs': read_csvs,
+        'write_csvs': write_csvs,
+        'calibration': calibration,
+        'photometry': photometry,
+        'outdir_root': outdir_root,
+        'create_outdir': create_outdir}
+    cached_csv_args.update(**kwargs)
+    summary_table = parallel_cached_csvs(dirs,
+                                         files_per_process=2,
+                                         **cached_csv_args)
+    summary_table.write(os.path.join(outdir_root, BASE + '.ecsv'),
+                                     overwrite=True)
+    return summary_table
+
+
 
 #on_fname = '/data/IoIO/raw/20210617/Jupiter-S007-R001-C001-Na_on.fts'
 #off_fname = '/data/IoIO/raw/20210617/Jupiter-S007-R001-C001-Na_off.fts'
@@ -214,4 +349,8 @@ def na_meso_pipeline(directory=None, # raw directory
 
 directory = '/data/IoIO/raw/20210617'
 
-pout = na_meso_pipeline(directory, fits_fixed_ignore=True)
+#pout = na_meso_pipeline(directory, fits_fixed_ignore=True)
+
+#t = na_meso_directory(directory, fits_fixed_ignore=True)
+
+t = na_back_tree(start='2021-06-17', stop='2021-06-17', fits_fixed_ignore=True)

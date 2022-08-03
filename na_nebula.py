@@ -15,7 +15,7 @@ from astropy import log
 import astropy.units as u
 from astropy.table import QTable
 
-import ccdproc as ccdp
+from ccdproc import ImageFileCollection
 
 from bigmultipipe import cached_pout
 
@@ -227,7 +227,13 @@ def na_nebula_directory(directory_or_collection,
                         create_outdir=True,
                         **kwargs):
 
-    if isinstance(directory_or_collection, ccdp.ImageFileCollection):
+    # --> Thinking about how to make collection_creator callable.
+    # --> Code below would be the callable.  I could call it in
+    # --> parallel_cached_csvs rather than having the bogus
+    # --> return_collection keyword here.  Then I would call it here
+    # --> to make the collection if directory_or_collection is not a collection
+
+    if isinstance(directory_or_collection, ImageFileCollection):
         # We are passed a collection when running multiple directories
         # in parallel
         directory = directory_or_collection.location
@@ -243,7 +249,7 @@ def na_nebula_directory(directory_or_collection,
         # Create a collection of valid long Na exposures that are
         # pointed at Jupiter (not offset for mesospheric foreground
         # observations)
-        collection = ccdp.ImageFileCollection(directory, filenames=flist)
+        collection = ImageFileCollection(directory, filenames=flist)
         st = collection.summary
         valid = ['Na' in f for f in st['filter']]
         valid = np.logical_and(valid, valid_long_exposure(st))
@@ -256,7 +262,7 @@ def na_nebula_directory(directory_or_collection,
         if np.any(~valid):
             fbases = st['file'][valid]
             flist = [os.path.join(directory, f) for f in fbases]
-        collection = ccdp.ImageFileCollection(directory, filenames=flist)
+        collection = ImageFileCollection(directory, filenames=flist)
 
     if return_collection:
         return collection
@@ -342,6 +348,7 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
         'csvnames': csvname_creator,
         'read_csvs': read_csvs,
         'write_csvs': write_csvs,
+        'calibration': calibration,
         'photometry': photometry,
         'standard_star_obj': standard_star_obj,
         'na_meso_obj': na_meso_obj,

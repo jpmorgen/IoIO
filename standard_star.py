@@ -1163,7 +1163,7 @@ def extinction_correct(flex_input, airmass=None,
                              'CCDData metadata are used for these quantities')
         ccd = flex_input.copy()
         if bmp_meta is None:
-        bmp_meta = {}
+            bmp_meta = {}
         old_ext_corr_val = ccd.meta.get('EXT_CORR_VAL')
         if inverse and (old_ext_corr_val is None
                         or old_ext_corr_val == 1):

@@ -24,9 +24,11 @@ from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 
 from IoIO.utils import (dict_to_ccd_meta, nan_biweight, nan_mad,
                         get_dirs_dates, reduced_dir, cached_csv,
-                        savefig_overwrite, finish_stripchart)
+                        savefig_overwrite, finish_stripchart,
+                        multi_glob)
 from IoIO.simple_show import simple_show
 from IoIO.cordata_base import SMALL_FILT_CROP
+from IoIO.cordata import CorData
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                calc_obj_to_ND, crop_ccd,
                                planet_to_object, pixel_per_Rj, 
@@ -45,6 +47,7 @@ from IoIO.standard_star import (StandardStar, SSArgparseHandler,
 from IoIO.horizons import GALSATS, galsat_ephemeris
 
 TORUS_ROOT = os.path.join(IoIO_ROOT, 'Torus')
+MAX_ROOT = os.path.join(IoIO_ROOT, 'for_Max')
 
 # https://lasp.colorado.edu/home/mop/files/2015/02/CoOrd_systems7.pdf
 # Has sysIII of intersection of mag and equatorial plains at 290.8.
@@ -665,6 +668,7 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
         t = cached_csv(directory,
                        code=torus_directory,
                        csvnames=os.path.join(rd, 'Characterize_Ansas.ecsv'),
+                       calibration=calibration,
                        standard_star_obj=standard_star_obj,
                        read_csvs=read_csvs,
                        write_csvs=write_csvs,
@@ -686,6 +690,28 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
     torus_stripchart(summary_table, outdir_root, n_plots=3, show=show)
 
     return summary_table
+
+def export_for_max(directory,
+                   start=None, # not used yet
+                   stop=None,
+                   max_root=MAX_ROOT):
+    # Develop export_for_max
+    flist = multi_glob(directory, '*-back-sub.fits')
+    if flist is None:
+        return
+    outdir = reduced_dir(directory, max_root, create=True)
+    flist.sort()
+    for fname in flist:
+        outbase = os.path.basename(fname)
+        outfname, ext = os.path.splitext(outbase)
+        outfname = os.path.join(outdir, outfname + '_NPole_up_small' + ext)
+        log.info(outfname)
+        ccd = CorData.read(fname)
+        ccd = rot_to(ccd, rot_angle_from_key='Jupiter_NPole_ang')
+        ccd.mask = None
+        ccd.uncertainty = None
+        ccd = as_single(ccd)
+        ccd.write(outfname, overwrite=True)
 
 class TorusArgparseHandler(SSArgparseHandler,
                            CorPhotometryArgparseMixin, CalArgparseHandler):
@@ -726,7 +752,7 @@ class TorusArgparseHandler(SSArgparseHandler,
                        num_processes=args.num_processes,
                        mem_frac=args.mem_frac,
                        fits_fixed_ignore=args.fits_fixed_ignore)
-        
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Run torus reduction')
