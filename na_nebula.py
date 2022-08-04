@@ -5,8 +5,12 @@
 import re
 import os
 import argparse
+import datetime
+from cycler import cycler
 
 import numpy as np
+
+from scipy.signal import medfilt
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -105,12 +109,16 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     return ccd
 
 def na_nebula_plot(t, outdir,
+                   tmin=None,
                    min_sb=0,
                    max_sb=1000,
+                   max_good_sb=np.inf,
                    min_av_ap_dist=0,
                    max_av_ap_dist=np.inf,
                    n_plots=2,
+                   tlim=None,
                    show=False):
+    t.sort('tavg')
     outbase = 'Na_nebula_apertures.png'
     sum_regexp = re.compile('Na_ap_.*_sum')
     area_regexp = re.compile('Na_ap_.*_area')
@@ -141,15 +149,31 @@ def na_nebula_plot(t, outdir,
         f = plt.figure(figsize=[8.5, 11/2])
     else:
         f = plt.figure(figsize=[8.5, 11])
+
+    #custom_cycler = (cycler(color=['b', 'g', 'r', 'c', 'm', 'y', 'k']))
+    custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'])
+    plt.rc('axes', prop_cycle=custom_cycler)
+                     
     date, _ = t['tavg'][0].fits.split('T')
     plt.suptitle('Na nebula rectangular aperture surface brightesses above & below torus centrifugal plane')
     ax = plt.subplot(n_plots,1,1)
-    plt.title('Most distant aperture subtracted')
+    plt.title(f'{ap_list[-1]:.0f} Rj aperture subtracted')
     for sb, av_ap in zip(sb_list, ap_list):
-        plt.plot(t['tavg'].datetime, sb - sb_list[-1], '.',
+        # Skip the most distant ap
+        if av_ap == ap_list[-1]:
+            continue        
+        bsub_sb = sb - sb_list[-1]
+        mask = sb < max_good_sb
+        plt.plot(t['tavg'][mask].datetime, bsub_sb[mask], '.',
                  label=f'+/- {av_ap:.0f} Rj')
+        # --> Might need an if to plot only when I want to
+        med_sb = medfilt(bsub_sb, 81)
+        plt.plot(t['tavg'][mask].datetime, med_sb[mask], '-',
+                 label=f'+/- {av_ap:.0f} Rj medfilt')
+        
+    ax.set_xlim(tlim)
     ax.set_ylim(0, max_sb/2)
-    plt.ylabel(f'Surf. Bright ({sb.unit})')
+    plt.ylabel(f'Na Surf. Bright ({sb.unit})')
     plt.legend()
 
     f.autofmt_xdate()

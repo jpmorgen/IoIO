@@ -9,6 +9,8 @@ from datetime import timedelta
 
 import numpy as np
 
+from scipy.signal import medfilt
+
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
@@ -424,6 +426,7 @@ def plot_planet_subim(ccd_in,
 def torus_stripchart(t, outdir, n_plots=5,
                      min_sb=0,
                      max_sb=300,
+                     tlim=None,
                      show=False):
     outbase = 'Characterize_Ansas.png'
     r_peak = t['ansa_right_r_peak']
@@ -453,9 +456,9 @@ def torus_stripchart(t, outdir, n_plots=5,
 
     # This was a not-so-successful bid at getting something like
     # f.autofmt_xdate() running but with my own definitions of things
-    time_expand = timedelta(minutes=5)
-    tlim = (np.min(t['tavg'].datetime) - time_expand,
-            np.max(t['tavg'].datetime) + time_expand)
+    #time_expand = timedelta(minutes=5)
+    #tlim = (np.min(t['tavg'].datetime) - time_expand,
+    #        np.max(t['tavg'].datetime) + time_expand)
     mean_surf_bright = np.mean((left_sb_biweight.value,
                                 right_sb_biweight.value))
     max_sb_mad = np.max((left_sb_mad.value, right_sb_mad.value))
@@ -464,7 +467,10 @@ def torus_stripchart(t, outdir, n_plots=5,
     if not np.isfinite(ylim_surf_bright[0]):
         ylim_surf_bright = None
 
-    f = plt.figure(figsize=[8.5, 11])
+    if n_plots == 1:
+        f = plt.figure(figsize=[8.5, 11/2])
+    else:
+        f = plt.figure(figsize=[8.5, 11])
     date, _ = t['tavg'][0].fits.split('T')
     plt.suptitle('Torus Ansa Characteristics')
 
@@ -472,15 +478,32 @@ def torus_stripchart(t, outdir, n_plots=5,
     # literal image left and right terms
 
     ax = plt.subplot(n_plots, 1, 1)
+    t.sort('tavg')
+
+    # --> Might need an if to plot only when I want to
+    #bad_mask = np.isnan(t['ansa_left_surf_bright'])
+    #lefts = t['ansa_left_surf_bright'][~bad_mask]
+    #med_left = medfilt(lefts, 21)
+    #plt.plot(t['tavg'][~bad_mask].datetime, med_left,
+    #         'k-', linewidth=3, label='East medfilt')
+    bad_mask = np.isnan(t['ansa_right_surf_bright'])
+    rights = t['ansa_right_surf_bright'][~bad_mask]
+    med_right = medfilt(rights, 21)
+    plt.plot(t['tavg'][~bad_mask].datetime, med_right,
+             'k-', linewidth=3, label='West medfilt')
+
+    # Was using alpha=0.5
+
     plt.errorbar(t['tavg'].datetime,
                  t['ansa_left_surf_bright'].value,
-                 t['ansa_left_surf_bright_err'].value, fmt='r.', alpha=0.5,
+                 t['ansa_left_surf_bright_err'].value, fmt='r.', alpha=0.1,
                  label='East')
     plt.errorbar(t['tavg'].datetime,
                  t['ansa_right_surf_bright'].value,
-                 t['ansa_right_surf_bright_err'].value, fmt='g.', alpha=0.5,
+                 t['ansa_right_surf_bright_err'].value, fmt='g.', alpha=0.1,
                  label='West')
-    plt.ylabel(f'Av. Surf. Bright ({t["ansa_left_surf_bright"].unit})')
+    
+    plt.ylabel(f'Ansa Av. Surf. Bright ({t["ansa_left_surf_bright"].unit})')
     #plt.hlines(np.asarray((left_sb_biweight.value,
     #                       left_sb_biweight.value - left_sb_mad.value,
     #                       left_sb_biweight.value + left_sb_mad.value)),
@@ -498,7 +521,7 @@ def torus_stripchart(t, outdir, n_plots=5,
     #           label=(f'West {right_sb_biweight:.0f} '
     #                  f'+/- {right_sb_mad:.0f}'))
     ax.legend()
-    #ax.set_xlim(tlim)
+    ax.set_xlim(tlim)
     #ax.set_ylim(ylim_surf_bright)
     ax.set_ylim(min_sb, max_sb)
     f.autofmt_xdate()
