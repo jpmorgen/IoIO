@@ -459,6 +459,8 @@ def torus_stripchart(t, outdir, n_plots=5,
     #time_expand = timedelta(minutes=5)
     #tlim = (np.min(t['tavg'].datetime) - time_expand,
     #        np.max(t['tavg'].datetime) + time_expand)
+    tlim = (np.min(t['tavg'].datetime),
+            np.max(t['tavg'].datetime))
     mean_surf_bright = np.mean((left_sb_biweight.value,
                                 right_sb_biweight.value))
     max_sb_mad = np.max((left_sb_mad.value, right_sb_mad.value))
@@ -488,19 +490,21 @@ def torus_stripchart(t, outdir, n_plots=5,
     #         'k-', linewidth=3, label='East medfilt')
     bad_mask = np.isnan(t['ansa_right_surf_bright'])
     rights = t['ansa_right_surf_bright'][~bad_mask]
-    med_right = medfilt(rights, 21)
-    plt.plot(t['tavg'][~bad_mask].datetime, med_right,
-             'k-', linewidth=3, label='West medfilt')
-
-    # Was using alpha=0.5
+    if len(rights) > 40:
+        alpha = 0.1
+        med_right = medfilt(rights, 21)
+        plt.plot(t['tavg'][~bad_mask].datetime, med_right,
+                 'k-', linewidth=3, label='West medfilt')
+    else:
+        alpha = 0.5
 
     plt.errorbar(t['tavg'].datetime,
                  t['ansa_left_surf_bright'].value,
-                 t['ansa_left_surf_bright_err'].value, fmt='r.', alpha=0.1,
+                 t['ansa_left_surf_bright_err'].value, fmt='r.', alpha=alpha,
                  label='East')
     plt.errorbar(t['tavg'].datetime,
                  t['ansa_right_surf_bright'].value,
-                 t['ansa_right_surf_bright_err'].value, fmt='g.', alpha=0.1,
+                 t['ansa_right_surf_bright_err'].value, fmt='g.', alpha=alpha,
                  label='West')
     
     plt.ylabel(f'Ansa Av. Surf. Bright ({t["ansa_left_surf_bright"].unit})')
@@ -612,6 +616,7 @@ def torus_stripchart(t, outdir, n_plots=5,
     ax.set_xlim(0, 360)
     ax.set_ylim(ylim_surf_bright)
     ax.legend()
+    finish_stripchart(outdir, outbase, show=show)
 
 def torus_directory(directory,
                     outdir=None,
