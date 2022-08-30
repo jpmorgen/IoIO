@@ -398,7 +398,7 @@ def valid_long_exposure(r):
     valid = np.logical_and(valid,
                            r['ybinning'] == 1)
     valid = np.logical_and(valid,
-                           r['exptime'] > 10)
+                           r['exptime'] > 10) # s
     return valid
 
 def im_med_min_max(im):

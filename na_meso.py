@@ -1,5 +1,7 @@
 """Construct model of telluric Na emission. """
 
+import os
+
 import numpy as np
 
 import matplotlib.pyplot as plt
@@ -8,13 +10,14 @@ from astropy import log
 from astropy import units as u
 from astropy.nddata import CCDData
 from astropy.table import QTable
+from astropy.time import Time
 from astropy.coordinates import SkyCoord, solar_system_ephemeris, get_body
 
 from ccdproc import ImageFileCollection
 
 from bigmultipipe import no_outfile, cached_pout, prune_pout
 
-from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates,
+from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates, multi_glob,
                         closest_in_time, valid_long_exposure, im_med_min_max,
                         add_history, cached_csv, iter_polyfit, 
                         savefig_overwrite)
@@ -32,6 +35,7 @@ from IoIO.cor_photometry import CorPhotometry, add_astrometry
 BASE = 'Na_meso'  
 OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
 LOCKFILE = '/tmp/na_meso_reduce.lock'
+AWAY_FROM_JUPITER = 5*u.deg # nominally 10 is what I used
 
 # For Photometry -- number of boxes for background calculation
 N_BACK_BOXES = 20
@@ -228,28 +232,32 @@ def na_meso_collection(directory,
     # innards of that code
     # --> Might be nice to restructure those innards to be available
     # to collections
+
+    # Alternately I could assume Jupiter doesn't move much in one
+    # night.  But this isn't too nasty to reproduce
     ras = st['objctra']
     decs = st['objctdec']
-    # This is not the exact tavg, but we are just getting close to
-    # make sure we are not pointed at Juptier
-    dateobs_strs = st['data-obs']
+    # This is not the exact tavg, but we are just getting close enough
+    # to make sure we are not pointed at Juptier
+    dateobs_strs = st['date-obs']
     scs = SkyCoord(ras, decs, unit=(u.hourangle, u.deg))
     times = Time(dateobs_strs, format='fits')
+    # What I can assume is that a directory has only one observatory
+    sample_fname = st[valid]['file'][0]
+    sample_fname = os.path.join(directory, sample_fname)
+    ccd = CorDataBase.read(sample_fname)
     with solar_system_ephemeris.set('builtin'):
         body_coords = get_body('jupiter', times, ccd.obs_location)
-
-
-    
-    if 'raoff' in st.colnames:
-        valid = np.logical_and(valid, not st['raoff'].mask)
-    if 'decoff' in st.colnames:
-        valid = np.logical_and(valid, not st['decoff'].mask)
+    # It is very nice that the code is automatically vectorized
+    seps = scs.separation(body_coords)
+    valid = np.logical_and(valid, seps > AWAY_FROM_JUPITER)
     if np.all(~valid):
         return []
     if np.any(~valid):
         fbases = st['file'][valid]
         flist = [os.path.join(directory, f) for f in fbases]
     collection = ImageFileCollection(directory, filenames=flist)
+    return collection
     
 
 def na_meso_directory(directory,
@@ -353,4 +361,6 @@ directory = '/data/IoIO/raw/20210617'
 
 #t = na_meso_directory(directory, fits_fixed_ignore=True)
 
-t = na_back_tree(start='2021-06-17', stop='2021-06-17', fits_fixed_ignore=True)
+#t = na_back_tree(start='2021-06-17', stop='2021-06-17', fits_fixed_ignore=True)
+
+collection = na_meso_collection(directory)
