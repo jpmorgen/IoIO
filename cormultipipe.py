@@ -614,109 +614,153 @@ def obj_surface_bright(ccd_in, bmp_meta=None, **kwargs):
     bmp_meta.update(osb_dict)
     return ccd
 
+class table_stacker_obj:
+    """Combines QTables or lists of dict into summary_table property.
+
+    In the case of QTable, handles Time column so as to dance around
+    issue that time.location doesn't vstack properly.  Just copies off
+    first location, sets location to None and copies location back
+    again.  Does simple but not exhaustive sanity check that location
+    is consistent
+
+    Parameters
+    ----------
+    colname : str
+        Name of column containing Time object.  This could be expanded
+        and generalized if more Time columns or other Mixin columns
+        cause problems
+
+    """
+
+    def __init__(self, colname='tavg'):
+        self.summary_table = None
+        self.colname = colname
+        self._location = None
+
+    # Hack for combining Time mixin columns of different lengths
+    @property
+    def location(self):
+        return self._location
+
+    @location.setter
+    def location(self, value):
+        # Assure we have only one location
+        if self._location is None:
+            self._location = value
+        assert value == self._location
+    
+    def clear_loc(self, t):
+        """Clear location in input QTable and store it in property.  Quietly
+        ignore cases where input is not QTable
+
+        """
+        if not isinstance(t, QTable) or len(t) == 0:
+            return
+        if t[0][self.colname].location is None:
+            return
+        self.location = t[0][self.colname].location.copy()
+        t[self.colname].location = None
+
+    def set_loc(self, t):
+        """Set location in input QTable from stored property"""
+        if not isinstance(t, QTable) or len(t) == 0:
+            return
+        t[self.colname].location = self.location
+
+    def append(self, t):
+        """Append input t to summary_table, respecting type"""
+        if t is None or len(t) == 0:
+            return
+        self.clear_loc(t)
+        self.clear_loc(self.summary_table)
+        if self.summary_table is None:
+            self.summary_table = t
+        elif isinstance(t, list):
+            self.summary_table.append(t)
+        elif isinstance(t, QTable):
+            self.summary_table = vstack([self.summary_table, t])
+        else:
+            raise ValueError(f'Unknown cached_csv return type {t}')
+        self.set_loc(self.summary_table)
+
 def parallel_cached_csvs(dirs,
+                         code=None,
+                         collector=None,
                          files_per_process=1, # set to 2--3 for on_off_pipeline
                          max_num_processes=MAX_NUM_PROCESSES,
+                         read_csvs=False,
                          **cached_csv_args):
-    wwk = WorkerWithKwargs(cached_csv, **cached_csv_args)
-    ## Pass return_collection=True to na_nebula_directory to prepare
-    ## for multi-directory processing
-    #return_collection_args = cached_csv_args.copy()
-    #return_collection_args['return_collection'] = True
-    ##return_collection_args['write_csvs'] = False
 
-    # vstack of [] with a QTable returns the QTable, so standardize
-    # all our empty/starter QTable values to []
-    summary_table = []
-    running_nfiles = 0
+    wwk = WorkerWithKwargs(cached_csv,
+                           code=code,
+                           read_csvs=read_csvs,
+                           **cached_csv_args)
+
+    running_nprocesses = 0
     collection_list = []
+    table_stacker = table_stacker_obj()
     for directory in dirs:
-        # Try to read cache.  It it fails this time, return collection
-        # only (remembering not to try to cache that!)
-        t = cached_csv(directory, return_collection=True, **cached_csv_args)
-        if isinstance(t, list):
-            if len(t) == 0:
-                # Covers tricky bug case where summary_table is QTable
-                # but t is [] due to no files
+        if read_csvs:
+            # Try to read cache
+            t = cached_csv(directory,
+                           code=None,
+                           read_csvs=read_csvs,
+                           **cached_csv_args)
+            if t is not None:
+                # Cache was successfully read
+                table_stacker.append(t)
                 continue
-            # Covers both the csv case and QTable case.  QTable.read
-            # returns [] when the cache file is empty.  Appending []
-            # to QTable or list does nothing
-            summary_table.append(t)
-            continue
-        if isinstance(t, QTable):
-            # We really read the cache
-            # Hack to get around astropy vstack bug with location
-            loc = t['tavg'][0].location.copy()
-            t['tavg'].location = None
-            summary_table = vstack([summary_table, t])
-            continue
 
-        # If we made it here, we were handed back a collection so we
-        # can look inside to see how many files are there & and
-        # process them in parallel
-        collection = t
-        nfiles = int(len(collection.files) / files_per_process)
-        if nfiles >= max_num_processes:
-            # Let cormultipipe regulate the number of processes
-            t = cached_csv(directory, **cached_csv_args)
-            if isinstance(t, list):
-                summary_table.append(t)
-                continue
-            loc = t['tavg'][0].location.copy()
-            t['tavg'].location = None
-            summary_table = vstack([summary_table, t])
+        # If we made it here, we need to run our code.  But first
+        # generate a collection so we can look inside to see how many
+        # files are there to maximize parallelization
+        collection = collector(directory, **cached_csv_args)
+
+        nprocesses = int(len(collection.files) / files_per_process)
+        if nprocesses >= max_num_processes:
+            # Directory has lots of files.  Let cormultipipe regulate
+            # the number of processes
+            t = cached_csv(directory,
+                           code=code,
+                           read_csvs=read_csvs,
+                           **cached_csv_args)
+            table_stacker.append(t)
             continue
             
-        if nfiles + running_nfiles < max_num_processes:
-            # Keep building our list
-            running_nfiles += nfiles
+        if nprocesses + running_nprocesses < max_num_processes:
+            # Keep building our list across multiple directories
+            running_nprocesses += nprocesses
             collection_list.append(collection)
             continue
 
-        if nfiles + running_nfiles == max_num_processes:
+        if nprocesses + running_nprocesses == max_num_processes:
             # We hit is just right
             collection_list.append(collection)
             to_process = collection_list
-            running_nfiles = 0
+            running_nprocesses = 0
             collection_list = []
         else:
             # We went over a bit.  Process what we have & start at the
             # current directory
             to_process = collection_list
-            running_nfiles = nfiles
+            running_nprocesses = nprocesses
             collection_list = [collection]
 
         with NestablePool(processes=max_num_processes) as p:
             tlist = p.map(wwk.worker, to_process)
-        # Combine QTables or lists of dict into one big one
+
         for t in tlist:
-            if isinstance(t, list):
-                summary_table.append(t)
-                continue
-            loc = t['tavg'][0].location.copy()
-            t['tavg'].location = None
-            summary_table = vstack([summary_table, t])
+            table_stacker.append(t)
             
     if len(collection_list) > 0:
-        to_process = collection_list
         # Handle last (set of) directories
+        to_process = collection_list
         with NestablePool(processes=max_num_processes) as p:
             tlist = p.map(wwk.worker, to_process)
-        # Combine QTables or lists into one big one
         for t in tlist:
-            if isinstance(t, list):
-                summary_table.append(t)
-                continue
-            loc = t['tavg'][0].location.copy()
-            t['tavg'].location = None
-            summary_table = vstack([summary_table, t])
-        
-    if isinstance(t, QTable) and len(summary_table) > 0:
-        # Complete our hack
-        summary_table['tavg'].location = loc
-        
-    return summary_table
+            table_stacker.append(t)
+
+    return table_stacker.summary_table
 
 ######### Argparse mixin
 class CorArgparseMixin:

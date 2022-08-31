@@ -21,6 +21,8 @@ from astropy.time import Time
 from astropy.stats import biweight_location, mad_std
 from astropy.table import QTable
 
+from ccdproc import ImageFileCollection
+
 from bigmultipipe import assure_list
 
 # MaxIM, ACP, FITS
@@ -549,6 +551,47 @@ def add_history(header, text='', caller=1):
     header['HISTORY'] = towrite
     return
 
+def csvname_creator(directory_or_collection, *args,
+                    outdir_root=None,
+                    csv_base=None,
+                    **kwargs):
+    """Create full path to [e]csv file in outdir_root
+
+    Parameters
+    ----------
+    directory_or_collection : str or ccdproc.ImageFileCollection
+        Provides raw directory location (e.g. /data/IoIO/raw/20210604)
+
+    outdir_root : str
+        Root of output directory (e.g., /data/IoIO/Torus)
+
+    csv_base : str
+        Basename of [e]csv file (e.g. Torus.ecsv)
+        
+    Returns
+    -------
+    csvname : str
+        Full path to [e]csv file
+
+    """
+    assert outdir_root is not None and csv_base is not None
+    if isinstance(directory_or_collection, ImageFileCollection):
+        directory = directory_or_collection.location
+    else:
+        directory = directory_or_collection
+    rd = reduced_dir(directory, outdir_root, create=False)
+    return os.path.join(rd, csv_base)
+
+#def cached_csv_exists(*args, csvnames=cvnames, **kwargs):
+#    """Returns true if all expected csvs exist"""
+#    if callable(csvnames):
+#        csvnames = csvnames(*args, **kwargs)
+#    csvnames = assure_list(csvnames)
+#    exists = True
+#    for csvname in csvnames:
+#        exists = exists and os.path.exists(csvname)
+#    return exists
+    
 def cached_csv(*args,
                code=None,
                csvnames=None,
@@ -565,8 +608,10 @@ def cached_csv(*args,
     ----------
     code : function
         Function that generates `~astropy.table.QTable`(s) or list(s)
-        of dict(s) if `read_csvs` is ``False`` or `poutname` cannot be
-        read
+        of dict(s) if `read_csvs` is ``False`` or `csvnames` cannot be
+        read.  Use code=None and read_csvs=True to avoid running code
+        and return only cached values.  In that case None return value
+        indicates no cache(s)
 
     csvnames : str, list of str or callable
         Filename(s) to be read/written.  There must be on filename per
@@ -599,9 +644,10 @@ def cached_csv(*args,
 
     Returns
     -------
-    dict_lists : list of dict
+    dict_lists : None or list of dict
         List of dictionaries read from csv file(s), one list per
-        filename in csvnames
+        filename in csvnames.  If code is None and no cache files are
+        found, None is returned
 
     """
     
@@ -612,17 +658,26 @@ def cached_csv(*args,
     if single_table_or_dictlist:
         csvnames = [csvnames]
 
+    list_of_table_or_dicts = None
     if read_csvs:
         try:
-            list_of_table_or_dicts = []
             for csvname in csvnames:
                 _, ext = os.path.splitext(csvname)
                 if ext == '.ecsv':
                     if os.path.getsize(csvname) == 0:
                         # [Q]Table.read generates an error rather than
-                        # an empty table when an empty file is read.
-                        # To us, an empty file means an empty table
+                        # an empty table when an empty file is read,
+                        # so we have to dance around a bit.
+                        # The "if" generates an error it csvname
+                        # doesn't exist.
+                        # If we made it here, the code ran
+                        # presumably successfully, so [] is our cache
+                        if list_of_table_or_dicts is None:
+                            list_of_table_or_dicts = []
                         continue
+                    
+                    if list_of_table_or_dicts is None:
+                        list_of_table_or_dicts = []
                     list_of_table_or_dicts.append(QTable.read(csvname))
                 else:
                     dict_list = []
@@ -630,14 +685,20 @@ def cached_csv(*args,
                         csvr = csv.DictReader(csvfile, quoting=quoting)
                         for row in csvr:
                             dict_list.append(row)
+                    if list_of_table_or_dicts is None:
+                        list_of_table_or_dicts = []
                     list_of_table_or_dicts.append(dict_list)
             if single_table_or_dictlist and len(list_of_table_or_dicts) > 0:
                 list_of_table_or_dicts = list_of_table_or_dicts[0]
             return list_of_table_or_dicts
         except Exception as e:
             d = os.path.dirname(csvname)
-            log.debug(f'Running code on {d} because received exception {e}')
+            if code is not None:
+                log.debug(f'Running code on {d} because received exception {e}')
             pass
+
+    if code is None:
+        return list_of_table_or_dicts
 
     # If we made it here, we need to generate our list(s) of dicts
     list_of_table_or_dicts = code(*args, **kwargs)
