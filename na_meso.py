@@ -1,3 +1,5 @@
+#!/usr/bin/python3
+
 """Construct model of telluric Na emission. """
 
 import os
@@ -20,7 +22,7 @@ from ccdproc import ImageFileCollection
 from bigmultipipe import no_outfile, cached_pout, prune_pout
 
 from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates,
-                        multi_glob, closest_in_time,
+                        multi_glob, closest_in_coord,
                         valid_long_exposure, im_med_min_max,
                         add_history, csvname_creator, cached_csv,
                         iter_polyfit, savefig_overwrite)
@@ -29,12 +31,14 @@ from IoIO.cordata_base import CorDataBase
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                CorMultiPipeBase, angle_to_major_body,
                                nd_filter_mask, combine_masks,
-                               parallel_cached_csvs)
+                               mask_nonlin_sat, parallel_cached_csvs)
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE,
                              JOIN_TOLERANCE_UNIT)
 from IoIO.cor_photometry import CorPhotometry, add_astrometry
- 
+from IoIO.standard_star import (StandardStar, extinction_correct,
+                                rayleigh_convert)
+
 BASE = 'Na_meso'  
 OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
 LOCKFILE = '/tmp/na_meso_reduce.lock'
@@ -59,6 +63,7 @@ def na_meso_process(data,
                     bmp_meta=None,
                     calibration=None,
                     photometry=None,
+                    standard_star_obj=None,
                     n_back_boxes=N_BACK_BOXES,
                     show=False,
                     off_on_ratio=None,
@@ -73,45 +78,41 @@ def na_meso_process(data,
         photometry = CorPhotometry(precalc=True,
                                    n_back_boxes=n_back_boxes,
                                    **kwargs)
+    standard_star_obj = standard_star_obj or StandardStar(reduce=True)
     if off_on_ratio is None:
         off_on_ratio, _ = calibration.flat_ratio('Na')
-    ccd = data[0]
-    raoff0 = ccd.meta.get('RAOFF') or 0
-    decoff0 = ccd.meta.get('DECOFF') or 0
+    jup_dist = angle_to_major_body(data[0], 'jupiter')
     fluxes = []
-    # --> If we are going to use this for comets, what we really want
-    # --> is just angular distance from Jupiter via the astropy ephemerides
     for ccd in data:
-        raoff = ccd.meta.get('RAOFF') or 0
-        decoff = ccd.meta.get('DECOFF') or 0
-        if raoff != raoff0 or decoff != decoff0:
-            log.warning(f'Mismatched RAOFF and DECOFF, skipping {in_name}')
-            bmp_meta.clear()
-            return None
-        if (raoff**2 + decoff**2)**0.5 < 15:
-            log.warning(f'Offset RAOFF {raoff} DECOFF {decoff} too small, skipping {in_name}')
-            bmp_meta.clear()
-            return None
         photometry.ccd = ccd
         exptime = ccd.meta['EXPTIME']*u.s
         flux = photometry.background / exptime
         fluxes.append(flux)
 
+    # Mesosphere is above the stratosphere, where the density of the
+    # atmosphere diminishes to very small values.  So all attenuation
+    # has already happened by the time we get up to the mesospheric
+    # sodium layer.  So do our extinction correction and rayleigh
+    # conversion now in hopes that later extinction_correct will get 
+    # time-dependent from real measurements
+    # https://en.wikipedia.org/wiki/Atmosphere_of_Earth#/media/File:Comparison_US_standard_atmosphere_1962.svg
     background = fluxes[0] - fluxes[1]/off_on_ratio
+    background = CCDData(background, meta=data[0].meta)
+    background = extinction_correct(background,
+                                    standard_star_obj=standard_star_obj,
+                                    bmp_meta=bmp_meta)
+    background = rayleigh_convert(background,
+                                  standard_star_obj=standard_star_obj,
+                                  bmp_meta=bmp_meta)
     if show:
-        simple_show(background.value)
+        simple_show(background)
 
     # Unfortunately, a lot of data were taken with the filter wheel
     # moving.  This uses the existing bias light/dark patch routine to
     # get uncontaminated part --> consider making this smarter
-    best_back, _ = im_med_min_max(background)
-    best_back_std = np.std(background)
+    best_back, _ = im_med_min_max(background)*background.unit
+    best_back_std = np.std(background)*background.unit
 
-    # Mesosphere is above the stratosphere, where the density of the
-    # atmosphere diminishes to very small values.  So all attenuation
-    # has already happened by the time we get up to the mesospheric
-    # sodium layer
-    # https://en.wikipedia.org/wiki/Atmosphere_of_Earth#/media/File:Comparison_US_standard_atmosphere_1962.svg
     ccd = data[0]
     objctalt = ccd.meta['OBJCTALT']
     objctaz = ccd.meta['OBJCTAZ']
@@ -120,8 +121,7 @@ def na_meso_process(data,
     tmeta = {'tavg': ccd.tavg,
              'ra': ccd.sky_coord.ra,
              'dec': ccd.sky_coord.dec,
-             'raoff': raoff0*u.arcmin,
-             'decoff': decoff0*u.arcmin,
+             'jup_dist': jup_dist,
              'best_back': best_back,
              'best_back_std': best_back_std,
              'alt': objctalt*u.deg,
@@ -131,10 +131,11 @@ def na_meso_process(data,
     
     bmp_meta.update(tmeta)
 
-
     # In production, we don't plan to write the file, but prepare the
     # name just in case
-    bmp_meta['outname'] = f'Jupiter_raoff_{raoff}_decoff_{decoff}_airmass_{airmass:.2}.fits'
+    in_base = os.path.basename(in_name[0])
+    in_base, _ = os.path.splitext(in_base)
+    bmp_meta['outname'] = f'Na_meso_{in_base}_airmass_{airmass:.2}.fits'
     # Return one image
     data = CCDData(background, meta=ccd.meta, mask=ccd.mask)
     data.meta['OFFBAND'] = in_name[1]
@@ -147,7 +148,7 @@ def na_meso_process(data,
     return data
 
 def na_meso_collection(directory,
-                       glob_include='Jupiter*', # --> add comets
+                       glob_include='*-Na_*',
                        warning_ignore_list=[],
                        fits_fixed_ignore=False,
                        **kwargs):
@@ -159,13 +160,25 @@ def na_meso_collection(directory,
 
     flist = multi_glob(directory, glob_include)
     if len(flist) == 0:
-        return []
+        # Empty collection
+        return ImageFileCollection(directory, glob_exclude='*')
     # Create a collection of valid long Na exposures that are
     # pointed away from Jupiter
     collection = ImageFileCollection(directory, filenames=flist)
     st = collection.summary
     valid = ['Na' in f for f in st['filter']]
     valid = np.logical_and(valid, valid_long_exposure(st))
+    if np.all(~valid):
+        return ImageFileCollection(directory, glob_exclude='*')
+    if np.any(~valid):
+        # There are generally lots of short exposures, so shorten the
+        # list for lengthy calculations below
+        fbases = st['file'][valid]
+        flist = [os.path.join(directory, f) for f in fbases]
+        collection = ImageFileCollection(directory, filenames=flist)
+        st = collection.summary
+        valid = np.full(len(flist), True)
+
     # angle_to_major_body(ccd, 'jupiter') would do some good here, but
     # it is designed to work on the ccd CorData level.  So use the
     # innards of that code
@@ -196,7 +209,7 @@ def na_meso_collection(directory,
     seps = scs.separation(body_coords)
     valid = np.logical_and(valid, seps > AWAY_FROM_JUPITER)
     if np.all(~valid):
-        return []
+        return ImageFileCollection(directory, glob_exclude='*')
     if np.any(~valid):
         fbases = st['file'][valid]
         flist = [os.path.join(directory, f) for f in fbases]
@@ -204,7 +217,6 @@ def na_meso_collection(directory,
     return collection
     
 def na_meso_pipeline(directory_or_collection=None,
-                     glob_include='Jupiter*', # --> add comets 
                      calibration=None,
                      photometry=None,
                      n_back_boxes=N_BACK_BOXES,
@@ -221,34 +233,19 @@ def na_meso_pipeline(directory_or_collection=None,
         collection = directory_or_collection
     else:
         directory = directory_or_collection
-        collection = na_meso_collection(directory,
-                                        glob_include=glob_include,
-                                        **kwargs)
-    if collection is None:
-        return []
+        collection = na_meso_collection(directory, **kwargs)
 
     outdir = outdir or reduced_dir(directory, outdir_root, create=False)
-    try:
-        raoffs = collection.values('raoff', unique=True)
-        decoffs = collection.values('decoff', unique=True)
-    except Exception as e:
-        log.debug(f'Skipping {directory} because of problem with RAOFF/DECOFF: {e}')
-        return []
-    f_pairs = []
-    for raoff in raoffs:
-        for decoff in decoffs:
-            try:
-                subc = collection.filter(raoff=raoff, decoff=decoff)
-            except:
-                log.debug(f'No match for RAOFF = {raoff} DECOFF = {decoff}')
-                continue
-            fp = closest_in_time(subc, ('Na_on', 'Na_off'),
-                                 valid_long_exposure,
-                                 directory=directory)
-            f_pairs.extend(fp)
+
+    # At this point, our collection is composed of Na on and off
+    # exposures.  Create pairs that have minimum angular separation
+    f_pairs = closest_in_coord(collection, ('Na_on', 'Na_off'),
+                               valid_long_exposure,
+                               directory=directory)
+
     if len(f_pairs) == 0:
-        log.warning(f'No matching set of Na background files found '
-                    f'in {directory}')
+        #log.warning(f'No matching set of Na background files found '
+        #            f'in {directory}')
         return []
 
     calibration = calibration or Calibration(reduce=True)
@@ -257,8 +254,6 @@ def na_meso_pipeline(directory_or_collection=None,
         n_back_boxes=n_back_boxes,
         **kwargs)
         
-    # --> We are going to want add_ephemeris here with a CorPhotometry
-    # --> to build up astormetric solutions
     cmp = CorMultiPipeBase(
         auto=True,
         calibration=calibration,
@@ -267,6 +262,8 @@ def na_meso_pipeline(directory_or_collection=None,
         create_outdir=create_outdir,
         post_process_list=[nd_filter_mask,
                            combine_masks,
+                           mask_nonlin_sat,
+                           add_astrometry,
                            na_meso_process,
                            no_outfile],                           
         num_processes=num_processes,
@@ -319,6 +316,7 @@ def na_meso_tree(data_root=RAW_DATA_ROOT,
                  stop=None,
                  calibration=None,
                  photometry=None,
+                 standard_star_obj=None,
                  keep_intermediate=None,
                  solve_timeout=SOLVE_TIMEOUT,
                  join_tolerance=JOIN_TOLERANCE*JOIN_TOLERANCE_UNIT,
@@ -330,6 +328,9 @@ def na_meso_tree(data_root=RAW_DATA_ROOT,
                  outdir_root=OUTDIR_ROOT,                 
                  **kwargs):
     dirs_dates = get_dirs_dates(data_root, start=start, stop=stop)
+    if len(dirs_dates) == 0:
+        log.warning(f'No data in time range {start} {stop}')
+        return QTable()
     dirs, _ = zip(*dirs_dates)
     if len(dirs) == 0:
         log.warning('No directories found')
@@ -340,6 +341,7 @@ def na_meso_tree(data_root=RAW_DATA_ROOT,
             precalc=True,
             solve_timeout=solve_timeout,
             join_tolerance=join_tolerance)
+    standard_star_obj = standard_star_obj or StandardStar(reduce=True)
 
     cached_csv_args = {
         'csvnames': csvname_creator,
@@ -347,6 +349,7 @@ def na_meso_tree(data_root=RAW_DATA_ROOT,
         'write_csvs': write_csvs,
         'calibration': calibration,
         'photometry': photometry,
+        'standard_star_obj': standard_star_obj,
         'outdir_root': outdir_root,
         'create_outdir': create_outdir}
     cached_csv_args.update(**kwargs)
@@ -356,8 +359,9 @@ def na_meso_tree(data_root=RAW_DATA_ROOT,
                                          files_per_process=3,
                                          read_csvs=read_csvs,
                                          **cached_csv_args)
-    summary_table.write(os.path.join(outdir_root, BASE + '.ecsv'),
-                                     overwrite=True)
+    if summary_table is not None:
+        summary_table.write(os.path.join(outdir_root, BASE + '.ecsv'),
+                            overwrite=True)
     return summary_table
 
 
@@ -372,6 +376,7 @@ def na_meso_tree(data_root=RAW_DATA_ROOT,
 
 
 directory = '/data/IoIO/raw/20210617'
+directory = '/data/IoIO/raw/2017-07-01/'
 
 #pout = na_meso_pipeline(directory, fits_fixed_ignore=True)
 
@@ -383,4 +388,17 @@ directory = '/data/IoIO/raw/20210617'
 
 #t = na_meso_tree(start='2021-06-17', stop='2021-06-17', fits_fixed_ignore=True)
 
-t = na_meso_tree(start='2021-06-01', stop='2021-06-17', fits_fixed_ignore=True)
+#t = na_meso_tree(start='2021-06-01', stop='2021-06-17', fits_fixed_ignore=True)
+
+#t = na_meso_tree(start='2021-12-01', stop='2021-12-17', fits_fixed_ignore=True)
+
+#t = na_meso_tree(start='2017-07-01', stop='2017-07-01', fits_fixed_ignore=True)
+
+#fp = closest_in_time(collection, ('Na_on', 'Na_off'),
+#                     valid_long_exposure,
+#                     directory=directory)
+#cp = closest_in_coord(collection, ('Na_on', 'Na_off'),
+#                     valid_long_exposure,
+#                     directory=directory)
+
+t = na_meso_tree(fits_fixed_ignore=True)

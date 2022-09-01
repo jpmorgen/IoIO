@@ -700,6 +700,7 @@ def parallel_cached_csvs(dirs,
     collection_list = []
     table_stacker = table_stacker_obj()
     for directory in dirs:
+
         if read_csvs:
             # Try to read cache
             t = cached_csv(directory,
@@ -715,8 +716,11 @@ def parallel_cached_csvs(dirs,
         # generate a collection so we can look inside to see how many
         # files are there to maximize parallelization
         collection = collector(directory, **cached_csv_args)
+        
+        # Reserve a process for empty directories
+        nfiles = np.max((1, len(collection.files)))
 
-        nprocesses = int(len(collection.files) / files_per_process)
+        nprocesses = int(nfiles / files_per_process)
         if nprocesses >= max_num_processes:
             # Directory has lots of files.  Let cormultipipe regulate
             # the number of processes

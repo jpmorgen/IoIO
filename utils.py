@@ -20,6 +20,7 @@ import astropy.units as u
 from astropy.time import Time
 from astropy.stats import biweight_location, mad_std
 from astropy.table import QTable
+from astropy.coordinates import SkyCoord
 
 from ccdproc import ImageFileCollection
 
@@ -300,6 +301,8 @@ def get_dirs_dates(directory,
         return []
     ddsorted = [dd for dd in ddsorted
                 if start <= dd[1] and dd[1] <= stop]
+    if len(ddsorted) == 0:
+        return []
     dirs, dates = zip(*ddsorted)
     dirs = [os.path.join(directory, d) for d in dirs]
     return list(zip(dirs, dates))
@@ -385,6 +388,45 @@ def closest_in_time(collection, value_pair,
             continue
         dts = [t_on - T for T in t_offs]
         idx_best1 = np.argmin(np.abs(dts))
+        # Unwrap
+        i_off = row_dict[value_pair[1]][idx_best1]
+        pair = [os.path.join(directory,
+                             st[i]['file'])
+                             for i in (i_on, i_off)]
+        pair_list.append(pair)
+    return pair_list
+
+def closest_in_coord(collection, value_pair,
+                     row_selector=None,
+                     keyword='filter',
+                     directory=None):
+    directory = collection.location or directory
+    if directory is None:
+        raise ValueError('Collection does not have a location.  Specify directory')
+    st = collection.summary
+    if st is None:
+        return []
+
+    row_dict = multi_row_selector(st, keyword, value_pair, row_selector)
+
+    pair_list = []
+    for i_on in row_dict[value_pair[0]]:
+        try:
+            coord_on = SkyCoord(st[i_on]['objctra'],
+                                st[i_on]['objctdec'],
+                                unit=(u.hourangle, u.deg))
+        except Exception as e:
+            fname = os.path.join(directory, st[i_on]['file'])
+            log.warning(f'Problem getting SkyCoord for {fname}: {e}')
+            continue
+        # Seach all second values
+        coord_offs = SkyCoord(st[row_dict[value_pair[1]]]['objctra'],
+                              st[row_dict[value_pair[1]]]['objctdec'],
+                              unit=(u.hourangle, u.deg))
+        if len(coord_offs) == 0:
+            continue
+        seps = coord_offs.separation(coord_on)
+        idx_best1 = np.argmin(seps)
         # Unwrap
         i_off = row_dict[value_pair[1]][idx_best1]
         pair = [os.path.join(directory,

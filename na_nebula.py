@@ -311,6 +311,7 @@ def na_nebula_directory(directory_or_collection,
                        post_process_list=[calc_obj_to_ND, planet_to_object],
                        plot_planet_rot_from_key=['Jupiter_NPole_ang'],
                        planet_subim_figsize=[6, 4],
+                       # --> THIS IS SOON OBSOLETE! na_meso_sub should go after
                        post_offsub=[sun_angle, na_meso_sub,
                                     extinction_correct, rayleigh_convert,
                                     obj_surface_bright, na_apertures,
