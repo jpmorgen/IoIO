@@ -391,12 +391,13 @@ class CorPhotometry(Photometry):
         # Make sure original solutions stands.  Note we have to do
         # this in the photometry we pass to cmp, since add_astrometry
         # doesn't handle it
-        self.solve_by_proxy = False
+        photometry = self.copy()
+        photometry.solve_by_proxy = False
         cmp = CorMultiPipeBinnedOK(
             calibration=calibration,
             auto=True,
-            photometry=self,
-            solve_timeout=600, # Try to solve all [didn't help]
+            photometry=photometry,
+            solve_timeout=600,
             mask_ND_before_astrometry=True, 
             create_outdir=True,
             post_process_list=[add_astrometry,
@@ -1093,7 +1094,11 @@ def add_astrometry(ccd_in, bmp_meta=None,
         outname = None
     photometry.outname = outname or photometry.outname
 
-    ccd.wcs = photometry.wcs
+    try:
+        ccd.wcs = photometry.wcs
+    except Exception as e:
+        log.error(f'Problem with {in_name}')
+        raise
     if photometry.wcs is None and fail_if_no_wcs:
         # Pathological case: no wcs solution and no proxy solution
         bmp_meta.clear()

@@ -1,5 +1,6 @@
 """Base Photometry object that provides interface with photutils"""
 
+from copy import deepcopy
 import numpy as np
 
 import matplotlib.pyplot as plt
@@ -457,6 +458,9 @@ class Photometry:
         self.photoobj_fields = photoobj_fields
         self.init_calc()
 
+    def copy(self):
+        return deepcopy(self)
+
     def init_calc(self):
         # Kernel ends up getting reset when it doesn't necessarily
         # need to be, but more pain than it is worth to address that
@@ -578,8 +582,7 @@ class Photometry:
                 mask=self.coverage_mask,
                 dilate_size=self.source_mask_dilate)
         except Exception as e:
-            log.warning('Received the following error: ' + str(e))
-            log.warning('source_mask will not be used')
+            log.warning('Received the following error, preventing use of source_mask: ' + str(e))
             source_mask = np.zeros_like(self.ccd.mask, dtype=bool)
             
         self._source_mask = source_mask
@@ -602,7 +605,7 @@ class Photometry:
             self._back_obj = back
             return self._back_obj
         except Exception as e:
-            log.warning('Received the following error: ' + str(e))
+            log.warning('Received the following Background2D error: ' + str(e))
             return None
 
     @property

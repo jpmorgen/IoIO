@@ -11144,3 +11144,20 @@ Wed Oct 27 08:38:08 2021 EDT  jpmorgen@snipe
 
 --> Not shutting off properly in case where we go below the horizon
 Does shut od when get to quitat time
+
+Sun Sep 04 22:30:42 2022 EDT  jpmorgen@snipe
+
+New astrometry
+
+Test it out on Alpha Boo
+
+cd "C:\Users\PLANETARY SCIENCE\Desktop\IoIO\Scripts\"
+IoIO.py center --ObsClassName CorObsData
+
+NOTE!  IoIO.py on IoIO1U1 seems to be an old copy
+
+Getting weird failure to start guider because guide star is not
+found.  Might be because I got the cameras confused by recording
+guider astrometry and then calling my script
+
+Indeed, restart helps

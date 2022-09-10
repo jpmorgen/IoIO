@@ -1172,12 +1172,20 @@ def extinction_correct(flex_input, airmass=None,
         filt = ccd.meta['FILTER']
         airmass = ccd.meta['AIRMASS']
         ext_coef, ext_coef_err = standard_star_obj.extinction_coef(filt)
-        if filt == 'Na_on':
-            # Na_on is not coming in with a good exctinction coef --
-            # it is too high.
-            ext_coef, ext_coef_err = standard_star_obj.extinction_coef('Na_off')
-            ccd.meta['HIERARCH SUBSTITUTE_EXTINCTION_COEF'] = 'Na_off'
-        
+
+        # On the fence a little about this.  Yes the extinction coef
+        # comes in different than all the other wavelengths around it,
+        # but the zero point and rayleigh conversion, which depend
+        # implicitly on extinction correct, come in sensibly.  For now
+        # go with it being self-consistent
+        ##
+        #if filt == 'Na_on':
+        #    # Na_on is not coming in with a good exctinction coef --
+        #    # it is too high.
+        #    ext_coef, ext_coef_err = standard_star_obj.extinction_coef('Na_off')
+        #    ccd.meta['HIERARCH SUBSTITUTE_EXTINCTION_COEF'] = 'Na_off'
+        ##
+
         mag = u.Magnitude(1*ccd.unit)
         ecmag = extinction_correct(mag, airmass, ext_coef,
                                    inverse=inverse)
