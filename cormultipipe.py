@@ -272,8 +272,7 @@ def mask_nonlin_sat(ccd_in, bmp_meta=None, margin=0.1, **kwargs):
         return [mask_nonlin_sat(ccd, bmp_meta=bmp_meta, 
                                margin=margin, **kwargs)
                 for ccd in ccd_in]
-    ccd = ccd_in.copy()
-    ccd = mask_above_key(ccd, bmp_meta=bmp_meta, key='SATLEVEL')
+    ccd = mask_above_key(ccd_in, bmp_meta=bmp_meta, key='SATLEVEL')
     ccd = mask_above_key(ccd, bmp_meta=bmp_meta, key='NONLIN')
     return ccd
 
@@ -801,6 +800,16 @@ class CorArgparseMixin:
         self.parser.add_argument('--' + option, 
                                  default=default, help=help, **kwargs)
 
+    def add_base(self, 
+                 option='base',
+                 default=None,
+                 help=None,
+                 **kwargs):
+        if help is None:
+            help = f'base of output filename (default: {default})'
+        self.parser.add_argument('--' + option, 
+                            default=default, help=help, **kwargs)
+
     def add_start(self,
                   option='start',
                   default=None,
@@ -840,6 +849,18 @@ class CorArgparseMixin:
                        **kwargs):
         if help is None:
             help = (f'Write CSV files')
+        self.parser.add_argument('--' + option,
+                                 action=argparse.BooleanOptionalAction,
+                                 default=default,
+                                 help=help, **kwargs)
+
+    def calc_highest_product(self, 
+                             option='calc_highest_product',
+                             default=True,
+                             help=None,
+                             **kwargs):
+        if help is None:
+            help = (f'Calculate highest product (e.g. all columns in QTable)')
         self.parser.add_argument('--' + option,
                                  action=argparse.BooleanOptionalAction,
                                  default=default,

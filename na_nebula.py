@@ -25,9 +25,9 @@ from bigmultipipe import cached_pout
 
 from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 
-from IoIO.utils import (get_dirs_dates, reduced_dir,
+from IoIO.utils import (get_dirs_dates, reduced_dir, 
                         valid_long_exposure, dict_to_ccd_meta,
-                        multi_glob, sum_ccddata, 
+                        multi_glob, sum_ccddata, csvname_creator,
                         savefig_overwrite, finish_stripchart)
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
@@ -47,13 +47,15 @@ from IoIO.cor_photometry import (CorPhotometry,
 from IoIO.standard_star import (StandardStar, SSArgparseHandler,
                                 extinction_correct, rayleigh_convert)
 from IoIO.horizons import galsat_ephemeris
-from IoIO.na_back import sun_angle, NaBack, na_meso_sub
+from IoIO.na_meso import (NaMeso, NaMesoArgparseHandler, sun_angles,
+                          na_meso_meta)
 from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
                                   TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
                                   on_off_pipeline)
 from IoIO.torus import plot_planet_subim, closest_galsat_to_jupiter
 
-NA_NEBULA_ROOT = os.path.join(IoIO_ROOT, 'Na_nebula')
+BASE = 'Na_nebula'
+OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
 
 def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     # We don't yet rotate the ND filter when we rot_to, so mask it first
@@ -65,7 +67,7 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     ccd = objctradec_to_obj_center(ccd)
     # default of 20 doesn't always get the emission.  This might not
     # be enough either
-    ccd = mask_galsats(ccd, galsat_mask_side=30)
+    ccd = mask_galsats(ccd, galsat_mask_side=30*u.pixel)
     center = ccd.obj_center*u.pixel
     pix_per_Rj = pixel_per_Rj(ccd)
     # --> These may need to be tweaked
@@ -92,17 +94,6 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
                                [('Jupiter_PDObsLon', u.deg),
                                 ('Jupiter_PDObsLat', u.deg),
                                 ('Jupiter_PDSunLon', u.deg)])
-    # --> HACK ALERT Should probably have done this in
-    # --> na_back to get units in rayleighs at that point
-    if ccd.meta.get('MESO'):
-        rc = ccd.meta['RAYLEIGH_CONVERSION']
-        rc_err = ccd.meta['RAYLEIGH_CONVERSION_ERR']
-        meso = ccd.meta['MESO']
-        meso_err = ccd.meta['MESO_ERR']
-        meso_r = rc * meso
-        meso_r_err = meso_r * (rc_err**2 / rc**2 + meso_err**2/meso**2)**0.5
-        bmp_meta['MESO'] = meso_r * u.R
-        bmp_meta['MESO_ERR'] = meso_r_err * u.R
         
     ccd = dict_to_ccd_meta(ccd, na_aps)
     bmp_meta.update(na_aps)
@@ -111,14 +102,15 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
 def na_nebula_plot(t, outdir,
                    tmin=None,
                    min_sb=0,
-                   max_sb=1000,
+                   max_sb=1000, # 400,
                    max_good_sb=np.inf,
                    min_av_ap_dist=0,
                    max_av_ap_dist=np.inf,
-                   n_plots=2,
+                   n_plots=4,
                    tlim=None,
                    show=False):
     t.sort('tavg')
+    tlim = (t['tavg'][0].datetime, t['tavg'][-1].datetime)
     outbase = 'Na_nebula_apertures.png'
     sum_regexp = re.compile('Na_ap_.*_sum')
     area_regexp = re.compile('Na_ap_.*_area')
@@ -177,7 +169,6 @@ def na_nebula_plot(t, outdir,
     plt.legend()
 
     f.autofmt_xdate()
-
     if n_plots == 1:
         finish_stripchart(outdir, outbase, show=show)
         return
@@ -185,65 +176,145 @@ def na_nebula_plot(t, outdir,
     ax = plt.subplot(n_plots,1,2)
     plt.title('Telluric Na empirical model subtracted')
     for sb, av_ap in zip(sb_list, ap_list):
-        plt.plot(t['tavg'].datetime, sb, '.', label=f'+/- {av_ap:.0f} Rj')
-        #plt.plot(t['tavg'].datetime, cts, '.', label=sum_colname)
-        #plt.plot(t['tavg'].datetime, area, '.', label=area_colname)
-    meso = t['MESO']
-    meso_err = t['MESO_ERR']
+        plt.plot(t['tavg'].datetime,
+                 sb-t['model_meso'],
+                 '.', label=f'+/- {av_ap:.0f} Rj')
+    meso = t['model_meso']
+    meso_err = t['model_meso_err']
     plt.errorbar(t['tavg'].datetime, meso.value, meso_err.value,
                  fmt='.', color=mcolors.to_rgb('grey'), alpha=0.2,
                  label='Telluric Na model')
+    ax.set_xlim(tlim)
     ax.set_ylim(min_sb, max_sb)
     #plt.yscale('log')
     plt.ylabel(f'Surf. Bright ({sb.unit})')
     plt.legend()
 
+    f.autofmt_xdate()
     if n_plots == 2:
+        finish_stripchart(outdir, outbase, show=show)
+        return
+
+    ax = plt.subplot(n_plots,1,3)
+    plt.title('Measured Telluric Na subtracted')
+    for sb, av_ap in zip(sb_list, ap_list):
+        model = t['tavg'].datetime
+        plt.plot(t['tavg'].datetime,
+                 sb-t['measured_meso'],
+                 '.', label=f'+/- {av_ap:.0f} Rj')
+    meso = t['measured_meso']
+    meso_err = t['measured_meso_err']
+    plt.errorbar(t['tavg'].datetime, meso.value, meso_err.value,
+                 fmt='.', color=mcolors.to_rgb('grey'), alpha=0.2,
+                 label='Measured Telluric Na')
+    ax.set_xlim(tlim)
+    ax.set_ylim(min_sb, max_sb)
+    #plt.yscale('log')
+    plt.ylabel(f'Surf. Bright ({sb.unit})')
+    plt.legend()
+
+    f.autofmt_xdate()
+    if n_plots == 3:
+        finish_stripchart(outdir, outbase, show=show)
+        return
+
+    ax = plt.subplot(n_plots,1,4)
+    plt.title('Best Guess Telluric Na subtracted')
+    for sb, av_ap in zip(sb_list, ap_list):
+        plt.plot(t['tavg'].datetime,
+                 sb-t['meso_or_model'],
+                 '.', label=f'+/- {av_ap:.0f} Rj')
+    meso = t['meso_or_model']
+    meso_err = t['meso_or_model_err']
+    plt.errorbar(t['tavg'].datetime, meso.value, meso_err.value,
+                 fmt='.', color=mcolors.to_rgb('grey'), alpha=0.2,
+                 label='Best guess Telluric Na')
+    ax.set_xlim(tlim)
+    ax.set_ylim(min_sb, max_sb)
+    #plt.yscale('log')
+    plt.ylabel(f'Surf. Bright ({sb.unit})')
+    plt.legend()
+
+    f.autofmt_xdate()
+    if n_plots == 4:
         finish_stripchart(outdir, outbase, show=show)
         return
 
     obj_sb = t['obj_surf_bright']
     obj_sb_err = t['obj_surf_bright_err']
-    ax = plt.subplot(n_plots,1,3)
+    ax = plt.subplot(n_plots,1,5)
     plt.title('Jupiter attenuated surface brightness')
     plt.errorbar(t['tavg'].datetime, obj_sb.value, obj_sb_err.value,
                  fmt='k.')#, label='Telluric Na model')
+    ax.set_xlim(tlim)
     ax.set_ylim(0, 200000)
     plt.ylabel(f'Atten. Surf. Bright ({obj_sb.unit})')
     
-    ax = plt.subplot(n_plots,1,4)
+    f.autofmt_xdate()
+    if n_plots == 5:
+        finish_stripchart(outdir, outbase, show=show)
+        return
+
+    ax = plt.subplot(n_plots,1,6)
     plt.plot(t['tavg'].datetime, t['extinction_correction_value'], '.')
     plt.title('Extinction correction factor')
     ax.set_ylim(1, 5)
     plt.ylabel(f'Extinction correction')
 
-    if n_plots == 3:
+    f.autofmt_xdate()
+    if n_plots == 6:
         finish_stripchart(outdir, outbase, show=show)
         return
 
-    ax = plt.subplot(n_plots,1,5)
+    ax = plt.subplot(n_plots,1,7)
     plt.plot(t['tavg'].datetime, sb_list[-1]/meso, '.',
              label=f'{ap_list[-1]:.0f} Rj')
     plt.axhline(1)
     plt.yscale('log')
+    ax.set_xlim(tlim)
     ax.set_ylim(0.03, 30)
     plt.ylabel(f'{av_ap:.0f} Rj / telluric')
     plt.legend()
-    
-    if n_plots == 4:
+
+    f.autofmt_xdate()
+    if n_plots == 6:
         finish_stripchart(outdir, outbase, show=show)
         return
 
     plt.xlabel(f'UT')# {date}')
 
     finish_stripchart(outdir, outbase, show=show)
-    
+
+def na_nebula_collection(directory,
+                         glob_include=TORUS_NA_NEB_GLOB_LIST,
+                         glob_exclude_list=TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
+                         **kwargs):
+    flist = multi_glob(directory, glob_include, glob_exclude_list)
+    if len(flist) == 0:
+        return ImageFileCollection(directory, glob_exclude='*')
+    # Create a collection of valid long Na exposures that are
+    # pointed at Jupiter (not offset for mesospheric foreground
+    # observations)
+    collection = ImageFileCollection(directory, filenames=flist)
+    st = collection.summary
+    valid = ['Na' in f for f in st['filter']]
+    valid = np.logical_and(valid, valid_long_exposure(st))
+    if 'raoff' in st.colnames:
+        valid = np.logical_and(valid, st['raoff'].mask)
+    if 'decoff' in st.colnames:
+        valid = np.logical_and(valid, st['decoff'].mask)
+    if np.all(~valid):
+        return ImageFileCollection(directory, glob_exclude='*')
+    if np.any(~valid):
+        fbases = st['file'][valid]
+        flist = [os.path.join(directory, f) for f in fbases]
+    return ImageFileCollection(directory, filenames=flist)
+
 def na_nebula_directory(directory_or_collection,
-                        return_collection=False,
                         glob_include=TORUS_NA_NEB_GLOB_LIST,
                         glob_exclude_list=TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
                         outdir=None,
-                        outdir_root=NA_NEBULA_ROOT,
+                        outdir_root=OUTDIR_ROOT,
                         standard_star_obj=None,
                         na_meso_obj=None,
                         read_pout=True,
@@ -251,51 +322,22 @@ def na_nebula_directory(directory_or_collection,
                         create_outdir=True,
                         **kwargs):
 
-    # --> Thinking about how to make collection_creator callable.
-    # --> Code below would be the callable.  I could call it in
-    # --> parallel_cached_csvs rather than having the bogus
-    # --> return_collection keyword here.  Then I would call it here
-    # --> to make the collection if directory_or_collection is not a collection
-
     if isinstance(directory_or_collection, ImageFileCollection):
         # We are passed a collection when running multiple directories
         # in parallel
         directory = directory_or_collection.location
         collection = directory_or_collection
     else:
-        # We are running by hand or we want to generate our collection
-        # to see how many files we have --> this could be a separate
-        # collection_creator passable
         directory = directory_or_collection
-        flist = multi_glob(directory, glob_include, glob_exclude_list)
-        if len(flist) == 0:
-            return []
-        # Create a collection of valid long Na exposures that are
-        # pointed at Jupiter (not offset for mesospheric foreground
-        # observations)
-        collection = ImageFileCollection(directory, filenames=flist)
-        st = collection.summary
-        valid = ['Na' in f for f in st['filter']]
-        valid = np.logical_and(valid, valid_long_exposure(st))
-        if 'raoff' in st.colnames:
-            valid = np.logical_and(valid, st['raoff'].mask)
-        if 'decoff' in st.colnames:
-            valid = np.logical_and(valid, st['decoff'].mask)
-        if np.all(~valid):
-            return []
-        if np.any(~valid):
-            fbases = st['file'][valid]
-            flist = [os.path.join(directory, f) for f in fbases]
-        collection = ImageFileCollection(directory, filenames=flist)
+        collection = na_nebula_collection(directory, **kwargs)
 
-    if return_collection:
-        return collection
+    if len(collection.files) == 0:
+        return QTable()
 
     outdir = outdir or reduced_dir(directory, outdir_root, create=False)
-    poutname = os.path.join(outdir, 'Na_nebula.pout')
+    poutname = os.path.join(outdir, BASE + '.pout')
     standard_star_obj = standard_star_obj or StandardStar(reduce=True)
-    na_meso_obj = na_meso_obj or NaBack(standard_star_obj=standard_star_obj,
-                                        reduce=True)
+    na_meso_obj = na_meso_obj or NaMeso()
     pout = cached_pout(on_off_pipeline,
                        poutname=poutname,
                        read_pout=read_pout,
@@ -311,8 +353,7 @@ def na_nebula_directory(directory_or_collection,
                        post_process_list=[calc_obj_to_ND, planet_to_object],
                        plot_planet_rot_from_key=['Jupiter_NPole_ang'],
                        planet_subim_figsize=[6, 4],
-                       # --> THIS IS SOON OBSOLETE! na_meso_sub should go after
-                       post_offsub=[sun_angle, na_meso_sub,
+                       post_offsub=[sun_angles, na_meso_meta,
                                     extinction_correct, rayleigh_convert,
                                     obj_surface_bright, na_apertures,
                                     closest_galsat_to_jupiter,
@@ -321,21 +362,12 @@ def na_nebula_directory(directory_or_collection,
                        outdir_root=outdir_root,
                        **kwargs)
     if pout is None or len(pout) == 0:
-        return []
+        return QTable()
 
     _ , pipe_meta = zip(*pout)
     t = QTable(rows=pipe_meta)
     na_nebula_plot(t, outdir)
     return t
-
-def csvname_creator(directory_or_collection, *args,
-                    outdir_root=None, **kwargs,):
-    if isinstance(directory_or_collection, ccdp.ImageFileCollection):
-        directory = directory_or_collection.location
-    else:
-        directory = directory_or_collection
-    rd = reduced_dir(directory, outdir_root, create=False)
-    return os.path.join(rd, 'Na_nebula.ecsv')
 
 def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
                    start=None,
@@ -350,7 +382,7 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
                    write_csvs=True,
                    show=False,
                    create_outdir=True,                       
-                   outdir_root=NA_NEBULA_ROOT,
+                   outdir_root=OUTDIR_ROOT,
                    **kwargs):
 
     dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
@@ -365,13 +397,10 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
             solve_timeout=solve_timeout,
             join_tolerance=join_tolerance)
     standard_star_obj = standard_star_obj or StandardStar(reduce=True)
-    na_meso_obj = na_meso_obj or NaBack(calibration=calibration,
-                                        standard_star_obj=standard_star_obj,
-                                        reduce=True)
+    na_meso_obj = na_meso_obj or NaMeso()
     cached_csv_args = {
-        'code': na_nebula_directory,
         'csvnames': csvname_creator,
-        'read_csvs': read_csvs,
+        'csv_base': BASE + '.ecsv',
         'write_csvs': write_csvs,
         'calibration': calibration,
         'photometry': photometry,
@@ -382,38 +411,36 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
     cached_csv_args.update(**kwargs)
     # Not sure why I am not getting a full house with files_per_process=2
     summary_table = parallel_cached_csvs(dirs,
+                                         code=na_nebula_directory,
+                                         collector=na_nebula_collection,
                                          files_per_process=3,
+                                         read_csvs=read_csvs,
                                          **cached_csv_args)
-    summary_table.write(os.path.join(outdir_root, 'Na_nebula.ecsv'),
-                                     overwrite=True)
+    summary_table.write(os.path.join(outdir_root, BASE + '.ecsv'),
+                        overwrite=True)
     na_nebula_plot(summary_table, outdir_root, show=show)
     return summary_table
 
-class NaNebulaArgparseHandler(SSArgparseHandler,
+class NaNebulaArgparseHandler(NaMesoArgparseHandler, SSArgparseHandler,
                               CorPhotometryArgparseMixin, CalArgparseHandler):
     def add_all(self):
         """Add options used in cmd"""
-        self.add_reduced_root(default=NA_NEBULA_ROOT)
+        self.add_reduced_root(default=OUTDIR_ROOT)
         self.add_start()
         self.add_stop()
-        self.add_show()
-        self.add_read_pout(default=True)
-        self.add_write_pout(default=True)        
-        self.add_read_csvs(default=True)
-        self.add_write_csvs(default=True)
-        self.add_solve_timeout()
-        self.add_join_tolerance()
-        self.add_join_tolerance_unit()
-        self.add_keep_intermediate()
+        #self.add_show()
+        #self.add_read_pout(default=True)
+        #self.add_write_pout(default=True)        
+        #self.add_read_csvs(default=True)
+        #self.add_write_csvs(default=True)
+        #self.add_solve_timeout()
+        #self.add_join_tolerance()
+        #self.add_join_tolerance_unit()
+        #self.add_keep_intermediate()
         super().add_all()
 
     def cmd(self, args):
-        c, ss = super().cmd(args)
-        # Eventually, I am going to want to have this be a proper
-        # command-line thing
-        na_meso_obj = NaBack(calibration=c,
-                             standard_star_obj=ss,
-                             reduce=True)
+        c, ss, m = super().cmd(args)
         t = na_nebula_tree(raw_data_root=args.raw_data_root,
                            start=args.start,
                            stop=args.stop,
@@ -424,7 +451,7 @@ class NaNebulaArgparseHandler(SSArgparseHandler,
                                args.join_tolerance
                                *u.Unit(args.join_tolerance_unit)),
                            standard_star_obj=ss,
-                           na_meso_obj=na_meso_obj,
+                           na_meso_obj=m,
                            read_pout=args.read_pout,
                            write_pout=args.write_pout,
                            read_csvs=args.read_csvs,
@@ -468,7 +495,7 @@ if __name__ == '__main__':
 #solve_timeout=SOLVE_TIMEOUT
 #join_tolerance=JOIN_TOLERANCE*JOIN_TOLERANCE_UNIT
 #
-#outdir_root=NA_NEBULA_ROOT
+#outdir_root=OUTDIR_ROOT
 #fits_fixed_ignore=True
 #photometry = (
 #    photometry
@@ -477,7 +504,7 @@ if __name__ == '__main__':
 #                     join_tolerance=join_tolerance))
 #calibration = calibration or Calibration(reduce=True)
 #standard_star_obj = standard_star_obj or StandardStar(reduce=True)
-#na_meso_obj = na_meso_obj or NaBack(calibration=calibration,
+#na_meso_obj = na_meso_obj or NaMeso(calibration=calibration,
 #                                    standard_star_obj=standard_star_obj,
 #                                    reduce=True)
 #outdir_root = outdir_root or os.path.join(IoIO_ROOT, 'Na_nebula')

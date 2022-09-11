@@ -376,6 +376,9 @@ def closest_in_time(collection, value_pair,
     if directory is None:
         raise ValueError('Collection does not have a location.  Specify directory')
     st = collection.summary
+    if st is None:
+        return []
+
     row_dict = multi_row_selector(st, keyword, value_pair, row_selector)
 
     pair_list = []

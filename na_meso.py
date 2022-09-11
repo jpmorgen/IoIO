@@ -3,6 +3,7 @@
 """Construct model of telluric Na emission. """
 
 import os
+import argparse
 import warnings
 
 import numpy as np
@@ -41,9 +42,10 @@ from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE,
                              JOIN_TOLERANCE_UNIT)
-from IoIO.cor_photometry import CorPhotometry, add_astrometry
-from IoIO.standard_star import (StandardStar, extinction_correct,
-                                rayleigh_convert)
+from IoIO.cor_photometry import (CorPhotometry,
+                                 CorPhotometryArgparseMixin, add_astrometry)
+from IoIO.standard_star import (StandardStar, SSArgparseHandler,
+                                extinction_correct, rayleigh_convert)
 
 BASE = 'Na_meso'  
 OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
@@ -54,7 +56,7 @@ AWAY_FROM_JUPITER = 5*u.deg # nominally 10 is what I used
 N_BACK_BOXES = 20
 
 # sin wave amplitude for mesospheric emission 
-MESO_AMPLITUDE = 15*u.R
+MESO_AMPLITUDE = 18*u.R
 MESO_BASELINE = 5*u.R
 MESO_AV = MESO_BASELINE + MESO_AMPLITUDE
 
@@ -65,22 +67,24 @@ def shadow_height(alt, sun_alt):
     
     Parameters
     ----------
-    alt : Angle
+    alt : Angle or Quantity
         Altitude angle of object
 
-    sun_alt : Angle
+    sun_alt : Angle or Quantity
         Altitude of sun (must be negative)
 
     """
-    assert np.all(sun_alt < 0)
+    assert (isinstance(alt, u.Quantity)
+            and isinstance(sun_alt, u.Quantity)
+            and np.all(sun_alt < 0))
     re = 1*u.R_earth
     re = re.to(u.km)
     tan_alpha_s = -np.tan(sun_alt) # sundown angle
-    tan_alpha = np.tan(alt) # observing alt angle
+    tan_alpha = np.tan(alt)
     sh = re * tan_alpha_s**2 * tan_alpha / (tan_alpha + tan_alpha_s)
     return sh
 
-def sun_angles(ccd_in,
+def sun_angles(ccd,
                bmp_meta=None,
                **kwargs):
     """cormultipipe post-processing routine that calculates sun alt-az and
@@ -88,7 +92,6 @@ def sun_angles(ccd_in,
     simple thin-slab calculation
 
     """
-    ccd = ccd_in.copy()
     with solar_system_ephemeris.set('builtin'):
         sun_coord = get_body('sun', ccd.tavg, ccd.obs_location)
     # https://docs.astropy.org/en/stable/coordinates/common_errors.html
@@ -98,15 +101,15 @@ def sun_angles(ccd_in,
     sun_angle =  sun_coord.separation(ccd.sky_coord)
     sun_altaz = sun_coord.transform_to(
         AltAz(obstime=ccd.tavg, location=ccd.obs_location))
-    objctalt = ccd.meta['OBJCTALT']
+    objctalt = ccd.meta['OBJCTALT']*u.deg
     sh = shadow_height(objctalt, sun_altaz.alt)
     adict = {'sun_angle': sun_angle,
              'sun_alt': sun_altaz.alt,
              'sun_az': sun_altaz.az,
              'shadow_height': sh}
-    ccd = dict_to_ccd_meta(ccd, adict)
+    ccd_out = dict_to_ccd_meta(ccd, adict)
     bmp_meta.update(adict)
-    return ccd
+    return ccd_out
 
 def na_meso_process(data,
                     in_name=None,
@@ -163,9 +166,11 @@ def na_meso_process(data,
     best_back, _ = im_med_min_max(background)*background.unit
     best_back_std = np.std(background)*background.unit
 
+    # Copy some of our CCD meta into bmp_meta so we can play with it
+    # in our QTable
     ccd = background
-    objctalt = ccd.meta['OBJCTALT']
-    objctaz = ccd.meta['OBJCTAZ']
+    objctalt = ccd.meta['OBJCTALT']*u.deg
+    objctaz = ccd.meta['OBJCTAZ']*u.deg
     airmass = ccd.meta.get('AIRMASS')
 
     tmeta = {'tavg': ccd.tavg,
@@ -174,8 +179,8 @@ def na_meso_process(data,
              'jup_dist': jup_dist,
              'best_back': best_back,
              'best_back_std': best_back_std,
-             'alt': objctalt*u.deg,
-             'az': objctaz*u.deg,
+             'alt': objctalt,
+             'az': objctaz,
              'airmass': airmass}
     ccd = sun_angles(ccd, bmp_meta=tmeta, **kwargs)
     
@@ -419,15 +424,26 @@ def na_meso_tree(data_root=RAW_DATA_ROOT,
 
 class NaMeso:
     def __init__(self,
-                 qtable_fname=None):
-        if qtable_fname is None:
-            qtable_fname = os.path.join(OUTDIR_ROOT, BASE + '.ecsv')
-        self.qtable_fname = qtable_fname
-        self._qtable = None
+                 qtable=None,
+                 outdir_root=OUTDIR_ROOT,
+                 base=BASE,
+                 qtable_fname=None,
+                 plot_fname=None,
+                 show=False):
+        self._qtable = qtable
+        self.outdir_root = outdir_root
+        self.base = base
+        self.qtable_fname = (qtable_fname
+                             or os.path.join(self.outdir_root,
+                                             self.base + '.ecsv'))
+        self.plot_fname = (plot_fname
+                           or os.path.join(self.outdir_root,
+                                           self.base + '.png'))
+        self.show = show
 
     @property
     def qtable(self):
-        """Basic storage of data.  --> may add reduction step if not found"""
+        """Basic storage of data"""
         if self._qtable is None:
             self._qtable = QTable.read(self.qtable_fname)
         return self._qtable
@@ -552,7 +568,7 @@ class NaMeso:
         if 'model_vcol_shadow_corrected' not in self.qtable.colnames:
             self.qtable['model_vcol_shadow_corrected'] = \
                 self.vcol_to_shadow_corrected(
-                    self.model_meso_vcol, self.shadow_height)
+                    self.model_meso_vcol, self.qtable['shadow_height'])
         return self.qtable['model_vcol_shadow_corrected']
 
     @pgproperty
@@ -572,7 +588,7 @@ class NaMeso:
         fit = fitting.LevMarLSQFitter()
         sin_init = (models.Sine1D(amplitude=MESO_AMPLITUDE.value,
                                   frequency=2/u.year,
-                                  phase=(-20*u.deg).to(u.rad))
+                                  phase=(-15*u.deg).to(u.rad))
                     + models.Const1D(amplitude=MESO_AV.value))
         #sin_init = (models.Sine1D(amplitude=MESO_AMPLITUDE.value,
         #                          frequency=2/u.year,
@@ -596,7 +612,7 @@ class NaMeso:
     def shadow_corrected_to_no_time(self, meso_shadow_corrected, tavg,
                                     inverse=False):
         """Transforms shadow height-corrected mesospheric vertical column
-        density to time-corrected and inverse
+        emission to time-corrected and inverse
 
         """
         model = self.meso_vcol_corrected_sin_quantity(tavg)
@@ -667,9 +683,9 @@ class NaMeso:
                                  ignore_nan=True)
 
     def best_na_meso(self, tavg, airmass, shadow_height): 
-        """Returns the best-estimate Na mesospheric emission 
+        """Returns dict of best-estimate Na mesospheric emission
 
-        Uses all Na background meausrements to construct an empirical,
+        Uses all Na background measurements to construct an empirical,
         time-dependent model of mesospheric Na emission.  This routine
         first looks to see if background observations were recorded on
         the date of observation and uses the biweight distribution of
@@ -693,6 +709,9 @@ class NaMeso:
             best-estimate Na mesospheric emission
 
         """
+        assert isinstance(shadow_height, u.Quantity)
+        model = self.meso_model_inverse(tavg, airmass, shadow_height)
+        model_err = self.shadow_corrected_av_err
         ijd = tavg.jd.astype(int)
         self.daily_shadow_corrected
         mask = self.qtable.groups.keys['ijd'] == ijd
@@ -700,36 +719,47 @@ class NaMeso:
         ijdt = self.qtable.groups[mask]
         shadow_corrected = ijdt['daily_shadow_corrected']
         shadow_corrected_err = ijdt['daily_shadow_corrected_std']
-        #if (len(shadow_corrected.value) == 0
-        #    or not np.isfinite(shadow_corrected)):
         if len(shadow_corrected.value) == 0:
-            meso = self.meso_model_inverse(tavg, airmass, shadow_height)
-            meso_err = self.shadow_corrected_av_err
-            return meso, meso_err
+            meso = np.NAN*model.unit
+            meso_err = np.NAN*model.unit
+            meso_or_model = model
+            meso_or_model_err = model_err
+        else:
+            shadow_corrected = u.Magnitude(shadow_corrected[0])
+            shadow_corrected_err = shadow_corrected_err[0]
+            vcol = self.vcol_to_shadow_corrected(
+                u.Magnitude(shadow_corrected),
+                shadow_height,
+                inverse=True)
+            meso_mag = self.meso_mag_to_vcol(vcol, airmass, inverse=True)
+            meso = meso_mag.physical
+            meso_err = shadow_corrected_err
+            meso_or_model = meso
+            meso_or_model_err = meso_err
+        return {'measured_meso': meso,
+                'measured_meso_err': meso_err,
+                'model_meso': model,
+                'model_meso_err': model_err,
+                'meso_or_model': meso_or_model,
+                'meso_or_model_err': meso_or_model_err}
 
-        shadow_corrected = u.Magnitude(shadow_corrected[0])
-        shadow_corrected_err = shadow_corrected_err[0]
-        vcol = self.vcol_to_shadow_corrected(u.Magnitude(shadow_corrected),
-                                             shadow_height,
-                                             inverse=True)
-        meso_mag = self.meso_mag_to_vcol(vcol, airmass, inverse=True)
-        meso = meso_mag.physical
-        return meso, shadow_corrected_err
+    def plots(self, show=False, plot_fname=None):
+        show = show or self.show
+        plot_fname = plot_fname or self.plot_fname
 
-    def plots(self):
         f = plt.figure(figsize=[11, 8.5])
-        ax = plt.subplot(3, 3, 1)
+        ax = plt.subplot(3, 2, 1)
         plt.plot(self.qtable['airmass'], self.qtable['best_back'], 'k.')
         plt.xlabel(f'airmass')
         plt.ylabel(f'meso Na emission ({self.qtable["best_back"].unit})')
 
-        ax = plt.subplot(3, 3, 2)
+        ax = plt.subplot(3, 2, 2)
         plt.plot(self.qtable['best_back_std'],
                  self.qtable['best_back'], 'k.')
         ax.set_xscale('linear')
         plt.xlabel(f'meso Na emission ({self.qtable["best_back"].unit})')
         plt.ylabel(f'meso Na emission std ({self.qtable["best_back_std"].unit})')
-        ax = plt.subplot(3, 3, 3)
+        ax = plt.subplot(3, 2, 3)
         plt.plot(self.qtable['airmass'], self.meso_mag, 'k.')
         plt.plot(self.qtable['airmass'],
                  self.meso_airmass_poly(self.qtable['airmass']), 'r-')
@@ -737,22 +767,22 @@ class NaMeso:
         plt.xlabel(f'airmass')
         plt.ylabel(f'meso Na emission ({self.model_meso_vcol.unit})')
 
-        #ax = plt.subplot(3, 3, 3)
+        #ax = plt.subplot(3, 2, 3)
         #plt.plot(self.qtable['airmass'], self.model_meso_vcol, 'k.')
         #plt.xlabel(f'airmass')
         #ax.invert_yaxis()        
         #plt.ylabel(f'Vert. col. meso Na ({self.model_meso_vcol.unit})')
 
-        #ax = plt.subplot(3, 3, 4)
+        #ax = plt.subplot(3, 2, 4)
         #plt.plot(self.shadow_height, self.model_meso_vcol, 'k.')
         #ax.set_xscale('log')
         #ax.invert_yaxis()        
         #plt.xlabel(f'Shadow height ({self.shadow_height.unit})')
         #plt.ylabel(f'Vert. col. Na ({self.model_meso_vcol.unit})')
 
-        ax = plt.subplot(3, 3, 4)
-        plt.plot(self.shadow_height, self.model_meso_vcol, 'k.')
-        plt.plot(self.shadow_height,
+        ax = plt.subplot(3, 2, 4)
+        plt.plot(self.qtable['shadow_height'], self.model_meso_vcol, 'k.')
+        plt.plot(self.qtable['shadow_height'],
                  self.vcol_dex_shadow_height_poly_quantity(
                      self.dex_shadow_height), 'r.')
         ax.set_xscale('log')
@@ -760,14 +790,14 @@ class NaMeso:
         plt.xlabel(f'Shadow height ({self.shadow_height.unit})')
         plt.ylabel(f'Vert. col. Na ({self.model_meso_vcol.unit})')
 
-        #ax = plt.subplot(3, 3, 6)
+        #ax = plt.subplot(3, 2, 6)
         #plt.plot(self.shadow_height, self.model_vcol_shadow_corrected, 'k.')
         #ax.set_xscale('log')
         #ax.invert_yaxis()        
         #plt.xlabel(f'Shadow height (SH) ({self.shadow_height.unit})')
         #plt.ylabel(f'SH corr. vert. col. Na ({self.model_meso_vcol.unit})')
 
-        #ax = plt.subplot(3, 3, 7)
+        #ax = plt.subplot(3, 2, 7)
         #plt.plot(self.qtable['jup_dist'],
         #         self.model_vcol_shadow_corrected, 'k.')
         #ax.set_xscale('linear')
@@ -775,7 +805,7 @@ class NaMeso:
         #plt.xlabel(f'Jupiter distance ({self.qtable["jup_dist"].unit})')
         #plt.ylabel(f'SH corr. vert. col. Na ({self.model_meso_vcol.unit})')
 
-        #ax = plt.subplot(3, 3, 7)
+        #ax = plt.subplot(3, 2, 7)
         #plt.plot(self.qtable['jup_dist'],
         #         self.meso_mag, 'k.')
         #ax.set_xscale('linear')
@@ -783,7 +813,7 @@ class NaMeso:
         #plt.xlabel(f'Jupiter distance ({self.qtable["jup_dist"].unit})')
         #plt.ylabel(f'SH corr. vert. col. Na ({self.model_meso_vcol.unit})')
 
-        #ax = plt.subplot(3, 3, 7)
+        #ax = plt.subplot(3, 2, 7)
         #plt.plot(self.qtable['tavg'].datetime,
         #         self.model_vcol_shadow_corrected,
         #         'k.')
@@ -796,7 +826,7 @@ class NaMeso:
         ##ax.set_ylim([0, 0.02])
         #ax.tick_params(axis='x', labelrotation = 45)
 
-        ax = plt.subplot(3, 3, 5)
+        ax = plt.subplot(3, 2, 5)
         plt.plot(self.qtable['tavg'].datetime,
                  self.model_vcol_shadow_corrected.physical, 'k.')
         plt.xlabel(f'Date')
@@ -806,27 +836,122 @@ class NaMeso:
                      self.qtable['tavg'].jd*u.day), 'r.')
         ax.tick_params(axis='x', labelrotation = 45)
 
-        ax = plt.subplot(3, 3, 6)
+        ax = plt.subplot(3, 2, 6)
         plt.plot(self.qtable['tavg'].datetime,
                  self.shadow_corrected_to_no_time(
                      self.model_vcol_shadow_corrected.physical,
                      self.qtable['tavg']),
                  'k.')
+        #plt.errorbar(self.qtable['tavg'].datetime,
+        #             self.daily_shadow_corrected.value,
+        #             self.daily_shadow_corrected_std.value,
+        #             fmt='r.')
         plt.errorbar(self.qtable['tavg'].datetime,
-                     self.daily_shadow_corrected.value,
-                     self.daily_shadow_corrected_std.value,
+                     self.shadow_corrected_to_no_time(
+                         self.daily_shadow_corrected,
+                         self.qtable['tavg']).value,
+                         self.daily_shadow_corrected_std.value,
                      fmt='r.')
         plt.xlabel(f'Date')
         plt.ylabel(f'Model residual ({self.model_meso_vcol.physical.unit})')
         ax.tick_params(axis='x', labelrotation = 45)
 
         plt.tight_layout()
-        plt.show()
+        savefig_overwrite(plot_fname)
 
+        if show:
+            plt.show()
+        plt.close()
+
+    def highest_product(self):
+        self.daily_shadow_corrected
+
+    def qtable_write(self, qtable_fname=None):
+        qtable_fname = qtable_fname or self.qtable_fname
+        self.qtable.write(qtable_fname, overwrite=True)
+        self.plots()
+    
+def na_meso_meta(ccd,
+                 na_meso_obj=None,
+                 bmp_meta=None,
+                 **kwargs):
+    """Calculates Na mesospheric emission & inserts it into CCD and BMP
+    metadata
+
+    """
+    best_meso = na_meso_obj.best_na_meso(ccd.tavg,
+                                         ccd.meta['airmass'],
+                                         ccd.meta['shadow_height']*u.km)
+    ccd_out = dict_to_ccd_meta(ccd, best_meso)
+    bmp_meta.update(best_meso)
+    return ccd_out
+
+class NaMesoArgparseHandler(SSArgparseHandler,
+                            CorPhotometryArgparseMixin,
+                            CalArgparseHandler):
+    def add_all(self):
+        """Add options used in cmd"""
+        self.add_reduced_root(option='na_meso_root',
+                              default=OUTDIR_ROOT)
+        self.add_base(default=BASE)
+        self.add_start(option='na_meso_start')
+        self.add_stop(option='na_meso_stop')
+        self.add_show()
+        self.add_read_pout(default=True)
+        self.add_write_pout(default=True)        
+        self.add_read_csvs(default=True)
+        self.add_write_csvs(default=True)
+        self.calc_highest_product()
+        self.add_solve_timeout()
+        self.add_join_tolerance()
+        self.add_join_tolerance_unit()
+        self.add_keep_intermediate()
+        super().add_all()
+
+    def cmd(self, args):
+        c, ss = super().cmd(args)
+        # Eventually, I am going to want to have this be a proper
+        # command-line thing
+        t = na_meso_tree(raw_data_root=args.raw_data_root,
+                         start=args.na_meso_start,
+                         stop=args.na_meso_stop,
+                         calibration=c,
+                         standard_star_obj=ss,
+                         keep_intermediate=args.keep_intermediate,
+                         solve_timeout=args.solve_timeout,
+                         join_tolerance=(
+                             args.join_tolerance
+                             *u.Unit(args.join_tolerance_unit)),
+                         read_pout=args.read_pout,
+                         write_pout=args.write_pout,
+                         read_csvs=args.read_csvs,
+                         write_csvs=args.write_csvs,
+                         show=args.show,
+                         create_outdir=args.create_outdir,
+                         outdir_root=args.na_meso_root,
+                         num_processes=args.num_processes,
+                         mem_frac=args.mem_frac,
+                         fits_fixed_ignore=args.fits_fixed_ignore)
+        m = NaMeso(qtable=t)
+        if args.calc_highest_product:
+            m.highest_product()
+            m.qtable_write()
+        return c, ss, m
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Run Na mesospheric emission reduction')
+    aph = NaMesoArgparseHandler(parser)
+    aph.add_all()
+    args = parser.parse_args()
+    aph.cmd(args)
+    
 
 #m = NaMeso()
-#m.plots()
+#m.plots(show=True)
 #t = Time('2020-01-01T00:01:00', format='fits')
+#print(m.best_na_meso(t, 2, 1E5*u.km))
+#t = Time('2020-04-30T00:01:00', format='fits')
 #print(m.best_na_meso(t, 2, 1E5*u.km))
 #t = Time('2019-10-23T00:01:00', format='fits')
 #print(m.best_na_meso(t, 2, 1E5*u.km))
