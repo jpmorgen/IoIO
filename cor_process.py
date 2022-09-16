@@ -283,11 +283,9 @@ def fix_obj_and_coord(ccd_in, **kwargs):
                         after=True)
         # Reset sky_coord so it reads these keys
         ccd.sky_coord = None
-        altaz = ccd.sky_coord.transform_to(
-            AltAz(obstime=ccd.tavg, location=ccd.obs_location))
-        ccd.meta['OBJCTAZ'] = (altaz.az.value, f'[{altaz.az.unit}]')
-        ccd.meta['OBJCTALT'] = (altaz.alt.value,
-                                f'[{altaz.alt.unit}]')
+        ccd.meta['OBJCTAZ'] = (ccd.alt_az.az.value, f'[{ccd.alt_az.az.unit}]')
+        ccd.meta['OBJCTALT'] = (ccd.alt_az.alt.value,
+                                f'[{ccd.alt_az.alt.unit}]')
         hadec = ccd.sky_coord.transform_to(
             HADec(obstime=ccd.tavg, location=ccd.obs_location))
         hastr = hadec.ha.to_string(unit=u.hour, sep=' ', pad=True)

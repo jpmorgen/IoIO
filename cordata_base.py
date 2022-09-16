@@ -18,7 +18,7 @@ from matplotlib.colors import LogNorm
 from astropy import log
 from astropy import units as u
 from astropy.stats import biweight_location
-from astropy.coordinates import EarthLocation, SkyCoord
+from astropy.coordinates import EarthLocation, SkyCoord, AltAz
 
 from astropy_fits_key import FitsKeyArithmeticMixin
 
@@ -452,6 +452,11 @@ class CorDataBase(FitsKeyArithmeticMixin, ACPPGD):
                    or self.meta.get('RADECSYS')
                    or 'FK5')
         return SkyCoord(ra, dec, unit=unit, frame=radesys.lower())
+
+    @pgproperty
+    def alt_az(self):
+        return self.sky_coord.transform_to(
+            AltAz(obstime=self.tavg, location=self.obs_location))
 
     @pgproperty
     def default_ND_params(self):

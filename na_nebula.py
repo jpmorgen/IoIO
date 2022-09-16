@@ -56,6 +56,7 @@ from IoIO.torus import plot_planet_subim, closest_galsat_to_jupiter
 
 BASE = 'Na_nebula'
 OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
+MEDFILT_WIDTH = 81
 
 def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     # We don't yet rotate the ND filter when we rot_to, so mask it first
@@ -101,7 +102,7 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
 
 def na_nebula_plot(t, outdir,
                    tmin=None,
-                   min_sb=0,
+                   min_sb=-200,
                    max_sb=1000, # 400,
                    max_good_sb=np.inf,
                    min_av_ap_dist=0,
@@ -148,6 +149,7 @@ def na_nebula_plot(t, outdir,
                      
     date, _ = t['tavg'][0].fits.split('T')
     plt.suptitle('Na nebula rectangular aperture surface brightesses above & below torus centrifugal plane')
+
     ax = plt.subplot(n_plots,1,1)
     plt.title(f'{ap_list[-1]:.0f} Rj aperture subtracted')
     for sb, av_ap in zip(sb_list, ap_list):
@@ -155,18 +157,17 @@ def na_nebula_plot(t, outdir,
         if av_ap == ap_list[-1]:
             continue        
         bsub_sb = sb - sb_list[-1]
-        mask = sb < max_good_sb
+        mask = bsub_sb < max_good_sb
         plt.plot(t['tavg'][mask].datetime, bsub_sb[mask], '.',
                  label=f'+/- {av_ap:.0f} Rj')
-        # --> Might need an if to plot only when I want to
-        med_sb = medfilt(bsub_sb, 81)
-        plt.plot(t['tavg'][mask].datetime, med_sb[mask], '-',
+        med_sb = medfilt(bsub_sb[mask], MEDFILT_WIDTH)
+        plt.plot(t['tavg'][mask].datetime, med_sb, '-',
                  label=f'+/- {av_ap:.0f} Rj medfilt')
         
     ax.set_xlim(tlim)
     ax.set_ylim(0, max_sb/2)
     plt.ylabel(f'Na Surf. Bright ({sb.unit})')
-    plt.legend()
+    #plt.legend()
 
     f.autofmt_xdate()
     if n_plots == 1:
@@ -174,16 +175,20 @@ def na_nebula_plot(t, outdir,
         return
     
     ax = plt.subplot(n_plots,1,2)
-    plt.title('Telluric Na empirical model subtracted')
+    plt.title('Best Guess Telluric Na subtracted')
     for sb, av_ap in zip(sb_list, ap_list):
-        plt.plot(t['tavg'].datetime,
-                 sb-t['model_meso'],
+        bsub_sb = sb-t['meso_or_model']
+        plt.plot(t['tavg'].datetime, bsub_sb,
                  '.', label=f'+/- {av_ap:.0f} Rj')
-    meso = t['model_meso']
-    meso_err = t['model_meso_err']
+        mask = bsub_sb < max_good_sb
+        med_sb = medfilt(bsub_sb[mask], MEDFILT_WIDTH)
+        plt.plot(t['tavg'][mask].datetime, med_sb, '-',
+                 label=f'+/- {av_ap:.0f} Rj medfilt')
+    meso = t['meso_or_model']
+    meso_err = t['meso_or_model_err']
     plt.errorbar(t['tavg'].datetime, meso.value, meso_err.value,
                  fmt='.', color=mcolors.to_rgb('grey'), alpha=0.2,
-                 label='Telluric Na model')
+                 label='Best guess Telluric Na')
     ax.set_xlim(tlim)
     ax.set_ylim(min_sb, max_sb)
     #plt.yscale('log')
@@ -196,12 +201,41 @@ def na_nebula_plot(t, outdir,
         return
 
     ax = plt.subplot(n_plots,1,3)
+    plt.title('Telluric Na empirical model subtracted')
+    for sb, av_ap in zip(sb_list, ap_list):
+        bsub_sb = sb - t['model_meso']
+        plt.plot(t['tavg'].datetime, bsub_sb,
+                 '.', label=f'+/- {av_ap:.0f} Rj')
+        mask = bsub_sb < max_good_sb
+        med_sb = medfilt(bsub_sb[mask], MEDFILT_WIDTH)
+        plt.plot(t['tavg'][mask].datetime, med_sb, '-',
+                 label=f'+/- {av_ap:.0f} Rj medfilt')
+    meso = t['model_meso']
+    meso_err = t['model_meso_err']
+    plt.errorbar(t['tavg'].datetime, meso.value, meso_err.value,
+                 fmt='.', color=mcolors.to_rgb('grey'), alpha=0.2,
+                 label='Telluric Na model')
+    ax.set_xlim(tlim)
+    ax.set_ylim(min_sb, max_sb)
+    #plt.yscale('log')
+    plt.ylabel(f'Surf. Bright ({sb.unit})')
+    #plt.legend()
+
+    f.autofmt_xdate()
+    if n_plots == 3:
+        finish_stripchart(outdir, outbase, show=show)
+        return
+
+    ax = plt.subplot(n_plots,1,4)
     plt.title('Measured Telluric Na subtracted')
     for sb, av_ap in zip(sb_list, ap_list):
-        model = t['tavg'].datetime
-        plt.plot(t['tavg'].datetime,
-                 sb-t['measured_meso'],
+        bsub_sb = sb-t['measured_meso']
+        plt.plot(t['tavg'].datetime, bsub_sb,
                  '.', label=f'+/- {av_ap:.0f} Rj')
+        mask = bsub_sb < max_good_sb
+        med_sb = medfilt(bsub_sb[mask], MEDFILT_WIDTH)
+        plt.plot(t['tavg'][mask].datetime, med_sb, '-',
+                 label=f'+/- {av_ap:.0f} Rj medfilt')
     meso = t['measured_meso']
     meso_err = t['measured_meso_err']
     plt.errorbar(t['tavg'].datetime, meso.value, meso_err.value,
@@ -211,29 +245,7 @@ def na_nebula_plot(t, outdir,
     ax.set_ylim(min_sb, max_sb)
     #plt.yscale('log')
     plt.ylabel(f'Surf. Bright ({sb.unit})')
-    plt.legend()
-
-    f.autofmt_xdate()
-    if n_plots == 3:
-        finish_stripchart(outdir, outbase, show=show)
-        return
-
-    ax = plt.subplot(n_plots,1,4)
-    plt.title('Best Guess Telluric Na subtracted')
-    for sb, av_ap in zip(sb_list, ap_list):
-        plt.plot(t['tavg'].datetime,
-                 sb-t['meso_or_model'],
-                 '.', label=f'+/- {av_ap:.0f} Rj')
-    meso = t['meso_or_model']
-    meso_err = t['meso_or_model_err']
-    plt.errorbar(t['tavg'].datetime, meso.value, meso_err.value,
-                 fmt='.', color=mcolors.to_rgb('grey'), alpha=0.2,
-                 label='Best guess Telluric Na')
-    ax.set_xlim(tlim)
-    ax.set_ylim(min_sb, max_sb)
-    #plt.yscale('log')
-    plt.ylabel(f'Surf. Bright ({sb.unit})')
-    plt.legend()
+    #plt.legend()
 
     f.autofmt_xdate()
     if n_plots == 4:
@@ -277,7 +289,7 @@ def na_nebula_plot(t, outdir,
     plt.legend()
 
     f.autofmt_xdate()
-    if n_plots == 6:
+    if n_plots == 7:
         finish_stripchart(outdir, outbase, show=show)
         return
 
@@ -593,3 +605,7 @@ if __name__ == '__main__':
 #ccd.obj_center = (ccd.meta['OBJ_CR1'], ccd.meta['OBJ_CR0'])
 #ccd = na_apertures(ccd)
 
+#na_nebula_tree(read_csvs=False)
+#na_nebula_plot(t, '/tmp', max_good_sb=1000*u.R, show=True, n_plots=4)
+t = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
+na_nebula_plot(t, '/tmp', show=True, n_plots=3, min_av_ap_dist=10, max_sb=600)
