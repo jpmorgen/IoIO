@@ -17,12 +17,11 @@ from astropy import units as u
 from astropy.table import QTable, unique
 from astropy.time import Time
 from astropy.stats import mad_std, biweight_location
-from astropy.convolution import convolve
+from astropy.convolution import convolve, Box1DKernel
 from astropy.coordinates import (Angle, SkyCoord,
                                  solar_system_ephemeris, get_body,
                                  AltAz)
 from astropy.wcs import FITSFixedWarning
-from astropy.modeling import models, fitting
 
 from ccdproc import ImageFileCollection
 
@@ -62,7 +61,7 @@ N_BACK_BOXES = 20
 MESO_AMPLITUDE = 20*u.R
 MESO_BASELINE = 8*u.R
 MESO_AV = MESO_BASELINE + MESO_AMPLITUDE
-MEDFILT_WIDTH = 21
+MEDFILT_WIDTH = 31
 
 def shadow_height(alt, sun_alt):
     """This is not the most robust shadow height calculation, it uses thin
@@ -566,150 +565,10 @@ class NaMeso:
         return self.qtable['model_vcol_shadow_corrected']
 
     @property
-    def phased_doy(self):
-        if 'phased_doy' not in self.qtable.colnames:
-            y = 1*u.year
-            y = y.to(u.day)
-            yphase = np.mod(m.qtable['tavg'].jd, y.value)
-            self.qtable['phased_doy'] = yphase
-        return self.qtable['phased_doy']
-
-    @property
-    def phased_idoy(self):
-        if 'phased_idoy' not in self.qtable.colnames:
-            self.qtable['phased_idoy'] = self.phased_doy.astype(int)
-        return self.qtable['phased_idoy']
-
-    @pgproperty
-    def doi_table(self):
-        """Returns table with one row per phased DOY.  Columns are
-        phased_idoy, doy_shadow_corrected and doy_shadow_corrected_std
-
-        """
-        t = QTable()
-        unit = self.model_vcol_shadow_corrected.physical.unit
-        t['doy'] = np.unique(self.phased_idoy)
-        t['shadow_corrected'] = np.NAN*unit
-        t['shadow_corrected_std'] = np.NAN*unit
-        for i, phased_idoy in enumerate(t['doy']):
-            mask = self.phased_idoy == phased_idoy
-            t_shadow_corrected = self.model_vcol_shadow_corrected[mask]
-            t_shadow_corrected = t_shadow_corrected.physical
-            tbiweight = biweight_location(t_shadow_corrected,
-                                          ignore_nan=True)
-            tstd = mad_std(t_shadow_corrected,
-                           ignore_nan=True)
-            t['shadow_corrected'][i] = tbiweight
-            t['shadow_corrected_std'][i] = tstd
-        med = medfilt(t['shadow_corrected'], MEDFILT_WIDTH)
-        t['medfilt_shadow_corrected'] = med
-        return t        
-
-    @property
-    def doy_shadow_corrected(self):
-        if 'doy_shadow_corrected' not in self.qtable.colnames:
-            unit = self.model_vcol_shadow_corrected.physical.unit
-            self.qtable['doy_shadow_corrected'] = np.NAN*unit
-            self.qtable['doy_shadow_corrected_std'] = np.NAN*unit
-            for i,phased_idoy in enumerate(self.phased_idoy):
-                mask = self.phased_idoy == phased_idoy
-                t_shadow_corrected = self.model_vcol_shadow_corrected[mask]
-                t_shadow_corrected = t_shadow_corrected.physical
-                tbiweight = biweight_location(t_shadow_corrected)
-                tstd = mad_std(t_shadow_corrected)
-                self.qtable['doy_shadow_corrected'][mask] = tbiweight
-                self.qtable['doy_shadow_corrected_std'][mask] = tstd
-        self.qtable = self.qtable.group_by('idoy')
-        return self.qtable['doy_shadow_corrected']
-
-    @property
-    def doy_shadow_corrected_std(self):
-        """Daily mad std of shadow height-corrected Na meso emission phased to
-        DOY
-
-        """
-        if 'doy_shadow_corrected_std' not in self.qtable.colnames:
-            self.daily_shadow_corrected
-        return self.qtable['doy_shadow_corrected_std']
-
-    @property
-    def medfilt_doy_shadow_corrected(self):
-        if 'medfilt_doy_shadow_corrected' not in self.qtable.colnames:
-            self.qtable.sort('phased_doy')
-            phased_sc = self.model_vcol_shadow_corrected
-            med = medfilt(phased_sc.physical, MEDFILT_WIDTH)
-            self.qtable['medfilt_doy_shadow_corrected'] = med
-        return self.qtable['medfilt_doy_shadow_corrected']
-
-    @pgproperty
-    def meso_vcol_corrected_sin_physical(self):
-        """Returns hand-fit sin function of shadow height-corrected meso
-        vertical column vs. JD.  Don in physical units, since that
-        makes more sense than logarithmic, though that sort of works too.
-
-        """
-        # This doesn't do any fit.  I have just tweaked the parameters
-        # by hand
-        # --! Aim for the low side to see if that helps make sure
-        # background is not over-estimated
-
-        # --> Might want to add in a Gaussian around the 1st of the year
-        
-        fit = fitting.LevMarLSQFitter()
-        sin_init = (models.Sine1D(amplitude=MESO_AMPLITUDE.value,
-                                  frequency=2/u.year,
-                                  phase=(-15*u.deg).to(u.rad))
-                    + models.Const1D(amplitude=MESO_AV.value))
-        #sin_init = (models.Sine1D(amplitude=MESO_AMPLITUDE.value,
-        #                          frequency=2/u.year,
-        #                          phase=(-10*u.deg).to(u.rad))
-        #            + models.Sine1D(amplitude=MESO_AV.value,
-        #                            frequency=2/u.year,
-        #                            phase=(-30*u.deg).to(u.rad))
-        #            + models.Const1D(amplitude=MESO_AV.value))
-        #sin_init = (models.Sine1D(amplitude=MESO_AMPLITUDE.value,
-        #                          frequency=1/u.year,
-        #                          phase=(+5*u.deg).to(u.rad))
-        #            + models.Const1D(amplitude=MESO_AV.value))
-        return fit(sin_init,
-                   self.qtable['tavg'].jd*u.day,
-                   self.model_vcol_shadow_corrected.physical)
-
-    def meso_vcol_corrected_sin_quantity(self, tavg):
-        v = self.meso_vcol_corrected_sin_physical(tavg.jd*u.day)
-        return v
-
-    def shadow_corrected_to_no_time(self, meso_shadow_corrected, tavg,
-                                    inverse=False):
-        """Transforms shadow height-corrected mesospheric vertical column
-        emission to time-corrected and inverse
-
-        """
-        model = self.meso_vcol_corrected_sin_quantity(tavg)
-        if inverse:
-            return meso_shadow_corrected + model - MESO_AV
-        return meso_shadow_corrected - model + MESO_AV
-
-    def meso_model_inverse(self, tavg, airmass, shadow_height):
-        shadow_corrected = self.shadow_corrected_to_no_time(
-            MESO_AV, tavg, inverse=True)
-        vcol = self.vcol_to_shadow_corrected(
-            u.Magnitude(shadow_corrected), shadow_height, inverse=True)
-        meso_mag = self.meso_mag_to_vcol(vcol, airmass, inverse=True)
-        meso = meso_mag.physical
-        return meso        
-
-    @property
     def ijd(self):
         if 'ijd' not in self.qtable.colnames:
             self.qtable['ijd'] = self.qtable['tavg'].jd.astype(int)
         return self.qtable['ijd']
-
-    @property
-    def itavg(self):
-        if 'itavg' not in self.qtable.colnames:
-            self.qtable['itavg'] = Time(self.ijd, format='jd')
-        return self.qtable['itavg']
 
     @property
     def daily_shadow_corrected(self):
@@ -729,8 +588,6 @@ class NaMeso:
                 tstd = mad_std(t_shadow_corrected)
                 self.qtable['daily_shadow_corrected'][mask] = tbiweight
                 self.qtable['daily_shadow_corrected_std'][mask] = tstd
-
-        self._qtable = self.qtable.group_by('ijd')
         return self.qtable['daily_shadow_corrected']
 
     @property
@@ -750,6 +607,142 @@ class NaMeso:
         """
         return biweight_location(self.daily_shadow_corrected_std,
                                  ignore_nan=True)
+
+    def calc_phased_doy(self, tavg):
+        y = 1*u.year
+        y = y.to(u.day)
+        return np.mod(tavg.jd, y.value)
+
+    @property
+    def phased_doy(self):
+        if 'phased_doy' not in self.qtable.colnames:
+            yphase = self.calc_phased_doy(self.qtable['tavg'])
+            self.qtable['phased_doy'] = yphase
+        return self.qtable['phased_doy']
+
+    @property
+    def phased_idoy(self):
+        if 'phased_idoy' not in self.qtable.colnames:
+            self.qtable['phased_idoy'] = self.phased_doy.astype(int)
+        return self.qtable['phased_idoy']
+
+    @pgproperty
+    def doi_table(self):
+        """Returns table with one row per phased DOY.  Columns are
+        phased_idoy, doy_shadow_corrected and doy_shadow_corrected_std
+
+        """
+        t = QTable()
+        unit = self.model_vcol_shadow_corrected.physical.unit
+        t['doy'] = np.arange(365)
+        #t['doy'] = np.unique(self.phased_idoy)
+        t['shadow_corrected'] = np.NAN*unit
+        t['shadow_corrected_std'] = np.NAN*unit
+        for i, phased_idoy in enumerate(t['doy']):
+            mask = self.phased_idoy == phased_idoy
+            t_shadow_corrected = self.model_vcol_shadow_corrected[mask]
+            t_shadow_corrected = t_shadow_corrected.physical
+            tbiweight = biweight_location(t_shadow_corrected,
+                                          ignore_nan=True)
+            tstd = mad_std(t_shadow_corrected,
+                           ignore_nan=True)
+            t['shadow_corrected'][i] = tbiweight
+            t['shadow_corrected_std'][i] = tstd
+        box_kernel = Box1DKernel(20)
+        med = medfilt(t['shadow_corrected'], MEDFILT_WIDTH)
+        t['medfilt_shadow_corrected'] = med
+        box = convolve(t['shadow_corrected'], box_kernel)
+        t['boxfilt_shadow_corrected'] = box
+        return t        
+
+    def tavg_to_shadow_corrected(self, tavg):
+        doi = self.calc_phased_doi(tavg)
+        return self.doi_table['boxfilt_shadow_corrected'][doi]
+        
+
+    #@property
+    #def doy_shadow_corrected(self):
+    #    if 'doy_shadow_corrected' not in self.qtable.colnames:
+    #        unit = self.model_vcol_shadow_corrected.physical.unit
+    #        self.qtable['doy_shadow_corrected'] = np.NAN*unit
+    #        self.qtable['doy_shadow_corrected_std'] = np.NAN*unit
+    #        for i,phased_idoy in enumerate(self.phased_idoy):
+    #            mask = self.phased_idoy == phased_idoy
+    #            t_shadow_corrected = self.model_vcol_shadow_corrected[mask]
+    #            t_shadow_corrected = t_shadow_corrected.physical
+    #            tbiweight = biweight_location(t_shadow_corrected)
+    #            tstd = mad_std(t_shadow_corrected)
+    #            self.qtable['doy_shadow_corrected'][mask] = tbiweight
+    #            self.qtable['doy_shadow_corrected_std'][mask] = tstd
+    #    self.qtable = self.qtable.group_by('idoy')
+    #    return self.qtable['doy_shadow_corrected']
+    #
+    #@property
+    #def doy_shadow_corrected_std(self):
+    #    """Daily mad std of shadow height-corrected Na meso emission phased to
+    #    DOY
+    #
+    #    """
+    #    if 'doy_shadow_corrected_std' not in self.qtable.colnames:
+    #        self.daily_shadow_corrected
+    #    return self.qtable['doy_shadow_corrected_std']
+    #
+    #@pgproperty
+    #def meso_vcol_corrected_sin_physical(self):
+    #    """Returns hand-fit sin function of shadow height-corrected meso
+    #    vertical column vs. JD.  Don in physical units, since that
+    #    makes more sense than logarithmic, though that sort of works too.
+    #
+    #    """
+    #    # This doesn't do any fit.  I have just tweaked the parameters
+    #    # by hand
+    #    # --! Aim for the low side to see if that helps make sure
+    #    # background is not over-estimated
+    #
+    #    # --> Might want to add in a Gaussian around the 1st of the year
+    #    
+    #    fit = fitting.LevMarLSQFitter()
+    #    sin_init = (models.Sine1D(amplitude=MESO_AMPLITUDE.value,
+    #                              frequency=2/u.year,
+    #                              phase=(-15*u.deg).to(u.rad))
+    #                + models.Const1D(amplitude=MESO_AV.value))
+    #    #sin_init = (models.Sine1D(amplitude=MESO_AMPLITUDE.value,
+    #    #                          frequency=2/u.year,
+    #    #                          phase=(-10*u.deg).to(u.rad))
+    #    #            + models.Sine1D(amplitude=MESO_AV.value,
+    #    #                            frequency=2/u.year,
+    #    #                            phase=(-30*u.deg).to(u.rad))
+    #    #            + models.Const1D(amplitude=MESO_AV.value))
+    #    #sin_init = (models.Sine1D(amplitude=MESO_AMPLITUDE.value,
+    #    #                          frequency=1/u.year,
+    #    #                          phase=(+5*u.deg).to(u.rad))
+    #    #            + models.Const1D(amplitude=MESO_AV.value))
+    #    return fit(sin_init,
+    #               self.qtable['tavg'].jd*u.day,
+    #               self.model_vcol_shadow_corrected.physical)
+    #
+    #def meso_vcol_corrected_sin_quantity(self, tavg):
+    #    v = self.meso_vcol_corrected_sin_physical(tavg.jd*u.day)
+    #    return v
+    #
+    #def shadow_corrected_to_no_time(self, meso_shadow_corrected, tavg,
+    #                                inverse=False):
+    #    """Transforms shadow height-corrected mesospheric vertical column
+    #    emission to time-corrected and inverse
+    #
+    #    """
+    #    model = self.meso_vcol_corrected_sin_quantity(tavg)
+    #    if inverse:
+    #        return meso_shadow_corrected + model - MESO_AV
+    #    return meso_shadow_corrected - model + MESO_AV
+
+    def meso_model_inverse(self, tavg, airmass, shadow_height):
+        shadow_corrected = self.tavg_to_shadow_corrected(tavg)
+        vcol = self.vcol_to_shadow_corrected(
+            u.Magnitude(shadow_corrected), shadow_height, inverse=True)
+        meso_mag = self.meso_mag_to_vcol(vcol, airmass, inverse=True)
+        meso = meso_mag.physical
+        return meso        
 
     def best_na_meso(self, tavg, airmass, shadow_height): 
         """Returns dict of best-estimate Na mesospheric emission
@@ -896,17 +889,17 @@ class NaMeso:
         ##ax.set_ylim([0, 0.02])
         #ax.tick_params(axis='x', labelrotation = 45)
 
-        ax = plt.subplot(3, 2, 5)
-        plt.plot(self.qtable['tavg'].datetime,
-                 self.model_vcol_shadow_corrected.physical, 'k.')
-        plt.xlabel(f'Date')
-        plt.ylabel(f'SH corr. vert. col. Na ({self.model_meso_vcol.physical.unit})')
-        plt.plot(self.qtable['tavg'].datetime,
-                 self.meso_vcol_corrected_sin_physical(
-                     self.qtable['tavg'].jd*u.day), 'r.')
-        ax.tick_params(axis='x', labelrotation = 45)
+        #ax = plt.subplot(3, 2, 5)
+        #plt.plot(self.qtable['tavg'].datetime,
+        #         self.model_vcol_shadow_corrected.physical, 'k.')
+        #plt.xlabel(f'Date')
+        #plt.ylabel(f'SH corr. vert. col. Na ({self.model_meso_vcol.physical.unit})')
+        #plt.plot(self.qtable['tavg'].datetime,
+        #         self.meso_vcol_corrected_sin_physical(
+        #             self.qtable['tavg'].jd*u.day), 'r.')
+        #ax.tick_params(axis='x', labelrotation = 45)
 
-        ax = plt.subplot(3, 2, 6)
+        ax = plt.subplot(3, 2, 5)
         plt.plot(self.phased_doy,
                  self.model_vcol_shadow_corrected.physical,
                  'k.')
@@ -916,6 +909,8 @@ class NaMeso:
                      fmt='r.')
         plt.plot(self.doi_table['doy'],
                  self.doi_table['medfilt_shadow_corrected'], 'c-')
+        plt.plot(self.doi_table['doy'],
+                 self.doi_table['boxfilt_shadow_corrected'], 'y-')
         plt.xlabel(f'Phased DOY')
         plt.ylabel(f'SH corr. vert. col. Na ({self.model_meso_vcol.physical.unit})')
 
