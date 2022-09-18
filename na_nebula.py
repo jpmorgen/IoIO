@@ -430,6 +430,7 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
                                          **cached_csv_args)
     summary_table.write(os.path.join(outdir_root, BASE + '.ecsv'),
                         overwrite=True)
+    # --> Put in a daily average
     na_nebula_plot(summary_table, outdir_root, show=show)
     return summary_table
 
@@ -606,6 +607,6 @@ if __name__ == '__main__':
 #ccd = na_apertures(ccd)
 
 #na_nebula_tree(read_csvs=False)
-#na_nebula_plot(t, '/tmp', max_good_sb=1000*u.R, show=True, n_plots=4)
 t = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
+#na_nebula_plot(t, '/tmp', max_good_sb=1000*u.R, show=True, n_plots=4)
 na_nebula_plot(t, '/tmp', show=True, n_plots=3, min_av_ap_dist=10, max_sb=600)

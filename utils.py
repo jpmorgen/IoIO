@@ -795,3 +795,47 @@ def finish_stripchart(outdir, outbase, show=False):
         plt.show()
     plt.close()
 
+def daily_biweight(qtable,
+                   day_col=None,
+                   data_col=None,
+                   biweight_col=None,
+                   std_col=None,
+                   ignore_nan=True):
+    """Compute biweight location and mad_std on a daily basis
+
+    Parameters
+    ----------
+    qtable : astropy.table.QTable
+        qtable to which computed columns will be placed/added
+
+    day_col : str
+        column name containing days (or other quantity over which to
+        collect biweight groups)
+
+    data_col : str
+        column name of data
+
+    biweight and std_col : str
+        column names in into which biweight and mad_std will be placed.
+        They will be created, if necessary
+
+    ignore_nan : bool
+        Ignore np.NAN in data
+        default = ``True''
+
+    """
+    if isinstance(qtable[data_col], u.Quantity):
+        unit = qtable[data_col].unit
+    else:
+        unit or 1                
+    for colname in [biweight_col, std_col]:
+        if colname not in qtable.colnames:
+            qtable[colname] = np.NAN*unit
+    for day in qtable[day_col]:
+        mask = qtable[day_col] == day
+        tvals = qtable[data_col][mask]
+        tbiweight = biweight_location(tvals, ignore_nan=ignore_nan)
+        tstd = mad_std(tvals, ignore_nan=ignore_nan)
+        qtable[biweight_col][mask] = tbiweight
+        qtable[std_col][mask] = tstd
+
