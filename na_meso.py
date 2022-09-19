@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 
 from astropy import log
 from astropy import units as u
-from astropy.table import QTable, hstack
+from astropy.table import QTable, unique, hstack
 from astropy.time import Time
 from astropy.stats import mad_std, biweight_location
 from astropy.convolution import convolve, Box1DKernel
@@ -526,17 +526,16 @@ class NaMeso:
                 self.qtable['shadow_height'])
         return self.qtable['dex_shadow_height']
 
-
     @pgproperty
     def vcol_dex_shadow_height_poly(self):
-        """Returns order 3 polynomial fit to observed mesospheric vertical
+        """Returns polynomial fit to observed mesospheric vertical
         column in magnitudes vs. log shadow height.  All datapoints
         are used.  
 
         """
         return iter_polyfit(self.dex_shadow_height,
                             self.model_meso_vcol,
-                            deg=4, max_resid=1)
+                            deg=5, max_resid=1)
 
     def vcol_dex_shadow_height_poly_quantity(self, dex_shadow_height):
         v = self.vcol_dex_shadow_height_poly(dex_shadow_height.value)
@@ -578,38 +577,17 @@ class NaMeso:
             return self.qtable['model_vcol_shadow_corrected_physical']
 
     @property
-    def test_daily_shadow_corrected(self):
+    def daily_shadow_corrected(self):
         self.ijd
         self.model_vcol_shadow_corrected_physical
-        if 'test_daily_shadow_corrected' not in self.qtable.colnames:
+        if 'daily_shadow_corrected' not in self.qtable.colnames:
             daily_biweight(
                 self.qtable,
                 day_col='ijd',
                 data_col='model_vcol_shadow_corrected_physical',
-                biweight_col='test_daily_shadow_corrected',
-                std_col='test_daily_shadow_corrected_std')
-            return self.qtable['test_daily_shadow_corrected']
-
-    #@property
-    #def daily_shadow_corrected(self):
-    #    """Returns daily biweight location of shadow height-corrected Na meso
-    #    emission.  Also calculates mad_std and groups qtable by ijd
-    #
-    #    """
-    #    if 'daily_shadow_corrected' not in self.qtable.colnames:
-    #        unit = self.model_vcol_shadow_corrected.physical.unit
-    #        self.qtable['daily_shadow_corrected'] = np.NAN*unit
-    #        self.qtable['daily_shadow_corrected_std'] = np.NAN*unit
-    #        for i, ijd in enumerate(self.ijd):
-    #            mask = self.ijd == ijd
-    #            t_shadow_corrected = self.model_vcol_shadow_corrected[mask]
-    #            t_shadow_corrected = t_shadow_corrected.physical
-    #            tbiweight = biweight_location(t_shadow_corrected)
-    #            tstd = mad_std(t_shadow_corrected)
-    #            self.qtable['daily_shadow_corrected'][mask] = tbiweight
-    #            self.qtable['daily_shadow_corrected_std'][mask] = tstd
-    #    self.qtable = self.qtable.group_by('ijd')
-    #    return self.qtable['daily_shadow_corrected']
+                biweight_col='daily_shadow_corrected',
+                std_col='daily_shadow_corrected_std')
+            return self.qtable['daily_shadow_corrected']
 
     @property
     def daily_shadow_corrected_std(self):
@@ -647,18 +625,61 @@ class NaMeso:
             self.qtable['phased_idoy'] = self.phased_doy.astype(int)
         return self.qtable['phased_idoy']
 
+    @property
+    def shadow_corrected_by_doy(self):
+        if 'shadow_corrected_by_doy' not in self.qtable.colnames:
+            self.phased_idoy
+            unit = self.model_vcol_shadow_corrected_physical.unit
+            daily_biweight(
+                self.qtable,
+                day_col='phased_idoy',
+                data_col='model_vcol_shadow_corrected_physical',
+                biweight_col='shadow_corrected_by_doy',
+                std_col='shadow_corrected_by_doy_std')
+
+    @property
+    def shadow_corrected_by_doy_std(self):
+        """Daily mad std of shadow height-corrected Na meso emission
+
+        """
+        if 'shadow_corrected_by_doy_std' not in self.qtable.colnames:
+            self.shadow_corrected_by_doy
+        return self.qtable['shadow_corrected_by_doy_std']
+
+#    # This is hard to do with a sparse table
+#    @pgproperty
+#    def doy_table(self):
+#        self.shadow_corrected_by_doy
+#        t = QTable()
+#        t['doy'] = np.arange(365)
+#        t = unique(self.qtable, keys='phased_idoy')
+#        dt = QTable([t['phased_idoy'],
+#                     t['shadow_corrected_by_doy'],
+#                     t['shadow_corrected_by_doy_std']],
+#                    names=('doy',
+#                           'shadow_corrected',
+#                           'shadow_corrected_std'))
+#        box_kernel = Box1DKernel(20)
+#        med = medfilt(dt['shadow_corrected'], MEDFILT_WIDTH)
+#        dt['medfilt_shadow_corrected'] = med
+#        box = convolve(dt['shadow_corrected'], box_kernel)
+#        dt['boxfilt_shadow_corrected'] = box
+#        return dt
+
+
     @pgproperty
-    def doi_table(self):
+    def doy_table(self):
         """Returns table with one row per phased DOY.  Columns are
         phased_idoy, doy_shadow_corrected and
         doy_shadow_corrected_std.  Note the columns are calculated
-        from the phased data, unlike daily_shadow_corrected inself.qtable
+        from the phased data, unlike daily_shadow_corrected in self.qtable
 
         """
         t = QTable()
-        unit = self.model_vcol_shadow_corrected.physical.unit
+        unit = self.model_vcol_shadow_corrected_physical.unit
         t['doy'] = np.arange(365)
         #t['doy'] = np.unique(self.phased_idoy)
+
         t['shadow_corrected'] = np.NAN*unit
         t['shadow_corrected_std'] = np.NAN*unit
         for i, phased_idoy in enumerate(t['doy']):
@@ -680,7 +701,7 @@ class NaMeso:
     def tavg_to_shadow_corrected(self, tavg):
         doy = self.calc_phased_doy(tavg)
         doy = doy.astype(int)
-        return self.doi_table['boxfilt_shadow_corrected'][doy]
+        return self.doy_table['boxfilt_shadow_corrected'][doy]
 
     def meso_model_inverse(self, tavg, airmass, shadow_height):
         shadow_corrected = self.tavg_to_shadow_corrected(tavg)
@@ -720,8 +741,10 @@ class NaMeso:
         assert isinstance(shadow_height, u.Quantity)
         model = self.meso_model_inverse(tavg, airmass, shadow_height)
         model_err = self.shadow_corrected_av_err
+        # Calculate measured meso on this day
         ijd = tavg.jd.astype(int)
         self.daily_shadow_corrected
+        self.qtable = self.qtable.group_by('ijd')
         mask = self.qtable.groups.keys['ijd'] == ijd
         # Shadow-corrected vertical column
         ijdt = self.qtable.groups[mask]
@@ -858,14 +881,14 @@ class NaMeso:
         plt.plot(self.phased_doy,
                  self.model_vcol_shadow_corrected.physical,
                  'k.')
-        plt.errorbar(self.doi_table['doy'],
-                     self.doi_table['shadow_corrected'].value,
-                     self.doi_table['shadow_corrected_std'].value,
+        plt.errorbar(self.doy_table['doy'],
+                     self.doy_table['shadow_corrected'].value,
+                     self.doy_table['shadow_corrected_std'].value,
                      fmt='r.')
-        plt.plot(self.doi_table['doy'],
-                 self.doi_table['medfilt_shadow_corrected'], 'y-')
-        plt.plot(self.doi_table['doy'],
-                 self.doi_table['boxfilt_shadow_corrected'], 'b-')
+        plt.plot(self.doy_table['doy'],
+                 self.doy_table['medfilt_shadow_corrected'], 'y-')
+        plt.plot(self.doy_table['doy'],
+                 self.doy_table['boxfilt_shadow_corrected'], 'b-')
         plt.xlabel(f'Phased DOY')
         plt.ylabel(f'SH corr. vert. col. Na ({self.model_meso_vcol.physical.unit})')
 
@@ -908,7 +931,7 @@ class NaMeso:
         plt.close()
 
     def highest_product(self):
-        self.daily_shadow_corrected
+        self.add_best_na_meso
 
     def qtable_write(self, qtable_fname=None):
         qtable_fname = qtable_fname or self.qtable_fname
@@ -994,7 +1017,7 @@ if __name__ == '__main__':
 m = NaMeso()
 #t = m.add_best_na_meso()
 #print(np.mod(m.qtable['tavg'].jd, (1*u.year).value) * (1*u.year).to(u.day))
-#m.plots(show=True)
+m.plots(show=True)
 #t = Time('2020-01-01T00:01:00', format='fits')
 #print(m.best_na_meso(t, 2, 1E5*u.km))
 #t = Time('2020-04-30T00:01:00', format='fits')
