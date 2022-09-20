@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 
 from astropy import log
 from astropy import units as u
-from astropy.table import QTable, unique, hstack
+from astropy.table import QTable, unique, hstack, vstack
 from astropy.time import Time
 from astropy.stats import mad_std, biweight_location
 from astropy.convolution import convolve, Box1DKernel
@@ -646,25 +646,36 @@ class NaMeso:
             self.shadow_corrected_by_doy
         return self.qtable['shadow_corrected_by_doy_std']
 
-#    # This is hard to do with a sparse table
-#    @pgproperty
-#    def doy_table(self):
-#        self.shadow_corrected_by_doy
-#        t = QTable()
-#        t['doy'] = np.arange(365)
-#        t = unique(self.qtable, keys='phased_idoy')
-#        dt = QTable([t['phased_idoy'],
-#                     t['shadow_corrected_by_doy'],
-#                     t['shadow_corrected_by_doy_std']],
-#                    names=('doy',
-#                           'shadow_corrected',
-#                           'shadow_corrected_std'))
-#        box_kernel = Box1DKernel(20)
-#        med = medfilt(dt['shadow_corrected'], MEDFILT_WIDTH)
-#        dt['medfilt_shadow_corrected'] = med
-#        box = convolve(dt['shadow_corrected'], box_kernel)
-#        dt['boxfilt_shadow_corrected'] = box
-#        return dt
+    # This is hard to do with a sparse table
+    @pgproperty
+    def test_doy_table(self):
+        self.shadow_corrected_by_doy
+        dt = unique(self.qtable, keys='phased_idoy')
+        new_col_names = ('doy',
+                         'shadow_corrected',
+                         'shadow_corrected_std')
+        dt = QTable([dt['phased_idoy'],
+                     dt['shadow_corrected_by_doy'],
+                     dt['shadow_corrected_by_doy_std']],
+                    names=new_col_names)
+        missing_days = [day for day in np.arange(365)
+                        if day not in dt['doy'] ]
+        if isinstance(dt['shadow_corrected'], u.Quantity):
+            unit = dt['shadow_corrected'].unit
+        else:
+            unit = 1
+        nan_col = np.full(len(missing_days), np.NAN)
+        mt = QTable([missing_days, nan_col*unit, nan_col*unit],
+                    names=new_col_names)
+        dt = vstack([dt, mt])
+        dt.sort('doy')
+
+        box_kernel = Box1DKernel(20)
+        med = medfilt(dt['shadow_corrected'], MEDFILT_WIDTH)
+        dt['medfilt_shadow_corrected'] = med
+        box = convolve(dt['shadow_corrected'], box_kernel)
+        dt['boxfilt_shadow_corrected'] = box
+        return dt
 
 
     @pgproperty
@@ -1015,9 +1026,10 @@ if __name__ == '__main__':
     
 
 m = NaMeso()
+dt = m.test_doy_table
 #t = m.add_best_na_meso()
 #print(np.mod(m.qtable['tavg'].jd, (1*u.year).value) * (1*u.year).to(u.day))
-m.plots(show=True)
+#m.plots(show=True)
 #t = Time('2020-01-01T00:01:00', format='fits')
 #print(m.best_na_meso(t, 2, 1E5*u.km))
 #t = Time('2020-04-30T00:01:00', format='fits')

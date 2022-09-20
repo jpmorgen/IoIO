@@ -100,6 +100,39 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     bmp_meta.update(na_aps)
     return ccd
 
+def add_concentric_na_apertures(t):
+    """Add to table t columns for brightnesses for the regions between
+    successively larger apertures (e.g. added column n = surface
+    brightness for region extending from aperture n and aperture n+1)
+
+    """
+    sum_regexp = re.compile('Na_ap_.*_sum')
+    area_regexp = re.compile('Na_ap_.*_area')
+    sum_colnames = filter(sum_regexp.match, t.colnames)
+    area_colnames = filter(area_regexp.match, t.colnames)
+
+    last_sum = 0
+    last_area = 0
+    last_ap_bound = 0
+    sb_list = []
+    ap_list = []
+    for sum_colname, area_colname in zip(sum_colnames, area_colnames):
+        ap_bound = sum_colname.split('_')
+        ap_bound = int(ap_bound[2])
+        av_ap = np.mean((ap_bound, last_ap_bound))*u.R_jup
+        last_ap_bound = ap_bound
+        cts = t[sum_colname] - last_sum
+        area = t[area_colname] - last_area
+        sb = cts / area
+        last_sum = t[sum_colname]
+        last_area = t[area_colname]
+        colname = r_to_from_colname(t,
+                            av_ap,
+                            colbase='concentric_ap_sb',
+                            encode=True)
+        t[colname] = sb
+        #t[f'concentric_ap_sb_{av_ap:.1f}'] = sb
+
 def na_nebula_plot(t, outdir,
                    tmin=None,
                    min_sb=-200,
@@ -430,7 +463,8 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
                                          **cached_csv_args)
     summary_table.write(os.path.join(outdir_root, BASE + '.ecsv'),
                         overwrite=True)
-    # --> Put in a daily average
+    ijd = summary_table['tavg'].jd.astype(int)
+   
     na_nebula_plot(summary_table, outdir_root, show=show)
     return summary_table
 
@@ -609,4 +643,40 @@ if __name__ == '__main__':
 #na_nebula_tree(read_csvs=False)
 t = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
 #na_nebula_plot(t, '/tmp', max_good_sb=1000*u.R, show=True, n_plots=4)
-na_nebula_plot(t, '/tmp', show=True, n_plots=3, min_av_ap_dist=10, max_sb=600)
+#na_nebula_plot(t, '/tmp', show=True, n_plots=3, min_av_ap_dist=10, max_sb=600)
+
+class encode_radius:
+    def __init__(self,
+                 colbase=None):
+        self.colbase = colbase
+
+    
+
+
+def r_to_from_colname(t, rad_or_colname,
+                      colbase=None,
+                      encode=False, decode=False):
+    """Encode or decode radius into column name"""
+    UNIT = u.R_jup
+    if encode:
+        assert rad_or_colname.unit == UNIT
+        v = rad_or_colname.value
+        return f'{colbase}_{v:.1f}'
+    elif decode:
+        s = rad_or_colname.split('_')
+        return float(s[-1])*UNIT
+    else:
+        raise ValueError('encode or decode must be specified')
+    
+
+add_concentric_na_apertures(t)
+sb_regexp = re.compile('concentric_ap_sb_.*')
+sb_colnames = filter(sb_regexp.match, t.colnames)
+for sb_col in sb_colnames:
+    print(r_to_from_colname(t,
+                            sb_col,
+                            colbase='concentric_ap_sb',
+                            decode=True))
+    #s = sb_col.split('_')
+    #ap_r = float(s[-1])*u.R_jup
+    #print(ap_r)
