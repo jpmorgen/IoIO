@@ -8,8 +8,6 @@ import warnings
 
 import numpy as np
 
-from scipy.signal import medfilt
-
 import matplotlib.pyplot as plt
 
 from astropy import log
@@ -646,7 +644,6 @@ class NaMeso:
             self.shadow_corrected_by_doy
         return self.qtable['shadow_corrected_by_doy_std']
 
-    # This is hard to do with a sparse table
     @pgproperty
     def test_doy_table(self):
         self.shadow_corrected_by_doy
@@ -658,6 +655,14 @@ class NaMeso:
                      dt['shadow_corrected_by_doy'],
                      dt['shadow_corrected_by_doy_std']],
                     names=new_col_names)
+        dt = daily_convolve(dt,
+                            'doy',
+                            'shadow_corrected',
+                            'boxfilt_shadow_corrected',
+                            Box1DKernel(20),
+                            all_days=np.arange(365))
+        return dt
+
         missing_days = [day for day in np.arange(365)
                         if day not in dt['doy'] ]
         if isinstance(dt['shadow_corrected'], u.Quantity):
@@ -896,8 +901,8 @@ class NaMeso:
                      self.doy_table['shadow_corrected'].value,
                      self.doy_table['shadow_corrected_std'].value,
                      fmt='r.')
-        plt.plot(self.doy_table['doy'],
-                 self.doy_table['medfilt_shadow_corrected'], 'y-')
+        #plt.plot(self.doy_table['doy'],
+        #         self.doy_table['medfilt_shadow_corrected'], 'y-')
         plt.plot(self.doy_table['doy'],
                  self.doy_table['boxfilt_shadow_corrected'], 'b-')
         plt.xlabel(f'Phased DOY')
@@ -1023,6 +1028,39 @@ if __name__ == '__main__':
     aph.add_all()
     args = parser.parse_args()
     aph.cmd(args)
+    
+def daily_convolve(qtable,
+                   day_col,
+                   data_col,
+                   convolve_col,
+                   kernel,
+                   all_days=None):
+    if all_days is not None:
+        # Prepare to create a table of missing days that is filled
+        # with NANs.  Don't assume we have just 3 input columns
+        missing_days = [day for day in all_days
+                        if day not in qtable[day_col]]
+        if convolve_col in qtable.colnames:
+            names = qtable.colnames
+        else:
+            names = qtable.colnames + [convolve_col]
+        n_nancols = len(qtable.colnames)
+        nan_col = np.full(len(missing_days), np.NAN)
+        if isinstance(qtable[data_col], u.Quantity):
+            unit = qtable[data_col].unit
+        else:
+            unit = 1
+        nan_cols = n_nancols * [nan_col*unit]
+        print([missing_days] + nan_cols)
+        print(qtable.colnames)
+        print(names)
+        print(n_nancols)
+        mt = QTable([missing_days] + nan_cols,
+                    names=names)
+        qtable = vstack([qtable, mt])
+    qtable.sort(day_col)
+    qtable[convolve_col] = convolve(qtable[data_col], kernel)
+    return qtable
     
 
 m = NaMeso()
