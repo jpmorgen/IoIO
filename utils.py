@@ -19,7 +19,8 @@ from astropy import log
 import astropy.units as u
 from astropy.time import Time
 from astropy.stats import biweight_location, mad_std
-from astropy.table import QTable
+from astropy.table import QTable, vstack
+from astropy.convolution import convolve
 from astropy.coordinates import SkyCoord
 
 from ccdproc import ImageFileCollection
@@ -838,4 +839,74 @@ def daily_biweight(qtable,
         tstd = mad_std(tvals, ignore_nan=ignore_nan)
         qtable[biweight_col][mask] = tbiweight
         qtable[std_col][mask] = tstd
+
+def daily_convolve(qtable,
+                   day_col,
+                   data_col,
+                   convolve_col,
+                   kernel,
+                   all_days=None):
+    """Returns a new QTable with a convolution column added to it.  This
+    assumes data are sampled evenly in time.  The all_days input,
+    together with an astropy convolution kernel that handles NANs, is
+    used to properly handle missing time steps
+
+    Parameters
+    ----------
+    qtable : QTable
+        input
+
+    day_col, data_col, convolve_col : str
+        Names of corresponding columns in qtable.  convolve_col will
+        be created if it is not in qtable
+
+    kernel : astropy.convolution.kernels kernal object
+        Kernel to convolve through data_col.  e.g. Box1DKernel(20)
+
+    all_days : ndarray
+        Array of day_col values that provides, e.g., a complete set of
+        time samples
+
+    Returns
+    -------
+    dt : QTable
+        New QTable
+
+    """
+    if all_days is not None:
+        # Prepare to create a table of missing days that is filled
+        # with NANs.  Don't assume we have just 3 input columns
+        missing_days = [day for day in all_days
+                        if day not in qtable[day_col]]
+        if convolve_col in qtable.colnames:
+            names = qtable.colnames
+        else:
+            names = qtable.colnames + [convolve_col]
+        n_nancols = len(qtable.colnames)
+        nan_col = np.full(len(missing_days), np.NAN)
+        if isinstance(qtable[data_col], u.Quantity):
+            unit = qtable[data_col].unit
+        else:
+            unit = 1
+        nan_cols = n_nancols * [nan_col*unit]
+        mt = QTable([missing_days] + nan_cols,
+                    names=names)
+        qtable = vstack([qtable, mt])
+    qtable.sort(day_col)
+    qtable[convolve_col] = convolve(qtable[data_col], kernel)
+    return qtable
+
+class ColnameEncoder:
+    def __init__(self,
+                 colbase=None):
+        self.colbase = colbase
+
+    def to_colname(self, t, rad):
+        # This could be made more sophisticated by having a format
+        # property and encoding that in some sort of layered string
+        return f'{self.colbase}_{rad.value:.1f}_{rad.unit}'
+
+    def from_colname(self, t, colname):
+        s = colname.split('_')
+        return float(s[-2])*u.Unit(s[-1])
 

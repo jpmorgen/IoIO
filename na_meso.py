@@ -12,10 +12,10 @@ import matplotlib.pyplot as plt
 
 from astropy import log
 from astropy import units as u
-from astropy.table import QTable, unique, hstack, vstack
+from astropy.table import QTable, unique, hstack
 from astropy.time import Time
 from astropy.stats import mad_std, biweight_location
-from astropy.convolution import convolve, Box1DKernel
+from astropy.convolution import Box1DKernel
 from astropy.coordinates import (Angle, SkyCoord,
                                  solar_system_ephemeris, get_body,
                                  AltAz)
@@ -32,7 +32,8 @@ from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates,
                         valid_long_exposure, im_med_min_max,
                         dict_to_ccd_meta, add_history,
                         csvname_creator, cached_csv, iter_polyfit,
-                        daily_biweight, savefig_overwrite)
+                        daily_biweight, daily_convolve,
+                        savefig_overwrite)
 from IoIO.simple_show import simple_show
 from IoIO.cordata_base import CorDataBase
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
@@ -645,7 +646,7 @@ class NaMeso:
         return self.qtable['shadow_corrected_by_doy_std']
 
     @pgproperty
-    def test_doy_table(self):
+    def doy_table(self):
         self.shadow_corrected_by_doy
         dt = unique(self.qtable, keys='phased_idoy')
         new_col_names = ('doy',
@@ -663,56 +664,36 @@ class NaMeso:
                             all_days=np.arange(365))
         return dt
 
-        missing_days = [day for day in np.arange(365)
-                        if day not in dt['doy'] ]
-        if isinstance(dt['shadow_corrected'], u.Quantity):
-            unit = dt['shadow_corrected'].unit
-        else:
-            unit = 1
-        nan_col = np.full(len(missing_days), np.NAN)
-        mt = QTable([missing_days, nan_col*unit, nan_col*unit],
-                    names=new_col_names)
-        dt = vstack([dt, mt])
-        dt.sort('doy')
-
-        box_kernel = Box1DKernel(20)
-        med = medfilt(dt['shadow_corrected'], MEDFILT_WIDTH)
-        dt['medfilt_shadow_corrected'] = med
-        box = convolve(dt['shadow_corrected'], box_kernel)
-        dt['boxfilt_shadow_corrected'] = box
-        return dt
-
-
-    @pgproperty
-    def doy_table(self):
-        """Returns table with one row per phased DOY.  Columns are
-        phased_idoy, doy_shadow_corrected and
-        doy_shadow_corrected_std.  Note the columns are calculated
-        from the phased data, unlike daily_shadow_corrected in self.qtable
-
-        """
-        t = QTable()
-        unit = self.model_vcol_shadow_corrected_physical.unit
-        t['doy'] = np.arange(365)
-        #t['doy'] = np.unique(self.phased_idoy)
-
-        t['shadow_corrected'] = np.NAN*unit
-        t['shadow_corrected_std'] = np.NAN*unit
-        for i, phased_idoy in enumerate(t['doy']):
-            mask = self.phased_idoy == phased_idoy
-            t_shadow_corrected = self.model_vcol_shadow_corrected[mask]
-            t_shadow_corrected = t_shadow_corrected.physical
-            tbiweight = biweight_location(t_shadow_corrected,
-                                          ignore_nan=True)
-            tstd = mad_std(t_shadow_corrected, ignore_nan=True)
-            t['shadow_corrected'][i] = tbiweight
-            t['shadow_corrected_std'][i] = tstd
-        box_kernel = Box1DKernel(20)
-        med = medfilt(t['shadow_corrected'], MEDFILT_WIDTH)
-        t['medfilt_shadow_corrected'] = med
-        box = convolve(t['shadow_corrected'], box_kernel)
-        t['boxfilt_shadow_corrected'] = box
-        return t        
+    #@pgproperty
+    #def doy_table(self):
+    #    """Returns table with one row per phased DOY.  Columns are
+    #    phased_idoy, doy_shadow_corrected and
+    #    doy_shadow_corrected_std.  Note the columns are calculated
+    #    from the phased data, unlike daily_shadow_corrected in self.qtable
+    #
+    #    """
+    #    t = QTable()
+    #    unit = self.model_vcol_shadow_corrected_physical.unit
+    #    t['doy'] = np.arange(365)
+    #    #t['doy'] = np.unique(self.phased_idoy)
+    #
+    #    t['shadow_corrected'] = np.NAN*unit
+    #    t['shadow_corrected_std'] = np.NAN*unit
+    #    for i, phased_idoy in enumerate(t['doy']):
+    #        mask = self.phased_idoy == phased_idoy
+    #        t_shadow_corrected = self.model_vcol_shadow_corrected[mask]
+    #        t_shadow_corrected = t_shadow_corrected.physical
+    #        tbiweight = biweight_location(t_shadow_corrected,
+    #                                      ignore_nan=True)
+    #        tstd = mad_std(t_shadow_corrected, ignore_nan=True)
+    #        t['shadow_corrected'][i] = tbiweight
+    #        t['shadow_corrected_std'][i] = tstd
+    #    box_kernel = Box1DKernel(20)
+    #    med = medfilt(t['shadow_corrected'], MEDFILT_WIDTH)
+    #    t['medfilt_shadow_corrected'] = med
+    #    box = convolve(t['shadow_corrected'], box_kernel)
+    #    t['boxfilt_shadow_corrected'] = box
+    #    return t        
 
     def tavg_to_shadow_corrected(self, tavg):
         doy = self.calc_phased_doy(tavg)
@@ -814,8 +795,8 @@ class NaMeso:
         plt.plot(self.qtable['best_back_std'],
                  self.qtable['best_back'], 'k.')
         ax.set_xscale('linear')
-        plt.xlabel(f'meso Na emission ({self.qtable["best_back"].unit})')
-        plt.ylabel(f'meso Na emission std ({self.qtable["best_back_std"].unit})')
+        plt.xlabel(f'meso Na emission std ({self.qtable["best_back_std"].unit})')
+        plt.ylabel(f'meso Na emission ({self.qtable["best_back"].unit})')
         ax = plt.subplot(3, 2, 3)
         plt.plot(self.qtable['airmass'], self.meso_mag, 'k.')
         plt.plot(self.qtable['airmass'],
@@ -1028,43 +1009,9 @@ if __name__ == '__main__':
     aph.add_all()
     args = parser.parse_args()
     aph.cmd(args)
-    
-def daily_convolve(qtable,
-                   day_col,
-                   data_col,
-                   convolve_col,
-                   kernel,
-                   all_days=None):
-    if all_days is not None:
-        # Prepare to create a table of missing days that is filled
-        # with NANs.  Don't assume we have just 3 input columns
-        missing_days = [day for day in all_days
-                        if day not in qtable[day_col]]
-        if convolve_col in qtable.colnames:
-            names = qtable.colnames
-        else:
-            names = qtable.colnames + [convolve_col]
-        n_nancols = len(qtable.colnames)
-        nan_col = np.full(len(missing_days), np.NAN)
-        if isinstance(qtable[data_col], u.Quantity):
-            unit = qtable[data_col].unit
-        else:
-            unit = 1
-        nan_cols = n_nancols * [nan_col*unit]
-        print([missing_days] + nan_cols)
-        print(qtable.colnames)
-        print(names)
-        print(n_nancols)
-        mt = QTable([missing_days] + nan_cols,
-                    names=names)
-        qtable = vstack([qtable, mt])
-    qtable.sort(day_col)
-    qtable[convolve_col] = convolve(qtable[data_col], kernel)
-    return qtable
-    
 
-m = NaMeso()
-dt = m.test_doy_table
+#m = NaMeso()
+#dt = m.test_doy_table
 #t = m.add_best_na_meso()
 #print(np.mod(m.qtable['tavg'].jd, (1*u.year).value) * (1*u.year).to(u.day))
 #m.plots(show=True)
