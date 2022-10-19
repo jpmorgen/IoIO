@@ -29,7 +29,7 @@ from IoIO.cor_photometry import (KEYS_TO_SOURCE_TABLE, CorPhotometry,
 
 EXOPLANET_ROOT = '/data/Exoplanets'
 GLOB_INCLUDE = ['TOI*', 'WASP*', 'KPS*', 'HAT*', 'K2*', 'TrES*',
-                'Qatar*', 'GJ*']
+                'Qatar*', 'GJ*', 'KELT*']
 
 MIN_TRANSIT_OBS_TIME = 1*u.hour
 
@@ -96,9 +96,13 @@ def estimate_exposure(vmag):
     target_nonlin = 50
     vmag = vmag*u.mag(u.electron)
     dmag = ref_mag - vmag
-    return (target_nonlin/ref_frac_nonlin
-            *(ref_expo * dmag.physical)
-            - expo_correct)
+    expo = (target_nonlin/ref_frac_nonlin
+            *(ref_expo * dmag.physical))
+    if expo > 0.71*u.s:
+        expo -= expo_correct
+    if expo < 0.71*u.s:
+        expo = 0.7*u.s
+    return expo
 
 def exoplanet_pipeline(flist,
                        reduced_directory,
@@ -193,6 +197,8 @@ def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
             solve_timeout=solve_timeout,
             join_tolerance=join_tolerance,
             keys_to_source_table=keys_to_source_table)
+            #back_rms_scale=20,
+            #deblend_nlevels=32)
     for directory in dirs:
         # For now, behave like Calibration.  If the directory is there
         # with files in it, we are done.  Move/delete the directory to

@@ -420,7 +420,7 @@ def is_flux(unit):
 class Photometry:
     def __init__(self,
                  ccd=None, # Passed by reference since nothing operates ON it
-                 seeing=5, # pixels
+                 seeing=3, # pixels -- seems to sharpen up annoying blends
                  n_connected_pixels=5,
                  source_mask_dilate=11, # pixels
                  source_mask_nsigma=2, # sigma above background

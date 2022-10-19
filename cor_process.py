@@ -328,7 +328,9 @@ def fix_obj_and_coord(ccd_in, **kwargs):
     if obj == 'WASP-136b':
         # Fix typo (also in outname_create)
         ccd.meta['OBJECT'] = 'WASP-163b'
+
     return ccd
+
 
 # --> I will want some sort of integrator for this to calculate
 # airmass at midpoint and handle case where we are close to horizon

@@ -40,7 +40,15 @@ OBJ_COL_TO_META = ['RA', 'DEC', 'RA_rate', 'DEC_rate', 'V',
                    'delta', 'delta_rate', 'lighttime', 'vel_sun',
                    'vel_obs', 'elong', 'elongFlag', 'alpha',
                    'sunTargetPA', 'velocityPA']
-
+COMET_COL_TO_META = ['M1', 'k1', 'flags', 'RA', 'DEC', 'RA_rate',
+                      'DEC_rate', 'Tmag', 'Nmag', 'illumination',
+                      'ang_width', 'PDObsLon', 'PDObsLat', 'PDSunLon',
+                      'PDSunLat', 'SubSol_ang', 'SubSol_dist',
+                      'NPole_ang', 'NPole_dist', 'EclLon', 'EclLat',
+                      'r', 'r_rate', 'delta', 'delta_rate',
+                      'lighttime', 'vel_sun', 'vel_obs', 'elong',
+                      'elongFlag', 'alpha', 'sunTargetPA',
+                      'velocityPA']
 
 GALSAT_FROM_OBS_COL_NUMS = \
     '1, 3, 6, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26, 27'
@@ -215,19 +223,15 @@ def galsat_ephemeris(ccd_in,
                          f'*and* planet="Jupiter"?')
         return ccd_in
     ccd = ccd_in.copy()
-    obs_loc = obs_loc or IOIO_1_LOCATION
+    obs_loc = obs_loc or ccd.obs_location
     obs_col_to_meta = obs_col_to_meta or GALSAT_OBS_COL_TO_META
     obs_name = obs_loc.info.name
 
-    # Get our ephemerides from the perspective of the observatory
-    # id_type='majorbody' required because minor bodies (e.g. asteroids)
-    # are the default
     obs_eph = None
     for galsat in GALSATS:
         h = RateLimitedHorizons(id=GALSATS[galsat],
                         epochs=ccd.tavg.jd,
-                        location=location_to_dict(obs_loc),
-                        id_type='majorbody')
+                        location=location_to_dict(obs_loc))
         e = h.rate_limited_ephemerides(quantities=GALSAT_FROM_OBS_COL_NUMS)
         if obs_eph is None:
             obs_eph = e
@@ -248,8 +252,7 @@ def galsat_ephemeris(ccd_in,
         epoch = ccd.tavg.jd*u.day - lt
         h = RateLimitedHorizons(id=GALSATS['Jupiter'],
                         epochs=epoch.value,
-                        location=f'500@{GALSATS[galsat]}',
-                        id_type='majorbody')
+                        location=f'500@{GALSATS[galsat]}')
         e = h.rate_limited_ephemerides(quantities=GALSAT_COL_NUMS)
         if gs_eph is None:
             gs_eph = e
@@ -316,25 +319,146 @@ def galsat_ephemeris(ccd_in,
     #bmp_meta['obs_eph'] = obs_eph
     return ccd
 
+def mpc_to_horizons(mpc):
+    # https://www.minorplanetcenter.net/iau/info/PackedDes.html
+    if mpc[0:1] == 'C':
+        if mpc[1] == 'I':
+            century = 18
+        elif mpc[1] == 'J':
+            century = 19
+        elif mpc[1] == 'K':
+            century = 20
+        else:
+            raise ValueError(f'Cannot parse {mpc}')
+        year = int(mpc[2:4])
+        year += century * 100
+        letter = mpc[4]
+        number = int(mpc[5:7])
+        fragm = mpc[7]
+        if fragm == '0':
+            fragm = ''
+        return f'{mpc[0]}/{year} {letter}{number}{fragm}' 
+    elif mpc[4] == 'P':
+        number = int(mpc[0:4])
+        return f'{number}{mpc[4]}'
+    else:
+        raise ValueError(f'Cannot parse OBJECT {mpc}')
+
+def comet_ephemeris(ccd_in,
+                    bmp_meta=None,
+                    quantities=OBJ_COL_NUMS,
+                    obs_col_to_meta=COMET_COL_TO_META,
+                    **kwargs):
+    """Puts comet ephemeris information into CCD meta.  For periodic
+    comets, parses the error message below to find the closest epoch
+    preceding our measurement
+
+    """
+    
+#ValueError: Ambiguous target name; provide unique id:
+#    Record #  Epoch-yr  >MATCH DESIG<  Primary Desig  Name  
+#    --------  --------  -------------  -------------  -------------------------
+#    90000291    1905    19P            19P             Borrelly
+#    90000292    1911    19P            19P             Borrelly
+#    90000293    1918    19P            19P             Borrelly
+#    90000294    1925    19P            19P             Borrelly
+#    90000295    1932    19P            19P             Borrelly
+#    90000296    1953    19P            19P             Borrelly
+#    90000297    1960    19P            19P             Borrelly
+#    90000298    1967    19P            19P             Borrelly
+#    90000299    1974    19P            19P             Borrelly
+#    90000300    1981    19P            19P             Borrelly
+#    90000301    1987    19P            19P             Borrelly
+#    90000302    1994    19P            19P             Borrelly
+#    90000303    2004    19P            19P             Borrelly
+#    90000304    2021    19P            19P             Borrelly
+
+    horizons_id = mpc_to_horizons(ccd_in.meta['OBJECT'])
+    try:
+        ccd = obj_ephemeris(ccd_in,
+                            horizons_id=horizons_id,
+                            quantities=quantities,
+                            obs_col_to_meta=obs_col_to_meta)
+    except Exception as e:
+        # Hack error message apart and pick epoch just before our data
+        # were taken
+        msg = str(e)
+        if 'Ambiguous target name' not in msg:
+            raise
+        obs_date, _ = ccd_in.tavg.fits.split('T')
+        obs_year = int(obs_date.split('-')[0])
+        for line in reversed(msg.splitlines()):
+            sl = line.split()
+            if horizons_id != sl[3]:
+                raise ValueError(f'observing epoch for {horizons_id} not found in {msg}')
+            year = int(sl[1])
+            if year <= obs_year:
+                horizons_id = sl[0]
+                ccd = obj_ephemeris(ccd_in,
+                                    horizons_id=horizons_id,
+                                    quantities=quantities,
+                                    obs_col_to_meta=obs_col_to_meta)
+                break
+    return ccd
+
+
 #from IoIO.cordata import CorData
 #from IoIO.cor_process import cor_process
 #from IoIO.calibration import Calibration
 #
-#fname = '/data/IoIO/raw/2021-10-28/Mercury-0001_Na_on.fit'
+##fname = '/data/IoIO/raw/20221004/Na_on-band_001.fits'
+###fname = '/data/IoIO/raw/2021-10-28/Mercury-0001_Na_on.fit'
+##fname = '/data/IoIO/raw/20220112/CK19L030-S002-R001-C003-U.fts'
+#fname = '/data/IoIO/raw/20220606/0019P-S001-R001-C001-Na_off_dupe-1.fts'
 #rccd = CorData.read(fname)
 #c = Calibration(reduce=True)
 #ccd = cor_process(rccd, calibration=c, auto=True)
-#
+
+#ccd = galsat_ephemeris(ccd)
+
 #ccd = obj_ephemeris(ccd,
 #                    horizons_id=199,
-#                    horizons_id_type='majorbody',
+#                    #horizons_id_type='majorbody',
+#                    quantities=OBJ_COL_NUMS,
+#                    obs_col_to_meta=OBJ_COL_TO_META)
+#
+##ccd = obj_ephemeris(ccd,
+##                    horizons_id='Ceres',
+##                    id_type='asteroid_name',
+##                    quantities=MERCURY_COL_NUMS,
+##                    obs_col_to_meta=OBS_COL_TO_META)
+##
+#                    
+##ccd = obj_ephemeris(ccd,
+##                    horizons_id=199,
+##                    horizons_id_type='majorbody',
+##                    quantities=OBJ_COL_NUMS,
+##                    obs_col_to_meta=OBJ_COL_TO_META)
+#
+#ccd = obj_ephemeris(ccd,
+#                    horizons_id='2016 67P',
+#                    horizons_id_type='smallbody',
 #                    quantities=OBJ_COL_NUMS,
 #                    obs_col_to_meta=OBJ_COL_TO_META)
 
+#print(mpc_to_horizons('CK19L030'))
 #ccd = obj_ephemeris(ccd,
-#                    horizons_id='Ceres',
-#                    id_type='asteroid_name',
-#                    quantities=MERCURY_COL_NUMS,
-#                    obs_col_to_meta=OBS_COL_TO_META)
-#
-                    
+#                    #horizons_id='C/2019 L3',
+#                    horizons_id='CK19L030',
+#                    horizons_id_type='smallbody',
+#                    quantities=OBJ_COL_NUMS,
+#                    obs_col_to_meta=COMET_COL_TO_META)
+
+#ccd = obj_ephemeris(ccd,
+#                    horizons_id='90000697',
+#                    horizons_id_type=None,
+#                    quantities=OBJ_COL_NUMS,
+#                    obs_col_to_meta=COMET_COL_TO_META)
+
+#ccd = obj_ephemeris(ccd,
+#                    horizons_id='67P',
+#                    horizons_id_type=None,
+#                    quantities=OBJ_COL_NUMS,
+#                    obs_col_to_meta=COMET_COL_TO_META)
+
+#ccd = comet_ephemeris(ccd)

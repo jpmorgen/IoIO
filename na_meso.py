@@ -282,7 +282,6 @@ def na_meso_pipeline(directory_or_collection=None,
                      calibration=None,
                      photometry=None,
                      n_back_boxes=N_BACK_BOXES,
-                     num_processes=None,
                      outdir=None,
                      outdir_root=OUTDIR_ROOT,
                      create_outdir=True,
@@ -328,7 +327,6 @@ def na_meso_pipeline(directory_or_collection=None,
                            add_astrometry,
                            na_meso_process,
                            no_outfile],                           
-        num_processes=num_processes,
         **kwargs)
 
     # but get ready to write to reduced directory if necessary
@@ -649,13 +647,12 @@ class NaMeso:
     def doy_table(self):
         self.shadow_corrected_by_doy
         dt = unique(self.qtable, keys='phased_idoy')
-        new_col_names = ('doy',
-                         'shadow_corrected',
-                         'shadow_corrected_std')
         dt = QTable([dt['phased_idoy'],
                      dt['shadow_corrected_by_doy'],
                      dt['shadow_corrected_by_doy_std']],
-                    names=new_col_names)
+                    names=('doy',
+                           'shadow_corrected',
+                           'shadow_corrected_std'))
         dt = daily_convolve(dt,
                             'doy',
                             'shadow_corrected',

@@ -1,9 +1,10 @@
 """Utilities for the IoIO data collection and reduction system"""
 
 import inspect
-import fnmatch
-import glob
 import os
+import re
+import glob
+import fnmatch
 import time
 import datetime
 from pathlib import Path
@@ -909,4 +910,14 @@ class ColnameEncoder:
     def from_colname(self, t, colname):
         s = colname.split('_')
         return float(s[-2])*u.Unit(s[-1])
+
+    @property
+    def col_regexp(self):
+        return re.compile(self.colbase + '_.*')
+
+    @property
+    def supplemented_regexp(self):
+        return re.compile('.*_' + self.colbase + '_.*')
+
+
 

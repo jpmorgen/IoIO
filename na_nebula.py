@@ -17,7 +17,8 @@ import matplotlib.colors as mcolors
 
 from astropy import log
 import astropy.units as u
-from astropy.table import QTable
+from astropy.time import Time
+from astropy.table import QTable, unique
 from astropy.convolution import Box1DKernel
 
 from ccdproc import ImageFileCollection
@@ -29,8 +30,8 @@ from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 from IoIO.utils import (ColnameEncoder, get_dirs_dates, reduced_dir,
                         valid_long_exposure, dict_to_ccd_meta,
                         multi_glob, sum_ccddata, csvname_creator,
-                        daily_convolve, savefig_overwrite,
-                        finish_stripchart)
+                        daily_biweight, daily_convolve,
+                        savefig_overwrite, finish_stripchart)
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
                                MAX_MEM_FRAC,
@@ -58,6 +59,7 @@ from IoIO.torus import plot_planet_subim, closest_galsat_to_jupiter
 
 BASE = 'Na_nebula'
 OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
+BOX_NDAYS = 20
 MEDFILT_WIDTH = 81
 
 def na_apertures(ccd_in, bmp_meta=None, **kwargs):
@@ -102,14 +104,15 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     bmp_meta.update(na_aps)
     return ccd
 
-def add_concentric_na_apertures(t, encoder):
+def add_annular_apertures(t, encoder, ap_base='Na_ap', subtract_col=None):
     """Add to table t columns for brightnesses for the regions between
     successively larger apertures (e.g. added column n = surface
-    brightness for region extending from aperture n and aperture n+1)
+    brightness for region extending from aperture n and aperture n+1),
+    optionally subtracting subtract_col from all results
 
     """
-    sum_regexp = re.compile('Na_ap_.*_sum')
-    area_regexp = re.compile('Na_ap_.*_area')
+    sum_regexp = re.compile(ap_base + '_.*_sum')
+    area_regexp = re.compile(ap_base + '_.*_area')
     sum_colnames = filter(sum_regexp.match, t.colnames)
     area_colnames = filter(area_regexp.match, t.colnames)
 
@@ -133,7 +136,10 @@ def add_concentric_na_apertures(t, encoder):
         #                    av_ap,
         #                    colbase='concentric_ap_sb',
         #                    encode=True)
+        if subtract_col is not None:
+            sb -= t[subtract_col]
         t[colname] = sb
+            
         #t[f'concentric_ap_sb_{av_ap:.1f}'] = sb
 
 def na_nebula_plot(t, outdir,
@@ -293,7 +299,7 @@ def na_nebula_plot(t, outdir,
     ax = plt.subplot(n_plots,1,5)
     plt.title('Jupiter attenuated surface brightness')
     plt.errorbar(t['tavg'].datetime, obj_sb.value, obj_sb_err.value,
-                 fmt='k.')#, label='Telluric Na model')
+                 fmt='k.')#, label='Telluric Na odel')
     ax.set_xlim(tlim)
     ax.set_ylim(0, 200000)
     plt.ylabel(f'Atten. Surf. Bright ({obj_sb.unit})')
@@ -644,36 +650,61 @@ if __name__ == '__main__':
 #ccd = na_apertures(ccd)
 
 #na_nebula_tree(read_csvs=False)
-t = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
+summary_table = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
 #na_nebula_plot(t, '/tmp', max_good_sb=1000*u.R, show=True, n_plots=4)
 #na_nebula_plot(t, '/tmp', show=True, n_plots=3, min_av_ap_dist=10, max_sb=600)
 
-def r_to_from_colname(t, rad_or_colname,
-                      colbase=None,
-                      encode=False, decode=False):
-    """Encode or decode radius into column name"""
-    UNIT = u.R_jup
-    if encode:
-        assert rad_or_colname.unit == UNIT
-        v = rad_or_colname.value
-        return f'{colbase}_{v:.1f}'
-    elif decode:
-        s = rad_or_colname.split('_')
-        return float(s[-1])*UNIT
-    else:
-        raise ValueError('encode or decode must be specified')
-    
 
-encoder = ColnameEncoder('concentric_ap_sb')
-add_concentric_na_apertures(t, encoder)
-sb_regexp = re.compile('concentric_ap_sb_.*')
-sb_colnames = filter(sb_regexp.match, t.colnames)
+# Add annular apertures to summary_table
+encoder = ColnameEncoder('annular_sb')
+add_annular_apertures(summary_table, encoder, subtract_col='meso_or_model')
+
+# Add daily biweight locations to summary_table
+summary_table['ijd'] = summary_table['tavg'].jd.astype(int)
+sb_colnames = filter(encoder.col_regexp.match, summary_table.colnames)
 for sb_col in sb_colnames:
-    print(encoder.from_colname(t, sb_col))
-    #print(r_to_from_colname(t,
-    #                        sb_col,
-    #                        colbase='concentric_ap_sb',
-    #                        decode=True))
-    #s = sb_col.split('_')
-    #ap_r = float(s[-1])*u.R_jup
-    #print(ap_r)
+    av_ap = encoder.from_colname(summary_table, sb_col)
+    daily_biweight(summary_table,
+                   day_col='ijd',
+                   data_col=sb_col,
+                   biweight_col='biweight_' + sb_col,
+                   std_col='std_' + sb_col)
+    print(av_ap)
+
+# Create a new table, one row per day with biweight & mad_std columns
+day_table = unique(summary_table, keys='ijd')
+bwt_std_colnames = filter(encoder.supplemented_regexp.match, day_table.colnames)
+bwt_std_colnames = list(bwt_std_colnames)
+day_table_colnames = ['ijd'] + bwt_std_colnames
+day_table = QTable(day_table[day_table_colnames])
+print(day_table_colnames)
+
+# Boxcar median each biweight column
+first_day = np.min(day_table['ijd'])
+last_day = np.max(day_table['ijd'])
+all_days = np.arange(first_day, last_day+1)
+bwt_col_regexp = re.compile('biweight_' + encoder.colbase + '_.*')
+bwt_colnames = list(filter(bwt_col_regexp.match, day_table.colnames))
+for bwt_col in bwt_colnames:
+    day_table = daily_convolve(day_table,
+                               'ijd',
+                               bwt_col,
+                               'boxfilt_' + bwt_col,
+                               Box1DKernel(BOX_NDAYS),
+                               all_days=all_days)
+day_table['itdatetime'] = Time(day_table['ijd'], format='jd').datetime
+box_col_regexp = re.compile('boxfilt_biweight_' + encoder.colbase + '_.*')
+box_colnames = list(filter(box_col_regexp.match, day_table.colnames))
+f = plt.figure()
+ax = plt.subplot()
+for box_col in box_colnames:
+    print(box_col)
+    av_ap = encoder.from_colname(day_table, box_col)
+    plt.plot(day_table['itdatetime'], day_table[box_col],
+             label=f'{av_ap}')
+plt.xlabel('date')
+plt.ylabel(f'Surf. bright {day_table[box_col].unit}')
+plt.legend()
+f.autofmt_xdate()
+plt.show()
+

@@ -909,13 +909,18 @@ def object_to_objctradec(ccd_in, **kwargs):
     obj = ccd.meta['OBJECT']
     simbad_results = s.query_object(obj)
     if simbad_results is None:
-        # --> This is where I want to emulate simbad results for
-        # Qatars or add abstraction layer for Simbad to do so
-
-        # Don't fail, since OBJT* are within pointing errors
-        log.warning(f'Simbad did not resolve: {obj}, relying on '
-                    f'OBJCTRA = {ccd.meta["OBJCTRA"]} '
-                    f'OBJCTDEC = {ccd.meta["OBJCTDEC"]}')
+        # Poke in a few target coords that aren't found in simbad
+        if obj == 'Qatar-10b':
+            ccd.meta['OBJCTRA'] = '18h57m46.54s'
+            ccd.meta['OBJCTDEC'] = '69d34m15.01s'
+        elif obj == 'TOI-2046b':
+            ccd.meta['OBJCTRA'] = '01h04m44.39s'
+            ccd.meta['OBJCTDEC'] = '74d19m52.70s'
+        else:
+            # Don't fail, since OBJT* may be within pointing errors
+            log.error(f'Simbad did not resolve: {obj}, relying on '
+                      f'OBJCTRA = {ccd.meta["OBJCTRA"]} '
+                      f'OBJCTDEC = {ccd.meta["OBJCTDEC"]}')
         return ccd
     obj_entry = simbad_results[0]
     ra = Angle(obj_entry['RA'], unit=u.hour)
