@@ -131,7 +131,7 @@ def add_annular_apertures(t, encoder, ap_base='Na_ap', subtract_col=None):
         sb = cts / area
         last_sum = t[sum_colname]
         last_area = t[area_colname]
-        colname = encoder.to_colname(t, av_ap)
+        colname = encoder.to_colname(av_ap)
         #colname = r_to_from_colname(t,
         #                    av_ap,
         #                    colbase='concentric_ap_sb',
@@ -141,6 +141,118 @@ def add_annular_apertures(t, encoder, ap_base='Na_ap', subtract_col=None):
         t[colname] = sb
             
         #t[f'concentric_ap_sb_{av_ap:.1f}'] = sb
+
+def add_annular_boxcar_medians(summary_table_in,
+                               subtract_col=None,
+                               show=True):
+
+    # --> Make fancy plot saving, ranging, etc., if really needed
+
+    summary_table = summary_table_in.copy()
+    
+    # Add annular apertures to summary_table
+    encoder = ColnameEncoder('annular_sb')
+    add_annular_apertures(summary_table, encoder,
+                          subtract_col=subtract_col)
+
+    # Add daily biweight locations to summary_table
+    summary_table['ijd'] = summary_table['tavg'].jd.astype(int)
+    sb_colnames = filter(encoder.col_regexp.match, summary_table.colnames)
+    for sb_col in sb_colnames:
+        av_ap = encoder.from_colname(sb_col)
+        daily_biweight(summary_table,
+                       day_col='ijd',
+                       data_col=sb_col,
+                       biweight_col='biweight_' + sb_col,
+                       std_col='std_' + sb_col)
+        print(av_ap)
+
+    # Create a new table, one row per day with biweight & mad_std columns
+    day_table = unique(summary_table, keys='ijd')
+    bwt_std_colnames = filter(encoder.supplemented_regexp.match, day_table.colnames)
+    bwt_std_colnames = list(bwt_std_colnames)
+    day_table_colnames = ['ijd'] + bwt_std_colnames
+    day_table = QTable(day_table[day_table_colnames])
+    print(day_table_colnames)
+
+    # Boxcar median each biweight column
+    first_day = np.min(day_table['ijd'])
+    last_day = np.max(day_table['ijd'])
+    all_days = np.arange(first_day, last_day+1)
+    bwt_col_regexp = re.compile('biweight_' + encoder.colbase + '_.*')
+    bwt_colnames = list(filter(bwt_col_regexp.match, day_table.colnames))
+    for bwt_col in bwt_colnames:
+        day_table = daily_convolve(day_table,
+                                   'ijd',
+                                   bwt_col,
+                                   'boxfilt_' + bwt_col,
+                                   Box1DKernel(BOX_NDAYS),
+                                   all_days=all_days)
+    day_table['itdatetime'] = Time(day_table['ijd'], format='jd').datetime
+    box_col_regexp = re.compile('boxfilt_biweight_' + encoder.colbase + '_.*')
+    box_colnames = list(filter(box_col_regexp.match, day_table.colnames))
+    f = plt.figure()
+    ax = plt.subplot()
+    for box_col in box_colnames:
+        print(box_col)
+        av_ap = encoder.from_colname(box_col)
+        plt.plot(day_table['itdatetime'], day_table[box_col],
+                 label=f'{av_ap}')
+    plt.xlabel('date')
+    plt.ylabel(f'Surf. bright {day_table[box_col].unit}')
+    plt.legend()
+    f.autofmt_xdate()
+    if show:
+        plt.show()
+    plt.close()
+
+    return day_table
+
+def add_sb_diffs(summary_table_in,
+                 show=True):
+    summary_table = summary_table_in.copy()
+    encoder = ColnameEncoder('annular_sb')
+    diff_encoder = ColnameEncoder('annular_sb_diff')
+    add_annular_apertures(summary_table, encoder)
+    sb_colnames = filter(encoder.col_regexp.match, summary_table.colnames)
+    prev_col = None
+    #av_aps = []
+    #sb_diffs = []
+    for sb_col in sb_colnames:
+        col_val = summary_table[sb_col]
+        av_ap = encoder.from_colname(sb_col)
+        if prev_col is None:
+            prev_col = col_val
+            prev_av_ap = av_ap
+            continue
+        diff = prev_col - col_val
+        av_ap = (prev_av_ap + av_ap)/2
+        summary_table[diff_encoder.to_colname(av_ap)] = diff
+        prev_col = col_val
+        prev_av_ap = av_ap
+
+    f = plt.figure()
+    ax = plt.subplot()
+    custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'])
+    plt.rc('axes', prop_cycle=custom_cycler)
+
+    diff_colnames = list(filter(diff_encoder.col_regexp.match,
+                                summary_table.colnames))
+    summary_table['datetime'] = summary_table['tavg'].datetime
+    for diff_col in diff_colnames[3:]:
+        av_ap = diff_encoder.from_colname(diff_col)
+        plt.plot(summary_table['datetime'], summary_table[diff_col], '.',
+                 label=f'{av_ap}')
+    plt.xlabel('date')
+    plt.ylabel(f'Surf. bright difference {summary_table[diff_col].unit}')
+    plt.legend()
+
+    f.autofmt_xdate()
+    if show:
+        plt.show()
+    plt.close()
+
+    return summary_table
 
 def na_nebula_plot(t, outdir,
                    tmin=None,
@@ -649,62 +761,13 @@ if __name__ == '__main__':
 #ccd.obj_center = (ccd.meta['OBJ_CR1'], ccd.meta['OBJ_CR0'])
 #ccd = na_apertures(ccd)
 
+
 #na_nebula_tree(read_csvs=False)
-summary_table = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
+#summary_table = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
 #na_nebula_plot(t, '/tmp', max_good_sb=1000*u.R, show=True, n_plots=4)
 #na_nebula_plot(t, '/tmp', show=True, n_plots=3, min_av_ap_dist=10, max_sb=600)
 
+#summary_table = add_annular_boxcar_medians(summary_table)
+#add_annular_boxcar_medians(summary_table, subtract_col='meso_or_model')
 
-# Add annular apertures to summary_table
-encoder = ColnameEncoder('annular_sb')
-add_annular_apertures(summary_table, encoder, subtract_col='meso_or_model')
-
-# Add daily biweight locations to summary_table
-summary_table['ijd'] = summary_table['tavg'].jd.astype(int)
-sb_colnames = filter(encoder.col_regexp.match, summary_table.colnames)
-for sb_col in sb_colnames:
-    av_ap = encoder.from_colname(summary_table, sb_col)
-    daily_biweight(summary_table,
-                   day_col='ijd',
-                   data_col=sb_col,
-                   biweight_col='biweight_' + sb_col,
-                   std_col='std_' + sb_col)
-    print(av_ap)
-
-# Create a new table, one row per day with biweight & mad_std columns
-day_table = unique(summary_table, keys='ijd')
-bwt_std_colnames = filter(encoder.supplemented_regexp.match, day_table.colnames)
-bwt_std_colnames = list(bwt_std_colnames)
-day_table_colnames = ['ijd'] + bwt_std_colnames
-day_table = QTable(day_table[day_table_colnames])
-print(day_table_colnames)
-
-# Boxcar median each biweight column
-first_day = np.min(day_table['ijd'])
-last_day = np.max(day_table['ijd'])
-all_days = np.arange(first_day, last_day+1)
-bwt_col_regexp = re.compile('biweight_' + encoder.colbase + '_.*')
-bwt_colnames = list(filter(bwt_col_regexp.match, day_table.colnames))
-for bwt_col in bwt_colnames:
-    day_table = daily_convolve(day_table,
-                               'ijd',
-                               bwt_col,
-                               'boxfilt_' + bwt_col,
-                               Box1DKernel(BOX_NDAYS),
-                               all_days=all_days)
-day_table['itdatetime'] = Time(day_table['ijd'], format='jd').datetime
-box_col_regexp = re.compile('boxfilt_biweight_' + encoder.colbase + '_.*')
-box_colnames = list(filter(box_col_regexp.match, day_table.colnames))
-f = plt.figure()
-ax = plt.subplot()
-for box_col in box_colnames:
-    print(box_col)
-    av_ap = encoder.from_colname(day_table, box_col)
-    plt.plot(day_table['itdatetime'], day_table[box_col],
-             label=f'{av_ap}')
-plt.xlabel('date')
-plt.ylabel(f'Surf. bright {day_table[box_col].unit}')
-plt.legend()
-f.autofmt_xdate()
-plt.show()
-
+#add_sb_diffs(summary_table)

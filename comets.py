@@ -195,8 +195,8 @@ log.setLevel('DEBUG')
 
 #cl = comet_list(include_PSIScope=False)
 #print(len(cl[0]), cl[1])
-#cl = comet_list()
-#print(len(cl[0]), cl[1])
+cl = comet_list()
+print(len(cl[0]), cl[1])
 
-pout = comet_pipeline('/data/IoIO/raw/20211028',
-                      fits_fixed_ignore=True)
+#pout = comet_pipeline('/data/IoIO/raw/20211028',
+#                      fits_fixed_ignore=True)

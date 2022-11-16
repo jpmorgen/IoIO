@@ -89,7 +89,7 @@ class ExoMultiPipe(CorMultiPipeBase):
 
 def estimate_exposure(vmag):
     # HAT-P-36b as ref
-    expo_correct = 2*u.s
+    expo_correct = 2.71*u.s
     ref_mag = 12.26*u.mag(u.electron)
     ref_expo = 102*u.s
     ref_frac_nonlin = 60

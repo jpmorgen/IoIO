@@ -902,12 +902,12 @@ class ColnameEncoder:
                  colbase=None):
         self.colbase = colbase
 
-    def to_colname(self, t, rad):
+    def to_colname(self, rad):
         # This could be made more sophisticated by having a format
         # property and encoding that in some sort of layered string
         return f'{self.colbase}_{rad.value:.1f}_{rad.unit}'
 
-    def from_colname(self, t, colname):
+    def from_colname(self, colname):
         s = colname.split('_')
         return float(s[-2])*u.Unit(s[-1])
 
