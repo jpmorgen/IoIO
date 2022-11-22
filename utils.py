@@ -14,6 +14,8 @@ import csv
 import numpy as np
 from numpy.polynomial import Polynomial
 
+from scipy.signal import medfilt
+
 import matplotlib.pyplot as plt
 
 from astropy import log
@@ -892,32 +894,101 @@ def daily_convolve(qtable,
         nan_cols = n_nancols * [nan_col*unit]
         mt = QTable([missing_days] + nan_cols,
                     names=names)
-        qtable = vstack([qtable, mt])
+        if len(mt) > 0:
+            qtable = vstack([qtable, mt])
     qtable.sort(day_col)
-    qtable[convolve_col] = convolve(qtable[data_col], kernel)
+    #qtable[convolve_col] = convolve(qtable[data_col], kernel)
+    qtable[convolve_col] = medfilt(qtable[data_col], 105)*qtable[data_col].unit
     return qtable
 
 class ColnameEncoder:
+    """Properties and methods to encode and decode quantities into
+    strings useful for QTable column headings
+
+    Parameters
+    ----------
+    colbase : str
+        Base string of column, e.g. 'Na_sum'
+        Default is ``None''
+
+    formatter : str
+        Numberic format string for encoding, e.g. '.1f'
+        Default is ``None''
+    """
     def __init__(self,
-                 colbase=None):
+                 colbase=None,
+                 formatter=None):
         self.colbase = colbase
+        self.formatter = formatter
+        self._colbase_regexp = None
+        self._colbase_middle_regexp = None
 
     def to_colname(self, rad):
-        # This could be made more sophisticated by having a format
-        # property and encoding that in some sort of layered string
-        return f'{self.colbase}_{rad.value:.1f}_{rad.unit}'
+        """Encode `astropy.units.Quantity` into string
+
+        Parameters 
+        ----------
+        rad : Quantity
+            `astropy.units.Quantity` to be encoded
+
+        Returns
+        -------
+        string in the form 'colbase_value_unit' where value is
+        formatted numerically according to formatter property
+
+        """
+        return f'{self.colbase}_{rad.value:{self.formatter}}_{rad.unit}'
 
     def from_colname(self, colname):
+        """Decode string into quantity
+
+        Parameters 
+        ----------
+        rad : Quantity
+            `astropy.units.Quantity` to be encoded
+
+        """
         s = colname.split('_')
         return float(s[-2])*u.Unit(s[-1])
 
     @property
-    def col_regexp(self):
+    def colbase_regexp(self):
+        """regexp with colbase anchored at beginning of regexp
+        """
+        if self._colbase_regexp:
+            return self._colbase_regexp
         return re.compile(self.colbase + '_.*')
 
     @property
-    def supplemented_regexp(self):
+    def colbase_middle_regexp(self):
+        """regexp with colbase in the middle of regexp
+        """
+        if self._colbase_middle_regexp:
+            return self._colbase_middle_regexp
         return re.compile('.*_' + self.colbase + '_.*')
 
+    def colbase_list(self, from_list):
+        return list(filter(self.colbase_regexp.match, from_list))
 
+    def colbase_middle_list(self, from_list):
+        return list(filter(self.colbase_middle_regexp.match, from_list))
 
+    def largest_colbase(self, from_list):
+        """Returns element of list that has the largest encoded Quantity"""
+        largest = None
+        from_list = self.colbase_list(from_list)
+        for col in from_list:
+            val = self.from_colname(col)
+            if largest is None:
+                largest = val
+            elif val > largest:
+                largest = val
+        return self.to_colname(largest)
+
+#c = ColnameEncoder('Na_ap', formatter='.0f')
+#print(c.to_colname(3*u.R_jup))
+#ap_sequence = np.asarray((1, 2, 4, 8, 16, 32, 64, 128)) * u.R_jup
+#na_aps = {}
+#for ap in ap_sequence:
+#    na_aps[c.to_colname(ap)] = ap
+#print(na_aps)

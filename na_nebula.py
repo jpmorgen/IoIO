@@ -77,6 +77,9 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     pix_per_Rj = pixel_per_Rj(ccd)
     # --> These may need to be tweaked
     ap_sequence = np.asarray((1, 2, 4, 8, 16, 32, 64, 128)) * u.R_jup
+
+    # --> Eventually use ColnameEncoder('Na_sum', formatter='.0f')
+    # --> Eventually use ColnameEncoder('Na_area', formatter='.0f')
     na_aps = {}
     for ap in ap_sequence:
         b = np.round(center[0] - ap/2 * pix_per_Rj).astype(int)
@@ -104,22 +107,24 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     bmp_meta.update(na_aps)
     return ccd
 
-def add_annular_apertures(t, encoder, ap_base='Na_ap', subtract_col=None):
+def add_annular_apertures(t, ap_base='Na_ap', subtract_col=None):
     """Add to table t columns for brightnesses for the regions between
     successively larger apertures (e.g. added column n = surface
     brightness for region extending from aperture n and aperture n+1),
     optionally subtracting subtract_col from all results
 
     """
+    # --> These will get replaced by ColNameEncoders
     sum_regexp = re.compile(ap_base + '_.*_sum')
     area_regexp = re.compile(ap_base + '_.*_area')
     sum_colnames = filter(sum_regexp.match, t.colnames)
     area_colnames = filter(area_regexp.match, t.colnames)
 
+    sb_encoder = ColnameEncoder('annular_sb', formatter='.1f')
+
     last_sum = 0
     last_area = 0
     last_ap_bound = 0
-    sb_list = []
     ap_list = []
     for sum_colname, area_colname in zip(sum_colnames, area_colnames):
         ap_bound = sum_colname.split('_')
@@ -131,33 +136,25 @@ def add_annular_apertures(t, encoder, ap_base='Na_ap', subtract_col=None):
         sb = cts / area
         last_sum = t[sum_colname]
         last_area = t[area_colname]
-        colname = encoder.to_colname(av_ap)
-        #colname = r_to_from_colname(t,
-        #                    av_ap,
-        #                    colbase='concentric_ap_sb',
-        #                    encode=True)
+        colname = sb_encoder.to_colname(av_ap)
         if subtract_col is not None:
             sb -= t[subtract_col]
         t[colname] = sb
-            
-        #t[f'concentric_ap_sb_{av_ap:.1f}'] = sb
+        ap_list.append(av_ap)
 
-def add_annular_boxcar_medians(summary_table_in,
-                               subtract_col=None,
-                               show=True):
+def subtract_col_from(t,
+                      encoder=None,
+                      subtract_colname=None,
+                      subtracted_prefix=None):
+    for col in encoder.colbase_list(t.colnames):
+        t[f'{subtracted_prefix}_{col}'] = t[col] - t[subtract_colname]
 
-    # --> Make fancy plot saving, ranging, etc., if really needed
-
-    summary_table = summary_table_in.copy()
-    
-    # Add annular apertures to summary_table
-    encoder = ColnameEncoder('annular_sb')
-    add_annular_apertures(summary_table, encoder,
-                          subtract_col=subtract_col)
+def add_daily_biweights(summary_table,
+                        encoder=None):
 
     # Add daily biweight locations to summary_table
     summary_table['ijd'] = summary_table['tavg'].jd.astype(int)
-    sb_colnames = filter(encoder.col_regexp.match, summary_table.colnames)
+    sb_colnames = encoder.colbase_list(summary_table.colnames)
     for sb_col in sb_colnames:
         av_ap = encoder.from_colname(sb_col)
         daily_biweight(summary_table,
@@ -166,12 +163,19 @@ def add_annular_boxcar_medians(summary_table_in,
                        biweight_col='biweight_' + sb_col,
                        std_col='std_' + sb_col)
         print(av_ap)
+        
+def boxcar_medians(
+        summary_table,
+        include_col_encoder=None, # includes with colbase_middle_list [might just make list]
+        median_col_encoder=None):
 
-    # Create a new table, one row per day with biweight & mad_std columns
+    # Create a new table, one row per day with biweight & mad_std
+    # columns This assumes that it is OK if any other prepends come
+    # along for the ride.  And yes, it does exclude the original
     day_table = unique(summary_table, keys='ijd')
-    bwt_std_colnames = filter(encoder.supplemented_regexp.match, day_table.colnames)
-    bwt_std_colnames = list(bwt_std_colnames)
-    day_table_colnames = ['ijd'] + bwt_std_colnames
+    include_colnames = include_col_encoder.colbase_middle_list(
+        day_table.colnames)
+    day_table_colnames = ['ijd'] + list(include_colnames)
     day_table = QTable(day_table[day_table_colnames])
     print(day_table_colnames)
 
@@ -179,42 +183,44 @@ def add_annular_boxcar_medians(summary_table_in,
     first_day = np.min(day_table['ijd'])
     last_day = np.max(day_table['ijd'])
     all_days = np.arange(first_day, last_day+1)
-    bwt_col_regexp = re.compile('biweight_' + encoder.colbase + '_.*')
-    bwt_colnames = list(filter(bwt_col_regexp.match, day_table.colnames))
-    for bwt_col in bwt_colnames:
+    med_colnames = median_col_encoder.colbase_list(day_table.colnames)
+    for med_col in med_colnames:
+        print(med_col)
         day_table = daily_convolve(day_table,
                                    'ijd',
-                                   bwt_col,
-                                   'boxfilt_' + bwt_col,
+                                   med_col,
+                                   'boxfilt_' + med_col,
                                    Box1DKernel(BOX_NDAYS),
                                    all_days=all_days)
     day_table['itdatetime'] = Time(day_table['ijd'], format='jd').datetime
-    box_col_regexp = re.compile('boxfilt_biweight_' + encoder.colbase + '_.*')
-    box_colnames = list(filter(box_col_regexp.match, day_table.colnames))
-    f = plt.figure()
-    ax = plt.subplot()
-    for box_col in box_colnames:
-        print(box_col)
-        av_ap = encoder.from_colname(box_col)
-        plt.plot(day_table['itdatetime'], day_table[box_col],
-                 label=f'{av_ap}')
-    plt.xlabel('date')
-    plt.ylabel(f'Surf. bright {day_table[box_col].unit}')
-    plt.legend()
-    f.autofmt_xdate()
-    if show:
-        plt.show()
-    plt.close()
+
+
+    #box_colbase_regexp = re.compile('boxfilt_biweight_' + encoder.colbase + '_.*')
+    #box_colnames = list(filter(box_colbase_regexp.match, day_table.colnames))
+    #f = plt.figure()
+    #ax = plt.subplot()
+    #for box_col in box_colnames:
+    #    print(box_col)
+    #    av_ap = encoder.from_colname(box_col)
+    #    plt.plot(day_table['itdatetime'], day_table[box_col],
+    #             label=f'{av_ap}')
+    #plt.xlabel('date')
+    #plt.ylabel(f'Surf. bright {day_table[box_col].unit}')
+    #plt.legend()
+    #f.autofmt_xdate()
+    #if show:
+    #    plt.show()
+    #plt.close()
 
     return day_table
 
 def add_sb_diffs(summary_table_in,
                  show=True):
     summary_table = summary_table_in.copy()
-    encoder = ColnameEncoder('annular_sb')
-    diff_encoder = ColnameEncoder('annular_sb_diff')
-    add_annular_apertures(summary_table, encoder)
-    sb_colnames = filter(encoder.col_regexp.match, summary_table.colnames)
+    encoder = ColnameEncoder('annular_sb', formatter='.1f')
+    diff_encoder = ColnameEncoder('annular_sb_diff', formatter='.1f')
+    add_annular_apertures(summary_table)
+    sb_colnames = filter(encoder.colbase_regexp.match, summary_table.colnames)
     prev_col = None
     #av_aps = []
     #sb_diffs = []
@@ -236,7 +242,7 @@ def add_sb_diffs(summary_table_in,
     custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'])
     plt.rc('axes', prop_cycle=custom_cycler)
 
-    diff_colnames = list(filter(diff_encoder.col_regexp.match,
+    diff_colnames = list(filter(diff_encoder.colbase_regexp.match,
                                 summary_table.colnames))
     summary_table['datetime'] = summary_table['tavg'].datetime
     for diff_col in diff_colnames[3:]:
@@ -267,31 +273,14 @@ def na_nebula_plot(t, outdir,
     t.sort('tavg')
     tlim = (t['tavg'][0].datetime, t['tavg'][-1].datetime)
     outbase = 'Na_nebula_apertures.png'
-    sum_regexp = re.compile('Na_ap_.*_sum')
-    area_regexp = re.compile('Na_ap_.*_area')
-    sum_colnames = filter(sum_regexp.match, t.colnames)
-    area_colnames = filter(area_regexp.match, t.colnames)
+    add_annular_apertures(t)
+    sb_encoder = ColnameEncoder('annular_sb', formatter='.1f')
+    largest_ap = sb_encoder.largest_colbase(t.colnames)
+    subtract_col_from(t, sb_encoder, largest_ap, 'largest_sub')
+    largest_sub_encoder = ColnameEncoder('largest_sub', formatter='.1f')
 
-    last_sum = 0
-    last_area = 0
-    last_ap_bound = 0
-    sb_list = []
-    ap_list = []
-    for sum_colname, area_colname in zip(sum_colnames, area_colnames):
-        ap_bound = sum_colname.split('_')
-        ap_bound = int(ap_bound[2])
-        av_ap = np.mean((ap_bound, last_ap_bound))
-        last_ap_bound = ap_bound
-        cts = t[sum_colname] - last_sum
-        area = t[area_colname] - last_area
-        sb = cts / area
-        if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
-            continue
-        ap_list.append(av_ap)
-        sb_list.append(sb)
-        last_sum = t[sum_colname]
-        last_area = t[area_colname]
-
+    ap_list = sb_encoder.colbase_list(t.colnames)
+    
     if n_plots == 1:
         f = plt.figure(figsize=[8.5, 11/2])
     else:
@@ -305,12 +294,12 @@ def na_nebula_plot(t, outdir,
     plt.suptitle('Na nebula rectangular aperture surface brightesses above & below torus centrifugal plane')
 
     ax = plt.subplot(n_plots,1,1)
-    plt.title(f'{ap_list[-1]:.0f} Rj aperture subtracted')
-    for sb, av_ap in zip(sb_list, ap_list):
+    plt.title(f'{sb_encoder.from_colname(largest_ap):.0f} aperture subtracted')
+    for ap in ap_list:
         # Skip the most distant ap
-        if av_ap == ap_list[-1]:
+        if ap == largest_ap:
             continue        
-        bsub_sb = sb - sb_list[-1]
+        bsub_sb = t[ap] - t[largest_ap]
         mask = bsub_sb < max_good_sb
         plt.plot(t['tavg'][mask].datetime, bsub_sb[mask], '.',
                  label=f'+/- {av_ap:.0f} Rj')
@@ -763,7 +752,7 @@ if __name__ == '__main__':
 
 
 #na_nebula_tree(read_csvs=False)
-#summary_table = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
+summary_table = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
 #na_nebula_plot(t, '/tmp', max_good_sb=1000*u.R, show=True, n_plots=4)
 #na_nebula_plot(t, '/tmp', show=True, n_plots=3, min_av_ap_dist=10, max_sb=600)
 
@@ -771,3 +760,101 @@ if __name__ == '__main__':
 #add_annular_boxcar_medians(summary_table, subtract_col='meso_or_model')
 
 #add_sb_diffs(summary_table)
+
+show=True
+min_av_ap_dist=0
+min_av_ap_dist=12*u.R_jup
+max_av_ap_dist=np.inf
+max_av_ap_dist=50*u.R_jup
+
+t = summary_table
+add_annular_apertures(t)
+sb_encoder = ColnameEncoder('annular_sb', formatter='.1f')
+largest_ap = sb_encoder.largest_colbase(t.colnames)
+subtract_col_from(t, sb_encoder, largest_ap, 'largest_sub')
+largest_sub_encoder = ColnameEncoder('largest_sub', formatter='.1f')
+
+f = plt.figure()
+ax = plt.subplot()
+ls_cols = largest_sub_encoder.colbase_list(t.colnames)
+for ls_col in ls_cols:
+    av_ap = largest_sub_encoder.from_colname(ls_col)
+    plt.plot(t['tavg'].datetime, t[ls_col], '.',
+             label=f'{av_ap}')
+plt.xlabel('date')
+plt.ylabel(f'Surf. bright {t[ls_col].unit}')
+plt.legend()
+f.autofmt_xdate()
+if show:
+    plt.show()
+plt.close()
+
+mask = None
+for ls_col in ls_cols:
+    if mask is None:
+        mask = t[ls_col] >= 0
+        continue
+    mask = np.logical_and(mask, t[ls_col] >= 0)
+
+#mask = np.logical_and(mask, t[ls_cols[-2]] < 50*u.R)
+mask = np.logical_and(mask, t[ls_cols[-2]] < 35*u.R)
+    
+f = plt.figure()
+ax = plt.subplot()
+for ls_col in ls_cols:
+    av_ap = largest_sub_encoder.from_colname(ls_col)
+    if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
+        continue
+    plt.plot(t['tavg'][mask].datetime, t[ls_col][mask], '.',
+             label=f'{av_ap}')
+plt.xlabel('date')
+plt.ylabel(f'Surf. bright {t[ls_col].unit}')
+plt.legend()
+f.autofmt_xdate()
+if show:
+    plt.show()
+plt.close()
+
+clean_t = t[mask]
+add_daily_biweights(clean_t, encoder=largest_sub_encoder)
+biweight_encoder = ColnameEncoder('biweight', formatter='.1f')
+biweight_cols = biweight_encoder.colbase_list(clean_t.colnames)
+day_table = boxcar_medians(clean_t,
+                           include_col_encoder=largest_sub_encoder,
+                           median_col_encoder=biweight_encoder)
+
+f = plt.figure()
+ax = plt.subplot()
+for bwt_col in biweight_cols:
+    av_ap = largest_sub_encoder.from_colname(bwt_col)
+    if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
+        continue
+    plt.plot(day_table['itdatetime'], day_table[bwt_col], '.',
+             label=f'{av_ap}')
+plt.xlabel('date')
+plt.ylabel(f'Surf. bright ({t[ls_col].unit})')
+plt.title('Na nebula -- nightly medians')
+plt.legend()
+f.autofmt_xdate()
+if show:
+    plt.show()
+plt.close()
+
+boxcar_encoder = ColnameEncoder('boxfilt_biweight', formatter='.1f')
+box_colnames = boxcar_encoder.colbase_list(day_table.colnames)
+f = plt.figure()
+ax = plt.subplot()
+for box_col in box_colnames:
+    av_ap = boxcar_encoder.from_colname(box_col)
+    if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
+        continue
+    plt.plot(day_table['itdatetime'], day_table[box_col], '.',
+             label=f'{av_ap}')
+plt.xlabel('date')
+plt.ylabel(f'Surf. bright {day_table[box_col].unit}')
+plt.legend()
+f.autofmt_xdate()
+if show:
+    plt.show()
+plt.close()
+
