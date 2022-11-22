@@ -13,25 +13,39 @@ from cormultipipe import Calibration, OffCorMultiPipe, nd_filter_mask
 
 log.setLevel('DEBUG')
 
+
 calibration = Calibration(reduce=True)
-directory = '/data/io/IoIO/raw/20200514/'
+directory = '/data/io/IoIO/raw/20221026/'
 rd = reduced_dir(directory, create=True)
 
-flist = [directory + 'CK17T020-S001-R001-C001-R_dupe-4.fts']
+flist = [directory + '0029P-S002-R001-C001-R_dupe-6']
 cmp = OffCorMultiPipe(auto=True, calibration=calibration,
                       fits_fixed_ignore=True, outname_ext='.fits', 
                       post_process_list=[nd_filter_mask, as_single])
 #                      post_process_list=[as_single])
 pout = cmp.pipeline(flist, outdir=rd, overwrite=True, outname_ext='.fits')
 
-from astropy.nddata import CCDData
-plt.rcParams.update({'font.size': 18})
 
-
-ccd = CCDData.read('/data/io/IoIO/reduced/20200514/CK17T020-S001-R001-C001-R_dupe-4_p.fits')
-
-plt.imshow(ccd)
-plt.show()
+## C/2017 T2 (PanSTAARS)
+#calibration = Calibration(reduce=True)
+#directory = '/data/io/IoIO/raw/20200514/'
+#rd = reduced_dir(directory, create=True)
+#
+#flist = [directory + 'CK17T020-S001-R001-C001-R_dupe-4.fts']
+#cmp = OffCorMultiPipe(auto=True, calibration=calibration,
+#                      fits_fixed_ignore=True, outname_ext='.fits', 
+#                      post_process_list=[nd_filter_mask, as_single])
+##                      post_process_list=[as_single])
+#pout = cmp.pipeline(flist, outdir=rd, overwrite=True, outname_ext='.fits')
+#
+#from astropy.nddata import CCDData
+#plt.rcParams.update({'font.size': 18})
+#
+#
+#ccd = CCDData.read('/data/io/IoIO/reduced/20200514/CK17T020-S001-R001-C001-R_dupe-4_p.fits')
+#
+#plt.imshow(ccd)
+#plt.show()
 
 #comet_center = np.asarray((1013, 1663))
 #delta = 1.67376532448597 * u.au
