@@ -423,11 +423,80 @@ def plot_planet_subim(ccd_in,
 
     return ccd_in
 
-def torus_stripchart(t, outdir, n_plots=5,
+def plot_ansa_brights(t,
+                      fig=None,
+                      ax=None,
+                      min_sb=0,
+                      max_sb=300,
+                      tlim=None,
+                      show=False):
+    if fig is None:
+        fig = plt.figure()
+    if ax is None:
+        ax = plt.subplot()
+
+    right_sb_biweight = nan_biweight(t['ansa_right_surf_bright'])
+    right_sb_mad = nan_mad(t['ansa_right_surf_bright'])
+    left_sb_biweight = nan_biweight(t['ansa_left_surf_bright'])
+    left_sb_mad = nan_mad(t['ansa_left_surf_bright'])
+
+    mean_surf_bright = np.mean((left_sb_biweight.value,
+                                right_sb_biweight.value))
+    max_sb_mad = np.max((left_sb_mad.value, right_sb_mad.value))
+    ylim_surf_bright = (mean_surf_bright - 5*max_sb_mad,
+                        mean_surf_bright + 5*max_sb_mad)
+    if not np.isfinite(ylim_surf_bright[0]):
+        ylim_surf_bright = None
+
+    bad_mask = np.isnan(t['ansa_right_surf_bright'])
+    rights = t['ansa_right_surf_bright'][~bad_mask]
+    if len(rights) > 40:
+        alpha = 0.1
+        med_right = medfilt(rights, 21)
+        plt.plot(t['tavg'][~bad_mask].datetime, med_right,
+                 'k-', linewidth=3, label='West medfilt')
+    else:
+        alpha = 0.5
+
+    plt.errorbar(t['tavg'].datetime,
+                 t['ansa_left_surf_bright'].value,
+                 t['ansa_left_surf_bright_err'].value, fmt='r.', alpha=alpha,
+                 label='East')
+    plt.errorbar(t['tavg'].datetime,
+                 t['ansa_right_surf_bright'].value,
+                 t['ansa_right_surf_bright_err'].value, fmt='g.', alpha=alpha,
+                 label='West')
+    if tlim is None:
+        tlim = ax.get_xlim()
+    plt.title('Torus Ansa Brightnesses')
+    plt.xlabel('date')
+    plt.ylabel(f'Ansa Av. Surf. Bright ({t["ansa_left_surf_bright"].unit})')
+    ax.legend()
+    ax.set_xlim(tlim)
+    #ax.set_ylim(ylim_surf_bright)
+    ax.set_ylim(min_sb, max_sb)
+    fig.autofmt_xdate()
+
+
+def torus_stripchart(table_or_fname, outdir,
+                     fig=None,
+                     n_plots=5,
                      min_sb=0,
                      max_sb=300,
                      tlim=None,
                      show=False):
+    if isinstance(table_or_fname, str):
+        t = QTable.read(table_or_fname)
+    else:
+        t = table_or_fname
+    if fig is None:
+        if n_plots == 1:
+            f = plt.figure(figsize=[8.5, 11/2])
+        else:
+            f = plt.figure(figsize=[8.5, 11])
+    else:
+        f = fig
+
     outbase = 'Characterize_Ansas.png'
     r_peak = t['ansa_right_r_peak']
     l_peak = t['ansa_left_r_peak']
@@ -459,8 +528,8 @@ def torus_stripchart(t, outdir, n_plots=5,
     #time_expand = timedelta(minutes=5)
     #tlim = (np.min(t['tavg'].datetime) - time_expand,
     #        np.max(t['tavg'].datetime) + time_expand)
-    tlim = (np.min(t['tavg'].datetime),
-            np.max(t['tavg'].datetime))
+    #tlim = (np.min(t['tavg'].datetime),
+    #        np.max(t['tavg'].datetime))
     mean_surf_bright = np.mean((left_sb_biweight.value,
                                 right_sb_biweight.value))
     max_sb_mad = np.max((left_sb_mad.value, right_sb_mad.value))
@@ -469,10 +538,6 @@ def torus_stripchart(t, outdir, n_plots=5,
     if not np.isfinite(ylim_surf_bright[0]):
         ylim_surf_bright = None
 
-    if n_plots == 1:
-        f = plt.figure(figsize=[8.5, 11/2])
-    else:
-        f = plt.figure(figsize=[8.5, 11])
     date, _ = t['tavg'][0].fits.split('T')
     plt.suptitle('Torus Ansa Characteristics')
 
@@ -506,7 +571,8 @@ def torus_stripchart(t, outdir, n_plots=5,
                  t['ansa_right_surf_bright'].value,
                  t['ansa_right_surf_bright_err'].value, fmt='g.', alpha=alpha,
                  label='West')
-    
+    if tlim is None:
+        tlim = ax.get_xlim()
     plt.ylabel(f'Ansa Av. Surf. Bright ({t["ansa_left_surf_bright"].unit})')
     #plt.hlines(np.asarray((left_sb_biweight.value,
     #                       left_sb_biweight.value - left_sb_mad.value,
@@ -548,7 +614,7 @@ def torus_stripchart(t, outdir, n_plots=5,
                label=f'{epsilon_biweight:.3f} +/- {epsilon_mad:.3f}')
     plt.axhline(0.025, color='y', label='Nominal 0.025')
     ax.legend()
-    #ax.set_xlim(tlim)
+    ax.set_xlim(tlim)
 
     if n_plots == 2:
         finish_stripchart(outdir, outbase, show=show)
@@ -572,7 +638,7 @@ def torus_stripchart(t, outdir, n_plots=5,
     plt.ylabel(r'Ansa position (R$_\mathrm{J}$)')
     plt.axhline(IO_ORBIT_R.value, color='y', label='Io orbit')
     ax.legend()
-    #ax.set_xlim(tlim)
+    ax.set_xlim(tlim)
     ax.set_ylim(5.5, 6.0)
 
     if n_plots == 3:
@@ -581,7 +647,7 @@ def torus_stripchart(t, outdir, n_plots=5,
         
     ax = plt.subplot(n_plots, 1, 4)
     plt.plot(t['tavg'].datetime, t['closest_galsat'], 'k.')
-    #ax.set_xlim(tlim)
+    ax.set_xlim(tlim)
     plt.ylabel(r'Closest galsat (R$_\mathrm{J}$)')
 
     # import matplotlib.dates as mdates
@@ -835,3 +901,7 @@ directory = '/data/IoIO/raw/2018-05-08/'
 #plot_planet_subim(ccd, outname='/tmp/test.fits')
 
 #plt.plot(t['tavg'].datetime, t['ansa_left_r_peak'])
+
+#t = QTable.read('/data/IoIO/Torus/Torus.ecsv')
+#plot_ansa_brights(t)
+#plt.show()

@@ -59,8 +59,11 @@ from IoIO.torus import plot_planet_subim, closest_galsat_to_jupiter
 
 BASE = 'Na_nebula'
 OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
-BOX_NDAYS = 20
-MEDFILT_WIDTH = 81
+BOX_NDAYS = 20 # GOING OBSOLETE
+MEDFILT_WIDTH = 81 # GOING OBSOLETE
+# Filter applied to 24 Rj aperture --> To be robust, this/code below
+# should be generalized
+MAX_24_Rj_SB = 35*u.R
 
 def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     # We don't yet rotate the ND filter when we rot_to, so mask it first
@@ -192,8 +195,8 @@ def boxcar_medians(
                                    'boxfilt_' + med_col,
                                    Box1DKernel(BOX_NDAYS),
                                    all_days=all_days)
-    day_table['itdatetime'] = Time(day_table['ijd'], format='jd').datetime
 
+    #day_table['itdatetime'] = Time(day_table['ijd'], format='jd').datetime
 
     #box_colbase_regexp = re.compile('boxfilt_biweight_' + encoder.colbase + '_.*')
     #box_colnames = list(filter(box_colbase_regexp.match, day_table.colnames))
@@ -249,7 +252,7 @@ def add_sb_diffs(summary_table_in,
         av_ap = diff_encoder.from_colname(diff_col)
         plt.plot(summary_table['datetime'], summary_table[diff_col], '.',
                  label=f'{av_ap}')
-    plt.xlabel('date')
+    plt.xlabel('Date')
     plt.ylabel(f'Surf. bright difference {summary_table[diff_col].unit}')
     plt.legend()
 
@@ -302,10 +305,10 @@ def na_nebula_plot(t, outdir,
         bsub_sb = t[ap] - t[largest_ap]
         mask = bsub_sb < max_good_sb
         plt.plot(t['tavg'][mask].datetime, bsub_sb[mask], '.',
-                 label=f'+/- {av_ap:.0f} Rj')
+                 label=f'+/- {ap:.0f} Rj')
         med_sb = medfilt(bsub_sb[mask], MEDFILT_WIDTH)
         plt.plot(t['tavg'][mask].datetime, med_sb, '-',
-                 label=f'+/- {av_ap:.0f} Rj medfilt')
+                 label=f'+/- {ap:.0f} Rj medfilt')
         
     ax.set_xlim(tlim)
     ax.set_ylim(0, max_sb/2)
@@ -521,8 +524,83 @@ def na_nebula_directory(directory_or_collection,
 
     _ , pipe_meta = zip(*pout)
     t = QTable(rows=pipe_meta)
-    na_nebula_plot(t, outdir)
+    #na_nebula_plot(t, outdir)
     return t
+
+def plot_nightly_medians(table_or_fname,
+                         fig=None,
+                         ax=None,
+                         tlim=None,
+                         min_av_ap_dist=12*u.R_jup,
+                         max_av_ap_dist=50*u.R_jup,
+                         show=False,
+                         fig_close=False):
+    if isinstance(table_or_fname, str):
+        t = QTable.read(table_or_fname)
+    else:
+        t = table_or_fname
+    if fig is None:
+        fig = plt.figure()
+    if ax is None:
+        ax = plt.subplot()
+    day_table = unique(t, keys='ijd')
+    day_table['itdatetime'] = Time(day_table['ijd'], format='jd').datetime
+    biweight_encoder = ColnameEncoder('biweight', formatter='.1f')
+    biweight_cols = biweight_encoder.colbase_list(day_table.colnames)
+    for bwt_col in biweight_cols:
+        av_ap = biweight_encoder.from_colname(bwt_col)
+        if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
+            continue
+        plt.plot(day_table['itdatetime'], day_table[bwt_col], '.',
+                 label=f'{av_ap}')
+    plt.xlabel('date')
+    plt.ylabel(f'Surf. bright ({t[bwt_col].unit})')
+    plt.title('Na nebula -- nightly medians')
+    if tlim is None:
+        tlim = ax.get_xlim()
+    ax.set_xlim(tlim)
+    plt.legend()
+    fig.autofmt_xdate()
+    if show:
+        plt.show()
+    if fig_close:
+        plt.close()
+
+def plot_obj_surf_bright(table_or_fname,
+                         fig=None,
+                         ax=None,
+                         tlim=None,
+                         sb_lim=(0,200000),
+                         show=False,
+                         fig_close=False):
+    if isinstance(table_or_fname, str):
+        t = QTable.read(table_or_fname)
+    else:
+        t = table_or_fname
+    if fig is None:
+        fig = plt.figure()
+    if ax is None:
+        ax = plt.subplot()
+
+    obj_sb = t['obj_surf_bright']
+    obj_sb_err = t['obj_surf_bright_err']
+    plt.title('Jupiter attenuated surface brightness')
+    plt.errorbar(t['tavg'].datetime, obj_sb.value, obj_sb_err.value,
+                 fmt='k.')
+    plt.ylabel(f'Atten. Surf. Bright ({obj_sb.unit})')
+
+    if tlim is None:
+        tlim = ax.get_xlim()
+    ax.set_xlim(tlim)
+    ax.set_ylim(sb_lim)
+    plt.legend()
+    fig.autofmt_xdate()
+    if show:
+        plt.show()
+    if fig_close:
+        plt.close()
+
+
 
 def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
                    start=None,
@@ -573,9 +651,33 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
                                          **cached_csv_args)
     summary_table.write(os.path.join(outdir_root, BASE + '.ecsv'),
                         overwrite=True)
-    ijd = summary_table['tavg'].jd.astype(int)
-   
-    na_nebula_plot(summary_table, outdir_root, show=show)
+
+    # Supplement summary_table with columns needed for plots
+    add_annular_apertures(summary_table)
+    # --> could do some multi-aperture, Na_meso etc., plots here
+    
+    sb_encoder = ColnameEncoder('annular_sb', formatter='.1f')
+    largest_ap = sb_encoder.largest_colbase(summary_table.colnames)
+    subtract_col_from(summary_table, sb_encoder, largest_ap, 'largest_sub')
+    largest_sub_encoder = ColnameEncoder('largest_sub', formatter='.1f')
+    ls_cols = largest_sub_encoder.colbase_list(summary_table.colnames)
+    
+    # Mask bad measurements
+    # This is pretty effective and may be useful for eventually making
+    # a movie, as long as I capture the appropriate filenames in summary_table
+    mask = None
+    for ls_col in ls_cols:
+        if mask is None:
+            mask = summary_table[ls_col] >= 0
+            continue
+        mask = np.logical_and(mask, summary_table[ls_col] >= 0)
+    mask = np.logical_and(mask, summary_table[ls_cols[-2]] < MAX_24_Rj_SB)
+
+    clean_t = summary_table[mask]
+    add_daily_biweights(clean_t, encoder=largest_sub_encoder)
+    clean_t.write(os.path.join(outdir_root, BASE + '_cleaned.ecsv'),
+                  overwrite=True)
+  
     return summary_table
 
 class NaNebulaArgparseHandler(NaMesoArgparseHandler, SSArgparseHandler,
@@ -752,7 +854,7 @@ if __name__ == '__main__':
 
 
 #na_nebula_tree(read_csvs=False)
-summary_table = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
+#summary_table = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
 #na_nebula_plot(t, '/tmp', max_good_sb=1000*u.R, show=True, n_plots=4)
 #na_nebula_plot(t, '/tmp', show=True, n_plots=3, min_av_ap_dist=10, max_sb=600)
 
@@ -761,100 +863,107 @@ summary_table = QTable.read('/data/IoIO/Na_nebula/Na_nebula.ecsv')
 
 #add_sb_diffs(summary_table)
 
-show=True
-min_av_ap_dist=0
-min_av_ap_dist=12*u.R_jup
-max_av_ap_dist=np.inf
-max_av_ap_dist=50*u.R_jup
+# show=True
+# min_av_ap_dist=0
+# min_av_ap_dist=12*u.R_jup
+# max_av_ap_dist=np.inf
+# max_av_ap_dist=50*u.R_jup
+# 
+# t = summary_table
+# add_annular_apertures(t)
+# sb_encoder = ColnameEncoder('annular_sb', formatter='.1f')
+# largest_ap = sb_encoder.largest_colbase(t.colnames)
+# subtract_col_from(t, sb_encoder, largest_ap, 'largest_sub')
+# largest_sub_encoder = ColnameEncoder('largest_sub', formatter='.1f')
+# 
+# 
+# # largest aperture subtracted, all points
+# f = plt.figure()
+# ax = plt.subplot()
+# ls_cols = largest_sub_encoder.colbase_list(t.colnames)
+# for ls_col in ls_cols:
+#     av_ap = largest_sub_encoder.from_colname(ls_col)
+#     plt.plot(t['tavg'].datetime, t[ls_col], '.',
+#              label=f'{av_ap}')
+# plt.xlabel('date')
+# plt.ylabel(f'Surf. bright {t[ls_col].unit}')
+# plt.legend()
+# f.autofmt_xdate()
+# if show:
+#     plt.show()
+# plt.close()
+# 
+# mask = None
+# for ls_col in ls_cols:
+#     if mask is None:
+#         mask = t[ls_col] >= 0
+#         continue
+#     mask = np.logical_and(mask, t[ls_col] >= 0)
+# 
+# mask = np.logical_and(mask, t[ls_cols[-2]] < MAX_24_Rj_SB)
+#     
+# # largest aperture subtracted, masked
+# f = plt.figure()
+# ax = plt.subplot()
+# for ls_col in ls_cols:
+#     av_ap = largest_sub_encoder.from_colname(ls_col)
+#     if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
+#         continue
+#     plt.plot(t['tavg'][mask].datetime, t[ls_col][mask], '.',
+#              label=f'{av_ap}')
+# plt.xlabel('date')
+# plt.ylabel(f'Surf. bright {t[ls_col].unit}')
+# plt.legend()
+# f.autofmt_xdate()
+# if show:
+#     plt.show()
+# plt.close()
+# 
+# clean_t = t[mask]
+# 
+# add_daily_biweights(clean_t, encoder=largest_sub_encoder)
+# 
+# biweight_encoder = ColnameEncoder('biweight', formatter='.1f')
+# biweight_cols = biweight_encoder.colbase_list(clean_t.colnames)
+# 
+# day_table = boxcar_medians(clean_t,
+#                            include_col_encoder=largest_sub_encoder,
+#                            median_col_encoder=biweight_encoder)
+# f = plt.figure()
+# ax = plt.subplot()
+# for bwt_col in biweight_cols:
+#     av_ap = largest_sub_encoder.from_colname(bwt_col)
+#     if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
+#         continue
+#     plt.plot(day_table['itdatetime'], day_table[bwt_col], '.',
+#              label=f'{av_ap}')
+# plt.xlabel('date')
+# plt.ylabel(f'Surf. bright ({t[ls_col].unit})')
+# plt.title('Na nebula -- nightly medians')
+# plt.legend()
+# f.autofmt_xdate()
+# if show:
+#     plt.show()
+# plt.close()
+# 
+# # Boxcar medians -- didn't really turn out all that well
+# boxcar_encoder = ColnameEncoder('boxfilt_biweight', formatter='.1f')
+# box_colnames = boxcar_encoder.colbase_list(day_table.colnames)
+# f = plt.figure()
+# ax = plt.subplot()
+# for box_col in box_colnames:
+#     av_ap = boxcar_encoder.from_colname(box_col)
+#     if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
+#         continue
+#     plt.plot(day_table['itdatetime'], day_table[box_col], '.',
+#              label=f'{av_ap}')
+# plt.xlabel('date')
+# plt.ylabel(f'Surf. bright {day_table[box_col].unit}')
+# plt.legend()
+# f.autofmt_xdate()
+# if show:
+#     plt.show()
+# plt.close()
 
-t = summary_table
-add_annular_apertures(t)
-sb_encoder = ColnameEncoder('annular_sb', formatter='.1f')
-largest_ap = sb_encoder.largest_colbase(t.colnames)
-subtract_col_from(t, sb_encoder, largest_ap, 'largest_sub')
-largest_sub_encoder = ColnameEncoder('largest_sub', formatter='.1f')
-
-f = plt.figure()
-ax = plt.subplot()
-ls_cols = largest_sub_encoder.colbase_list(t.colnames)
-for ls_col in ls_cols:
-    av_ap = largest_sub_encoder.from_colname(ls_col)
-    plt.plot(t['tavg'].datetime, t[ls_col], '.',
-             label=f'{av_ap}')
-plt.xlabel('date')
-plt.ylabel(f'Surf. bright {t[ls_col].unit}')
-plt.legend()
-f.autofmt_xdate()
-if show:
-    plt.show()
-plt.close()
-
-mask = None
-for ls_col in ls_cols:
-    if mask is None:
-        mask = t[ls_col] >= 0
-        continue
-    mask = np.logical_and(mask, t[ls_col] >= 0)
-
-#mask = np.logical_and(mask, t[ls_cols[-2]] < 50*u.R)
-mask = np.logical_and(mask, t[ls_cols[-2]] < 35*u.R)
-    
-f = plt.figure()
-ax = plt.subplot()
-for ls_col in ls_cols:
-    av_ap = largest_sub_encoder.from_colname(ls_col)
-    if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
-        continue
-    plt.plot(t['tavg'][mask].datetime, t[ls_col][mask], '.',
-             label=f'{av_ap}')
-plt.xlabel('date')
-plt.ylabel(f'Surf. bright {t[ls_col].unit}')
-plt.legend()
-f.autofmt_xdate()
-if show:
-    plt.show()
-plt.close()
-
-clean_t = t[mask]
-add_daily_biweights(clean_t, encoder=largest_sub_encoder)
-biweight_encoder = ColnameEncoder('biweight', formatter='.1f')
-biweight_cols = biweight_encoder.colbase_list(clean_t.colnames)
-day_table = boxcar_medians(clean_t,
-                           include_col_encoder=largest_sub_encoder,
-                           median_col_encoder=biweight_encoder)
-
-f = plt.figure()
-ax = plt.subplot()
-for bwt_col in biweight_cols:
-    av_ap = largest_sub_encoder.from_colname(bwt_col)
-    if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
-        continue
-    plt.plot(day_table['itdatetime'], day_table[bwt_col], '.',
-             label=f'{av_ap}')
-plt.xlabel('date')
-plt.ylabel(f'Surf. bright ({t[ls_col].unit})')
-plt.title('Na nebula -- nightly medians')
-plt.legend()
-f.autofmt_xdate()
-if show:
-    plt.show()
-plt.close()
-
-boxcar_encoder = ColnameEncoder('boxfilt_biweight', formatter='.1f')
-box_colnames = boxcar_encoder.colbase_list(day_table.colnames)
-f = plt.figure()
-ax = plt.subplot()
-for box_col in box_colnames:
-    av_ap = boxcar_encoder.from_colname(box_col)
-    if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
-        continue
-    plt.plot(day_table['itdatetime'], day_table[box_col], '.',
-             label=f'{av_ap}')
-plt.xlabel('date')
-plt.ylabel(f'Surf. bright {day_table[box_col].unit}')
-plt.legend()
-f.autofmt_xdate()
-if show:
-    plt.show()
-plt.close()
-
+#plot_nightly_medians('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
+#plot_obj_surf_bright('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv', show=True)

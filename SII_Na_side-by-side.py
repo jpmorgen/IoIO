@@ -30,7 +30,8 @@ linewidth = 2
 #rdir = '/data/io/IoIO/reduced/2018-05-14/'
 #fnums = range(1,21,3)
 
-rdir = '/data/io/IoIO/reduced/2018-06-06/'
+#rdir = '/data/io/IoIO/reduced/2018-06-06/'
+rdir = '/data/IoIO/reduced/2018-06-06/'
 #nfs = 8
 #SII_fnums = range(2,40,5)
 #Na_fnums = range(2,10)
