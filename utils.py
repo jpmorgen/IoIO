@@ -799,6 +799,38 @@ def finish_stripchart(outdir, outbase, show=False):
         plt.show()
     plt.close()
 
+def stripchart(to_plot,
+               fig=None,
+               ax=None,
+               show=False, # not sure if I want these
+               fig_close=False,
+               **kwargs):
+    """Plots a single plot in a stripchart 
+    
+    Parameters
+    ----------
+    to_plot : function
+        Function that accepts **kwargs to plot desired stripchart element
+
+    fig : pyplot.figure
+        Defaults to creating a new figure with no args
+
+    ax : pyplot.Axes
+        Defaults to plt.subplot()
+    """
+
+    if fig is None:
+        fig = plt.figure()
+    if ax is None:
+        ax = plt.subplot()
+
+    to_plot(fig=None, ax=None, **kwargs)
+
+    if show:
+        plt.show()
+    if fig_close:
+        plt.close()
+    
 def daily_biweight(qtable,
                    day_col=None,
                    data_col=None,
@@ -985,6 +1017,48 @@ class ColnameEncoder:
                 largest = val
         return self.to_colname(largest)
 
+def flexi_slice(im, b, t, l, r):
+    if isinstance(im, CCDData):
+        nccd = im.copy()
+        nccd.data = flexi_slice(im.data, b, t, l, r)
+        if im.uncertainty is not None:
+            nccd.uncertainty.array = flexi_slice(im.uncertainty.array,
+                                                 b, t, l, r)
+        if im.mask is not None:
+            nccd.mask = flexi_slice(im.mask, b, t, l, r)
+        return nccd
+
+    nim = np.zeros((t-b, r-l), im.dtype)
+
+    if l < 0:
+        orig_l = 0
+        new_l = -l    
+    else:
+        orig_l = l
+        new_l = 0
+    if r > im.shape[1]:
+        orig_r = im.shape[1]
+        new_r = new_l + orig_r
+    else:
+        orig_r = r
+        new_r = orig_r - new_l
+
+    if b < 0:
+        orig_b = 0
+        new_b = -b
+    else:
+        orig_b = b
+        new_b = 0
+    if t > im.shape[0]:
+        orig_t = im.shape[0]
+        new_t = new_b + orig_t
+    else:
+        orig_t = t
+        new_t = orig_t - new_b
+
+    nim[new_b:new_t, new_l:new_r] = im[orig_b:orig_t, orig_l:orig_r]
+    return nim
+    
 #c = ColnameEncoder('Na_ap', formatter='.0f')
 #print(c.to_colname(3*u.R_jup))
 #ap_sequence = np.asarray((1, 2, 4, 8, 16, 32, 64, 128)) * u.R_jup

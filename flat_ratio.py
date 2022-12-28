@@ -15,7 +15,7 @@ from astropy.io.fits import getheader
 from astropy.stats import mad_std, biweight_location
 from astropy.time import Time
 
-from IoIO.util import savefig_overwrite
+from IoIO.utils import savefig_overwrite
 from IoIO.cordata_base import CorDataBase
 from IoIO.calibration import CALIBRATION_ROOT, Calibration
 
@@ -109,8 +109,8 @@ for ib, band in enumerate(['Na', 'SII']):
     plt.ylim([biweight_ratio-3*mad_std_ratio, biweight_ratio+3*mad_std_ratio])
     plt.gcf().autofmt_xdate()
 
-outname = os.path.join(CALIBRATION_ROOT, 'flat__ratio_vs_time.png')
-savefig_overwrite(outname), transparent=True)
+outname = os.path.join(CALIBRATION_ROOT, 'flat_ratio_vs_time.png')
+savefig_overwrite(outname, transparent=True)
 show= True
 if show:
     plt.show()

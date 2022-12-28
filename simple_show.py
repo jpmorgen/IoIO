@@ -30,7 +30,10 @@ def simple_show(im, **kwargs):
               cmap=plt.cm.gray,
               filternorm=0, interpolation='none',
               **kwargs)
-    ax.format_coord = CCDImageFormatter(im.data)
+    if isinstance(im, CCDData):
+        ax.format_coord = CCDImageFormatter(im.data)
+    else:
+        ax.format_coord = CCDImageFormatter(im)
     plt.show()
 
 if __name__ == '__main__':

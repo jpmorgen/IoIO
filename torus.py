@@ -34,7 +34,7 @@ from IoIO.cordata import CorData
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                calc_obj_to_ND, crop_ccd,
                                planet_to_object, pixel_per_Rj, 
-                               objctradec_to_obj_center)
+                               objctradec_to_obj_center, obj_surface_bright)
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE,
                              JOIN_TOLERANCE_UNIT, rot_to)
@@ -449,6 +449,7 @@ def plot_ansa_brights(t,
         ylim_surf_bright = None
 
     bad_mask = np.isnan(t['ansa_right_surf_bright'])
+    bad_mask = np.logical_or(bad_mask, t['d_on_off'] > 5)
     rights = t['ansa_right_surf_bright'][~bad_mask]
     if len(rights) > 40:
         alpha = 0.1
@@ -476,6 +477,110 @@ def plot_ansa_brights(t,
     #ax.set_ylim(ylim_surf_bright)
     ax.set_ylim(min_sb, max_sb)
     fig.autofmt_xdate()
+
+
+def plot_epsilons(t,
+                  fig=None,
+                  ax=None,
+                  tlim=None,
+                  show=False):
+    if fig is None:
+        fig = plt.figure()
+    if ax is None:
+        ax = plt.subplot()
+
+    r_peak = t['ansa_right_r_peak']
+    l_peak = t['ansa_left_r_peak']
+    av_peak = (np.abs(r_peak) + np.abs(l_peak)) / 2
+    # Current values for epsilon are messed up because peaks are not
+    # coming in at the right places presumably due to the simple
+    # Gaussian modeling.  The offset should be to the left (east,
+    # dawn) such that Io dips inside the IPT on that side.  To prepare
+    # for a sensible answer, cast my r_peak in left-handed coordinate
+    # system so epsilon is positive if l_peak is larger
+    epsilon = -(r_peak + l_peak) / av_peak
+    denom_var = t['ansa_left_r_peak_err']**2 + t['ansa_right_r_peak_err']**2
+    num_var = denom_var / 2
+    epsilon_err = epsilon * ((denom_var / (r_peak + l_peak)**2)
+                             + (num_var / av_peak**2))**0.5
+    epsilon_biweight = nan_biweight(epsilon)
+    epsilon_mad = nan_mad(epsilon)
+
+    bad_mask = np.isnan(epsilon)
+    good_epsilons = epsilon[~bad_mask]
+
+    if len(good_epsilons) > 20:
+        alpha = 0.2
+        med_epsilon = medfilt(good_epsilons, 11)
+        plt.plot(t['tavg'][~bad_mask].datetime, med_epsilon,
+                 'r-', linewidth=3, label='Epsilon medfilt')
+    else:
+        alpha = 0.5
+        
+    plt.errorbar(t['tavg'].datetime,
+                 epsilon.value,
+                 epsilon_err.value, fmt='k.', alpha=alpha,
+                 label='Epsilon')
+
+    ax.set_ylim(-0.05, 0.08)
+    plt.ylabel(r'Sky plane $|\vec\epsilon|$')
+    plt.hlines(np.asarray((epsilon_biweight,
+                           epsilon_biweight - epsilon_mad,
+                           epsilon_biweight + epsilon_mad)),
+               *tlim,
+               linestyles=('-', '--', '--'),
+               label=f'{epsilon_biweight:.3f} +/- {epsilon_mad:.3f}')
+    plt.axhline(0.025, color='y', label='Nominal 0.025')
+    ax.legend()
+    ax.set_xlim(tlim)
+
+
+def plot_ansa_pos(t,
+                  fig=None,
+                  ax=None,
+                  tlim=None,
+                  show=False):
+    if fig is None:
+        fig = plt.figure()
+    if ax is None:
+        ax = plt.subplot()
+
+    rights = np.abs(t['ansa_left_r_peak'])
+    lefts = np.abs(t['ansa_right_r_peak'])
+    right_bad_mask = np.isnan(rights)
+    rights = rights[~right_bad_mask]
+    left_bad_mask = np.isnan(lefts)
+    lefts = lefts[~left_bad_mask]
+
+    if len(rights) and len(lefts) > 40:
+        alpha = 0.2
+        med_rights = medfilt(rights, 21)
+        plt.plot(t['tavg'][~right_bad_mask].datetime, med_rights,
+                 'k-', linewidth=3, label='West medfilt')
+        med_lefts = medfilt(lefts, 21)
+        plt.plot(t['tavg'][~left_bad_mask].datetime, med_lefts,
+                 'm-', linewidth=3, label='East medfilt')
+    else:
+        alpha = 0.5
+
+    plt.errorbar(t['tavg'][~right_bad_mask].datetime,
+                 rights.value,
+                 t['ansa_left_r_peak_err'][~right_bad_mask].value, fmt='r.',
+                 label='East', alpha=alpha)
+    plt.errorbar(t['tavg'][~left_bad_mask].datetime,
+                 lefts.value,
+                 t['ansa_right_r_peak_err'][~left_bad_mask].value, fmt='g.',
+                 label='West', alpha=alpha)
+
+
+    #plt.plot(t['tavg'].datetime,
+    #         np.abs(t['ansa_right_r_peak']) + t['ansa_right_r_stddev'],
+    #         'g^')
+    plt.ylabel(r'Ansa position (R$_\mathrm{J}$)')
+    plt.axhline(IO_ORBIT_R.value, color='y', label='Io orbit')
+    ax.legend()
+    ax.set_xlim(tlim)
+    ax.set_ylim(5.5, 6.0)
 
 
 def torus_stripchart(table_or_fname, outdir,
@@ -601,9 +706,24 @@ def torus_stripchart(table_or_fname, outdir,
         return
         
     ax = plt.subplot(n_plots, 1, 2)
+
+    bad_mask = np.isnan(epsilon)
+    good_epsilons = epsilon[~bad_mask]
+
+    if len(good_epsilons) > 40:
+        alpha = 0.1
+        med_epsilon = medfilt(good_epsilons, 21)
+        plt.plot(t['tavg'][~bad_mask].datetime, med_epsilon,
+                 'r-', linewidth=3, label='Epsilon medfilt')
+
+    else:
+        alpha = 0.5
+        
     plt.errorbar(t['tavg'].datetime,
                  epsilon.value,
-                 epsilon_err.value, fmt='k.')
+                 epsilon_err.value, fmt='k.', alpha=alpha,
+                 label='Epsilon')
+
     ax.set_ylim(-0.05, 0.08)
     plt.ylabel(r'Sky plane $|\vec\epsilon|$')
     plt.hlines(np.asarray((epsilon_biweight,
@@ -714,7 +834,7 @@ def torus_directory(directory,
                        planet_subim_dx=10*u.R_jup,
                        planet_subim_dy=5*u.R_jup,                       
                        post_offsub=[extinction_correct, rayleigh_convert,
-                                    characterize_ansas,
+                                    obj_surface_bright, characterize_ansas,
                                     closest_galsat_to_jupiter,
                                     plot_planet_subim, as_single],
                        outdir=outdir,
@@ -905,3 +1025,5 @@ directory = '/data/IoIO/raw/2018-05-08/'
 #t = QTable.read('/data/IoIO/Torus/Torus.ecsv')
 #plot_ansa_brights(t)
 #plt.show()
+
+# plot_obj_surf_bright('/data/IoIO/Torus/Torus.ecsv', show=True)

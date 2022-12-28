@@ -967,3 +967,4 @@ if __name__ == '__main__':
 
 #plot_nightly_medians('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
 #plot_obj_surf_bright('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv', show=True)
+
