@@ -1,5 +1,6 @@
 """Utilities for the IoIO data collection and reduction system"""
 
+import gc
 import inspect
 import os
 import re
@@ -17,6 +18,7 @@ from numpy.polynomial import Polynomial
 from scipy.signal import medfilt
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 
 from astropy import log
 import astropy.units as u
@@ -25,10 +27,13 @@ from astropy.stats import biweight_location, mad_std
 from astropy.table import QTable, vstack
 from astropy.convolution import convolve
 from astropy.coordinates import SkyCoord
+from astropy.nddata import CCDData
 
 from ccdproc import ImageFileCollection
 
-from bigmultipipe import assure_list
+from bigmultipipe import assure_list, outname_creator
+
+from IoIO.photometry import rot_to
 
 # MaxIM, ACP, FITS
 FITS_GLOB_LIST = ['*.fit', '*.fts', '*.fits']
@@ -1017,31 +1022,34 @@ class ColnameEncoder:
                 largest = val
         return self.to_colname(largest)
 
-def flexi_slice(im, b, t, l, r):
+def flexi_slice(im, b, t, l, r, fill_value=0):
+    """Performs a slice of im, inserting it into a larger shaped array, if necessary
+    
+    Parameters
+    ----------
+    im : ndarray or CCDData
+
+    b, t, l, r : int 
+        Slice coords.  These can be outside the original array
+        bounds, resulting in a larger return array/CCDData padded with zeros
+
+    Returns
+    -------
+    nim : ndarray or CCDData
+
+    """
     if isinstance(im, CCDData):
         nccd = im.copy()
         nccd.data = flexi_slice(im.data, b, t, l, r)
+        fname = im.meta['RAWFNAME']                        
         if im.uncertainty is not None:
             nccd.uncertainty.array = flexi_slice(im.uncertainty.array,
                                                  b, t, l, r)
         if im.mask is not None:
-            nccd.mask = flexi_slice(im.mask, b, t, l, r)
+            nccd.mask = flexi_slice(im.mask, b, t, l, r, fill_value=True)
         return nccd
 
-    nim = np.zeros((t-b, r-l), im.dtype)
-
-    if l < 0:
-        orig_l = 0
-        new_l = -l    
-    else:
-        orig_l = l
-        new_l = 0
-    if r > im.shape[1]:
-        orig_r = im.shape[1]
-        new_r = new_l + orig_r
-    else:
-        orig_r = r
-        new_r = orig_r - new_l
+    nim = np.full((t-b, r-l), fill_value, im.dtype)
 
     if b < 0:
         orig_b = 0
@@ -1051,14 +1059,110 @@ def flexi_slice(im, b, t, l, r):
         new_b = 0
     if t > im.shape[0]:
         orig_t = im.shape[0]
-        new_t = new_b + orig_t
+        new_t = new_b + orig_t - orig_b
     else:
         orig_t = t
-        new_t = orig_t - new_b
+        new_t = orig_t + new_b
 
+    if l < 0:
+        orig_l = 0
+        new_l = -l    
+    else:
+        orig_l = l
+        new_l = 0
+    if r > im.shape[1]:
+        orig_r = im.shape[1]
+        new_r = new_l + orig_r - orig_l
+    else:
+        orig_r = r
+        new_r = orig_r + new_l
     nim[new_b:new_t, new_l:new_r] = im[orig_b:orig_t, orig_l:orig_r]
     return nim
     
+def pixel_per_Rj(ccd):
+    Rj_arcsec = ccd.meta['Jupiter_ang_width'] * u.arcsec / 2
+    cdelt = ccd.wcs.proj_plane_pixel_scales() # tuple
+    lcdelt = [c.value for c in cdelt]
+    pixscale = np.mean(lcdelt) * cdelt[0].unit
+    pixscale = pixscale.to(u.arcsec) / u.pixel
+    return Rj_arcsec / pixscale / u.R_jup 
+   
+def plot_planet_subim(ccd_in,
+                      plot_planet_rot_from_key=None,
+                      pix_per_planet_radius=pixel_per_Rj,
+                      in_name=None,
+                      outname=None,
+                      planet_subim_axis_label=r'R$\mathrm{_J}$',
+                      planet_subim_dx=None,
+                      planet_subim_dy=None,
+                      planet_subim_vmin=30,
+                      planet_subim_vmax=5000,
+                      planet_subim_figsize=[5, 2.5],
+                      plot_planet_cmap='gist_heat',
+                      **kwargs):
+    # https://stackoverflow.com/questions/4931376/generating-matplotlib-graphs-without-a-running-x-server
+    # --> This might help with the X crashes, but it has to be
+    # imported before import matplotlib.pyplot 
+    # import matplotlib as mpl
+    # mpl.use('Agg')
+
+    in_name = os.path.basename(ccd_in.meta['RAWFNAME'])
+    # This will pick up outdir, if specified
+    outname = outname_creator(in_name, outname=outname, **kwargs)
+    if outname is None:
+        raise ValueError('in_name or outname must be specified')
+    ccd = rot_to(ccd_in, rot_angle_from_key=plot_planet_rot_from_key)
+    pix_per_Rp = pix_per_planet_radius(ccd)
+    center = ccd.wcs.world_to_pixel(ccd.sky_coord)*u.pixel
+    if planet_subim_dx is None:
+        l, r = 0, ccd.shape[1]
+    else:
+        l = np.round(center[0] - planet_subim_dx * pix_per_Rp).astype(int)
+        r = np.round(center[0] + planet_subim_dx * pix_per_Rp).astype(int)
+    if planet_subim_dy is None:
+        b, t = 0, ccd.shape[0]
+    else:
+        b = np.round(center[1] - planet_subim_dy * pix_per_Rp).astype(int)
+        t = np.round(center[1] + planet_subim_dy * pix_per_Rp).astype(int)
+
+    print(f'center: {center} b,t,l,r: {b} {t} {l} {r} {outname}')
+
+
+    subim = flexi_slice(ccd, b.value, t.value, l.value, r.value)
+    nr, nc = subim.shape
+    subim.data[subim.data < planet_subim_vmin] = planet_subim_vmin
+    x = (np.arange(nc)*u.pixel - (center[0] - l)) / pix_per_Rp
+    y = (np.arange(nr)*u.pixel - (center[1] - b)) / pix_per_Rp
+    X, Y = np.meshgrid(x.value, y.value)
+    f = plt.figure(figsize=planet_subim_figsize)
+    try:
+        plt.pcolormesh(X, Y, subim,
+                       norm=LogNorm(vmin=planet_subim_vmin,
+                                    vmax=planet_subim_vmax),
+                       cmap=plot_planet_cmap,
+                       shading='auto')
+    except Exception as e:
+        log.error(f'RAWFNAME of problem: {ccd.meta["RAWFNAME"]} {e}')
+        return ccd_in
+    plt.ylabel(planet_subim_axis_label)
+    plt.xlabel(planet_subim_axis_label)
+    plt.axis('scaled')
+    cbar = plt.colorbar()
+    cbar.ax.set_xlabel(ccd.unit.to_string())
+    date_obs, _ = ccd.meta['DATE-OBS'].split('T')
+    plt.title(f'{date_obs} {os.path.basename(outname)}')
+    plt.tight_layout()
+    outroot, _ = os.path.splitext(outname)
+    d = os.path.dirname(outname)
+    os.makedirs(d, exist_ok=True)
+    savefig_overwrite(outroot + '.png')
+    # See note in standard_star.py about the gc.collect().  Hoping
+    # that this solves X freeze-ups
+    plt.close()
+    gc.collect()
+
+    return ccd_in
+
 #c = ColnameEncoder('Na_ap', formatter='.0f')
 #print(c.to_colname(3*u.R_jup))
 #ap_sequence = np.asarray((1, 2, 4, 8, 16, 32, 64, 128)) * u.R_jup

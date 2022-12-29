@@ -31,7 +31,8 @@ from IoIO.utils import (ColnameEncoder, get_dirs_dates, reduced_dir,
                         valid_long_exposure, dict_to_ccd_meta,
                         multi_glob, sum_ccddata, csvname_creator,
                         daily_biweight, daily_convolve,
-                        savefig_overwrite, finish_stripchart)
+                        savefig_overwrite, finish_stripchart,
+                        pixel_per_Rj, plot_planet_subim)
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
                                MAX_MEM_FRAC,
@@ -40,7 +41,7 @@ from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                planet_to_object,
                                objctradec_to_obj_center,
                                nd_filter_mask, parallel_cached_csvs,
-                               pixel_per_Rj, obj_surface_bright)
+                               obj_surface_bright)
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE,
                              JOIN_TOLERANCE_UNIT, rot_to)
@@ -55,7 +56,7 @@ from IoIO.na_meso import (NaMeso, NaMesoArgparseHandler, sun_angles,
 from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
                                   TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
                                   on_off_pipeline)
-from IoIO.torus import plot_planet_subim, closest_galsat_to_jupiter
+from IoIO.torus import closest_galsat_to_jupiter
 
 BASE = 'Na_nebula'
 OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
@@ -81,8 +82,8 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     # --> These may need to be tweaked
     ap_sequence = np.asarray((1, 2, 4, 8, 16, 32, 64, 128)) * u.R_jup
 
-    # --> Eventually use ColnameEncoder('Na_sum', formatter='.0f')
-    # --> Eventually use ColnameEncoder('Na_area', formatter='.0f')
+    sum_encoder = ColnameEncoder('Na_sum', formatter='.0f')
+    area_encoder = ColnameEncoder('Na_area', formatter='.0f')
     na_aps = {}
     for ap in ap_sequence:
         b = np.round(center[0] - ap/2 * pix_per_Rj).astype(int)
@@ -93,8 +94,8 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
         subim = ccd[b:t, :]
         ap_key = f'Na_ap_{ap.value:.0f}_Rj'
         ap_sum, ap_area = sum_ccddata(subim)
-        na_aps[f'{ap_key}_sum'] = ap_sum
-        na_aps[f'{ap_key}_area'] = ap_area
+        na_aps[sum_encoder.to_colname(ap)] = ap_sum
+        na_aps[area_encoder.to_colname(ap)] = ap_area
     # We only  want to mess with our original CCD metadata
     if bmp_meta is None:
         bmp_meta = {}
@@ -117,11 +118,10 @@ def add_annular_apertures(t, ap_base='Na_ap', subtract_col=None):
     optionally subtracting subtract_col from all results
 
     """
-    # --> These will get replaced by ColNameEncoders
-    sum_regexp = re.compile(ap_base + '_.*_sum')
-    area_regexp = re.compile(ap_base + '_.*_area')
-    sum_colnames = filter(sum_regexp.match, t.colnames)
-    area_colnames = filter(area_regexp.match, t.colnames)
+    sum_encoder = ColnameEncoder('Na_sum', formatter='.0f')
+    area_encoder = ColnameEncoder('Na_area', formatter='.0f')
+    sum_colnames = sum_encoder.colbase_list(t.colnames)
+    area_colnames = area_encoder.colbase_list(t.colnames)
 
     sb_encoder = ColnameEncoder('annular_sb', formatter='.1f')
 
@@ -130,10 +130,14 @@ def add_annular_apertures(t, ap_base='Na_ap', subtract_col=None):
     last_ap_bound = 0
     ap_list = []
     for sum_colname, area_colname in zip(sum_colnames, area_colnames):
-        ap_bound = sum_colname.split('_')
-        ap_bound = int(ap_bound[2])
+        # Although we are calculating aperture SBs using the
+        # difference between concentric apertures extending above and
+        # below the equatorial plane, once we have the rectangular
+        # aperture SBs, we call them by the distance from the plane
+        ap_bound = sum_encoder.from_colname(sum_colname) / 2
         av_ap = np.mean((ap_bound, last_ap_bound))*u.R_jup
         last_ap_bound = ap_bound
+        # These are not affected by what we call the aperture distance
         cts = t[sum_colname] - last_sum
         area = t[area_colname] - last_area
         sb = cts / area
@@ -511,6 +515,8 @@ def na_nebula_directory(directory_or_collection,
                        post_process_list=[calc_obj_to_ND, planet_to_object],
                        plot_planet_rot_from_key=['Jupiter_NPole_ang'],
                        planet_subim_figsize=[6, 4],
+                       planet_subim_dx=45*u.R_jup,
+                       planet_subim_dy=40*u.R_jup, 
                        post_offsub=[sun_angles, na_meso_meta,
                                     extinction_correct, rayleigh_convert,
                                     obj_surface_bright, na_apertures,
@@ -731,14 +737,15 @@ if __name__ == '__main__':
     aph.cmd(args)
 
 
-#log.setLevel('DEBUG')
-#
-##directory = '/data/IoIO/raw/20210607/'
-##directory = '/data/IoIO/raw/20211017/'
-#
-##directory = '/data/IoIO/raw/2017-05-02'
+log.setLevel('DEBUG')
+
+#directory = '/data/IoIO/raw/20210607/'
+#directory = '/data/IoIO/raw/20211017/'
+
+#directory = '/data/IoIO/raw/2017-05-02'
 #directory = '/data/IoIO/raw/2018-05-08/'
-#
+directory = '/data/IoIO/raw/20221224/'
+
 #t = na_nebula_tree(start='2018-05-08',
 #                   stop='2018-05-10',
 #                   read_csvs=True,
@@ -746,38 +753,39 @@ if __name__ == '__main__':
 #                   read_pout=True,
 #                   write_pout=True,
 #                   fits_fixed_ignore=True)
-                   
-#calibration=None
-#photometry=None
-#standard_star_obj=None
-#na_meso_obj=None
-#solve_timeout=SOLVE_TIMEOUT
-#join_tolerance=JOIN_TOLERANCE*JOIN_TOLERANCE_UNIT
-#
-#outdir_root=OUTDIR_ROOT
-#fits_fixed_ignore=True
-#photometry = (
-#    photometry
-#    or CorPhotometry(precalc=True,
-#                     solve_timeout=solve_timeout,
-#                     join_tolerance=join_tolerance))
-#calibration = calibration or Calibration(reduce=True)
-#standard_star_obj = standard_star_obj or StandardStar(reduce=True)
+                  
+calibration=None
+photometry=None
+standard_star_obj=None
+na_meso_obj=None
+solve_timeout=SOLVE_TIMEOUT
+join_tolerance=JOIN_TOLERANCE*JOIN_TOLERANCE_UNIT
+
+outdir_root=OUTDIR_ROOT
+fits_fixed_ignore=True
+photometry = (
+    photometry
+    or CorPhotometry(precalc=True,
+                     solve_timeout=solve_timeout,
+                     join_tolerance=join_tolerance))
+calibration = calibration or Calibration(reduce=True)
+standard_star_obj = standard_star_obj or StandardStar(reduce=True)
 #na_meso_obj = na_meso_obj or NaMeso(calibration=calibration,
 #                                    standard_star_obj=standard_star_obj,
 #                                    reduce=True)
-#outdir_root = outdir_root or os.path.join(IoIO_ROOT, 'Na_nebula')
-#t = na_nebula_directory(directory,
-#                           calibration=calibration,
-#                           photometry=photometry,
-#                           standard_star_obj=standard_star_obj,
-#                           na_meso_obj=na_meso_obj,                           
-#                           solve_timeout=solve_timeout,
-#                           join_tolerance=join_tolerance,
-#                           outdir_root=outdir_root,
-#                           fits_fixed_ignore=fits_fixed_ignore,
-#                           read_pout=True,
-#                           write_pout=True)
+na_meso_obj = na_meso_obj or NaMeso()
+outdir_root = outdir_root or os.path.join(IoIO_ROOT, 'Na_nebula')
+t = na_nebula_directory(directory,
+                           calibration=calibration,
+                           photometry=photometry,
+                           standard_star_obj=standard_star_obj,
+                           na_meso_obj=na_meso_obj,                           
+                           solve_timeout=solve_timeout,
+                           join_tolerance=join_tolerance,
+                           outdir_root=outdir_root,
+                           fits_fixed_ignore=fits_fixed_ignore,
+                           read_pout=True,
+                           write_pout=True)
 
 
 #if pout is None or len(pout) == 0:

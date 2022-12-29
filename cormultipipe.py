@@ -22,7 +22,7 @@ from ccdmultipipe import CCDMultiPipe, CCDArgparseMixin
 
 import IoIO.sx694 as sx694
 from IoIO.utils import (add_history, im_med_min_max, sum_ccddata, cached_csv,
-                        dict_to_ccd_meta)
+                        dict_to_ccd_meta, pixel_per_Rj)
 
 from IoIO.cordata_base import CorDataBase
 from IoIO.cordata import CorData
@@ -579,14 +579,6 @@ def planet_to_object(ccd_in, bmp_meta=None, planet=None, **kwargs):
     ccd.meta['object'] = planet.capitalize()
     return ccd
 
-def pixel_per_Rj(ccd):
-    Rj_arcsec = ccd.meta['Jupiter_ang_width'] * u.arcsec / 2
-    cdelt = ccd.wcs.proj_plane_pixel_scales() # tuple
-    lcdelt = [c.value for c in cdelt]
-    pixscale = np.mean(lcdelt) * cdelt[0].unit
-    pixscale = pixscale.to(u.arcsec) / u.pixel
-    return Rj_arcsec / pixscale / u.R_jup 
-   
 def obj_surface_bright(ccd_in, bmp_meta=None, **kwargs):
     """Calculates Jupiter surface brightness using a box 0.5 Rj on a side"""
     if bmp_meta is None:

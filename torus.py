@@ -2,7 +2,6 @@
 
 """Reduce IoIO Io plamsa torus observations"""
 
-import gc
 import os
 import argparse
 from datetime import timedelta
@@ -12,7 +11,6 @@ import numpy as np
 from scipy.signal import medfilt
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
 
 from astropy import log
 import astropy.units as u
@@ -27,13 +25,13 @@ from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 from IoIO.utils import (dict_to_ccd_meta, nan_biweight, nan_mad,
                         get_dirs_dates, reduced_dir, cached_csv,
                         savefig_overwrite, finish_stripchart,
-                        multi_glob)
+                        multi_glob, pixel_per_Rj, plot_planet_subim)
 from IoIO.simple_show import simple_show
 from IoIO.cordata_base import SMALL_FILT_CROP
 from IoIO.cordata import CorData
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                calc_obj_to_ND, crop_ccd,
-                               planet_to_object, pixel_per_Rj, 
+                               planet_to_object, 
                                objctradec_to_obj_center, obj_surface_bright)
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE,
@@ -347,82 +345,6 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
         bmp_meta.update(ansa_meta)
     return ccd
 
-def plot_planet_subim(ccd_in,
-                      plot_planet_rot_from_key=None,
-                      pix_per_planet_radius=pixel_per_Rj,
-                      in_name=None,
-                      outname=None,
-                      planet_subim_axis_label=r'R$\mathrm{_J}$',
-                      planet_subim_dx=None,
-                      planet_subim_dy=None,
-                      planet_subim_vmin=30,
-                      planet_subim_vmax=5000,
-                      planet_subim_figsize=[5, 2.5],
-                      plot_planet_cmap='gist_heat',
-                      **kwargs):
-    # https://stackoverflow.com/questions/4931376/generating-matplotlib-graphs-without-a-running-x-server
-    # --> This might help with the X crashes, but it has to be
-    # imported before import matplotlib.pyplot 
-    # import matplotlib as mpl
-    # mpl.use('Agg')
-
-    in_name = os.path.basename(ccd_in.meta['RAWFNAME'])
-    # This will pick up outdir, if specified
-    outname = outname_creator(in_name, outname=outname, **kwargs)
-    if outname is None:
-        raise ValueError('in_name or outname must be specified')
-    ccd = rot_to(ccd_in, rot_angle_from_key=plot_planet_rot_from_key)
-    pix_per_Rp = pix_per_planet_radius(ccd)
-    center = ccd.wcs.world_to_pixel(ccd.sky_coord)*u.pixel
-    if planet_subim_dx is None:
-        l, r = 0, ccd.shape[1]
-    else:
-        l = np.round(center[0] - planet_subim_dx * pix_per_Rp).astype(int)
-        r = np.round(center[0] + planet_subim_dx * pix_per_Rp).astype(int)
-        l = np.max((l.value, 0))
-        r = np.min((r.value, ccd.shape[1]))
-    if planet_subim_dy is None:
-        b, t = 0, ccd.shape[0]
-    else:
-        b = np.round(center[1] - planet_subim_dy * pix_per_Rp).astype(int)
-        t = np.round(center[1] + planet_subim_dy * pix_per_Rp).astype(int)
-        b = np.max((b.value, 0))
-        t = np.min((t.value, ccd.shape[0]))
-    subim = ccd[b:t, l:r]
-    nr, nc = subim.shape
-    subim.data[subim.data < planet_subim_vmin] = planet_subim_vmin
-    x = (np.arange(nc)*u.pixel - (center[0] - l*u.pixel)) / pix_per_Rp
-    y = (np.arange(nr)*u.pixel - (center[1] - b*u.pixel)) / pix_per_Rp
-    X, Y = np.meshgrid(x.value, y.value)
-    f = plt.figure(figsize=planet_subim_figsize)
-    try:
-        plt.pcolormesh(X, Y, subim,
-                       norm=LogNorm(vmin=planet_subim_vmin,
-                                    vmax=planet_subim_vmax),
-                       cmap=plot_planet_cmap,
-                       shading='auto')
-    except Exception as e:
-        log.error(f'RAWFNAME of problem: {ccd.meta["RAWFNAME"]} {e}')
-        return ccd_in
-    plt.ylabel(planet_subim_axis_label)
-    plt.xlabel(planet_subim_axis_label)
-    plt.axis('scaled')
-    cbar = plt.colorbar()
-    cbar.ax.set_xlabel(ccd.unit.to_string())
-    date_obs, _ = ccd.meta['DATE-OBS'].split('T')
-    plt.title(f'{date_obs} {os.path.basename(outname)}')
-    plt.tight_layout()
-    outroot, _ = os.path.splitext(outname)
-    d = os.path.dirname(outname)
-    os.makedirs(d, exist_ok=True)
-    savefig_overwrite(outroot + '.png')
-    # See note in standard_star.py about the gc.collect().  Hoping
-    # that this solves X freeze-ups
-    plt.close()
-    gc.collect()
-
-    return ccd_in
-
 def plot_ansa_brights(t,
                       fig=None,
                       ax=None,
@@ -583,6 +505,7 @@ def plot_ansa_pos(t,
     ax.set_ylim(5.5, 6.0)
 
 
+# --> This is becoming obsolete
 def torus_stripchart(table_or_fname, outdir,
                      fig=None,
                      n_plots=5,
