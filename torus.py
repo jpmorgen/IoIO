@@ -345,6 +345,51 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
         bmp_meta.update(ansa_meta)
     return ccd
 
+def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):
+    t['mask'] = False
+    if 'd_on_off' in t.colnames:
+        t['mask'] = np.logical_or(t['mask'], t['d_on_off'] > d_on_off_max)
+    if 'obj_to_ND' in t.colnames:
+        t['mask'] = np.logical_or(t['mask'], t['obj_to_ND'] > obj_to_ND_max)    
+
+def add_medfilt(t, colname, mask_col='mask', medfilt_width=21):
+    t[f'{colname}_medfilt'] = np.NAN
+    if len(t) < medfilt_width/2:
+        return
+    if mask_col in t.colnames:
+        bad_mask = t[mask_col]
+    else:
+        bad_mask = False
+    bad_mask = np.logical_or(bad_mask, np.isnan(t[colname]))
+    vals = t[colname][~bad_mask]
+    meds = medfilt(vals, medfilt_width)
+    t[f'{colname}_medfilt'][~bad_mask] = meds
+
+def add_ansa_pos_medfilt(t, ansa_pos_filtwidth=21):
+    add_medfilt(t, 'ansa_right_r_peak', medfilt_width=ansa_pos_filtwidth)
+    add_medfilt(t, 'ansa_left_r_peak', medfilt_width=ansa_pos_filtwidth)
+    t['ansa_left_r_peak_medfilt'] = -t['ansa_left_r_peak_medfilt']
+    return
+
+    t['ansa_right_r_peak_medfilt'] = np.NAN
+    t['ansa_left_r_peak_medfilt'] = np.NAN
+    if len(t) < ansa_pos_filtwidth*2:
+        return
+    rights = np.abs(t['ansa_right_r_peak'])
+    lefts = np.abs(t['ansa_left_r_peak'])
+    right_bad_mask = np.isnan(rights)
+    right_bad_mask = np.logical_or(right_bad_mask, t['d_on_off'] > 5)
+    rights = rights[~right_bad_mask]
+    left_bad_mask = np.isnan(lefts)
+    left_bad_mask = np.logical_or(left_bad_mask, t['d_on_off'] > 5)
+    lefts = lefts[~left_bad_mask]
+    med_rights = medfilt(rights, ansa_pos_filtwidth)
+    med_lefts = medfilt(lefts, ansa_pos_filtwidth)
+    t['ansa_right_r_peak_medfilt'][~right_bad_mask] = medfilt(
+        med_rights, ansa_pos_filtwidth)
+    t['ansa_left_r_peak_medfilt'][~left_bad_mask] = medfilt(
+        med_lefts, ansa_pos_filtwidth)
+
 def plot_ansa_brights(t,
                       fig=None,
                       ax=None,
@@ -376,8 +421,10 @@ def plot_ansa_brights(t,
     if len(rights) > 40:
         alpha = 0.1
         med_right = medfilt(rights, 21)
+        #plt.plot(t['tavg'][~bad_mask].datetime, med_right,
+        #         'k-', linewidth=3, label='West medfilt')
         plt.plot(t['tavg'][~bad_mask].datetime, med_right,
-                 'k-', linewidth=3, label='West medfilt')
+                 'k*', markersize=6, label='West medfilt')
     else:
         alpha = 0.5
 
@@ -400,7 +447,6 @@ def plot_ansa_brights(t,
     ax.set_ylim(min_sb, max_sb)
     fig.autofmt_xdate()
 
-
 def plot_epsilons(t,
                   fig=None,
                   ax=None,
@@ -411,6 +457,7 @@ def plot_epsilons(t,
     if ax is None:
         ax = plt.subplot()
 
+    add_ansa_pos_medfilt(t)
     r_peak = t['ansa_right_r_peak']
     l_peak = t['ansa_left_r_peak']
     av_peak = (np.abs(r_peak) + np.abs(l_peak)) / 2
@@ -444,6 +491,13 @@ def plot_epsilons(t,
                  epsilon_err.value, fmt='k.', alpha=alpha,
                  label='Epsilon')
 
+    r_med_peak = t['ansa_right_r_peak_medfilt']
+    l_med_peak = t['ansa_left_r_peak_medfilt']
+    av_med_peak = (np.abs(r_med_peak) + np.abs(l_med_peak)) / 2
+    medfilt_epsilon = -(r_med_peak + l_med_peak) / av_med_peak
+    plt.plot(t['tavg'].datetime, medfilt_epsilon,
+             'k*', markersize=6, label='Epsilon from medfilts')
+
     ax.set_ylim(-0.05, 0.08)
     plt.ylabel(r'Sky plane $|\vec\epsilon|$')
     plt.hlines(np.asarray((epsilon_biweight,
@@ -456,7 +510,6 @@ def plot_epsilons(t,
     ax.legend()
     ax.set_xlim(tlim)
 
-
 def plot_ansa_pos(t,
                   fig=None,
                   ax=None,
@@ -467,8 +520,9 @@ def plot_ansa_pos(t,
     if ax is None:
         ax = plt.subplot()
 
-    rights = np.abs(t['ansa_left_r_peak'])
-    lefts = np.abs(t['ansa_right_r_peak'])
+    add_ansa_pos_medfilt(t)
+    rights = np.abs(t['ansa_right_r_peak'])
+    lefts = np.abs(t['ansa_left_r_peak'])
     right_bad_mask = np.isnan(rights)
     rights = rights[~right_bad_mask]
     left_bad_mask = np.isnan(lefts)
@@ -476,22 +530,25 @@ def plot_ansa_pos(t,
 
     if len(rights) and len(lefts) > 40:
         alpha = 0.2
-        med_rights = medfilt(rights, 21)
-        plt.plot(t['tavg'][~right_bad_mask].datetime, med_rights,
-                 'k-', linewidth=3, label='West medfilt')
-        med_lefts = medfilt(lefts, 21)
-        plt.plot(t['tavg'][~left_bad_mask].datetime, med_lefts,
-                 'm-', linewidth=3, label='East medfilt')
+        #med_lefts = medfilt(lefts, 21)
+        #plt.plot(t['tavg'][~left_bad_mask].datetime, med_lefts,
+        #         'k-', linewidth=3, label='East medfilt')
+        plt.plot(t['tavg'].datetime, t['ansa_left_r_peak_medfilt'],
+                 'k*', markersize=12, label='East medfilt')
+        plt.plot(t['tavg'].datetime, t['ansa_right_r_peak_medfilt'],
+                 'k+', markersize=12, label='West medfilt')
+        #med_rights = medfilt(rights, 21)
+        #plt.plot(t['tavg'][~right_bad_mask].datetime, med_rights,
+        #         'm-', linewidth=3, label='West medfilt')
     else:
         alpha = 0.5
-
-    plt.errorbar(t['tavg'][~right_bad_mask].datetime,
-                 rights.value,
-                 t['ansa_left_r_peak_err'][~right_bad_mask].value, fmt='r.',
-                 label='East', alpha=alpha)
     plt.errorbar(t['tavg'][~left_bad_mask].datetime,
                  lefts.value,
-                 t['ansa_right_r_peak_err'][~left_bad_mask].value, fmt='g.',
+                 t['ansa_right_r_peak_err'][~left_bad_mask].value, fmt='r.',
+                 label='East', alpha=alpha)
+    plt.errorbar(t['tavg'][~right_bad_mask].datetime,
+                 rights.value,
+                 t['ansa_left_r_peak_err'][~right_bad_mask].value, fmt='g.',
                  label='West', alpha=alpha)
 
 
@@ -907,7 +964,8 @@ if __name__ == '__main__':
 # OK
 #directory = '/data/IoIO/raw/2017-05-02'
 ## Good with ANSA_WIDTH_BOUNDS = (0.1*u.R_jup, 0.5*u.R_jup)
-directory = '/data/IoIO/raw/2018-05-08/'
+#directory = '/data/IoIO/raw/2018-05-08/'
+directory = '/data/IoIO/raw/20221224/'
 
 #outdir_root=TORUS_ROOT
 #rd = reduced_dir(directory, outdir_root, create=False)

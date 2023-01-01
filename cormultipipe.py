@@ -416,16 +416,19 @@ def objctradec_to_obj_center(ccd_in, bmp_meta=None, **kwargs):
     #    bmp_meta['dobj_center'] = dcent
     return ccd
 
-def calc_obj_to_ND(ccd_in, **kwargs):
+def calc_obj_to_ND(ccd_in, bmp_meta=None, **kwargs):
     """obj_to_ND gets messed up when rotating unless it is calculated
 ahead of time.  Put this early in the pipeline
 
     """
+    if bmp_meta is None:
+        bmp_meta = {}
     if isinstance(ccd_in, list):
-        return [calc_obj_to_ND(ccd, **kwargs) for ccd in ccd_in]
+        return [calc_obj_to_ND(ccd, bmp_meta=bmp_meta, **kwargs)
+                for ccd in ccd_in]
     # This does everything
     ccd = ccd_in.copy()
-    _ = ccd.obj_to_ND
+    bmp_meta['obj_to_ND'] = ccd.obj_to_ND
     return ccd
 
 def crop_ccd(ccd_in, crop_ccd_coord=None,

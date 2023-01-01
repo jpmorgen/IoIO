@@ -1114,19 +1114,18 @@ def plot_planet_subim(ccd_in,
     ccd = rot_to(ccd_in, rot_angle_from_key=plot_planet_rot_from_key)
     pix_per_Rp = pix_per_planet_radius(ccd)
     center = ccd.wcs.world_to_pixel(ccd.sky_coord)*u.pixel
+    # Trying to have the axes always read the same valuees
+    center = np.floor(center).astype(int)
     if planet_subim_dx is None:
         l, r = 0, ccd.shape[1]
     else:
-        l = np.round(center[0] - planet_subim_dx * pix_per_Rp).astype(int)
-        r = np.round(center[0] + planet_subim_dx * pix_per_Rp).astype(int)
+        l = np.floor(center[0] - planet_subim_dx * pix_per_Rp).astype(int)
+        r = np.ceil(center[0] + planet_subim_dx * pix_per_Rp).astype(int)
     if planet_subim_dy is None:
         b, t = 0, ccd.shape[0]
     else:
-        b = np.round(center[1] - planet_subim_dy * pix_per_Rp).astype(int)
-        t = np.round(center[1] + planet_subim_dy * pix_per_Rp).astype(int)
-
-    print(f'center: {center} b,t,l,r: {b} {t} {l} {r} {outname}')
-
+        b = np.floor(center[1] - planet_subim_dy * pix_per_Rp).astype(int)
+        t = np.ceil(center[1] + planet_subim_dy * pix_per_Rp).astype(int)
 
     subim = flexi_slice(ccd, b.value, t.value, l.value, r.value)
     nr, nc = subim.shape
@@ -1147,6 +1146,7 @@ def plot_planet_subim(ccd_in,
     plt.ylabel(planet_subim_axis_label)
     plt.xlabel(planet_subim_axis_label)
     plt.axis('scaled')
+    #plt.axis('equal')
     cbar = plt.colorbar()
     cbar.ax.set_xlabel(ccd.unit.to_string())
     date_obs, _ = ccd.meta['DATE-OBS'].split('T')

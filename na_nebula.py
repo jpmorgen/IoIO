@@ -111,11 +111,10 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     bmp_meta.update(na_aps)
     return ccd
 
-def add_annular_apertures(t, ap_base='Na_ap', subtract_col=None):
+def add_annular_apertures(t):
     """Add to table t columns for brightnesses for the regions between
     successively larger apertures (e.g. added column n = surface
-    brightness for region extending from aperture n and aperture n+1),
-    optionally subtracting subtract_col from all results
+    brightness for region extending from aperture n and aperture n+1)
 
     """
     sum_encoder = ColnameEncoder('Na_sum', formatter='.0f')
@@ -135,6 +134,7 @@ def add_annular_apertures(t, ap_base='Na_ap', subtract_col=None):
         # below the equatorial plane, once we have the rectangular
         # aperture SBs, we call them by the distance from the plane
         ap_bound = sum_encoder.from_colname(sum_colname) / 2
+        ap_bound = ap_bound.value
         av_ap = np.mean((ap_bound, last_ap_bound))*u.R_jup
         last_ap_bound = ap_bound
         # These are not affected by what we call the aperture distance
@@ -144,8 +144,6 @@ def add_annular_apertures(t, ap_base='Na_ap', subtract_col=None):
         last_sum = t[sum_colname]
         last_area = t[area_colname]
         colname = sb_encoder.to_colname(av_ap)
-        if subtract_col is not None:
-            sb -= t[subtract_col]
         t[colname] = sb
         ap_list.append(av_ap)
 
@@ -267,6 +265,7 @@ def add_sb_diffs(summary_table_in,
 
     return summary_table
 
+# --> This is becoming obsolete
 def na_nebula_plot(t, outdir,
                    tmin=None,
                    min_sb=-200,
@@ -537,8 +536,8 @@ def plot_nightly_medians(table_or_fname,
                          fig=None,
                          ax=None,
                          tlim=None,
-                         min_av_ap_dist=12*u.R_jup,
-                         max_av_ap_dist=50*u.R_jup,
+                         min_av_ap_dist=6*u.R_jup,
+                         max_av_ap_dist=25*u.R_jup,
                          show=False,
                          fig_close=False):
     if isinstance(table_or_fname, str):
@@ -553,12 +552,18 @@ def plot_nightly_medians(table_or_fname,
     day_table['itdatetime'] = Time(day_table['ijd'], format='jd').datetime
     biweight_encoder = ColnameEncoder('biweight', formatter='.1f')
     biweight_cols = biweight_encoder.colbase_list(day_table.colnames)
-    for bwt_col in biweight_cols:
+    std_encoder = ColnameEncoder('std', formatter='.1f')
+    std_cols = std_encoder.colbase_list(day_table.colnames)
+    for bwt_col, std_col in zip(biweight_cols, std_cols):
         av_ap = biweight_encoder.from_colname(bwt_col)
         if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
             continue
         plt.plot(day_table['itdatetime'], day_table[bwt_col], '.',
                  label=f'{av_ap}')
+        # Lots of big error bars
+        #plt.errorbar(day_table['itdatetime'], day_table[bwt_col].value, 
+        #             day_table[bwt_col].value, fmt='.', 
+        #             label=f'{av_ap}')
     plt.xlabel('date')
     plt.ylabel(f'Surf. bright ({t[bwt_col].unit})')
     plt.title('Na nebula -- nightly medians')
@@ -737,56 +742,56 @@ if __name__ == '__main__':
     aph.cmd(args)
 
 
-log.setLevel('DEBUG')
-
-#directory = '/data/IoIO/raw/20210607/'
-#directory = '/data/IoIO/raw/20211017/'
-
-#directory = '/data/IoIO/raw/2017-05-02'
-#directory = '/data/IoIO/raw/2018-05-08/'
-directory = '/data/IoIO/raw/20221224/'
-
-#t = na_nebula_tree(start='2018-05-08',
-#                   stop='2018-05-10',
-#                   read_csvs=True,
-#                   write_csvs=True,
-#                   read_pout=True,
-#                   write_pout=True,
-#                   fits_fixed_ignore=True)
-                  
-calibration=None
-photometry=None
-standard_star_obj=None
-na_meso_obj=None
-solve_timeout=SOLVE_TIMEOUT
-join_tolerance=JOIN_TOLERANCE*JOIN_TOLERANCE_UNIT
-
-outdir_root=OUTDIR_ROOT
-fits_fixed_ignore=True
-photometry = (
-    photometry
-    or CorPhotometry(precalc=True,
-                     solve_timeout=solve_timeout,
-                     join_tolerance=join_tolerance))
-calibration = calibration or Calibration(reduce=True)
-standard_star_obj = standard_star_obj or StandardStar(reduce=True)
-#na_meso_obj = na_meso_obj or NaMeso(calibration=calibration,
-#                                    standard_star_obj=standard_star_obj,
-#                                    reduce=True)
-na_meso_obj = na_meso_obj or NaMeso()
-outdir_root = outdir_root or os.path.join(IoIO_ROOT, 'Na_nebula')
-t = na_nebula_directory(directory,
-                           calibration=calibration,
-                           photometry=photometry,
-                           standard_star_obj=standard_star_obj,
-                           na_meso_obj=na_meso_obj,                           
-                           solve_timeout=solve_timeout,
-                           join_tolerance=join_tolerance,
-                           outdir_root=outdir_root,
-                           fits_fixed_ignore=fits_fixed_ignore,
-                           read_pout=True,
-                           write_pout=True)
-
+#log.setLevel('DEBUG')
+#
+##directory = '/data/IoIO/raw/20210607/'
+##directory = '/data/IoIO/raw/20211017/'
+#
+##directory = '/data/IoIO/raw/2017-05-02'
+##directory = '/data/IoIO/raw/2018-05-08/'
+#directory = '/data/IoIO/raw/20221224/'
+#
+##t = na_nebula_tree(start='2018-05-08',
+##                   stop='2018-05-10',
+##                   read_csvs=True,
+##                   write_csvs=True,
+##                   read_pout=True,
+##                   write_pout=True,
+##                   fits_fixed_ignore=True)
+#                  
+#calibration=None
+#photometry=None
+#standard_star_obj=None
+#na_meso_obj=None
+#solve_timeout=SOLVE_TIMEOUT
+#join_tolerance=JOIN_TOLERANCE*JOIN_TOLERANCE_UNIT
+#
+#outdir_root=OUTDIR_ROOT
+#fits_fixed_ignore=True
+#photometry = (
+#    photometry
+#    or CorPhotometry(precalc=True,
+#                     solve_timeout=solve_timeout,
+#                     join_tolerance=join_tolerance))
+#calibration = calibration or Calibration(reduce=True)
+#standard_star_obj = standard_star_obj or StandardStar(reduce=True)
+##na_meso_obj = na_meso_obj or NaMeso(calibration=calibration,
+##                                    standard_star_obj=standard_star_obj,
+##                                    reduce=True)
+#na_meso_obj = na_meso_obj or NaMeso()
+#outdir_root = outdir_root or os.path.join(IoIO_ROOT, 'Na_nebula')
+#t = na_nebula_directory(directory,
+#                           calibration=calibration,
+#                           photometry=photometry,
+#                           standard_star_obj=standard_star_obj,
+#                           na_meso_obj=na_meso_obj,                           
+#                           solve_timeout=solve_timeout,
+#                           join_tolerance=join_tolerance,
+#                           outdir_root=outdir_root,
+#                           fits_fixed_ignore=fits_fixed_ignore,
+#                           read_pout=True,
+#                           write_pout=True)
+#
 
 #if pout is None or len(pout) == 0:
 #    #return QTable()
