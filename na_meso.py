@@ -695,6 +695,8 @@ class NaMeso:
     def tavg_to_shadow_corrected(self, tavg):
         doy = self.calc_phased_doy(tavg)
         doy = doy.astype(int)
+        # Hack to avoid index error
+        doy = np.max((doy, 364))
         return self.doy_table['boxfilt_shadow_corrected'][doy]
 
     def meso_model_inverse(self, tavg, airmass, shadow_height):

@@ -14,6 +14,7 @@ from scipy.signal import medfilt
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.dates as mdates
 
 from astropy import log
 import astropy.units as u
@@ -37,7 +38,7 @@ from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
                                MAX_MEM_FRAC,
                                COR_PROCESS_EXPAND_FACTOR,
-                               calc_obj_to_ND, #crop_ccd,
+                               tavg_to_bmp_meta, calc_obj_to_ND, #crop_ccd,
                                planet_to_object,
                                objctradec_to_obj_center,
                                nd_filter_mask, parallel_cached_csvs,
@@ -56,7 +57,7 @@ from IoIO.na_meso import (NaMeso, NaMesoArgparseHandler, sun_angles,
 from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
                                   TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
                                   on_off_pipeline)
-from IoIO.torus import closest_galsat_to_jupiter
+from IoIO.torus import closest_galsat_to_jupiter, add_mask_col
 
 BASE = 'Na_nebula'
 OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
@@ -99,7 +100,6 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     # We only  want to mess with our original CCD metadata
     if bmp_meta is None:
         bmp_meta = {}
-    bmp_meta['tavg'] = ccd.tavg
 
     ccd = ccd_meta_to_bmp_meta(ccd_in, bmp_meta=bmp_meta,
                                ccd_meta_to_bmp_meta_keys=
@@ -111,6 +111,7 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     bmp_meta.update(na_aps)
     return ccd
 
+# --> This needs to be moved up into na_apertures
 def add_annular_apertures(t):
     """Add to table t columns for brightnesses for the regions between
     successively larger apertures (e.g. added column n = surface
@@ -511,7 +512,8 @@ def na_nebula_directory(directory_or_collection,
                        na_meso_obj=na_meso_obj,
                        add_ephemeris=galsat_ephemeris,
                        planet='Jupiter',
-                       post_process_list=[calc_obj_to_ND, planet_to_object],
+                       post_process_list=[tavg_to_bmp_meta,
+                                          calc_obj_to_ND, planet_to_object],
                        plot_planet_rot_from_key=['Jupiter_NPole_ang'],
                        planet_subim_figsize=[6, 4],
                        planet_subim_dx=45*u.R_jup,
@@ -529,6 +531,7 @@ def na_nebula_directory(directory_or_collection,
 
     _ , pipe_meta = zip(*pout)
     t = QTable(rows=pipe_meta)
+    add_mask_col(t)
     #na_nebula_plot(t, outdir)
     return t
 
@@ -559,7 +562,7 @@ def plot_nightly_medians(table_or_fname,
         if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
             continue
         plt.plot(day_table['itdatetime'], day_table[bwt_col], '.',
-                 label=f'{av_ap}')
+                 label=f'{av_ap.value} R$_\mathrm{{J}}$')
         # Lots of big error bars
         #plt.errorbar(day_table['itdatetime'], day_table[bwt_col].value, 
         #             day_table[bwt_col].value, fmt='.', 
@@ -570,6 +573,7 @@ def plot_nightly_medians(table_or_fname,
     if tlim is None:
         tlim = ax.get_xlim()
     ax.set_xlim(tlim)
+    ax.xaxis.set_minor_locator(mdates.MonthLocator())
     plt.legend()
     fig.autofmt_xdate()
     if show:
@@ -663,6 +667,7 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
     summary_table.write(os.path.join(outdir_root, BASE + '.ecsv'),
                         overwrite=True)
 
+    # --> This should probably be at the directory level  
     # Supplement summary_table with columns needed for plots
     add_annular_apertures(summary_table)
     # --> could do some multi-aperture, Na_meso etc., plots here
@@ -672,7 +677,8 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
     subtract_col_from(summary_table, sb_encoder, largest_ap, 'largest_sub')
     largest_sub_encoder = ColnameEncoder('largest_sub', formatter='.1f')
     ls_cols = largest_sub_encoder.colbase_list(summary_table.colnames)
-    
+
+    print('len(summary_table): ', len(summary_table))
     # Mask bad measurements
     # This is pretty effective and may be useful for eventually making
     # a movie, as long as I capture the appropriate filenames in summary_table
@@ -685,6 +691,7 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
     mask = np.logical_and(mask, summary_table[ls_cols[-2]] < MAX_24_Rj_SB)
 
     clean_t = summary_table[mask]
+    print('len(clean_t): ', len(clean_t))
     add_daily_biweights(clean_t, encoder=largest_sub_encoder)
     clean_t.write(os.path.join(outdir_root, BASE + '_cleaned.ecsv'),
                   overwrite=True)

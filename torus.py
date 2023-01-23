@@ -11,10 +11,12 @@ import numpy as np
 from scipy.signal import medfilt
 
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 from astropy import log
 import astropy.units as u
 from astropy.table import QTable, vstack
+from astropy.convolution import Gaussian1DKernel, interpolate_replace_nans
 from astropy.coordinates import Angle, SkyCoord
 from astropy.modeling import models, fitting
 
@@ -30,8 +32,8 @@ from IoIO.simple_show import simple_show
 from IoIO.cordata_base import SMALL_FILT_CROP
 from IoIO.cordata import CorData
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
-                               calc_obj_to_ND, crop_ccd,
-                               planet_to_object, 
+                               tavg_to_bmp_meta, calc_obj_to_ND, crop_ccd,
+                               planet_to_object, mean_image,
                                objctradec_to_obj_center, obj_surface_bright)
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE,
@@ -333,7 +335,6 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
     ccd = ccd_in.copy()
     if bmp_meta is None:
         bmp_meta = {}
-    bmp_meta['tavg'] = ccd.tavg
     ccd = ccd_meta_to_bmp_meta(ccd, bmp_meta=bmp_meta,
                                ccd_meta_to_bmp_meta_keys=
                                [('Jupiter_PDObsLon', u.deg),
@@ -350,7 +351,11 @@ def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):
     if 'd_on_off' in t.colnames:
         t['mask'] = np.logical_or(t['mask'], t['d_on_off'] > d_on_off_max)
     if 'obj_to_ND' in t.colnames:
-        t['mask'] = np.logical_or(t['mask'], t['obj_to_ND'] > obj_to_ND_max)    
+        t['mask'] = np.logical_or(t['mask'], t['obj_to_ND'] > obj_to_ND_max)
+    if 'mean_image' in t.colnames:
+        # This is specific to the torus data
+        t['mask'] = np.logical_or(t['mask'], t['mean_image'] < 0*u.R)
+        t['mask'] = np.logical_or(t['mask'], t['mean_image'] > 200*u.R)
 
 def add_medfilt(t, colname, mask_col='mask', medfilt_width=21):
     t[f'{colname}_medfilt'] = np.NAN
@@ -365,30 +370,19 @@ def add_medfilt(t, colname, mask_col='mask', medfilt_width=21):
     meds = medfilt(vals, medfilt_width)
     t[f'{colname}_medfilt'][~bad_mask] = meds
 
+def add_interpolated(t, colname, kernel):
+    t[f'{colname}_interp'] = interpolate_replace_nans(t[colname], kernel)
+
+def add_ansa_surf_bright_medfilt(t, ansa_bright_filtwidth=21):
+    add_medfilt(t, 'ansa_right_surf_bright',
+                medfilt_width=ansa_bright_filtwidth)
+    add_medfilt(t, 'ansa_left_surf_bright',
+                medfilt_width=ansa_bright_filtwidth)
+    
+
 def add_ansa_pos_medfilt(t, ansa_pos_filtwidth=21):
     add_medfilt(t, 'ansa_right_r_peak', medfilt_width=ansa_pos_filtwidth)
     add_medfilt(t, 'ansa_left_r_peak', medfilt_width=ansa_pos_filtwidth)
-    t['ansa_left_r_peak_medfilt'] = -t['ansa_left_r_peak_medfilt']
-    return
-
-    t['ansa_right_r_peak_medfilt'] = np.NAN
-    t['ansa_left_r_peak_medfilt'] = np.NAN
-    if len(t) < ansa_pos_filtwidth*2:
-        return
-    rights = np.abs(t['ansa_right_r_peak'])
-    lefts = np.abs(t['ansa_left_r_peak'])
-    right_bad_mask = np.isnan(rights)
-    right_bad_mask = np.logical_or(right_bad_mask, t['d_on_off'] > 5)
-    rights = rights[~right_bad_mask]
-    left_bad_mask = np.isnan(lefts)
-    left_bad_mask = np.logical_or(left_bad_mask, t['d_on_off'] > 5)
-    lefts = lefts[~left_bad_mask]
-    med_rights = medfilt(rights, ansa_pos_filtwidth)
-    med_lefts = medfilt(lefts, ansa_pos_filtwidth)
-    t['ansa_right_r_peak_medfilt'][~right_bad_mask] = medfilt(
-        med_rights, ansa_pos_filtwidth)
-    t['ansa_left_r_peak_medfilt'][~left_bad_mask] = medfilt(
-        med_lefts, ansa_pos_filtwidth)
 
 def plot_ansa_brights(t,
                       fig=None,
@@ -402,6 +396,8 @@ def plot_ansa_brights(t,
     if ax is None:
         ax = plt.subplot()
 
+    t = t[~t['mask']]    
+    add_ansa_surf_bright_medfilt(t)
     right_sb_biweight = nan_biweight(t['ansa_right_surf_bright'])
     right_sb_mad = nan_mad(t['ansa_right_surf_bright'])
     left_sb_biweight = nan_biweight(t['ansa_left_surf_bright'])
@@ -414,35 +410,38 @@ def plot_ansa_brights(t,
                         mean_surf_bright + 5*max_sb_mad)
     if not np.isfinite(ylim_surf_bright[0]):
         ylim_surf_bright = None
-
-    bad_mask = np.isnan(t['ansa_right_surf_bright'])
-    bad_mask = np.logical_or(bad_mask, t['d_on_off'] > 5)
-    rights = t['ansa_right_surf_bright'][~bad_mask]
-    if len(rights) > 40:
+    if len(t) > 40:
         alpha = 0.1
-        med_right = medfilt(rights, 21)
-        #plt.plot(t['tavg'][~bad_mask].datetime, med_right,
-        #         'k-', linewidth=3, label='West medfilt')
-        plt.plot(t['tavg'][~bad_mask].datetime, med_right,
-                 'k*', markersize=6, label='West medfilt')
+        p_med = plt.plot(t['tavg'].datetime,
+                         t['ansa_right_surf_bright_medfilt'],
+                         'k*', markersize=6, label='West medfilt')
+        #plt.plot(t['tavg'].datetime, t['ansa_left_surf_bright_medfilt'],
+        #         'k+', markersize=6, label='East medfilt')
     else:
         alpha = 0.5
+        p_med = None
 
-    plt.errorbar(t['tavg'].datetime,
-                 t['ansa_left_surf_bright'].value,
-                 t['ansa_left_surf_bright_err'].value, fmt='r.', alpha=alpha,
-                 label='East')
-    plt.errorbar(t['tavg'].datetime,
-                 t['ansa_right_surf_bright'].value,
-                 t['ansa_right_surf_bright_err'].value, fmt='g.', alpha=alpha,
-                 label='West')
+    p_left = plt.errorbar(t['tavg'].datetime,
+                          t['ansa_left_surf_bright'].value,
+                          t['ansa_left_surf_bright_err'].value,
+                          fmt='r.', alpha=alpha,
+                          label='East')
+    p_right = plt.errorbar(t['tavg'].datetime,
+                           t['ansa_right_surf_bright'].value,
+                           t['ansa_right_surf_bright_err'].value,
+                           fmt='g.', alpha=alpha,
+                           label='West')
+    handles = [p_left, p_right]
+    if p_med:
+        handles.extend(p_med)
     if tlim is None:
         tlim = ax.get_xlim()
     plt.title('Torus Ansa Brightnesses')
     plt.xlabel('date')
     plt.ylabel(f'Ansa Av. Surf. Bright ({t["ansa_left_surf_bright"].unit})')
-    ax.legend()
+    ax.legend(handles=handles)
     ax.set_xlim(tlim)
+    ax.xaxis.set_minor_locator(mdates.MonthLocator())
     #ax.set_ylim(ylim_surf_bright)
     ax.set_ylim(min_sb, max_sb)
     fig.autofmt_xdate()
@@ -457,7 +456,9 @@ def plot_epsilons(t,
     if ax is None:
         ax = plt.subplot()
 
+    t = t[~t['mask']]    
     add_ansa_pos_medfilt(t)
+
     r_peak = t['ansa_right_r_peak']
     l_peak = t['ansa_left_r_peak']
     av_peak = (np.abs(r_peak) + np.abs(l_peak)) / 2
@@ -481,23 +482,36 @@ def plot_epsilons(t,
     if len(good_epsilons) > 20:
         alpha = 0.2
         med_epsilon = medfilt(good_epsilons, 11)
-        plt.plot(t['tavg'][~bad_mask].datetime, med_epsilon,
-                 'r-', linewidth=3, label='Epsilon medfilt')
+        p_med = plt.plot(t['tavg'][~bad_mask].datetime, med_epsilon,
+                         'k*', markersize=6, label='Medfilt')
+        # These don't overlap anywhere 
+        #r_med_peak = t['ansa_right_r_peak_medfilt']
+        #l_med_peak = -t['ansa_left_r_peak_medfilt']
+        #av_med_peak = (np.abs(r_med_peak) + np.abs(l_med_peak)) / 2
+        #medfilt_epsilon = -(r_med_peak + l_med_peak) / av_med_peak
+        #plt.plot(t['tavg'].datetime, medfilt_epsilon,
+        #         'k*', markersize=6, label='Epsilon from medfilts')
+        kernel = Gaussian1DKernel(10)
+        add_interpolated(t, 'ansa_right_r_peak_medfilt', kernel)
+        add_interpolated(t, 'ansa_left_r_peak_medfilt', kernel)
+        r_med_peak = t['ansa_right_r_peak_medfilt_interp']
+        l_med_peak = t['ansa_left_r_peak_medfilt_interp']
+        av_med_peak = (np.abs(r_med_peak) + np.abs(l_med_peak)) / 2
+        medfilt_epsilon = -(r_med_peak + l_med_peak) / av_med_peak
+        p_interps = plt.plot(t['tavg'].datetime, medfilt_epsilon,
+                             'c*', markersize=3, label='From interpolations')
     else:
         alpha = 0.5
-        
-    plt.errorbar(t['tavg'].datetime,
-                 epsilon.value,
-                 epsilon_err.value, fmt='k.', alpha=alpha,
-                 label='Epsilon')
+        p_med = None
+       
+    p_eps = plt.errorbar(t['tavg'].datetime,
+                         epsilon.value,
+                         epsilon_err.value, fmt='k.', alpha=alpha,
+                         label='Epsilon')
 
-    r_med_peak = t['ansa_right_r_peak_medfilt']
-    l_med_peak = t['ansa_left_r_peak_medfilt']
-    av_med_peak = (np.abs(r_med_peak) + np.abs(l_med_peak)) / 2
-    medfilt_epsilon = -(r_med_peak + l_med_peak) / av_med_peak
-    plt.plot(t['tavg'].datetime, medfilt_epsilon,
-             'k*', markersize=6, label='Epsilon from medfilts')
-
+    handles = [p_eps]
+    if p_med:
+        handles.extend([p_med[0], p_interps[0]])
     ax.set_ylim(-0.05, 0.08)
     plt.ylabel(r'Sky plane $|\vec\epsilon|$')
     plt.hlines(np.asarray((epsilon_biweight,
@@ -507,8 +521,10 @@ def plot_epsilons(t,
                linestyles=('-', '--', '--'),
                label=f'{epsilon_biweight:.3f} +/- {epsilon_mad:.3f}')
     plt.axhline(0.025, color='y', label='Nominal 0.025')
-    ax.legend()
+    ax.legend(handles=handles)
+    plt.title('Epsilon')
     ax.set_xlim(tlim)
+    ax.xaxis.set_minor_locator(mdates.MonthLocator())
 
 def plot_ansa_pos(t,
                   fig=None,
@@ -520,6 +536,7 @@ def plot_ansa_pos(t,
     if ax is None:
         ax = plt.subplot()
 
+    t = t[~t['mask']]    
     add_ansa_pos_medfilt(t)
     rights = np.abs(t['ansa_right_r_peak'])
     lefts = np.abs(t['ansa_left_r_peak'])
@@ -530,16 +547,10 @@ def plot_ansa_pos(t,
 
     if len(rights) and len(lefts) > 40:
         alpha = 0.2
-        #med_lefts = medfilt(lefts, 21)
-        #plt.plot(t['tavg'][~left_bad_mask].datetime, med_lefts,
-        #         'k-', linewidth=3, label='East medfilt')
-        plt.plot(t['tavg'].datetime, t['ansa_left_r_peak_medfilt'],
+        plt.plot(t['tavg'].datetime, -t['ansa_left_r_peak_medfilt'],
                  'k*', markersize=12, label='East medfilt')
         plt.plot(t['tavg'].datetime, t['ansa_right_r_peak_medfilt'],
                  'k+', markersize=12, label='West medfilt')
-        #med_rights = medfilt(rights, 21)
-        #plt.plot(t['tavg'][~right_bad_mask].datetime, med_rights,
-        #         'm-', linewidth=3, label='West medfilt')
     else:
         alpha = 0.5
     plt.errorbar(t['tavg'][~left_bad_mask].datetime,
@@ -559,8 +570,8 @@ def plot_ansa_pos(t,
     plt.axhline(IO_ORBIT_R.value, color='y', label='Io orbit')
     ax.legend()
     ax.set_xlim(tlim)
-    ax.set_ylim(5.5, 6.0)
-
+    ax.set_ylim(5.4, 6.0)
+    ax.xaxis.set_minor_locator(mdates.MonthLocator())
 
 # --> This is becoming obsolete
 def torus_stripchart(table_or_fname, outdir,
@@ -808,13 +819,15 @@ def torus_directory(directory,
                        add_ephemeris=galsat_ephemeris,
                        planet='Jupiter',
                        crop_ccd_coord=SMALL_FILT_CROP,
-                       post_process_list=[calc_obj_to_ND, crop_ccd,
+                       post_process_list=[tavg_to_bmp_meta,
+                                          calc_obj_to_ND, crop_ccd,
                                           planet_to_object],
                        plot_planet_rot_from_key=['Jupiter_NPole_ang'],
                        planet_subim_dx=10*u.R_jup,
                        planet_subim_dy=5*u.R_jup,                       
                        post_offsub=[extinction_correct, rayleigh_convert,
-                                    obj_surface_bright, characterize_ansas,
+                                    obj_surface_bright, mean_image,
+                                    characterize_ansas,
                                     closest_galsat_to_jupiter,
                                     plot_planet_subim, as_single],
                        outdir=outdir,
@@ -824,6 +837,7 @@ def torus_directory(directory,
 
     _ , pipe_meta = zip(*pout)
     t = QTable(rows=pipe_meta)
+    add_mask_col(t)
     torus_stripchart(t, outdir)
     return t
 

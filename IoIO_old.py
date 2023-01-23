@@ -31,7 +31,6 @@ SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 #       [  1.28303305e+03,   1.39479846e+03]]
 
 ## Fri Feb 08 19:35:56 2019 EST  jpmorgen@snipe
-# Start 2019-02-07 ?
 #run_level_default_ND_params \
 #    = [[  4.65269008e-03,   8.76050569e-03],
 #       [  1.27189987e+03,   1.37717911e+03]]
@@ -67,19 +66,19 @@ bins."""
     return (hist, centers)
 
 # This is improved with sx694.overscan_estimate
-def back_level(im, readnoise=None):
-    # Use the histogram technique to spot the bias level of the image.
-    # The coronagraph creates a margin of un-illuminated pixels on the
-    # CCD.  These are great for estimating the bias and scattered
-    # light for spontanous subtraction.  The ND filter provides a
-    # similar peak after bias subutraction (or, rather, it is the
-    # second such peak)
-    # --> This is very specific to the coronagraph.  Consider porting first peak find from IDL
-    # --> histogram is wrong because readnoise units are in electrons, not ADU
-    # --> consider making find_peaks_cwt args relative to readnoise
-    im_hist, im_hist_centers = hist_of_im(im, readnoise)
-    im_peak_idx = signal.find_peaks_cwt(im_hist, np.arange(10, 50))
-    return im_hist_centers[im_peak_idx[0]]
+#def back_level(im, readnoise=None):
+#    # Use the histogram technique to spot the bias level of the image.
+#    # The coronagraph creates a margin of un-illuminated pixels on the
+#    # CCD.  These are great for estimating the bias and scattered
+#    # light for spontanous subtraction.  The ND filter provides a
+#    # similar peak after bias subutraction (or, rather, it is the
+#    # second such peak)
+#    # --> This is very specific to the coronagraph.  Consider porting first peak find from IDL
+#    # --> histogram is wrong because readnoise units are in electrons, not ADU
+#    # --> consider making find_peaks_cwt args relative to readnoise
+#    im_hist, im_hist_centers = hist_of_im(im, readnoise)
+#    im_peak_idx = signal.find_peaks_cwt(im_hist, np.arange(10, 50))
+#    return im_hist_centers[im_peak_idx[0]]
 
 class CorObsData(pg.ObsData):
     """Object for containing coronagraph image data used for centering Jupiter
@@ -365,10 +364,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
             # make the center of mass calc more accurate, just set
             # everything that is not getting toward saturation to 0
             # --> Might want to fine-tune or remove this so bright
-            # Fri Jun 25 14:30:14 2021 EDT  jpmorgen@snipe
-            # Copied over from cordata, since caught it there as
-            # potential bug.  Really want to have saturated pixels show
-            im[np.where(im < satlevel*0.7)] = 0
+            im[np.where(im < satlevel)] = 0
             
             #log.debug('Approx number of saturating pixels ' + str(np.sum(im)/65000))
 
@@ -1076,8 +1072,31 @@ def ACP_IPT_Na_R(args):
                                 binning=1,
                                 filt=6)
 
-            log.debug('CENTERING WITH GUIDEBOX MOVES') 
-            P.center_loop()
+            log.info('Collecting V, U, B, and R')
+            if ((time.time() + downloadtime*4*2) > Tend):
+                log.info('Exposure would extend past end of ACP exposure, returning') 
+                return
+            for ifilt in range(2):
+                P.MC.acquire_im(pg.uniq_fname('R_', d),
+                                exptime=0.1,
+                                binning=1,
+                                filt=0)
+            for ifilt in range(2):
+                P.MC.acquire_im(pg.uniq_fname('V_', d),
+                                exptime=0.2,
+                                binning=1,
+                                filt=4)
+            for ifilt in range(2):
+                P.MC.acquire_im(pg.uniq_fname('U_', d),
+                                exptime=20,
+                                binning=1,
+                                filt=5)
+            for ifilt in range(2):
+                P.MC.acquire_im(pg.uniq_fname('B_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=7)
+
             while True:
                 #fname = pg.uniq_fname(basename, d)
                 #log.debug('data_collector preparing to record ' + fname)
@@ -1103,30 +1122,6 @@ def ACP_IPT_Na_R(args):
                 # 7 B 			~0.25 deg
                 # 8 R125		  	~0.25 deg
         
-                log.info('Collecting V, U, B, and R')
-                if ((time.time() + downloadtime*4*2) > Tend):
-                    log.info('Exposure would extend past end of ACP exposure, returning') 
-                    return
-                for ifilt in range(2):
-                    P.MC.acquire_im(pg.uniq_fname('R_', d),
-                                    exptime=0.1,
-                                    binning=1,
-                                    filt=0)
-                for ifilt in range(2):
-                    P.MC.acquire_im(pg.uniq_fname('V_', d),
-                                    exptime=0.2,
-                                    binning=1,
-                                    filt=4)
-                for ifilt in range(2):
-                    P.MC.acquire_im(pg.uniq_fname('U_', d),
-                                    exptime=20,
-                                    binning=1,
-                                    filt=5)
-                for ifilt in range(2):
-                    P.MC.acquire_im(pg.uniq_fname('B_', d),
-                                    exptime=0.7,
-                                    binning=1,
-                                    filt=7)
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
                 P.center_loop()
                 log.info('Collecting Na')

@@ -2,47 +2,53 @@ The latest release of this software is available at
 
 https://zenodo.org/badge/latestdoi/157604461
 
-The Io Input/Output facility (IoIO) is a small-aperture (35 cm)
-coronagraph constructed for the study of material ejected from
-Jupiter's moon Io (the output) and entering Jupiter's magnetosphere
-(the input).  A full description of the instrument and its first
-results is contained in Morgenthaler, J., Rathbun, J., Schmidt, C.,
-Baumgardner, J, Schneider, N. "Large Volcanic Event on Io Inferred
-from Jovian Sodium Nebula Brightening."  This archive contains the
-code for recording, reducing and presenting the data.
+The Planetary Science Institute's Io Input/Output facility (IoIO) is a
+small-aperture (35 cm) coronagraph constructed for the study of
+material ejected from Jupiter's moon Io (the output) and entering
+Jupiter's magnetosphere (the input).  A full description of the
+instrument and its first results is contained in Morgenthaler, J.,
+Rathbun, J., Schmidt, C., Baumgardner, J, Schneider, N. "Large
+Volcanic Event on Io Inferred from Jovian Sodium Nebula Brightening,"
+ApJL L23, 2019.  This archive contains the latest code for recording,
+reducing and presenting the data for a planned 2023 publication
+reporting a large volcanic outburst in 2022.
 
+Portions of this software depend on the following packages/software:
 
-Portions of this software depend on define.py, a package maintained by
-Daniel R. Morgenthaler available at
-https://zenodo.org/badge/latestdoi/157608102
+BigMultiPipe: https://zenodo.org/badge/latestdoi/329778044
+CCDMultiPipe: https://zenodo.org/badge/latestdoi/475075489
+Precisionguide: https://zenodo.org/badge/latestdoi/475075489
+Burnashev: https://zenodo.org/badge/latestdoi/585668465
+Astropy_FITS_key: https://zenodo.org/badge/latestdoi/361299826
 
 Brief description of files in this repository:
 
-IoIO.py: version of code used to control telescope during 2019-2020
-Jovian oppositions.  Imports precisionguide.py
+remote_pipeline.sh: runs all components of the data processing pipeline
 
-precisionguide.py: start of a general package which will solve the
-problem of differential flexure between boresite-mounted guide scopes
-and a main scope. Provides tools for precise positioning of a target
-in the FOV.
+calibration.py: creates database of master biases, darkes and flats,
+and picks best match for CCD image being processed
 
-ReduceCorObs.py: code used to reduce IoIO observations.  Imports
-precisionguide.py and define.py.  define.py is maintained by Daniel
-R. Morgenthaler and useful for debugging
+standard_star.py: processes Burnashev standard star observations,
+creating flux calibration and extinction coefficient databases
 
-read_ap.py and read_off_Jup_ap.py: reads the CSV file created by
-ReduceCorObs.py which has the individual image aperture surface
-brightness values and reduction parameters.  NOTE: This code applies a
-correction of a factor of ADU2R_adjust = 1.15 to the aperture sum data
-output by ReduceCorObs to account for details of the calibration
-proceedure not yet coded into ReduceCorObs
+exoplanets.py: photometric and astrometric processing of exoplanet
+transit obesrvations
 
-Na_im.py, SII_im.py, SII_Na_side-by-side.py: read and display images
-for publication.  Imports ADU2R_adjust from read_ap
+na_nebula.py and torus.py: process the IoIO Na nebula and Io plasma
+torus (IPT) observations.
 
-Na_support_table.py: generate a properly sorted CSV file containing
-the individual image aperture surface brightness values and reduction
-parameters.  Imports ADU2R_adjust from read_ap
+morgenthaler_2023.py: create time-history plot of Na nebula and IPT
+for 2023 publication
+
+movie.py: create movie of Na nebula and/or IPT images using PNGs
+created by na_nebula.py and torus.py
+
+fix*.py: these run sections of the pipeline system to fix minor bugs.
+They will be phased out when the pipeline is rerun.
+
+IoIO_old.py and precisionguide_old: code currently controlling the
+telescope.  These will be phased out when the telescope control code
+is transferred into the new version of precisionguide.
 
 ioio.notebk: software developement notebook
 

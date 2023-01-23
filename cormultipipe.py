@@ -214,6 +214,13 @@ def light_image(im, light_tolerance=3, **kwargs):
     return im
 
 ######### CorMultiPipe post-processing routines
+def mean_image(ccd, bmp_meta=None, **kwargs):
+    if bmp_meta is None:
+        bmp_meta = {}
+    m = np.mean(ccd) * ccd.unit
+    bmp_meta['mean_image'] = m
+    return ccd
+
 def add_raw_fname(ccd_in, in_name=None, **kwargs):
     ccd = ccd_in.copy()
     if isinstance(in_name, str):
@@ -332,6 +339,18 @@ def nd_filter_mask(ccd_in, nd_edge_expand=ND_EDGE_EXPAND, **kwargs):
 #    return multi_proc(nd_filter_mask,
 #                      element_type=CCDData,
 #                      **kwargs)(data)
+
+def tavg_to_bmp_meta(ccd_in, bmp_meta=None, **kwargs):
+    if isinstance(ccd_in, list):
+        return [tavg_to_bmp_meta(ccd, bmp_meta=bmp_meta,
+                                 **kwargs)
+                for ccd in ccd_in]
+    if bmp_meta is None:
+        bmp_meta = {}
+    bmp_meta['tavg'] = ccd_in.tavg
+    bmp_meta['tavg_uncertainty'] = ccd_in.meta['DATE-AVG-UNCERTAINTY'] * u.s
+    return ccd_in
+
 
 def detflux(ccd_in, exptime_unit=None, **kwargs):
     if isinstance(ccd_in, list):

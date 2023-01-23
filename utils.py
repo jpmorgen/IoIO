@@ -1099,6 +1099,8 @@ def plot_planet_subim(ccd_in,
                       planet_subim_vmax=5000,
                       planet_subim_figsize=[5, 2.5],
                       plot_planet_cmap='gist_heat',
+                      planet_subim_backcalc=None,
+                      bmp_meta=None,
                       **kwargs):
     # https://stackoverflow.com/questions/4931376/generating-matplotlib-graphs-without-a-running-x-server
     # --> This might help with the X crashes, but it has to be
@@ -1106,12 +1108,20 @@ def plot_planet_subim(ccd_in,
     # import matplotlib as mpl
     # mpl.use('Agg')
 
-    in_name = os.path.basename(ccd_in.meta['RAWFNAME'])
+    in_name = in_name or os.path.basename(ccd_in.meta['RAWFNAME'])
     # This will pick up outdir, if specified
     outname = outname_creator(in_name, outname=outname, **kwargs)
     if outname is None:
         raise ValueError('in_name or outname must be specified')
+    if planet_subim_backcalc is None:
+        planet_subim_backcalc = lambda *args, **kwargs:0
+    background = planet_subim_backcalc(in_name=in_name,
+                                       outname=outname,
+                                       bmp_meta=bmp_meta, 
+                                       **kwargs)
+        
     ccd = rot_to(ccd_in, rot_angle_from_key=plot_planet_rot_from_key)
+    ccd = ccd.subtract(background, handle_meta='first_found') 
     pix_per_Rp = pix_per_planet_radius(ccd)
     center = ccd.wcs.world_to_pixel(ccd.sky_coord)*u.pixel
     # Trying to have the axes always read the same valuees
@@ -1149,8 +1159,10 @@ def plot_planet_subim(ccd_in,
     #plt.axis('equal')
     cbar = plt.colorbar()
     cbar.ax.set_xlabel(ccd.unit.to_string())
-    date_obs, _ = ccd.meta['DATE-OBS'].split('T')
-    plt.title(f'{date_obs} {os.path.basename(outname)}')
+    date_obs, time_obs = ccd.tavg.fits.split('T')
+    time_obs, _ = time_obs.split('.')
+    #plt.title(f'{date_obs} {os.path.basename(outname)}')
+    plt.title(f'{date_obs} {time_obs} UT')
     plt.tight_layout()
     outroot, _ = os.path.splitext(outname)
     d = os.path.dirname(outname)
