@@ -1108,13 +1108,21 @@ def plot_planet_subim(ccd_in,
     # import matplotlib as mpl
     # mpl.use('Agg')
 
-    in_name = in_name or os.path.basename(ccd_in.meta['RAWFNAME'])
+    if in_name is None or isinstance(in_name, list):
+        # A bit of a hack to deal with the most common use of this
+        # function, where in_name is a list of two files: on-band and
+        # off-band.  Although I generally standardize on-band to be
+        # the second file in in_name, this is a little safer and only
+        # assumes that I am plotting a file that has been processed by
+        # cormultipipe and has RAWFNAME
+        in_name = os.path.basename(ccd_in.meta['RAWFNAME'])
+        
     # This will pick up outdir, if specified
     outname = outname_creator(in_name, outname=outname, **kwargs)
     if outname is None:
         raise ValueError('in_name or outname must be specified')
     if planet_subim_backcalc is None:
-        planet_subim_backcalc = lambda *args, **kwargs:0
+        planet_subim_backcalc = lambda *args, **kwargs:0*ccd_in.unit
     background = planet_subim_backcalc(in_name=in_name,
                                        outname=outname,
                                        bmp_meta=bmp_meta, 

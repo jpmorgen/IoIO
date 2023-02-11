@@ -12,12 +12,14 @@ def master_stripchart(t_na, t_torus, nplots=4, start=None, stop=None,
                       outname=None):
 
     if start is None:
-        start = '2017-01-01'
+        start = date.fromisoformat('2017-01-01')
     if stop is None:
-        stop = '2023-02-01'
+        stop = date.today()
 
-    start = date.fromisoformat(start)
-    stop = date.fromisoformat(stop)
+    if isinstance(start, str):
+        start = date.fromisoformat(start)
+    if isinstance(stop, str):
+        stop = date.fromisoformat(stop)
 
     if nplots == 2:
         fig = plt.figure(figsize=[8.5, 8.5])
@@ -56,8 +58,11 @@ def master_stripchart(t_na, t_torus, nplots=4, start=None, stop=None,
 
 
 t_na = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
-t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
-#master_stripchart(t_na, t_torus)
+#t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
+t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
+master_stripchart(t_na, t_torus)
+#master_stripchart(t_na, t_torus, start='2022-05-01', stop='2023-02-01')
+
 #master_stripchart(t_na, t_torus, nplots=2, start='2017-01-01', stop='2023-01-01', outname='/home/jpmorgen/Papers/io/IoIO/Na_SII_time_sequence.png')
 #master_stripchart(t_na, t_torus,
 #                  outname='/home/jpmorgen/Papers/io/IoIO/Na_SII_epsilon_time_sequence.png')
@@ -65,8 +70,8 @@ t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
 #                  outname='/home/jpmorgen/Papers/io/IoIO/Na_SII_epsilon_2018.png')
 #master_stripchart(t_na, t_torus, start='2020-03-01', stop='2020-12-31',
 #                  outname='/home/jpmorgen/Papers/io/IoIO/Na_SII_epsilon_2020.png')
-master_stripchart(t_na, t_torus, start='2022-05-01', stop='2023-02-01',
-                  outname='/home/jpmorgen/Papers/io/IoIO/Na_SII_epsilon_2022-3.png')
+#master_stripchart(t_na, t_torus, start='2022-05-01', stop='2023-02-01',
+#                  outname='/home/jpmorgen/Papers/io/IoIO/Na_SII_epsilon_2022-3.png')
 
         
 #f = plt.figure(figsize=[8.5, 4])

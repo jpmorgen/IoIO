@@ -347,7 +347,10 @@ def kasten_young_airmass(ccd_in):
         # We have been here before, so exit quietly
         return ccd_in
     ccd = ccd_in.copy()
-    objctalt = ccd.meta.get('objctalt') 
+    objctalt = ccd.meta.get('objctalt')
+    if objctalt is None:
+        # Probably a bias
+        return ccd
     objctalt = float(objctalt) * u.deg
     zd = 90*u.deg - objctalt
     oairmass = ccd.meta.get('AIRMASS')

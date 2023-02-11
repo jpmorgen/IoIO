@@ -1,4 +1,4 @@
-#! /bin/bash
+#!/bin/bash
 
 # Pipeline commands that are run by IoIO1U1 xfr.csh
 

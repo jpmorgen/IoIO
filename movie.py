@@ -53,13 +53,14 @@ stop = None
 # start = '2018-05-11'
 # stop = '2018-05-20'
 
- # 2022-11-09
-start = '2022-10-21'
-stop = '2022-11-22'
+# # 2022-11-09
+# start = '2022-10-21'
+# stop = '2022-11-22'
 
 t = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
 make_movie(t, '/tmp/test_Na.mp4', start=start, stop=stop)
 #t = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
-#add_mask_col(t)
-#make_movie(t, '/tmp/test_SII.mp4', start=start, stop=stop)
+t = QTable.read('/data/IoIO/Torus/Torus.ecsv')
+add_mask_col(t)
+make_movie(t, '/tmp/test_SII.mp4', start=start, stop=stop)
 

@@ -983,7 +983,7 @@ def flat_combine_one_fdict(fdict,
     bad_fname = outbase + '_' + this_filter + '_flat_bad.fits'
 
     if num_files < min_num_flats:
-        log.warning(f"Not enough good flats found for filter {this_filter} in {directory}")
+        log.warning(f"Not enough raw flat files found for filter {this_filter} in {directory}")
         Path(bad_fname).touch()
         return False
 
@@ -1006,7 +1006,7 @@ def flat_combine_one_fdict(fdict,
     pout = cmp.pipeline(fnames, **kwargs)
     pout, fnames = prune_pout(pout, fnames)
     if len(pout) == 0:
-        log.warning(f"Not enough good flats found for filter {this_filter} in {directory}")
+        log.warning(f"No good flats found for filter {this_filter} in {directory}")
         Path(bad_fname).touch()
         return False
     out_fnames, pipe_meta = zip(*pout)

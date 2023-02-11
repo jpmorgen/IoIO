@@ -166,6 +166,10 @@ def has_filter(ccd_in, **kwargs):
         if None in result:
             return None
         return ccd_in
+    imagetyp = ccd_in.meta.get('imagetyp')
+    imagetyp = imagetyp.lower() 
+    if imagetyp in ['bias', 'dark']:
+        return ccd_in
     if ccd_in.meta.get('filter') is None:
         return None
     return ccd_in
@@ -349,8 +353,9 @@ def tavg_to_bmp_meta(ccd_in, bmp_meta=None, **kwargs):
         bmp_meta = {}
     bmp_meta['tavg'] = ccd_in.tavg
     bmp_meta['tavg_uncertainty'] = ccd_in.meta['DATE-AVG-UNCERTAINTY'] * u.s
+    bmp_meta['exptime'] = ccd_in.meta['EXPTIME'] * u.s
+    bmp_meta['exptime-uncertainty'] = ccd_in.meta['EXPTIME-UNCERTAINTY'] * u.s
     return ccd_in
-
 
 def detflux(ccd_in, exptime_unit=None, **kwargs):
     if isinstance(ccd_in, list):

@@ -9,6 +9,7 @@ from datetime import timedelta
 import numpy as np
 
 from scipy.signal import medfilt
+from scipy.ndimage import median_filter
 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -191,6 +192,7 @@ def ansa_parameters(ccd,
     
     # This is the fit object for both horizontal and vertical
     fit = fitting.LevMarLSQFitter(calc_uncertainties=True)
+    #fit = fitting.LMLSQFitter(calc_uncertainties=True)
     r_model_init = (
         models.Gaussian1D(mean=side_mult*IO_ORBIT_R,
                           stddev=0.3*u.R_jup,
@@ -205,12 +207,17 @@ def ansa_parameters(ccd,
     dRj = r_fit.stddev_0.quantity
     r_amp = r_fit.amplitude_0.quantity
 
-    #print(r_fit.fit_deriv(r_Rj))
+    # #print(r_fit.fit_deriv(r_Rj))
+    # print(r_fit)
+    # print(r_fit.mean_0.std)
+    # print(r_ansa)
+    # print(dRj)
+    # print(r_amp)
 
     if show:
         f = plt.figure(figsize=[5, 5])
         date_obs, _ = ccd.meta['DATE-OBS'].split('T') 
-        outname = outname_creator(in_name, outname=outname, **kwargs)
+        #outname = outname_creator(in_name, outname=outname, **kwargs)
         #plt.title(f'{date_obs} {os.path.basename(outname)}')
         plt.plot(r_Rj, r_prof)
         plt.plot(r_Rj, r_fit(r_Rj))
@@ -367,11 +374,12 @@ def add_medfilt(t, colname, mask_col='mask', medfilt_width=21):
         bad_mask = False
     bad_mask = np.logical_or(bad_mask, np.isnan(t[colname]))
     vals = t[colname][~bad_mask]
-    meds = medfilt(vals, medfilt_width)
+    #meds = medfilt(vals, medfilt_width)
+    meds = median_filter(vals, size=medfilt_width, mode='reflect')
     t[f'{colname}_medfilt'][~bad_mask] = meds
 
 def add_interpolated(t, colname, kernel):
-    t[f'{colname}_interp'] = interpolate_replace_nans(t[colname], kernel)
+    t[f'{colname}_interp'] = interpolate_replace_nans(t[colname], kernel, boundary='extend')
 
 def add_ansa_surf_bright_medfilt(t, ansa_bright_filtwidth=21):
     add_medfilt(t, 'ansa_right_surf_bright',
@@ -436,7 +444,7 @@ def plot_ansa_brights(t,
         handles.extend(p_med)
     if tlim is None:
         tlim = ax.get_xlim()
-    plt.title('Torus Ansa Brightnesses')
+    plt.title(r'Torus Ansa Brightnesses in [SII] 6731 $\mathrm{\AA}$')
     plt.xlabel('date')
     plt.ylabel(f'Ansa Av. Surf. Bright ({t["ansa_left_surf_bright"].unit})')
     ax.legend(handles=handles)
@@ -1005,13 +1013,14 @@ directory = '/data/IoIO/raw/20221224/'
 #t = QTable(rows=pipe_meta)
 
 
-#from IoIO.cordata import CorData
-#ccd = CorData.read('/data/IoIO/Torus/2018-05-08/SII_on-band_026-back-sub.fits')
-###ccd = CorData.read('/data/IoIO/Torus/2018-05-08/SII_on-band_017-back-sub.fits')
-##ccd.obj_center = np.asarray((ccd.meta['obj_cr1'], ccd.meta['obj_cr0']))
-###                                      
-#bmp_meta = {}
-#ccd = characterize_ansas(ccd, bmp_meta=bmp_meta, show=True)
+# from IoIO.cordata import CorData
+# ccd = CorData.read('/data/IoIO/Torus/2018-05-08/SII_on-band_026-back-sub.fits')
+# #ccd = CorData.read('/data/IoIO/Torus/20230129/SII_on-band_001-back-sub.fits')
+# ###ccd = CorData.read('/data/IoIO/Torus/2018-05-08/SII_on-band_017-back-sub.fits')
+# ##ccd.obj_center = np.asarray((ccd.meta['obj_cr1'], ccd.meta['obj_cr0']))
+# ###                                      
+# bmp_meta = {}
+# ccd = characterize_ansas(ccd, bmp_meta=bmp_meta, show=True)
 
 #plot_planet_subim(ccd, outname='/tmp/test.fits')
 
