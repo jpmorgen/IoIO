@@ -20,6 +20,7 @@ from astropy.table import QTable, vstack
 from astropy.convolution import Gaussian1DKernel, interpolate_replace_nans
 from astropy.coordinates import Angle, SkyCoord
 from astropy.modeling import models, fitting
+from astropy.timeseries import LombScargle
 
 from bigmultipipe import cached_pout, outname_creator
 
@@ -77,6 +78,17 @@ ANSA_DY = 1.25 * u.R_jup
 
 IO_ORBIT_R = 421700 * u.km 
 IO_ORBIT_R = IO_ORBIT_R.to(u.R_jup)
+
+SYSIII = 9*u.hr+55*u.min+29.71*u.s # --> Want reference other than Boulder PDF
+SYSIV_LOW = 10.1*u.hr
+SYSIV_HIGH = 10.35*u.hr
+IO_ORBIT = 42.45930686*u.hr
+EUROPA_ORBIT = 3.551181*u.day
+EUROPA_ORBIT = EUROPA_ORBIT.to(u.hr)
+GANYMEDE_ORBIT = 7.15455296*u.day
+GANYMEDE_ORBIT = GANYMEDE_ORBIT.to(u.hr)
+CALLISTO_ORBIT = 16.6890184*u.day
+CALLISTO_ORBIT = CALLISTO_ORBIT.to(u.hr)
 
 
 #def IPT_NPole_ang(ccd, **kwargs):
@@ -928,6 +940,223 @@ def export_for_max(directory,
         ccd.uncertainty = None
         ccd = as_single(ccd)
         ccd.write(outfname, overwrite=True)
+
+class SecAxFormatter(object):
+    """Provides second Y axis value interactive pyplot window"""
+    def __init__(self, frequency, power):
+        self.frequency = frequency
+        self.power = power
+    def __call__(self, frequency, power):
+        frequency *= self.frequency.unit
+        return \
+            f'freq: {frequency:0.4f} ' \
+            f'power: {power:0.2f} ' \
+            f'period: {1/frequency:0.2f} ' \
+            f'period: {(1/frequency).to(u.day):0.2f}'
+        #return f'{frequency} {power} {1/frequency}'
+
+#def one_over(x):
+#    """Vectorized 1/x, treating x==0 manually"""
+#    x = np.array(x).astype(float)
+#    near_zero = np.isclose(x, 0)
+#    x[near_zero] = np.inf
+#    x[~near_zero] = 1 / x[~near_zero]
+#    return x
+#
+#inverse = one_over
+#
+#fig, ax = plt.subplots()
+#ax.plot(frequency, power)
+#ax.set_xlim((min(frequency.value), max(frequency.value)))
+#ax.format_coord = CCDImageFormatter()
+##ax.set_xscale('log')
+##ax.loglog(frequency.value, power)
+#ax.set_xlabel('Frequency ' + frequency.unit.to_string())
+##ax.set_xlim((1/1000, .2))
+#plt.axvline(1/SYSIII.value, color='orange')
+#plt.axvline(1/SYSIV_LOW.value, color='green')
+#plt.axvline(1/SYSIV_HIGH.value, color='green', linestyle='--')
+#secax = ax.secondary_xaxis('top', functions=(one_over, inverse))
+##secax.set_xscale('log')
+#secax.set_xlabel('Period ' + (1/frequency).unit.to_string())
+##secax.xaxis.set_minor_locator(AutoMinorLocator())
+#plt.show()
+
+def periodogram(start, stop,
+                autopower=False,
+                min_period=9.5*u.hr,
+                max_period=11*u.hr,
+                plot_type='period',
+                torus_table='/data/IoIO/Torus/Torus.ecsv',
+                false_alarm_probability=0.99,
+                nfreq=25000,
+                plotname=None):
+
+    t = QTable.read(torus_table)
+    t.sort('tavg')
+
+    #Io_freqs = np.asarray(
+    #    (0, 1/16, 1/8, 1/4, 1/2, 3/5, 3/4, 1, 1.25, 1.5, 1.75))
+    #Io_freqs = np.asarray((0, 1, 2, 0.5))
+    Io_freqs = np.asarray((0, 1))
+    Io_freqs = Io_freqs / IO_ORBIT
+    Europa_freqs = np.asarray((0,1))
+    Europa_freqs = Europa_freqs / EUROPA_ORBIT
+    Ganymede_freqs = np.asarray((0,1))
+    Ganymede_freqs = Ganymede_freqs / GANYMEDE_ORBIT
+    #Callisto_freqs = np.asarray((0,1))
+    Callisto_freqs = np.asarray((0,))
+    Callisto_freqs = Callisto_freqs / CALLISTO_ORBIT
+    n_day_samples = 24*u.hr/min_period
+    day_freqs =  np.arange(n_day_samples)
+    day_freqs = day_freqs / (24*u.hr)
+    day_freqs[0] = 0
+    n_freqs = (len(Io_freqs)
+               * len(Europa_freqs)
+               * len(Ganymede_freqs)
+               * len(Callisto_freqs)
+               * len(day_freqs))
+    if len(Callisto_freqs) == 1:
+        # Add first Callisto in by hand.  It doesn't seem to show up
+        # at other times, probably because it is not resonant
+        n_freqs += 1
+    assert Io_freqs.unit == day_freqs.unit
+    obs_freqs = np.zeros(n_freqs) * Io_freqs.unit
+    i = 0
+    if len(Callisto_freqs) == 1:
+        obs_freqs[i] = 1 / CALLISTO_ORBIT
+        i += 1        
+    for day in day_freqs:
+        for Io in Io_freqs:
+            for Europa in Europa_freqs:
+                for Ganymede in Ganymede_freqs:
+                    for Callisto in Callisto_freqs:
+                        obs_freq = Io + Europa + Ganymede + Callisto + day
+                        obs_freqs[i] = obs_freq
+                        i += 1
+    #print(1/obs_freqs)
+    print(obs_freqs)
+    #return
+
+    # --> I need to make this is adjusted for 1lt to Jupiter I might need
+    # --> to phase by sysIII to the western ansa from the perspective of
+    # --> the sun
+
+    mask = np.logical_and(start < t['tavg'], t['tavg'] < stop)
+    mask = np.logical_and(mask, np.isfinite(t['ansa_right_surf_bright']))
+    t = t[mask]
+    #plt.plot(t['tavg'].jd, t['ansa_right_surf_bright'])
+    #plt.show()
+    t_in_hr = t['tavg'] - t['tavg'][0]
+    t_in_hr = t_in_hr.to(u.hr)
+    #t_in_hr = t_in_hr.to(u.day)
+    #plt.plot(t_in_hr, t['ansa_right_surf_bright'])
+    #plt.show()
+
+    # --> the problem of double-peaks is autopower. I want to specify
+    # --> power with my own frequency grid
+    # https://docs.astropy.org/en/stable/timeseries/lombscargle.html
+    # details
+
+
+    if autopower:
+        ls = LombScargle(t_in_hr,
+                         t['ansa_right_surf_bright'],
+                         t['ansa_right_surf_bright_err'])
+        frequency, power = ls.autopower()
+    else:
+        # This just saves computation time, which is negligible.  Aliasing
+        # is the same (or non-exisitant), at least in the sysIII/IV area
+        frequency = np.linspace(1/max_period, 1/min_period, nfreq)
+        ls = LombScargle(t_in_hr,
+                         t['ansa_right_surf_bright'],
+                         t['ansa_right_surf_bright_err'],
+                         t['ansa_right_surf_bright_err'])
+        power = ls.power(frequency)
+
+
+    # sysIII 9.92491944 h
+    # sysIV = 10.1 -- 10.4
+    # day = 24
+    # Io = 42.45930686
+
+
+    # For 2018 only
+    # print(1/(1/9.92491944 - 1/10.1)/24) # 23 d
+    # print(1/(1/9.92491944 - 1/10.4)/24) # 9 d # see some lumps down here
+    # 
+    # print(1/(1/9.92491944 - 1/24)) # 16.923389215755936 [see this big time]
+    # print(1/(1/9.92491944 - 1/42.45930686)) # 12.952609023297214 [small lump]
+    # 
+    # print(1/((1/9.92491944 - 1/12)) # 57 hr
+
+    # Lump 23.48 -- 24.36 hr -- largest complex
+    # Lump near 22 & 21 medium noise
+    # 18.8, 18.5, 18.0 ,17.9, 17.4 smallish noise
+    # Multi-lump 16.44 -- 17.11 pretty big = beat sysIII to 24 hr
+    # Lumps 11.8 -- 12.1, with peak 11.878, 12.0, 12.121
+
+    # So what is offsetting peaks by a little -- aliasing by a long
+    # signal.  Biggest power is in period of:
+
+    # 36 days is moderate
+    # 150 days is huge
+
+    # print(1/(1/(9.92491944*u.hr) - 1/(150*u.day)))
+    # # 9.952357313492922 h
+    # # Indeed, so I have power coming in from my overall observing period
+    # print(1/(1/(9.92491944*u.hr) - 1/(30*u.day)))
+    # # 10.063642835014518 h
+    # # Hmm.  That doesn't move it as much as I would like
+
+    start_str, _ = start.fits.split('T')
+    stop_str, _ = stop.fits.split('T')
+
+
+    fig,ax = plt.subplots(figsize=[22, 17])
+
+    ax.set_title(f'{start_str} -- {stop_str}')
+    # Awkward because of how Quntities are handled
+    #Io_alias_freqs = np.asarray(( 0.75, 3/5, 1/2))
+    #Io_alias_freqs = Io_alias_freqs/IO_ORBIT + 1/(12*u.hr)
+        
+    if plot_type == 'period':
+        ax.plot(1/frequency, power)
+        ax.xlim((min_period.value, max_period.value))
+        ax.set_xlabel('Period ' + (1/frequency).unit.to_string())
+        sysIII_plot = SYSIII.value
+        sysIV_low = SYSIV_LOW.value
+        sysIV_high = SYSIV_HIGH.value
+        obs_freqs_to_plot = 1/obs_freqs.value
+    if plot_type == 'frequency':
+        ax.plot(frequency, power)
+        #plt.xlim((1/max_period.value, 1/min_period.value))
+        ax.set_xlabel('Frequency ' + frequency.unit.to_string())
+        sysIII_plot = 1/SYSIII.value
+        sysIV_low = 1/SYSIV_LOW.value
+        sysIV_high = 1/SYSIV_HIGH.value
+        obs_freqs_to_plot = obs_freqs.value
+
+    ax.set_ylabel('Normalized power')
+    ax.axvline(sysIII_plot, color='orange')
+    ax.axvline(sysIV_low, color='green')
+    ax.axvline(sysIV_high, color='green', linestyle='--')
+    ax.axhline(ls.false_alarm_level(false_alarm_probability),
+                                    color='red')
+    for obs_freq in obs_freqs_to_plot:
+        ax.axvline(obs_freq, color='cyan', linestyle='-')
+    plt.legend(['Periodogram',
+                r'$\mathrm{\lambda_{III}}$',
+                r'$\mathrm{\lambda_{IV}}$ low',
+                r'$\mathrm{\lambda_{IV}}$ high',
+                f'{false_alarm_probability*100:2.0f}% confidence',
+                'Moons'])
+    ax.format_coord = SecAxFormatter(frequency, power)
+    if plotname:
+        savefig_overwrite(plotname)
+    else:
+        plt.show()
+    #print(len(frequency))
 
 class TorusArgparseHandler(SSArgparseHandler,
                            CorPhotometryArgparseMixin, CalArgparseHandler):
