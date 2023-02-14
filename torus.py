@@ -20,7 +20,7 @@ from astropy.table import QTable, vstack
 from astropy.convolution import Gaussian1DKernel, interpolate_replace_nans
 from astropy.coordinates import Angle, SkyCoord
 from astropy.modeling import models, fitting
-from astropy.timeseries import LombScargle
+from astropy.timeseries import TimeSeries, LombScargle
 
 from bigmultipipe import cached_pout, outname_creator
 
@@ -377,6 +377,7 @@ def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):
         t['mask'] = np.logical_or(t['mask'], t['mean_image'] > 200*u.R)
 
 def add_medfilt(t, colname, mask_col='mask', medfilt_width=21):
+    """TABLE MUST BE SORTED FIRST"""
     t[f'{colname}_medfilt'] = np.NAN
     if len(t) < medfilt_width/2:
         return
@@ -982,30 +983,45 @@ class SecAxFormatter(object):
 ##secax.xaxis.set_minor_locator(AutoMinorLocator())
 #plt.show()
 
+def one_over(x):
+    """Vectorized 1/x, treating x==0 manually"""
+    x = np.array(x).astype(float)
+    near_zero = np.isclose(x, 0)
+    x[near_zero] = np.inf
+    x[~near_zero] = 1 / x[~near_zero]
+    return x
+
 def periodogram(start, stop,
                 autopower=False,
                 min_period=9.5*u.hr,
                 max_period=11*u.hr,
                 plot_type='period',
+                side=None,
                 torus_table='/data/IoIO/Torus/Torus.ecsv',
-                false_alarm_probability=0.99,
+                false_alarm_level=0.001,
                 nfreq=25000,
-                plotname=None):
+                plotdir=None):
 
     t = QTable.read(torus_table)
     t.sort('tavg')
 
-    #Io_freqs = np.asarray(
-    #    (0, 1/16, 1/8, 1/4, 1/2, 3/5, 3/4, 1, 1.25, 1.5, 1.75))
-    #Io_freqs = np.asarray((0, 1, 2, 0.5))
-    Io_freqs = np.asarray((0, 1))
+    if side == 'west':
+        side = 'right'
+    elif side == 'east':
+        side = 'left'
+    assert side == 'left' or side == 'right'
+    #Io_freqs = np.asarray((0, 0.5, 1, 3/2, 1.75, 2))
+    Io_freqs = np.asarray((0, 1, 3/2, 1.75))
     Io_freqs = Io_freqs / IO_ORBIT
-    Europa_freqs = np.asarray((0,1))
+    #Europa_freqs = np.asarray((0, 0.5, 1, 3/2, 1.75, 2))
+    Europa_freqs = np.asarray((0, 1, 3/2))
     Europa_freqs = Europa_freqs / EUROPA_ORBIT
-    Ganymede_freqs = np.asarray((0,1))
+    #Ganymede_freqs = np.asarray((0, 0.5, 1, 3/2, 1.75, 2))
+    Ganymede_freqs = np.asarray((0, 1, 3/2))
     Ganymede_freqs = Ganymede_freqs / GANYMEDE_ORBIT
-    #Callisto_freqs = np.asarray((0,1))
-    Callisto_freqs = np.asarray((0,))
+    #Callisto_freqs = np.asarray((0, 0.5, 1, 3/2, 1.75, 2))
+    Callisto_freqs = np.asarray((0, 0.5, 1, 3/2))
+    #Callisto_freqs = np.asarray((0,))
     Callisto_freqs = Callisto_freqs / CALLISTO_ORBIT
     n_day_samples = 24*u.hr/min_period
     day_freqs =  np.arange(n_day_samples)
@@ -1016,34 +1032,62 @@ def periodogram(start, stop,
                * len(Ganymede_freqs)
                * len(Callisto_freqs)
                * len(day_freqs))
-    if len(Callisto_freqs) == 1:
-        # Add first Callisto in by hand.  It doesn't seem to show up
-        # at other times, probably because it is not resonant
-        n_freqs += 1
     assert Io_freqs.unit == day_freqs.unit
     obs_freqs = np.zeros(n_freqs) * Io_freqs.unit
     i = 0
-    if len(Callisto_freqs) == 1:
-        obs_freqs[i] = 1 / CALLISTO_ORBIT
-        i += 1        
+    obs_freq = 0
+    ## Trying some dispassionate way to set limit
+    #moon_freq = 200
+    #obs_freq = 0
+    #for day in day_freqs:
+    #    obs_freq = day
+    #    for Io in Io_freqs:
+    #        if obs_freqs[i-1] + obs_freq + Io < moon_freq * Io:
+    #            obs_freq += Io
+    #        for Europa in Europa_freqs:
+    #            if obs_freqs[i-1] + obs_freq + Europa < moon_freq * Europa:
+    #                obs_freq += Europa
+    #            for Ganymede in Ganymede_freqs:
+    #                if obs_freqs[i-1] + obs_freq + Ganymede < moon_freq * Ganymede:
+    #                    obs_freq += Ganymede
+    #                for Callisto in Callisto_freqs:
+    #                    if obs_freqs[i-1] + obs_freq + Callisto < moon_freq * Callisto:
+    #                        obs_freq += Callisto
+    #                    obs_freqs[i] = obs_freq
+    #                    i += 1
     for day in day_freqs:
         for Io in Io_freqs:
+            if (Io > 1 / IO_ORBIT
+                and obs_freq > 0.900/u.hr):
+                Io = 0
             for Europa in Europa_freqs:
+                #if Europa > 0 and obs_freq > 0.076/u.hr:
+                #    Interference at 10.25hr
+                #    continue
+                if (Europa > 1 / EUROPA_ORBIT
+                    and obs_freq > 0.0195/u.hr):
+                    Europa = 0
                 for Ganymede in Ganymede_freqs:
+                    if (Ganymede > 1 / GANYMEDE_ORBIT
+                        and obs_freq > 0.0195/u.hr):
+                        #and obs_freq > 0.040/u.hr):
+                        #if Ganymede > 0 and obs_freq > 0.032/u.hr:
+                        Ganymede = 0
                     for Callisto in Callisto_freqs:
-                        obs_freq = Io + Europa + Ganymede + Callisto + day
-                        obs_freqs[i] = obs_freq
-                        i += 1
-    #print(1/obs_freqs)
-    print(obs_freqs)
-    #return
-
-    # --> I need to make this is adjusted for 1lt to Jupiter I might need
-    # --> to phase by sysIII to the western ansa from the perspective of
-    # --> the sun
+                        if (Callisto > 1 / CALLISTO_ORBIT
+                            and obs_freq > 0.0195/u.hr
+                            or Callisto > 0 / CALLISTO_ORBIT
+                            and obs_freq > 0.0923/u.hr):
+                            Callisto = 0
+                            obs_freq = Io + Europa + Ganymede + Callisto + day
+                            obs_freqs[i] = obs_freq
+                            i += 1
+                            # --> I need to make this is adjusted for 1lt to Jupiter I might need
+                            # --> to phase by sysIII to the western ansa from the perspective of
+                            # --> the sun
 
     mask = np.logical_and(start < t['tavg'], t['tavg'] < stop)
-    mask = np.logical_and(mask, np.isfinite(t['ansa_right_surf_bright']))
+    mask = np.logical_and(mask, np.isfinite(t[f'ansa_{side}_surf_bright']))
     t = t[mask]
     #plt.plot(t['tavg'].jd, t['ansa_right_surf_bright'])
     #plt.show()
@@ -1061,60 +1105,22 @@ def periodogram(start, stop,
 
     if autopower:
         ls = LombScargle(t_in_hr,
-                         t['ansa_right_surf_bright'],
-                         t['ansa_right_surf_bright_err'])
+                         t[f'ansa_{side}_surf_bright'],
+                         t[f'ansa_{side}_surf_bright_err'])
         frequency, power = ls.autopower()
     else:
         # This just saves computation time, which is negligible.  Aliasing
         # is the same (or non-exisitant), at least in the sysIII/IV area
         frequency = np.linspace(1/max_period, 1/min_period, nfreq)
         ls = LombScargle(t_in_hr,
-                         t['ansa_right_surf_bright'],
-                         t['ansa_right_surf_bright_err'],
-                         t['ansa_right_surf_bright_err'])
-        power = ls.power(frequency)
-
-
-    # sysIII 9.92491944 h
-    # sysIV = 10.1 -- 10.4
-    # day = 24
-    # Io = 42.45930686
-
-
-    # For 2018 only
-    # print(1/(1/9.92491944 - 1/10.1)/24) # 23 d
-    # print(1/(1/9.92491944 - 1/10.4)/24) # 9 d # see some lumps down here
-    # 
-    # print(1/(1/9.92491944 - 1/24)) # 16.923389215755936 [see this big time]
-    # print(1/(1/9.92491944 - 1/42.45930686)) # 12.952609023297214 [small lump]
-    # 
-    # print(1/((1/9.92491944 - 1/12)) # 57 hr
-
-    # Lump 23.48 -- 24.36 hr -- largest complex
-    # Lump near 22 & 21 medium noise
-    # 18.8, 18.5, 18.0 ,17.9, 17.4 smallish noise
-    # Multi-lump 16.44 -- 17.11 pretty big = beat sysIII to 24 hr
-    # Lumps 11.8 -- 12.1, with peak 11.878, 12.0, 12.121
-
-    # So what is offsetting peaks by a little -- aliasing by a long
-    # signal.  Biggest power is in period of:
-
-    # 36 days is moderate
-    # 150 days is huge
-
-    # print(1/(1/(9.92491944*u.hr) - 1/(150*u.day)))
-    # # 9.952357313492922 h
-    # # Indeed, so I have power coming in from my overall observing period
-    # print(1/(1/(9.92491944*u.hr) - 1/(30*u.day)))
-    # # 10.063642835014518 h
-    # # Hmm.  That doesn't move it as much as I would like
-
-    start_str, _ = start.fits.split('T')
-    stop_str, _ = stop.fits.split('T')
-
+                         t[f'ansa_{side}_surf_bright'],
+                         t[f'ansa_{side}_surf_bright_err'],
+                         t[f'ansa_{side}_surf_bright_err'])
+        power = ls.power(frequency, method='slow')
 
     fig,ax = plt.subplots(figsize=[22, 17])
-
+    start_str, _ = start.fits.split('T')
+    stop_str, _ = stop.fits.split('T')
     ax.set_title(f'{start_str} -- {stop_str}')
     # Awkward because of how Quntities are handled
     #Io_alias_freqs = np.asarray(( 0.75, 3/5, 1/2))
@@ -1122,42 +1128,127 @@ def periodogram(start, stop,
         
     if plot_type == 'period':
         ax.plot(1/frequency, power)
-        ax.xlim((min_period.value, max_period.value))
+        ax.set_xlim((max_period.value, min_period.value))
+        #ax.set_xlim((min_period.value, max_period.value))
         ax.set_xlabel('Period ' + (1/frequency).unit.to_string())
         sysIII_plot = SYSIII.value
         sysIV_low = SYSIV_LOW.value
         sysIV_high = SYSIV_HIGH.value
         obs_freqs_to_plot = 1/obs_freqs.value
+        top_ax_label = 'Frequency ' + frequency.unit.to_string()
     if plot_type == 'frequency':
         ax.plot(frequency, power)
-        #plt.xlim((1/max_period.value, 1/min_period.value))
+        plt.xlim((1/max_period.value, 1/min_period.value))
         ax.set_xlabel('Frequency ' + frequency.unit.to_string())
         sysIII_plot = 1/SYSIII.value
         sysIV_low = 1/SYSIV_LOW.value
         sysIV_high = 1/SYSIV_HIGH.value
         obs_freqs_to_plot = obs_freqs.value
+        top_ax_label = 'Period ' + (1/frequency).unit.to_string()
 
     ax.set_ylabel('Normalized power')
     ax.axvline(sysIII_plot, color='orange')
     ax.axvline(sysIV_low, color='green')
     ax.axvline(sysIV_high, color='green', linestyle='--')
-    ax.axhline(ls.false_alarm_level(false_alarm_probability),
+    ax.axhline(ls.false_alarm_level(false_alarm_level),
                                     color='red')
+    
     for obs_freq in obs_freqs_to_plot:
         ax.axvline(obs_freq, color='cyan', linestyle='-')
     plt.legend(['Periodogram',
                 r'$\mathrm{\lambda_{III}}$',
                 r'$\mathrm{\lambda_{IV}}$ low',
                 r'$\mathrm{\lambda_{IV}}$ high',
-                f'{false_alarm_probability*100:2.0f}% confidence',
+                f'{false_alarm_level} false alarm level',
                 'Moons'])
     ax.format_coord = SecAxFormatter(frequency, power)
-    if plotname:
+
+    secax = ax.secondary_xaxis('top', functions=(one_over, one_over))
+    secax.set_xlabel(top_ax_label)
+    plt.minorticks_on()
+    # This doesn't work for some reason
+    #secax.tick_params(axis='x', which='minor')
+
+    min_period_str = min_period.to_string()
+    min_period_str = min_period_str.replace(' ', '_')
+    max_period_str = max_period.to_string()
+    max_period_str = max_period_str.replace(' ', '_')
+    if plotdir:
+        plotname = f'periodogram_{plot_type}_{side_str}_{start_str}--{stop_str}_{min_period_str}-{max_period_str}.png'
+        plotname = os.path.join(plotdir, plotname)
         savefig_overwrite(plotname)
     else:
         plt.show()
-    #print(len(frequency))
+    plt.close()
 
+def phase_plot(start, stop, fold_period=SYSIII,
+               side=None,
+               plotdir=None):
+    torus_table='/data/IoIO/Torus/Torus.ecsv'
+    t = QTable.read(torus_table)
+    t.sort('tavg')
+    if side == 'west':
+        side = 'right'
+    elif side == 'east':
+        side = 'left'
+    if side == 'right':
+        side_str = 'West'
+    elif side == 'left':
+        side_str = 'East'
+    else:
+        raise ValueError(f'Invalid side: {side}')
+
+    t = t[~t['mask']]
+    mask = np.logical_and(start < t['tavg'], t['tavg'] < stop)
+    mask = np.logical_and(mask, np.isfinite(t[f'ansa_{side}_surf_bright']))
+    t = t[mask]
+
+    add_ansa_surf_bright_medfilt(t)
+
+    ts = TimeSeries(time=t['tavg'])
+    ts[f'{side}_ansa_surf_bright'] = t[f'ansa_{side}_surf_bright']
+
+    ts_folded = ts.fold(period=fold_period)
+    ts_folded.sort('time')
+
+    ### This wasn't nearly as good as the median filtering
+    ##kernel = Gaussian1DKernel(stddev=50)
+    ##ts_folded['west_ansa_surf_bright_gauss'] = convolve(
+    ##    ts_folded['west_ansa_surf_bright'], kernel)
+
+    ts_folded[f'{side}_ansa_surf_bright']
+
+    add_medfilt(ts_folded, f'{side}_ansa_surf_bright',
+                medfilt_width=51)
+
+    plt.plot(ts_folded.time.jd*24.,
+             ts_folded[f'{side}_ansa_surf_bright'], 'k.')
+    plt.plot(ts_folded.time.jd*24.,
+             ts_folded[f'{side}_ansa_surf_bright_medfilt'], 'r-')
+    #plt.plot(ts_folded.time.jd*24.,
+    #         ts_folded['west_ansa_surf_bright_gauss'], 'c-')
+
+    plt.ylim((0, 300))
+    # This masks potentially spurious signals at some periods
+    #plt.plot(ts_folded.time.jd*24.,
+    #         ts_folded['west_ansa_normed'], 'k.')
+    #plt.ylim((0.25, 2))
+    plt.xlabel('Hour')
+    plt.ylabel(f'{side_str} Ansa Surf. Bright. '
+               f'({ts_folded[f"{side_str}_ansa_surf_bright"].unit})')
+    start_str, _ = start.fits.split('T')
+    stop_str, _ = stop.fits.split('T')
+    fold_str = f'{fold_period:3.3f}'
+    plt.title(f'{start_str} -- {stop_str} Folded at {fold_str}')
+    fold_str = fold_str.replace(' ', '_')
+    if plotdir:
+        plotname = f'phase_plot_{side_str}_{start_str}--{stop_str}_{fold_str}.png'
+        plotname = os.path.join(plotdir, plotname)
+        savefig_overwrite(plotname)
+    else:
+        plt.show()
+    plt.close()
+    
 class TorusArgparseHandler(SSArgparseHandler,
                            CorPhotometryArgparseMixin, CalArgparseHandler):
     def add_all(self):

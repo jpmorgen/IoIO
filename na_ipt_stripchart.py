@@ -56,25 +56,23 @@ def master_stripchart(t_na, t_torus, nplots=4, start=None, stop=None,
         savefig_overwrite(outname)
         plt.close()
 
+outdir = '/home/jpmorgen/Papers/io/IoIO_2017--2022/'
 
 t_na = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
 #t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
 t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
 master_stripchart(t_na, t_torus)
-#master_stripchart(t_na, t_torus, start='2022-05-01', stop='2023-02-01')
-
-#master_stripchart(t_na, t_torus, nplots=2, start='2017-01-01', stop='2023-01-01', outname='/home/jpmorgen/Papers/io/IoIO/Na_SII_time_sequence.png')
-#master_stripchart(t_na, t_torus,
-#                  outname='/home/jpmorgen/Papers/io/IoIO/Na_SII_epsilon_time_sequence.png')
-#master_stripchart(t_na, t_torus, start='2018-01-01', stop='2018-08-01',
-#                  outname='/home/jpmorgen/Papers/io/IoIO/Na_SII_epsilon_2018.png')
-#master_stripchart(t_na, t_torus, start='2020-03-01', stop='2020-12-31',
-#                  outname='/home/jpmorgen/Papers/io/IoIO/Na_SII_epsilon_2020.png')
-#master_stripchart(t_na, t_torus, start='2022-05-01', stop='2023-02-01',
-#                  outname='/home/jpmorgen/Papers/io/IoIO/Na_SII_epsilon_2022-3.png')
-
-        
-#f = plt.figure(figsize=[8.5, 4])
-#torus_stripchart('/data/IoIO/Torus/Torus.ecsv', '/tmp', n_plots=1,
-#                 tlim=(start, stop),
-#                 fig=f)
+###master_stripchart(t_na, t_torus, start='2022-05-01', stop='2023-02-01')
+##
+##master_stripchart(t_na, t_torus, nplots=2, start='2017-01-01', stop='2023-03-01', outname='/home/jpmorgen/Papers/io/IoIO_2017--2022/Na_SII_time_sequence_2023.png')
+##master_stripchart(t_na, t_torus,
+##                  outname=outdir + 'Na_SII_epsilon_time_sequence.png')
+##master_stripchart(t_na, t_torus, start='2018-01-01', stop='2018-08-01',
+##                  outname=outdir + 'Na_SII_epsilon_2018.png')
+##master_stripchart(t_na, t_torus, start='2019-02-01', stop='2019-11-01',
+##                  outname=outdir + 'Na_SII_epsilon_2019.png')
+##master_stripchart(t_na, t_torus, start='2020-03-01', stop='2020-12-31',
+##                  outname=outdir + 'Na_SII_epsilon_2020.png')
+##master_stripchart(t_na, t_torus, start='2022-05-01', stop='2023-03-01',
+##                  outname=outdir + 'Na_SII_epsilon_2022-3.png')
+##

@@ -57,7 +57,7 @@ from IoIO.na_meso import (NaMeso, NaMesoArgparseHandler, sun_angles,
 from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
                                   TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
                                   on_off_pipeline)
-from IoIO.torus import closest_galsat_to_jupiter, add_mask_col
+from IoIO.torus import closest_galsat_to_jupiter, add_mask_col, add_medfilt
 
 BASE = 'Na_nebula'
 OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
@@ -542,7 +542,8 @@ def plot_nightly_medians(table_or_fname,
                          min_av_ap_dist=6*u.R_jup,
                          max_av_ap_dist=25*u.R_jup,
                          show=False,
-                         fig_close=False):
+                         fig_close=False,
+                         max_night_gap=15):
     if isinstance(table_or_fname, str):
         t = QTable.read(table_or_fname)
     else:
@@ -551,7 +552,14 @@ def plot_nightly_medians(table_or_fname,
         fig = plt.figure()
     if ax is None:
         ax = plt.subplot()
+
+    custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f'])
+    plt.rc('axes', prop_cycle=custom_cycler)
+        
     day_table = unique(t, keys='ijd')
+    day_table.sort('ijd')
+    deltas = day_table['ijd'][1:] - day_table['ijd'][0:-1]
+    gap_idx = np.flatnonzero(deltas > max_night_gap)
     day_table['itdatetime'] = Time(day_table['ijd'], format='jd').datetime
     biweight_encoder = ColnameEncoder('biweight', formatter='.1f')
     biweight_cols = biweight_encoder.colbase_list(day_table.colnames)
@@ -561,12 +569,20 @@ def plot_nightly_medians(table_or_fname,
         av_ap = biweight_encoder.from_colname(bwt_col)
         if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
             continue
-        plt.plot(day_table['itdatetime'], day_table[bwt_col], '.',
-                 label=f'{av_ap.value} R$_\mathrm{{J}}$')
-        # Lots of big error bars
-        #plt.errorbar(day_table['itdatetime'], day_table[bwt_col].value, 
-        #             day_table[bwt_col].value, fmt='.', 
-        #             label=f'{av_ap}')
+        plt.errorbar(day_table['itdatetime'], day_table[bwt_col].value, 
+                     day_table[std_col].value, fmt='.', 
+                     label=f'{av_ap.value} R$_\mathrm{{J}}$', alpha=0.25)
+        add_medfilt(day_table, bwt_col)
+        # Quick-and-dirty gap work.  Could do this in the day_table,
+        # but I would need to muck with all of the columns
+        times = day_table['itdatetime']
+        vals = day_table[bwt_col+'_medfilt']
+        times = np.append(times, times[gap_idx] + datetime.timedelta(days=1))
+        vals = np.append(vals, (np.NAN, ) * len(gap_idx))
+        sort_idx = np.argsort(times)
+        plt.plot(times[sort_idx], vals[sort_idx], '-',
+                 label=f'{av_ap.value} R$_\mathrm{{J}}$ medfilt', linewidth=2)
+        
     plt.xlabel('date')
     plt.ylabel(f'Surf. bright ({t[bwt_col].unit})')
     plt.title('Na nebula -- nightly medians')
