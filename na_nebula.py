@@ -543,6 +543,7 @@ def plot_nightly_medians(table_or_fname,
                          max_av_ap_dist=25*u.R_jup,
                          show=False,
                          fig_close=False,
+                         medfilt_width=21,
                          max_night_gap=15):
     if isinstance(table_or_fname, str):
         t = QTable.read(table_or_fname)
@@ -572,7 +573,7 @@ def plot_nightly_medians(table_or_fname,
         plt.errorbar(day_table['itdatetime'], day_table[bwt_col].value, 
                      day_table[std_col].value, fmt='.', 
                      label=f'{av_ap.value} R$_\mathrm{{J}}$', alpha=0.25)
-        add_medfilt(day_table, bwt_col)
+        add_medfilt(day_table, bwt_col, medfilt_width=medfilt_width)
         # Quick-and-dirty gap work.  Could do this in the day_table,
         # but I would need to muck with all of the columns
         times = day_table['itdatetime']
@@ -590,7 +591,7 @@ def plot_nightly_medians(table_or_fname,
         tlim = ax.get_xlim()
     ax.set_xlim(tlim)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
-    plt.legend()
+    plt.legend(ncol=2)
     fig.autofmt_xdate()
     if show:
         plt.show()

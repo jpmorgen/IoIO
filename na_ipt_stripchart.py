@@ -9,7 +9,7 @@ from IoIO.na_nebula import plot_nightly_medians
 from IoIO.torus import plot_ansa_brights, plot_epsilons, plot_ansa_pos
 
 def master_stripchart(t_na, t_torus, nplots=4, start=None, stop=None,
-                      outname=None):
+                      na_medfilt_width=11, outname=None):
 
     if start is None:
         start = date.fromisoformat('2017-01-01')
@@ -22,15 +22,16 @@ def master_stripchart(t_na, t_torus, nplots=4, start=None, stop=None,
         stop = date.fromisoformat(stop)
 
     if nplots == 2:
-        fig = plt.figure(figsize=[8.5, 8.5])
+        fig = plt.figure(figsize=[11, 11])
     else:
-        fig = plt.figure(figsize=[22, 17])
+        fig = plt.figure(figsize=[15, 11.6])
     ax = plt.subplot(nplots, 1, 1)
 
     plot_nightly_medians(t_na,
                          fig=fig, ax=ax,
                          tlim=(start, stop),
-                         show=False)
+                         show=False,
+                         medfilt_width=na_medfilt_width)
 
     ax = plt.subplot(nplots, 1, 2)
     plot_ansa_brights(t_torus,
@@ -59,12 +60,18 @@ def master_stripchart(t_na, t_torus, nplots=4, start=None, stop=None,
 outdir = '/home/jpmorgen/Papers/io/IoIO_2017--2022/'
 
 t_na = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
-#t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
-t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
-master_stripchart(t_na, t_torus)
+t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
+#t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
+#master_stripchart(t_na, t_torus)
+#master_stripchart(t_na, t_torus, start='2018-01-01', stop='2018-08-01',)
+#master_stripchart(t_na, t_torus, start='2019-01-01', stop='2019-12-31',)
+#master_stripchart(t_na, t_torus, start='2020-01-01', stop='2020-12-31',)
+#master_stripchart(t_na, t_torus, start='2022-01-01', stop='2023-04-01',)
 ###master_stripchart(t_na, t_torus, start='2022-05-01', stop='2023-02-01')
 ##
-##master_stripchart(t_na, t_torus, nplots=2, start='2017-01-01', stop='2023-03-01', outname='/home/jpmorgen/Papers/io/IoIO_2017--2022/Na_SII_time_sequence_2023.png')
+master_stripchart(
+    t_na, t_torus, nplots=2,
+    start='2017-01-01', stop='2023-03-01')#, outname='~/Papers/io/IoIO_2017--2023_GRL/Na_SII_time_sequence.eps')
 ##master_stripchart(t_na, t_torus,
 ##                  outname=outdir + 'Na_SII_epsilon_time_sequence.png')
 ##master_stripchart(t_na, t_torus, start='2018-01-01', stop='2018-08-01',
@@ -76,3 +83,6 @@ master_stripchart(t_na, t_torus)
 ##master_stripchart(t_na, t_torus, start='2022-05-01', stop='2023-03-01',
 ##                  outname=outdir + 'Na_SII_epsilon_2022-3.png')
 ##
+
+#from IoIO.na_nebula import plot_obj_surf_bright
+#plot_obj_surf_bright(t_na, show=True, fig_close=True)

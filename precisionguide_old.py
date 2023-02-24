@@ -3269,8 +3269,10 @@ def GuideBoxMover(args):
         last_modtime = 0
         while True:
             if MC.horizon_limit():
-                log.error('GuideBoxMover: Horizon limit reached')
-                return False
+                # Returning false seemed to confuse process that popened us 
+                log.error('GuideBoxMover: Horizon limit reached.  Doing nothing')
+                time.sleep(3)
+                continue
     
             # --> Make this sleep time variable based on a fraction of the
             # --> expected motion calculated below

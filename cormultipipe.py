@@ -221,7 +221,7 @@ def light_image(im, light_tolerance=3, **kwargs):
 def mean_image(ccd, bmp_meta=None, **kwargs):
     if bmp_meta is None:
         bmp_meta = {}
-    m = np.mean(ccd) * ccd.unit
+    m = np.nanmean(ccd) * ccd.unit
     bmp_meta['mean_image'] = m
     return ccd
 
@@ -622,9 +622,9 @@ def obj_surface_bright(ccd_in, bmp_meta=None, **kwargs):
     jup_sum, jup_area = sum_ccddata(subim)
     sb = jup_sum / jup_area
     if ccd.uncertainty.uncertainty_type == 'std':
-        dev = np.sum(subim.uncertainty.array**2)
+        dev = np.nansum(subim.uncertainty.array**2)
     else:
-        dev = np.sum(subim.uncertainty.array)
+        dev = np.nansum(subim.uncertainty.array)
     sb_err = dev**-0.5*ccd.unit*u.pixel**2 / jup_area
     osb_dict = {'obj_surf_bright': sb,
                 'obj_surf_bright_err': sb_err}

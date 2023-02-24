@@ -23,7 +23,6 @@ import matplotlib.pyplot as plt
 import sx694
 import precisionguide_old as pg
 
-HORIZON_LIMIT = 7
 SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 
 # 2018 end of run
@@ -1004,7 +1003,7 @@ def ACP_IPT_Na_R(args):
             if ((time.time() + downloadtime*4*3) > Tend):
                 log.info('Exposure would extend past end of ACP exposure, returning') 
                 return
-            if P.MC.Telescope.Altitude < HORIZON_LIMIT:
+            if P.MC.Telescope.Altitude < P.MC.horizon_limit():
                 log.info('Telescope below horizon limit')
                 return
             for ifilt in range(1):
@@ -1102,7 +1101,7 @@ def ACP_IPT_Na_R(args):
                                 filt=7)
 
             while True:
-                if P.MC.Telescope.Altitude < HORIZON_LIMIT:
+                if P.MC.Telescope.Altitude < P.MC.horizon_limit():
                     log.info('Telescope below horizon limit')
                     return
                 #fname = pg.uniq_fname(basename, d)
@@ -1136,7 +1135,7 @@ def ACP_IPT_Na_R(args):
                 if ((time.time() + exptime) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
                     return
-                if P.MC.Telescope.Altitude < HORIZON_LIMIT:
+                if P.MC.Telescope.Altitude < P.MC.horizon_limit():
                     log.info('Telescope below horizon limit')
                     return
                 P.MC.acquire_im(pg.uniq_fname('Na_off-band_', d),
@@ -1148,7 +1147,7 @@ def ACP_IPT_Na_R(args):
                 if ((time.time() + exptime) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
                     return
-                if P.MC.Telescope.Altitude < HORIZON_LIMIT:
+                if P.MC.Telescope.Altitude < P.MC.horizon_limit():
                     log.info('Telescope below horizon limit')
                     return
                 P.MC.acquire_im(pg.uniq_fname('Na_on-band_', d),
@@ -1172,7 +1171,7 @@ def ACP_IPT_Na_R(args):
                     if ((time.time() + exptime) > Tend):
                         log.info('Exposure would extend past end of ACP exposure, returning') 
                         return
-                    if P.MC.Telescope.Altitude < HORIZON_LIMIT:
+                    if P.MC.Telescope.Altitude < P.MC.horizon_limit():
                         log.info('Telescope below horizon limit')
                         return
                     P.MC.acquire_im(pg.uniq_fname('SII_on-band_', d),
@@ -1183,7 +1182,7 @@ def ACP_IPT_Na_R(args):
                     if ((time.time() + exptime) > Tend):
                         log.info('Exposure would extend past end of ACP exposure, returning') 
                         return
-                    if P.MC.Telescope.Altitude < HORIZON_LIMIT:
+                    if P.MC.Telescope.Altitude < P.MC.horizon_limit():
                         log.info('Telescope below horizon limit')
                         return
                     P.MC.acquire_im(pg.uniq_fname('SII_off-band_', d),

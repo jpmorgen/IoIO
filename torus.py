@@ -56,8 +56,9 @@ MAX_ROOT = os.path.join(IoIO_ROOT, 'for_Max')
 # https://lasp.colorado.edu/home/mop/files/2015/02/CoOrd_systems7.pdf
 # Has sysIII of intersection of mag and equatorial plains at 290.8.
 # That means tilt is toward 200.8, which is my basic recollection
-CENTRIFUGAL_EQUATOR_AMPLITUDE = 6.8*u.deg
-JUPITER_MAG_SYSIII = 290.8*u.deg
+# --> FIX THESE to values in paper
+CENTRIFUGAL_EQUATOR_AMPLITUDE = 6.8*u.deg # --> 6.3*u.deg
+JUPITER_MAG_SYSIII = 290.8*u.deg # --> 286.61*u.deg
 MAX_N_MASK = 10
 RIGHT_INNER = 4.75 * u.R_jup
 RIGHT_OUTER = 6.75 * u.R_jup
@@ -373,8 +374,14 @@ def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):
         t['mask'] = np.logical_or(t['mask'], t['obj_to_ND'] > obj_to_ND_max)
     if 'mean_image' in t.colnames:
         # This is specific to the torus data
-        t['mask'] = np.logical_or(t['mask'], t['mean_image'] < 0*u.R)
+        t['mask'] = np.logical_or(t['mask'], t['mean_image'] < 35*u.R)
         t['mask'] = np.logical_or(t['mask'], t['mean_image'] > 200*u.R)
+    if 'ansa_right_surf_bright_err' in t.colnames:
+        # This is specific to the torus data
+        t['mask'] = np.logical_or(t['mask'],
+                                  t['ansa_right_surf_bright_err'] > 10*u.R)
+        t['mask'] = np.logical_or(t['mask'],
+                                  t['ansa_left_surf_bright_err'] > 10*u.R)
 
 def add_medfilt(t, colname, mask_col='mask', medfilt_width=21):
     """TABLE MUST BE SORTED FIRST"""
@@ -409,7 +416,7 @@ def plot_ansa_brights(t,
                       fig=None,
                       ax=None,
                       min_sb=0,
-                      max_sb=300,
+                      max_sb=250,
                       tlim=None,
                       show=False):
     if fig is None:
@@ -599,7 +606,7 @@ def torus_stripchart(table_or_fname, outdir,
                      fig=None,
                      n_plots=5,
                      min_sb=0,
-                     max_sb=300,
+                     max_sb=250,
                      tlim=None,
                      show=False):
     if isinstance(table_or_fname, str):
@@ -1009,7 +1016,12 @@ def periodogram(start, stop,
         side = 'right'
     elif side == 'east':
         side = 'left'
-    assert side == 'left' or side == 'right'
+    if side == 'right':
+        side_str = 'West'
+    elif side == 'left':
+        side_str = 'East'
+    else:
+        raise ValueError(f'Invalid side: {side}')
     #Io_freqs = np.asarray((0, 0.5, 1, 3/2, 1.75, 2))
     Io_freqs = np.asarray((0, 1, 3/2, 1.75))
     Io_freqs = Io_freqs / IO_ORBIT
@@ -1079,9 +1091,9 @@ def periodogram(start, stop,
                             or Callisto > 0 / CALLISTO_ORBIT
                             and obs_freq > 0.0923/u.hr):
                             Callisto = 0
-                            obs_freq = Io + Europa + Ganymede + Callisto + day
-                            obs_freqs[i] = obs_freq
-                            i += 1
+                        obs_freq = Io + Europa + Ganymede + Callisto + day
+                        obs_freqs[i] = obs_freq
+                        i += 1
                             # --> I need to make this is adjusted for 1lt to Jupiter I might need
                             # --> to phase by sysIII to the western ansa from the perspective of
                             # --> the sun
@@ -1121,7 +1133,7 @@ def periodogram(start, stop,
     fig,ax = plt.subplots(figsize=[22, 17])
     start_str, _ = start.fits.split('T')
     stop_str, _ = stop.fits.split('T')
-    ax.set_title(f'{start_str} -- {stop_str}')
+    ax.set_title(f'{side_str} {start_str} -- {stop_str}')
     # Awkward because of how Quntities are handled
     #Io_alias_freqs = np.asarray(( 0.75, 3/5, 1/2))
     #Io_alias_freqs = Io_alias_freqs/IO_ORBIT + 1/(12*u.hr)
@@ -1228,18 +1240,18 @@ def phase_plot(start, stop, fold_period=SYSIII,
     #plt.plot(ts_folded.time.jd*24.,
     #         ts_folded['west_ansa_surf_bright_gauss'], 'c-')
 
-    plt.ylim((0, 300))
+    plt.ylim((0, 250))
     # This masks potentially spurious signals at some periods
     #plt.plot(ts_folded.time.jd*24.,
     #         ts_folded['west_ansa_normed'], 'k.')
     #plt.ylim((0.25, 2))
     plt.xlabel('Hour')
     plt.ylabel(f'{side_str} Ansa Surf. Bright. '
-               f'({ts_folded[f"{side_str}_ansa_surf_bright"].unit})')
+               f'({ts_folded[f"{side}_ansa_surf_bright"].unit})')
     start_str, _ = start.fits.split('T')
     stop_str, _ = stop.fits.split('T')
     fold_str = f'{fold_period:3.3f}'
-    plt.title(f'{start_str} -- {stop_str} Folded at {fold_str}')
+    plt.title(f'{side_str} {start_str} -- {stop_str} Folded at {fold_str}')
     fold_str = fold_str.replace(' ', '_')
     if plotdir:
         plotname = f'phase_plot_{side_str}_{start_str}--{stop_str}_{fold_str}.png'

@@ -57,10 +57,14 @@ stop = None
 # start = '2022-10-21'
 # stop = '2022-11-22'
 
-t = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
-make_movie(t, '/tmp/test_Na.mp4', start=start, stop=stop)
-#t = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
-t = QTable.read('/data/IoIO/Torus/Torus.ecsv')
-add_mask_col(t)
+## Looking for bright start of 2022 Na outburst
+#start = '2022-05-29'
+#stop =  '2022-09-17'
+
+#t = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
+#make_movie(t, '/tmp/test_Na.mp4', start=start, stop=stop)
+t = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
+#t = QTable.read('/data/IoIO/Torus/Torus.ecsv')
+#add_mask_col(t)
 make_movie(t, '/tmp/test_SII.mp4', start=start, stop=stop)
 
