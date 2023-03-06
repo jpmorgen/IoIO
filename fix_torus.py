@@ -31,24 +31,24 @@ class FixTorus(BigMultiPipe):
 
 t = QTable.read('/data/IoIO/Torus/Torus.ecsv')
 
-#back_pipe = FixTorus()
-#
-#flist = t['outname']#[0:10]
-#pout = back_pipe.pipeline(flist, post_process_list=[calc_obj_to_ND,
-#                                                    mean_image])
-#flist, pout = prune_pout(flist, pout)
-#_ , pipe_meta = zip(*pout)
-#
-#t['mean_image'] = np.NAN * u.R
-#t['obj_to_ND'] = np.NAN * u.R
-#
-#t.add_index('outname')
-#for outname, meta in zip(flist, pipe_meta):
-#    print(f"{outname} {meta['obj_to_ND']:.2f} {meta['mean_image']:.2f}")
-#    t.loc[outname]['obj_to_ND'] = meta['obj_to_ND']
-#    t.loc[outname]['mean_image'] = meta['mean_image']
-#
-t = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
+back_pipe = FixTorus()
+
+flist = t['outname']#[0:10]
+pout = back_pipe.pipeline(flist, post_process_list=[calc_obj_to_ND,
+                                                    mean_image])
+flist, pout = prune_pout(flist, pout)
+_ , pipe_meta = zip(*pout)
+
+t['mean_image'] = np.NAN * u.R
+t['obj_to_ND'] = np.NAN * u.R
+
+t.add_index('outname')
+for outname, meta in zip(flist, pipe_meta):
+    print(f"{outname} {meta['obj_to_ND']:.2f} {meta['mean_image']:.2f}")
+    t.loc[outname]['obj_to_ND'] = meta['obj_to_ND']
+    t.loc[outname]['mean_image'] = meta['mean_image']
+
+#t = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
 add_mask_col(t)
 
 t.write('/data/IoIO/Torus/Torus_cleaned.ecsv', overwrite=True)
