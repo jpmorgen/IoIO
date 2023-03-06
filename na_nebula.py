@@ -566,13 +566,16 @@ def plot_nightly_medians(table_or_fname,
     biweight_cols = biweight_encoder.colbase_list(day_table.colnames)
     std_encoder = ColnameEncoder('std', formatter='.1f')
     std_cols = std_encoder.colbase_list(day_table.colnames)
+    point_handles = []
+    medfilt_handles = []
     for bwt_col, std_col in zip(biweight_cols, std_cols):
         av_ap = biweight_encoder.from_colname(bwt_col)
         if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
             continue
-        plt.errorbar(day_table['itdatetime'], day_table[bwt_col].value, 
-                     day_table[std_col].value, fmt='.', 
-                     label=f'{av_ap.value} R$_\mathrm{{J}}$', alpha=0.25)
+        h = plt.errorbar(day_table['itdatetime'], day_table[bwt_col].value, 
+                         day_table[std_col].value, fmt='.', 
+                         label=f'{av_ap.value} R$_\mathrm{{J}}$', alpha=0.25)
+        point_handles.append(h)        
         add_medfilt(day_table, bwt_col, medfilt_width=medfilt_width)
         # Quick-and-dirty gap work.  Could do this in the day_table,
         # but I would need to muck with all of the columns
@@ -581,9 +584,13 @@ def plot_nightly_medians(table_or_fname,
         times = np.append(times, times[gap_idx] + datetime.timedelta(days=1))
         vals = np.append(vals, (np.NAN, ) * len(gap_idx))
         sort_idx = np.argsort(times)
-        plt.plot(times[sort_idx], vals[sort_idx], '-',
-                 label=f'{av_ap.value} R$_\mathrm{{J}}$ medfilt', linewidth=2)
-        
+        h = plt.plot(times[sort_idx], vals[sort_idx], '-',
+                     label=f'{av_ap.value} R$_\mathrm{{J}}$ medfilt',
+                     linewidth=2)
+        medfilt_handles.append(h[0])
+    handles = point_handles
+    handles.extend(medfilt_handles)
+
     plt.xlabel('date')
     plt.ylabel(f'Surf. bright ({t[bwt_col].unit})')
     plt.title('Na nebula -- nightly medians')
@@ -591,7 +598,7 @@ def plot_nightly_medians(table_or_fname,
         tlim = ax.get_xlim()
     ax.set_xlim(tlim)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
-    plt.legend(ncol=2)
+    plt.legend(ncol=2, handles=handles)
     fig.autofmt_xdate()
     if show:
         plt.show()

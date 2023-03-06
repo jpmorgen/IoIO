@@ -442,9 +442,9 @@ def plot_ansa_brights(t,
         alpha = 0.1
         p_med = plt.plot(t['tavg'].datetime,
                          t['ansa_right_surf_bright_medfilt'],
-                         'k*', markersize=6, label='West medfilt')
+                         'k*', markersize=6, label='Dusk medfilt')
         #plt.plot(t['tavg'].datetime, t['ansa_left_surf_bright_medfilt'],
-        #         'k+', markersize=6, label='East medfilt')
+        #         'k+', markersize=6, label='Dawn medfilt')
     else:
         alpha = 0.5
         p_med = None
@@ -452,13 +452,13 @@ def plot_ansa_brights(t,
     p_left = plt.errorbar(t['tavg'].datetime,
                           t['ansa_left_surf_bright'].value,
                           t['ansa_left_surf_bright_err'].value,
-                          fmt='r.', alpha=alpha,
-                          label='East')
+                          fmt='b.', alpha=alpha,
+                          label='Dawn')
     p_right = plt.errorbar(t['tavg'].datetime,
                            t['ansa_right_surf_bright'].value,
                            t['ansa_right_surf_bright_err'].value,
-                           fmt='g.', alpha=alpha,
-                           label='West')
+                           fmt='r.', alpha=alpha,
+                           label='Dusk')
     handles = [p_left, p_right]
     if p_med:
         handles.extend(p_med)
@@ -541,7 +541,7 @@ def plot_epsilons(t,
     if p_med:
         handles.extend([p_med[0], p_interps[0]])
     ax.set_ylim(-0.05, 0.08)
-    plt.ylabel(r'Sky plane $|\vec\epsilon|$')
+    plt.ylabel(r'Sky plane $|\vec\epsilon|$ (dawnward)')
     plt.hlines(np.asarray((epsilon_biweight,
                            epsilon_biweight - epsilon_mad,
                            epsilon_biweight + epsilon_mad)),
@@ -553,6 +553,7 @@ def plot_epsilons(t,
     plt.title('Epsilon')
     ax.set_xlim(tlim)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
+    fig.autofmt_xdate()
 
 def plot_ansa_pos(t,
                   fig=None,
@@ -566,39 +567,50 @@ def plot_ansa_pos(t,
 
     t = t[~t['mask']]    
     add_ansa_pos_medfilt(t)
-    rights = np.abs(t['ansa_right_r_peak'])
-    lefts = np.abs(t['ansa_left_r_peak'])
+    #rights = np.abs(t['ansa_right_r_peak'])
+    #lefts = np.abs(t['ansa_left_r_peak'])
+    rights = t['ansa_right_r_peak'] - IO_ORBIT_R
+    lefts = t['ansa_left_r_peak'] + IO_ORBIT_R
     right_bad_mask = np.isnan(rights)
     rights = rights[~right_bad_mask]
     left_bad_mask = np.isnan(lefts)
     lefts = lefts[~left_bad_mask]
 
+    medfilt_handles = []
     if len(rights) and len(lefts) > 40:
         alpha = 0.2
-        plt.plot(t['tavg'].datetime, -t['ansa_left_r_peak_medfilt'],
-                 'k*', markersize=12, label='East medfilt')
-        plt.plot(t['tavg'].datetime, t['ansa_right_r_peak_medfilt'],
-                 'k+', markersize=12, label='West medfilt')
+        h = plt.plot(t['tavg'].datetime,
+                     -(t['ansa_left_r_peak_medfilt'] + IO_ORBIT_R.value),
+                     'k*', markersize=12, label='Dawn medfilt')
+        medfilt_handles.append(h[0])
+        h = plt.plot(t['tavg'].datetime,
+                     -(t['ansa_right_r_peak_medfilt'] - IO_ORBIT_R.value),
+                     'k+', markersize=12, label='Dusk medfilt')
+        medfilt_handles.append(h[0])
     else:
         alpha = 0.5
-    plt.errorbar(t['tavg'][~left_bad_mask].datetime,
-                 lefts.value,
-                 t['ansa_right_r_peak_err'][~left_bad_mask].value, fmt='r.',
-                 label='East', alpha=alpha)
-    plt.errorbar(t['tavg'][~right_bad_mask].datetime,
-                 rights.value,
-                 t['ansa_left_r_peak_err'][~right_bad_mask].value, fmt='g.',
-                 label='West', alpha=alpha)
-
+    point_handles = []
+    h = plt.errorbar(t['tavg'][~left_bad_mask].datetime,
+                     -lefts.value,
+                     t['ansa_right_r_peak_err'][~left_bad_mask].value, fmt='b.',
+                     label='Dawn', alpha=alpha)
+    point_handles.append(h)
+    h = plt.errorbar(t['tavg'][~right_bad_mask].datetime,
+                     -rights.value,
+                     t['ansa_left_r_peak_err'][~right_bad_mask].value, fmt='r.',
+                     label='Dusk', alpha=alpha)
+    point_handles.append(h)
+    handles = point_handles
+    handles.extend(medfilt_handles)
 
     #plt.plot(t['tavg'].datetime,
     #         np.abs(t['ansa_right_r_peak']) + t['ansa_right_r_stddev'],
     #         'g^')
-    plt.ylabel(r'Ansa position (R$_\mathrm{J}$)')
-    plt.axhline(IO_ORBIT_R.value, color='y', label='Io orbit')
-    ax.legend()
+    plt.ylabel(r'Dawnward ansa shift from Io orbit (R$_\mathrm{J}$)')
+    plt.axhline(0, color='y', label='Io orbit')
+    ax.legend(handles=handles, ncol=2)
     ax.set_xlim(tlim)
-    ax.set_ylim(5.4, 6.0)
+    #ax.set_ylim(5.4, 6.0)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
 
 # --> This is becoming obsolete
@@ -676,25 +688,25 @@ def torus_stripchart(table_or_fname, outdir,
     #lefts = t['ansa_left_surf_bright'][~bad_mask]
     #med_left = medfilt(lefts, 21)
     #plt.plot(t['tavg'][~bad_mask].datetime, med_left,
-    #         'k-', linewidth=3, label='East medfilt')
+    #         'k-', linewidth=3, label='Dawn medfilt')
     bad_mask = np.isnan(t['ansa_right_surf_bright'])
     rights = t['ansa_right_surf_bright'][~bad_mask]
     if len(rights) > 40:
         alpha = 0.1
         med_right = medfilt(rights, 21)
         plt.plot(t['tavg'][~bad_mask].datetime, med_right,
-                 'k-', linewidth=3, label='West medfilt')
+                 'k-', linewidth=3, label='Dusk medfilt')
     else:
         alpha = 0.5
 
     plt.errorbar(t['tavg'].datetime,
                  t['ansa_left_surf_bright'].value,
-                 t['ansa_left_surf_bright_err'].value, fmt='r.', alpha=alpha,
-                 label='East')
+                 t['ansa_left_surf_bright_err'].value, fmt='b.', alpha=alpha,
+                 label='Dawn')
     plt.errorbar(t['tavg'].datetime,
                  t['ansa_right_surf_bright'].value,
-                 t['ansa_right_surf_bright_err'].value, fmt='g.', alpha=alpha,
-                 label='West')
+                 t['ansa_right_surf_bright_err'].value, fmt='r.', alpha=alpha,
+                 label='Dusk')
     if tlim is None:
         tlim = ax.get_xlim()
     plt.ylabel(f'Ansa Av. Surf. Bright ({t["ansa_left_surf_bright"].unit})')
@@ -704,7 +716,7 @@ def torus_stripchart(table_or_fname, outdir,
     #           *tlim,
     #           colors='r',
     #           linestyles=('-', '--', '--'),
-    #           label=(f'East {left_sb_biweight:.0f} '
+    #           label=(f'Dawn {left_sb_biweight:.0f} '
     #                  f'+/- {left_sb_mad:.0f}'))
     #plt.hlines(np.asarray((right_sb_biweight.value,
     #                       right_sb_biweight.value - right_sb_mad.value,
@@ -712,7 +724,7 @@ def torus_stripchart(table_or_fname, outdir,
     #           *tlim,
     #           linestyles=('-', '--', '--'),
     #           colors='g',
-    #           label=(f'West {right_sb_biweight:.0f} '
+    #           label=(f'Dusk {right_sb_biweight:.0f} '
     #                  f'+/- {right_sb_mad:.0f}'))
     ax.legend()
     ax.set_xlim(tlim)
@@ -762,15 +774,15 @@ def torus_stripchart(table_or_fname, outdir,
     ax = plt.subplot(n_plots, 1, 3)
     plt.errorbar(t['tavg'].datetime,
                  np.abs(t['ansa_left_r_peak'].value),
-                 t['ansa_left_r_peak_err'].value, fmt='r.',
-                 label='East')
+                 t['ansa_left_r_peak_err'].value, fmt='b.',
+                 label='Dawn')
     #plt.plot(t['tavg'].datetime,
     #         np.abs(t['ansa_left_r_peak']) + t['ansa_left_r_stddev'],
     #         'r^')
     plt.errorbar(t['tavg'].datetime,
                  np.abs(t['ansa_right_r_peak'].value),
-                 t['ansa_right_r_peak_err'].value, fmt='g.',
-                 label='West')
+                 t['ansa_right_r_peak_err'].value, fmt='r.',
+                 label='Dusk')
     #plt.plot(t['tavg'].datetime,
     #         np.abs(t['ansa_right_r_peak']) + t['ansa_right_r_stddev'],
     #         'g^')
@@ -796,24 +808,24 @@ def torus_stripchart(table_or_fname, outdir,
     #f.autofmt_xdate()
     plt.xlabel(f'UT {date}')
 
-    east_sysIII = Angle(t['Jupiter_PDObsLon'] + 90*u.deg)
-    west_sysIII = Angle(t['Jupiter_PDObsLon'] - 90*u.deg)
-    east_sysIII = east_sysIII.wrap_at(360*u.deg)
-    west_sysIII = west_sysIII.wrap_at(360*u.deg)
+    dawn_sysIII = Angle(t['Jupiter_PDObsLon'] + 90*u.deg)
+    dusk_sysIII = Angle(t['Jupiter_PDObsLon'] - 90*u.deg)
+    dawn_sysIII = dawn_sysIII.wrap_at(360*u.deg)
+    dusk_sysIII = dusk_sysIII.wrap_at(360*u.deg)
 
     if n_plots == 4:
         finish_stripchart(outdir, outbase, show=show)
         return
 
     ax = plt.subplot(n_plots, 1, 5)
-    plt.errorbar(east_sysIII.value,
+    plt.errorbar(dawn_sysIII.value,
                  t['ansa_left_surf_bright'].value,
-                 t['ansa_left_surf_bright_err'].value, fmt='r.',
-                 label='East')
-    plt.errorbar(west_sysIII.value,
+                 t['ansa_left_surf_bright_err'].value, fmt='b.',
+                 label='Dawn')
+    plt.errorbar(dusk_sysIII.value,
                  t['ansa_right_surf_bright'].value,
-                 t['ansa_right_surf_bright_err'].value, fmt='g.',
-                 label='West')
+                 t['ansa_right_surf_bright_err'].value, fmt='r.',
+                 label='Dusk')
     plt.ylabel(f'Surf. Bright ({t["ansa_left_surf_bright"].unit})')
     plt.xlabel(r'Ansa $\lambda{\mathrm{III}}$')
     plt.xticks(np.arange(0,360,45))
@@ -1014,12 +1026,16 @@ def periodogram(start, stop,
 
     if side == 'west':
         side = 'right'
+    elif side == 'dusk':
+        side = 'right'
     elif side == 'east':
         side = 'left'
+    elif side == 'dawn':
+        side = 'left'
     if side == 'right':
-        side_str = 'West'
+        side_str = 'Dusk'
     elif side == 'left':
-        side_str = 'East'
+        side_str = 'Dawn'
     else:
         raise ValueError(f'Invalid side: {side}')
     #Io_freqs = np.asarray((0, 0.5, 1, 3/2, 1.75, 2))
@@ -1201,12 +1217,16 @@ def phase_plot(start, stop, fold_period=SYSIII,
     t.sort('tavg')
     if side == 'west':
         side = 'right'
+    elif side == 'dusk':
+        side = 'right'
     elif side == 'east':
         side = 'left'
+    elif side == 'dawn':
+        side = 'left'
     if side == 'right':
-        side_str = 'West'
+        side_str = 'Dusk'
     elif side == 'left':
-        side_str = 'East'
+        side_str = 'Dawn'
     else:
         raise ValueError(f'Invalid side: {side}')
 
