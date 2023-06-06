@@ -4,7 +4,7 @@
 
 import os
 import argparse
-from datetime import timedelta
+import datetime
 
 import numpy as np
 
@@ -13,6 +13,7 @@ from scipy.ndimage import median_filter
 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from matplotlib.ticker import MultipleLocator
 
 from astropy import log
 import astropy.units as u
@@ -49,6 +50,7 @@ from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
 from IoIO.standard_star import (StandardStar, SSArgparseHandler,
                                 extinction_correct, rayleigh_convert)
 from IoIO.horizons import GALSATS, galsat_ephemeris
+from IoIO.juno import JunoTimes, PJAXFormatter
 
 TORUS_ROOT = os.path.join(IoIO_ROOT, 'Torus')
 MAX_ROOT = os.path.join(IoIO_ROOT, 'for_Max')
@@ -418,13 +420,31 @@ def plot_ansa_brights(t,
                       min_sb=0,
                       max_sb=250,
                       tlim=None,
-                      show=False):
+                      show=False,
+                      max_night_gap=20):
     if fig is None:
         fig = plt.figure()
     if ax is None:
         ax = plt.subplot()
 
     t = t[~t['mask']]    
+    t.sort('tavg')
+
+    # --> vstack Doesn't work with masked columns
+    ## Insert NANs in the table at times > max_night_gap so that plotted
+    ## of line of median filter has gaps
+    ## Hack to get around astropy vstack bug with location
+    #loc = t['tavg'][0].location.copy()
+    #t['tavg'].location = None
+    #deltas = t['tavg'][1:] - t['tavg'][0:-1]
+    #gap_idx = np.flatnonzero(deltas > max_night_gap)
+    #gap_times = t['tavg'][gap_idx] + TimeDelta(1, format='jd')
+    #gap_t = t[0:len(gap_idx)]
+    #gap_t['tavg'] = gap_times
+    #t = vstack([t, gap_t])
+    #t.sort('tavg')
+    #t['tavg'].location = loc
+
     add_ansa_surf_bright_medfilt(t)
     right_sb_biweight = nan_biweight(t['ansa_right_surf_bright'])
     right_sb_mad = nan_mad(t['ansa_right_surf_bright'])
@@ -438,23 +458,45 @@ def plot_ansa_brights(t,
                         mean_surf_bright + 5*max_sb_mad)
     if not np.isfinite(ylim_surf_bright[0]):
         ylim_surf_bright = None
+    datetimes = t['tavg'].datetime
     if len(t) > 40:
         alpha = 0.1
-        p_med = plt.plot(t['tavg'].datetime,
+        p_med = plt.plot(datetimes,
                          t['ansa_right_surf_bright_medfilt'],
                          'k*', markersize=6, label='Dusk medfilt')
         #plt.plot(t['tavg'].datetime, t['ansa_left_surf_bright_medfilt'],
         #         'k+', markersize=6, label='Dawn medfilt')
+        ## Add gaps as NANs so plot with line makes gaps
+        #
+        ## --> This doesn't work because there are too many NANs from
+        ## the original median filtering
+        #times = t['tavg'].datetime
+        #deltas = times[1:] - times[0:-1]
+        ##print(len(deltas))
+        #one_day = datetime.timedelta(days=1)
+        #gap_idx = np.flatnonzero(deltas > max_night_gap*one_day)
+        ##print(len(gap_idx))
+        ##print(times[gap_idx])
+        ##print(times[gap_idx] + one_day)
+        #times = np.append(times, times[gap_idx] + one_day)
+        #vals = np.append(t['ansa_right_surf_bright_medfilt'],
+        #                 (np.NAN, ) * len(gap_idx))
+        #sort_idx = np.argsort(times)
+        ##print(sort_idx)
+        ##p_med = plt.plot(times[sort_idx], vals[sort_idx],
+        ##                 'k-', linewidth=2, label='Dusk medfilt')
+        #p_med = plt.plot(times[sort_idx], vals[sort_idx],
+        #                 'k*', markersize=6, label='Dusk medfilt')
     else:
         alpha = 0.5
         p_med = None
 
-    p_left = plt.errorbar(t['tavg'].datetime,
+    p_left = plt.errorbar(datetimes,
                           t['ansa_left_surf_bright'].value,
                           t['ansa_left_surf_bright_err'].value,
                           fmt='b.', alpha=alpha,
                           label='Dawn')
-    p_right = plt.errorbar(t['tavg'].datetime,
+    p_right = plt.errorbar(datetimes,
                            t['ansa_right_surf_bright'].value,
                            t['ansa_right_surf_bright_err'].value,
                            fmt='r.', alpha=alpha,
@@ -473,6 +515,15 @@ def plot_ansa_brights(t,
     #ax.set_ylim(ylim_surf_bright)
     ax.set_ylim(min_sb, max_sb)
     fig.autofmt_xdate()
+
+    jts = JunoTimes()
+    secax = ax.secondary_xaxis('top',
+                                functions=(jts.plt_date2pj, jts.pj2plt_date))
+    secax.xaxis.set_minor_locator(MultipleLocator(1))
+    secax.set_xlabel('PJ')    
+    ax.format_coord = PJAXFormatter(datetimes,
+                                    t['ansa_right_surf_bright'].value)
+                               
 
 def plot_epsilons(t,
                   fig=None,

@@ -62,13 +62,16 @@ outdir = '/data/IoIO/analysis/'
 t_na = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
 t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
 #t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
-#master_stripchart(t_na, t_torus)
-master_stripchart(t_na, t_torus, nplots=2)
+master_stripchart(t_na, t_torus)
+#master_stripchart(t_na, t_torus, nplots=2)
 #master_stripchart(t_na, t_torus, start='2018-01-01', stop='2018-08-01',)
 #master_stripchart(t_na, t_torus, start='2019-01-01', stop='2019-12-31',)
+#master_stripchart(t_na, t_torus, start='2019-01-01', stop='2019-12-31', nplots=2)
 #master_stripchart(t_na, t_torus, start='2020-01-01', stop='2020-12-31',)
+#master_stripchart(t_na, t_torus, start='2020-01-01', stop='2020-12-31', nplots=2)
 #master_stripchart(t_na, t_torus, start='2022-01-01', stop='2023-04-01',)
-###master_stripchart(t_na, t_torus, start='2022-05-01', stop='2023-02-01')
+#master_stripchart(t_na, t_torus, start='2022-05-01', stop='2023-02-01')
+#master_stripchart(t_na, t_torus, start='2022-05-01', stop='2023-02-01', nplots=2)
 
 #master_stripchart(
 #    t_na, t_torus, nplots=2,

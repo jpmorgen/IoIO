@@ -910,7 +910,10 @@ def object_to_objctradec(ccd_in, **kwargs):
     simbad_results = s.query_object(obj)
     if simbad_results is None:
         # Poke in a few target coords that aren't found in simbad
-        if obj == 'Qatar-10b':
+        if obj == 'Qatar-2b':
+            ccd.meta['OBJCTRA'] = '13h50m37.32s'
+            ccd.meta['OBJCTDEC'] = '-06d48m14.66s'
+        elif obj == 'Qatar-10b':
             ccd.meta['OBJCTRA'] = '18h57m46.54s'
             ccd.meta['OBJCTDEC'] = '69d34m15.01s'
         elif obj == 'TOI-2046b':

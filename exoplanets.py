@@ -29,7 +29,8 @@ from IoIO.cor_photometry import (KEYS_TO_SOURCE_TABLE, CorPhotometry,
 
 EXOPLANET_ROOT = '/data/Exoplanets'
 GLOB_INCLUDE = ['TOI*', 'WASP*', 'KPS*', 'HAT*', 'K2*', 'TrES*',
-                'Qatar*', 'GJ*', 'KELT*']
+                'Qatar*', 'GJ*', 'KELT*', 'KOI*', 'CoRoT*', 'Kepler*',
+                'MASCARA*', 'GPX*', 'NGTS*', 'OGLE*', 'LTT*', 'HIP*']
 
 MIN_TRANSIT_OBS_TIME = 1*u.hour
 
@@ -98,9 +99,9 @@ def estimate_exposure(vmag):
     dmag = ref_mag - vmag
     expo = (target_nonlin/ref_frac_nonlin
             *(ref_expo * dmag.physical))
-    if expo > 0.71*u.s:
+    if expo > 0.71*u.s + expo_correct:
         expo -= expo_correct
-    if expo < 0.71*u.s:
+    elif expo > 0.71*u.s:
         expo = 0.7*u.s
     return expo
 
@@ -135,9 +136,10 @@ def exoplanet_pipeline(flist,
                        **kwargs)
     #pout = cmp.pipeline([flist[0]], outdir='/tmp', overwrite=True)
     pout = cmp.pipeline(flist, outdir=reduced_directory, overwrite=True)
-    pout, flist = prune_pout(pout, flist)
+    pout, _ = prune_pout(pout, flist)
     if len(pout) == 0:
         log.warning(f'No good observations in series {flist[0]}')
+        return {}
     # The way pipeline works, these will be randomized
     outnames, bmp_meta = zip(*pout)
     keep_fits = min(keep_fits, len(outnames))
@@ -159,7 +161,6 @@ def exoplanet_directory(directory,
     collection = ccdp.ImageFileCollection(filenames=all_files,
                                           keywords=['object'])
     exoplanets = collection.values('object', unique=True)
-
     for e in exoplanets:
         # Load our object into the cache so there are no collisions
         # during multiprocessing
@@ -346,6 +347,9 @@ if __name__ == '__main__':
     aph.cmd(args)
                  
 #log.setLevel('DEBUG')
+#directory = '/data/IoIO/raw/20230504'
+#exoplanet_directory(directory)
+
 ##directory = '/data/IoIO/raw/20210921'
 #directory = '/data/IoIO/raw/20220319/'
 ##exoplanet_tree()

@@ -15,6 +15,7 @@ from scipy.signal import medfilt
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
+from matplotlib.ticker import MultipleLocator
 
 from astropy import log
 import astropy.units as u
@@ -58,6 +59,7 @@ from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
                                   TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
                                   on_off_pipeline)
 from IoIO.torus import closest_galsat_to_jupiter, add_mask_col, add_medfilt
+from IoIO.juno import JunoTimes, PJAXFormatter
 
 BASE = 'Na_nebula'
 OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
@@ -600,6 +602,14 @@ def plot_nightly_medians(table_or_fname,
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
     plt.legend(ncol=2, handles=handles)
     fig.autofmt_xdate()
+
+    jts = JunoTimes()
+    secax = ax.secondary_xaxis('top',
+                                functions=(jts.plt_date2pj, jts.pj2plt_date))
+    secax.xaxis.set_minor_locator(MultipleLocator(1))
+    secax.set_xlabel('PJ')    
+    ax.format_coord = PJAXFormatter(times[sort_idx], vals[sort_idx])
+    
     if show:
         plt.show()
     if fig_close:
