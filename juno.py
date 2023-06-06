@@ -2,14 +2,16 @@
 
 import numpy as np
 
+import matplotlib.pyplot as plt
+
 import astropy.units as u
 from astropy.time import Time
 from astroquery.jplhorizons import HorizonsClass
 
 from IoIO.horizons import OBJ_COL_NUMS
 
-MJD_MAPTLOTLIB0 = Time('1970-01-01T00:00:00', format='fits')
-MJD_MAPTLOTLIB0 = MJD_MAPTLOTLIB0.mjd
+MJD_MATPLOTLIB0 = Time(plt.rcParams['date.epoch'], format='fits')
+MJD_MATPLOTLIB0 = MJD_MATPLOTLIB0.mjd
 
 JUNO_PERIJOVES = [
     '2016-07-05T02:47:32', 
@@ -288,10 +290,10 @@ class JunoTimes():
 
     def pj2plt_date(self, pj):
         t = np.interp(pj, self.pj_list, self.pjs.mjd)
-        return t - MJD_MAPTLOTLIB0
+        return t - MJD_MATPLOTLIB0
 
     def plt_date2pj(self, plt_date):
-        t = Time(plt_date + MJD_MAPTLOTLIB0, format='mjd')
+        t = Time(plt_date + MJD_MATPLOTLIB0, format='mjd')
         return np.interp(t.mjd, self.pjs.mjd, self.pj_list)
 
 
@@ -303,7 +305,7 @@ class PJAXFormatter():
         self.jts = JunoTimes(body=body)
     def __call__(self, plt_date, y):
         pj = self.jts.plt_date2pj(plt_date)
-        dtime = Time(plt_date + MJD_MAPTLOTLIB0, format='mjd')
+        dtime = Time(plt_date + MJD_MATPLOTLIB0, format='mjd')
         dtime.format = 'fits'
         #dtime = dtime.datetime64
         #return \

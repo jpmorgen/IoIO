@@ -506,23 +506,25 @@ def plot_ansa_brights(t,
         handles.extend(p_med)
     if tlim is None:
         tlim = ax.get_xlim()
-    plt.title(r'Torus Ansa Brightnesses in [SII] 6731 $\mathrm{\AA}$')
+    #plt.title(r'Torus Ansa Brightnesses in [SII] 6731 $\mathrm{\AA}$')
     plt.xlabel('date')
     plt.ylabel(f'Ansa Av. Surf. Bright ({t["ansa_left_surf_bright"].unit})')
     ax.legend(handles=handles)
-    ax.set_xlim(tlim)
-    ax.xaxis.set_minor_locator(mdates.MonthLocator())
-    #ax.set_ylim(ylim_surf_bright)
-    ax.set_ylim(min_sb, max_sb)
-    fig.autofmt_xdate()
 
-    jts = JunoTimes()
-    secax = ax.secondary_xaxis('top',
-                                functions=(jts.plt_date2pj, jts.pj2plt_date))
-    secax.xaxis.set_minor_locator(MultipleLocator(1))
-    secax.set_xlabel('PJ')    
-    ax.format_coord = PJAXFormatter(datetimes,
-                                    t['ansa_right_surf_bright'].value)
+    # Trying to get gridspec to work with dates
+    # ax.set_xlim(tlim)
+    # ax.xaxis.set_minor_locator(mdates.MonthLocator())
+    # #ax.set_ylim(ylim_surf_bright)
+    # ax.set_ylim(min_sb, max_sb)
+    # fig.autofmt_xdate()
+    # 
+    # jts = JunoTimes()
+    # secax = ax.secondary_xaxis('top',
+    #                             functions=(jts.plt_date2pj, jts.pj2plt_date))
+    # secax.xaxis.set_minor_locator(MultipleLocator(1))
+    # secax.set_xlabel('PJ')    
+    # ax.format_coord = PJAXFormatter(datetimes,
+    #                                 t['ansa_right_surf_bright'].value)
                                
 
 def plot_epsilons(t,
@@ -602,7 +604,7 @@ def plot_epsilons(t,
     plt.axhline(0.025, color='y', label='Nominal 0.025')
     ax.legend(handles=handles)
     plt.title('Epsilon')
-    ax.set_xlim(tlim)
+    #ax.set_xlim(tlim)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
     fig.autofmt_xdate()
 
@@ -660,9 +662,10 @@ def plot_ansa_pos(t,
     plt.ylabel(r'Dawnward ansa shift from Io orbit (R$_\mathrm{J}$)')
     plt.axhline(0, color='y', label='Io orbit')
     ax.legend(handles=handles, ncol=2)
-    ax.set_xlim(tlim)
+    #ax.set_xlim(tlim)
     #ax.set_ylim(5.4, 6.0)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
+    fig.autofmt_xdate()
 
 # --> This is becoming obsolete
 def torus_stripchart(table_or_fname, outdir,

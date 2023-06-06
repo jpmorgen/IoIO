@@ -22,33 +22,42 @@ def master_stripchart(t_na, t_torus, nplots=4, start=None, stop=None,
         stop = date.fromisoformat(stop)
 
     if nplots == 2:
-        fig = plt.figure(figsize=[11, 11])
+        figsize = [11, 11]
     else:
-        fig = plt.figure(figsize=[15, 11.6])
-    ax = plt.subplot(nplots, 1, 1)
+        figsize = [15, 11.6]
 
+    # Hints from https://matplotlib.org/stable/gallery/subplots_axes_and_figures/subplots_demo.html
+    #gs = fig.add_gridspec(nplots, hspace=0)
+    # This is giving trouble with dates being expressed as datetime objects whether or not sharex=True
+    #axs = gs.subplots(sharex=True)
+    #axs = gs.subplots()
+
+    fig, axs = plt.subplots(nplots, figsize=figsize)
     plot_nightly_medians(t_na,
-                         fig=fig, ax=ax,
+                         fig=fig, ax=axs[0],
                          tlim=(start, stop),
                          show=False,
                          medfilt_width=na_medfilt_width)
 
     ax = plt.subplot(nplots, 1, 2)
     plot_ansa_brights(t_torus,
-                      fig=fig, ax=ax,
+                      fig=fig, ax=axs[1],
                       tlim=(start, stop))
 
     if nplots > 2:
         ax = plt.subplot(nplots, 1, 3)
-        plot_epsilons(t_torus, fig=fig, ax=ax,
+        plot_epsilons(t_torus, fig=fig, ax=axs[2],
                       tlim=(start, stop),
                       show=False)
 
     if nplots > 3:
         ax = plt.subplot(nplots, 1, 4)
-        plot_ansa_pos(t_torus, fig=fig, ax=ax,
+        plot_ansa_pos(t_torus, fig=fig, ax=axs[3],
                       tlim=(start, stop),
                       show=False)
+
+    #for ax in axs:
+    #    ax.label_outer()
 
     plt.tight_layout()
     if outname is None:
@@ -62,8 +71,8 @@ outdir = '/data/IoIO/analysis/'
 t_na = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
 t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
 #t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
-master_stripchart(t_na, t_torus)
-#master_stripchart(t_na, t_torus, nplots=2)
+#master_stripchart(t_na, t_torus)
+master_stripchart(t_na, t_torus, nplots=2)
 #master_stripchart(t_na, t_torus, start='2018-01-01', stop='2018-08-01',)
 #master_stripchart(t_na, t_torus, start='2019-01-01', stop='2019-12-31',)
 #master_stripchart(t_na, t_torus, start='2019-01-01', stop='2019-12-31', nplots=2)
