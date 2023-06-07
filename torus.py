@@ -385,23 +385,47 @@ def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):
         t['mask'] = np.logical_or(t['mask'],
                                   t['ansa_left_surf_bright_err'] > 10*u.R)
 
+def nan_median_filter(data, mask=True, **kwargs):
+    ndata = data.copy()
+    mask = np.logical_and(mask, ~np.isnan(data))
+    meds = median_filter(data[mask], **kwargs)
+    if isinstance(ndata, u.Quantity):
+        meds *= ndata.unit
+    ndata[mask] = meds
+    return ndata
+    
 def add_medfilt(t, colname, mask_col='mask', medfilt_width=21):
     """TABLE MUST BE SORTED FIRST"""
-    t[f'{colname}_medfilt'] = np.NAN
+    
     if len(t) < medfilt_width/2:
         return
     if mask_col in t.colnames:
         bad_mask = t[mask_col]
     else:
         bad_mask = False
-    bad_mask = np.logical_or(bad_mask, np.isnan(t[colname]))
-    vals = t[colname][~bad_mask]
+    meds = nan_median_filter(t[colname], mask=~bad_mask,
+                             size=medfilt_width, mode='reflect')
+    #bad_mask = np.logical_or(bad_mask, np.isnan(t[colname]))
+    #vals = t[colname][~bad_mask]
     #meds = medfilt(vals, medfilt_width)
-    meds = median_filter(vals, size=medfilt_width, mode='reflect')
-    t[f'{colname}_medfilt'][~bad_mask] = meds
+    #meds = median_filter(vals, size=medfilt_width, mode='reflect')
+    #t[f'{colname}_medfilt'][~bad_mask] = meds
+    t[f'{colname}_medfilt'] = meds
 
 def add_interpolated(t, colname, kernel):
-    t[f'{colname}_interp'] = interpolate_replace_nans(t[colname], kernel, boundary='extend')
+    if isinstance(t[colname], u.Quantity):
+        vals = t[colname].value
+        unit = t[colname].unit
+    else:
+        vals = t[colname]
+        unit = 1
+    if isinstance(vals, np.ma.MaskedArray):
+        vals = np.asarray(vals)
+    print(type(vals))
+    print(vals)
+    vals = interpolate_replace_nans(vals, kernel, boundary='extend')
+    t[f'{colname}_interp'] = vals*unit
+    #t[f'{colname}_interp'] = interpolate_replace_nans(t[colname], kernel, boundary='extend')
 
 def add_ansa_surf_bright_medfilt(t, ansa_bright_filtwidth=21):
     add_medfilt(t, 'ansa_right_surf_bright',
