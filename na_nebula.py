@@ -541,7 +541,9 @@ def plot_nightly_medians(table_or_fname,
                          fig=None,
                          ax=None,
                          tlim=None,
-                         min_av_ap_dist=6*u.R_jup,
+                         min_sb=0, # For plot ylim
+                         max_sb=275,
+                         min_av_ap_dist=6*u.R_jup, # selects SB boxes
                          max_av_ap_dist=25*u.R_jup,
                          show=False,
                          fig_close=False,
@@ -574,8 +576,7 @@ def plot_nightly_medians(table_or_fname,
         av_ap = biweight_encoder.from_colname(bwt_col)
         if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
             continue
-        print(day_table[bwt_col])
-        h = plt.errorbar(day_table['itdatetime'], day_table[bwt_col].value, 
+        h = ax.errorbar(day_table['itdatetime'], day_table[bwt_col].value, 
                          day_table[std_col].value, fmt='.', 
                          label=f'{av_ap.value} R$_\mathrm{{J}}$', alpha=0.25)
         point_handles.append(h)        
@@ -587,21 +588,22 @@ def plot_nightly_medians(table_or_fname,
         times = np.append(times, times[gap_idx] + datetime.timedelta(days=1))
         vals = np.append(vals, (np.NAN, ) * len(gap_idx))
         sort_idx = np.argsort(times)
-        h = plt.plot(times[sort_idx], vals[sort_idx], '-',
+        h = ax.plot(times[sort_idx], vals[sort_idx], '-',
                      label=f'{av_ap.value} R$_\mathrm{{J}}$ medfilt',
                      linewidth=2)
         medfilt_handles.append(h[0])
     handles = point_handles
     handles.extend(medfilt_handles)
 
-    plt.xlabel('date')
-    plt.ylabel(f'Surf. bright ({t[bwt_col].unit})')
-    plt.title('Na nebula -- nightly medians')
+    ax.set_xlabel('date')
+    ax.set_ylabel(f'Na Neb. Surf. Bright ({t[bwt_col].unit})')
+    #plt.title('Na nebula -- nightly medians')
     if tlim is None:
         tlim = ax.get_xlim()
     ax.set_xlim(tlim)
+    ax.set_ylim((min_sb, max_sb))
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
-    plt.legend(ncol=2, handles=handles)
+    ax.legend(ncol=2, handles=handles)
     fig.autofmt_xdate()
 
     jts = JunoTimes()

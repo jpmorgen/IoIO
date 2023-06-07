@@ -418,7 +418,7 @@ def plot_ansa_brights(t,
                       fig=None,
                       ax=None,
                       min_sb=0,
-                      max_sb=250,
+                      max_sb=225,
                       tlim=None,
                       show=False,
                       max_night_gap=20):
@@ -461,7 +461,7 @@ def plot_ansa_brights(t,
     datetimes = t['tavg'].datetime
     if len(t) > 40:
         alpha = 0.1
-        p_med = plt.plot(datetimes,
+        p_med = ax.plot(datetimes,
                          t['ansa_right_surf_bright_medfilt'],
                          'k*', markersize=6, label='Dusk medfilt')
         #plt.plot(t['tavg'].datetime, t['ansa_left_surf_bright_medfilt'],
@@ -491,12 +491,12 @@ def plot_ansa_brights(t,
         alpha = 0.5
         p_med = None
 
-    p_left = plt.errorbar(datetimes,
+    p_left = ax.errorbar(datetimes,
                           t['ansa_left_surf_bright'].value,
                           t['ansa_left_surf_bright_err'].value,
                           fmt='b.', alpha=alpha,
                           label='Dawn')
-    p_right = plt.errorbar(datetimes,
+    p_right = ax.errorbar(datetimes,
                            t['ansa_right_surf_bright'].value,
                            t['ansa_right_surf_bright_err'].value,
                            fmt='r.', alpha=alpha,
@@ -507,15 +507,15 @@ def plot_ansa_brights(t,
     if tlim is None:
         tlim = ax.get_xlim()
     #plt.title(r'Torus Ansa Brightnesses in [SII] 6731 $\mathrm{\AA}$')
-    plt.xlabel('date')
-    plt.ylabel(f'Ansa Av. Surf. Bright ({t["ansa_left_surf_bright"].unit})')
+    ax.set_xlabel('date')
+    ax.set_ylabel(f'IPT Ansa Surf. Bright ({t["ansa_left_surf_bright"].unit})')
     ax.legend(handles=handles)
 
     # Trying to get gridspec to work with dates
-    # ax.set_xlim(tlim)
-    # ax.xaxis.set_minor_locator(mdates.MonthLocator())
+    ax.set_xlim(tlim)
+    ax.xaxis.set_minor_locator(mdates.MonthLocator())
     # #ax.set_ylim(ylim_surf_bright)
-    # ax.set_ylim(min_sb, max_sb)
+    ax.set_ylim(min_sb, max_sb)
     # fig.autofmt_xdate()
     # 
     # jts = JunoTimes()
@@ -530,6 +530,8 @@ def plot_ansa_brights(t,
 def plot_epsilons(t,
                   fig=None,
                   ax=None,
+                  min_eps=-0.015,
+                  max_eps=0.06,
                   tlim=None,
                   show=False):
     if fig is None:
@@ -563,7 +565,7 @@ def plot_epsilons(t,
     if len(good_epsilons) > 20:
         alpha = 0.2
         med_epsilon = medfilt(good_epsilons, 11)
-        p_med = plt.plot(t['tavg'][~bad_mask].datetime, med_epsilon,
+        p_med = ax.plot(t['tavg'][~bad_mask].datetime, med_epsilon,
                          'k*', markersize=6, label='Medfilt')
         # These don't overlap anywhere 
         #r_med_peak = t['ansa_right_r_peak_medfilt']
@@ -579,32 +581,33 @@ def plot_epsilons(t,
         l_med_peak = t['ansa_left_r_peak_medfilt_interp']
         av_med_peak = (np.abs(r_med_peak) + np.abs(l_med_peak)) / 2
         medfilt_epsilon = -(r_med_peak + l_med_peak) / av_med_peak
-        p_interps = plt.plot(t['tavg'].datetime, medfilt_epsilon,
+        p_interps = ax.plot(t['tavg'].datetime, medfilt_epsilon,
                              'c*', markersize=3, label='From interpolations')
     else:
         alpha = 0.5
         p_med = None
        
-    p_eps = plt.errorbar(t['tavg'].datetime,
-                         epsilon.value,
-                         epsilon_err.value, fmt='k.', alpha=alpha,
-                         label='Epsilon')
+    p_eps = ax.errorbar(t['tavg'].datetime,
+                        epsilon.value,
+                        epsilon_err.value, fmt='k.', alpha=alpha,
+                        label='Epsilon')
 
     handles = [p_eps]
     if p_med:
         handles.extend([p_med[0], p_interps[0]])
     ax.set_ylim(-0.05, 0.08)
-    plt.ylabel(r'Sky plane $|\vec\epsilon|$ (dawnward)')
-    plt.hlines(np.asarray((epsilon_biweight,
+    ax.set_ylabel(r'Sky plane $|\vec\epsilon|$ (dawnward)')
+    ax.hlines(np.asarray((epsilon_biweight,
                            epsilon_biweight - epsilon_mad,
                            epsilon_biweight + epsilon_mad)),
                *tlim,
                linestyles=('-', '--', '--'),
                label=f'{epsilon_biweight:.3f} +/- {epsilon_mad:.3f}')
-    plt.axhline(0.025, color='y', label='Nominal 0.025')
+    ax.axhline(0.025, color='y', label='Nominal 0.025')
     ax.legend(handles=handles)
-    plt.title('Epsilon')
-    #ax.set_xlim(tlim)
+    #plt.title('Epsilon')
+    ax.set_xlim(tlim)
+    ax.set_ylim((min_eps, max_eps))
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
     fig.autofmt_xdate()
 
@@ -643,12 +646,12 @@ def plot_ansa_pos(t,
     else:
         alpha = 0.5
     point_handles = []
-    h = plt.errorbar(t['tavg'][~left_bad_mask].datetime,
+    h = ax.errorbar(t['tavg'][~left_bad_mask].datetime,
                      -lefts.value,
                      t['ansa_right_r_peak_err'][~left_bad_mask].value, fmt='b.',
                      label='Dawn', alpha=alpha)
     point_handles.append(h)
-    h = plt.errorbar(t['tavg'][~right_bad_mask].datetime,
+    h = ax.errorbar(t['tavg'][~right_bad_mask].datetime,
                      -rights.value,
                      t['ansa_left_r_peak_err'][~right_bad_mask].value, fmt='r.',
                      label='Dusk', alpha=alpha)
@@ -659,11 +662,11 @@ def plot_ansa_pos(t,
     #plt.plot(t['tavg'].datetime,
     #         np.abs(t['ansa_right_r_peak']) + t['ansa_right_r_stddev'],
     #         'g^')
-    plt.ylabel(r'Dawnward ansa shift from Io orbit (R$_\mathrm{J}$)')
-    plt.axhline(0, color='y', label='Io orbit')
+    ax.set_ylabel(r'Dawnward ansa shift from Io orbit (R$_\mathrm{J}$)')
+    ax.axhline(0, color='y', label='Io orbit')
     ax.legend(handles=handles, ncol=2)
-    #ax.set_xlim(tlim)
-    #ax.set_ylim(5.4, 6.0)
+    ax.set_xlim(tlim)
+    ax.set_ylim(-0.3, 0.4)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
     fig.autofmt_xdate()
 
