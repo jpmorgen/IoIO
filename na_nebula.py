@@ -601,7 +601,7 @@ def plot_nightly_medians(table_or_fname,
     if tlim is None:
         tlim = ax.get_xlim()
     ax.set_xlim(tlim)
-    ax.set_ylim((min_sb, max_sb))
+    ax.set_ylim(min_sb, max_sb)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
     ax.legend(ncol=2, handles=handles)
     fig.autofmt_xdate()

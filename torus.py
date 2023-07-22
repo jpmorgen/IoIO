@@ -413,6 +413,7 @@ def add_medfilt(t, colname, mask_col='mask', medfilt_width=21):
     t[f'{colname}_medfilt'] = meds
 
 def add_interpolated(t, colname, kernel):
+    # --> This is a bug in the making, since I am not handling the masked values properly 
     if isinstance(t[colname], u.Quantity):
         vals = t[colname].value
         unit = t[colname].unit
@@ -420,9 +421,12 @@ def add_interpolated(t, colname, kernel):
         vals = t[colname]
         unit = 1
     if isinstance(vals, np.ma.MaskedArray):
-        vals = np.asarray(vals)
-    print(type(vals))
-    print(vals)
+        # This makes masked entries into NANs, but not for astropy columns
+        # https://stackoverflow.com/questions/56213393/replace-masked-with-nan-in-numpy-masked-array        
+        vals = vals.filled(np.NAN)
+
+    # --> HACK ALERT! I need ot do this properly within the astropy ecosystem
+    vals = np.asarray(vals)
     vals = interpolate_replace_nans(vals, kernel, boundary='extend')
     t[f'{colname}_interp'] = vals*unit
     #t[f'{colname}_interp'] = interpolate_replace_nans(t[colname], kernel, boundary='extend')
@@ -535,20 +539,24 @@ def plot_ansa_brights(t,
     ax.set_ylabel(f'IPT Ansa Surf. Bright ({t["ansa_left_surf_bright"].unit})')
     ax.legend(handles=handles)
 
-    # Trying to get gridspec to work with dates
     ax.set_xlim(tlim)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
     # #ax.set_ylim(ylim_surf_bright)
     ax.set_ylim(min_sb, max_sb)
-    # fig.autofmt_xdate()
-    # 
-    # jts = JunoTimes()
-    # secax = ax.secondary_xaxis('top',
-    #                             functions=(jts.plt_date2pj, jts.pj2plt_date))
-    # secax.xaxis.set_minor_locator(MultipleLocator(1))
-    # secax.set_xlabel('PJ')    
-    # ax.format_coord = PJAXFormatter(datetimes,
-    #                                 t['ansa_right_surf_bright'].value)
+    fig.autofmt_xdate()
+    ax.format_coord = PJAXFormatter(datetimes,
+                                    t['ansa_right_surf_bright'])
+
+    #jts = JunoTimes()
+    #secax = ax.secondary_xaxis('top',
+    #                           functions=(jts.plt_date2pj, jts.pj2plt_date))
+    #secax.tick_params(tick1On=False)
+    #secax.tick_params(tick2On=False)
+    #secax.tick_params(label1On=False)
+    #secax.tick_params(label2On=False)
+    #
+    #secax.xaxis.set_minor_locator(MultipleLocator(1))
+    #secax.set_xlabel('PJ')
                                
 
 def plot_epsilons(t,
@@ -619,7 +627,6 @@ def plot_epsilons(t,
     handles = [p_eps]
     if p_med:
         handles.extend([p_med[0], p_interps[0]])
-    ax.set_ylim(-0.05, 0.08)
     ax.set_ylabel(r'Sky plane $|\vec\epsilon|$ (dawnward)')
     ax.hlines(np.asarray((epsilon_biweight,
                            epsilon_biweight - epsilon_mad,
@@ -631,9 +638,16 @@ def plot_epsilons(t,
     ax.legend(handles=handles)
     #plt.title('Epsilon')
     ax.set_xlim(tlim)
-    ax.set_ylim((min_eps, max_eps))
+    ax.set_ylim(min_eps, max_eps)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
     fig.autofmt_xdate()
+    ax.format_coord = PJAXFormatter(t['tavg'].datetime, epsilon)
+
+    #jts = JunoTimes()
+    #secax = ax.secondary_xaxis('top',
+    #                            functions=(jts.plt_date2pj, jts.pj2plt_date))
+    #secax.xaxis.set_minor_locator(MultipleLocator(1))
+    #secax.set_xlabel('PJ')    
 
 def plot_ansa_pos(t,
                   fig=None,
@@ -647,10 +661,11 @@ def plot_ansa_pos(t,
 
     t = t[~t['mask']]    
     add_ansa_pos_medfilt(t)
-    #rights = np.abs(t['ansa_right_r_peak'])
-    #lefts = np.abs(t['ansa_left_r_peak'])
+    # Make it clear we are plotting the perturbation from Io's orbital
+    # position on the right and left sides of Jupiter.  We will make t
+    # eastward (negative of these), when plotting
     rights = t['ansa_right_r_peak'] - IO_ORBIT_R
-    lefts = t['ansa_left_r_peak'] + IO_ORBIT_R
+    lefts = t['ansa_left_r_peak'] - (-IO_ORBIT_R)
     right_bad_mask = np.isnan(rights)
     rights = rights[~right_bad_mask]
     left_bad_mask = np.isnan(lefts)
@@ -660,11 +675,11 @@ def plot_ansa_pos(t,
     if len(rights) and len(lefts) > 40:
         alpha = 0.2
         h = plt.plot(t['tavg'].datetime,
-                     -(t['ansa_left_r_peak_medfilt'] + IO_ORBIT_R.value),
+                     -(t['ansa_left_r_peak_medfilt'] - (-IO_ORBIT_R)),
                      'k*', markersize=12, label='Dawn medfilt')
         medfilt_handles.append(h[0])
         h = plt.plot(t['tavg'].datetime,
-                     -(t['ansa_right_r_peak_medfilt'] - IO_ORBIT_R.value),
+                     -(t['ansa_right_r_peak_medfilt'] - IO_ORBIT_R),
                      'k+', markersize=12, label='Dusk medfilt')
         medfilt_handles.append(h[0])
     else:
@@ -693,6 +708,18 @@ def plot_ansa_pos(t,
     ax.set_ylim(-0.3, 0.4)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
     fig.autofmt_xdate()
+    ax.format_coord = PJAXFormatter(t['tavg'].datetime,
+                                    -(t['ansa_left_r_peak_medfilt'] +
+                                      IO_ORBIT_R))
+
+    #jts = JunoTimes()
+    #secax = ax.secondary_xaxis('top',
+    #                            functions=(jts.plt_date2pj, jts.pj2plt_date))
+    #secax.xaxis.set_minor_locator(MultipleLocator(1))
+    #secax.set_xlabel('PJ')    
+
+def plot_ansa_r_amplitudes():
+    pass
 
 # --> This is becoming obsolete
 def torus_stripchart(table_or_fname, outdir,
