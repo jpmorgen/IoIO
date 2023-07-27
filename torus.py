@@ -4,7 +4,7 @@
 
 import os
 import argparse
-import datetime
+from datetime import date
 
 import numpy as np
 
@@ -117,7 +117,11 @@ def bad_ansa(side):
             f'ansa_{side}_y_stddev': masked*u.R_jup,
             f'ansa_{side}_y_stddev_err': masked*u.R_jup,
             f'ansa_{side}_surf_bright': masked*u.R,
-            f'ansa_{side}_surf_bright_err': masked*u.R}
+            f'ansa_{side}_surf_bright_err': masked*u.R,
+            f'ansa_{side}_cont': masked*u.R,
+            f'ansa_{side}_cont_err': masked*u.R,
+            f'ansa_{side}_slope': masked*u.R/u.jupiterRad,
+            f'ansa_{side}_slope_err': masked*u.R/u.jupiterRad}
 
 def ansa_parameters(ccd,
                     side=None,
@@ -220,7 +224,6 @@ def ansa_parameters(ccd,
     r_fit = fit(r_model_init, r_Rj, r_prof, weights=r_dev**-0.5)
     r_ansa = r_fit.mean_0.quantity
     dRj = r_fit.stddev_0.quantity
-    r_amp = r_fit.amplitude_0.quantity
 
     # #print(r_fit.fit_deriv(r_Rj))
     # print(r_fit)
@@ -281,19 +284,27 @@ def ansa_parameters(ccd,
         return bad_ansa(side)
 
     y_pos = y_fit.mean_0.quantity
-    dy_pos = r_fit.stddev_0.quantity
+    y_pos_std = y_fit.mean_0.std or np.NAN
+    dy_pos = y_fit.stddev_0.quantity
+    dy_pos_std = y_fit.stddev_0.std or np.NAN
+    y_amplitude = y_fit.amplitude_0.quantity
     y_amplitude_std = y_fit.amplitude_0.std or np.NAN
+    # r_ansa et al. are defined above
     r_ansa_std = r_fit.mean_0.std or np.NAN
     dRj_std = r_fit.stddev_0.std or np.NAN
+    r_amp = r_fit.amplitude_0.quantity
     r_amp_std = r_fit.amplitude_0.std or np.NAN
-    y_pos_std = y_fit.mean_0.std or np.NAN
-    dy_pos_std = r_fit.stddev_0.std or np.NAN
-    
+    cont = r_fit.c0_1.quantity
+    cont_std = r_fit.c0_1.std or np.NAN
+    slope = r_fit.c1_1.quantity
+    slope_std = r_fit.c1_1.std or np.NAN
+
+
     # Units of amplitude are already in rayleigh.  When we do the
     # integral, we technically should multiply the amplitude by the
     # peak stddev.  But that gives us an intensity meausrement.  To
     # convert that to sb, we divide again by the stddev.
-    sb = (2 * np.pi)**-0.5 * y_fit.amplitude_0.quantity
+    sb = (2 * np.pi)**-0.5 * y_amplitude
     sb_err = (2 * np.pi)**-0.5 * y_amplitude_std
 
     # Update bad_ansa when changing these
@@ -308,7 +319,11 @@ def ansa_parameters(ccd,
             f'ansa_{side}_y_stddev': dy_pos,
             f'ansa_{side}_y_stddev_err': dy_pos_std * dy_pos.unit,
             f'ansa_{side}_surf_bright': sb,
-            f'ansa_{side}_surf_bright_err': sb_err * sb.unit}
+            f'ansa_{side}_surf_bright_err': sb_err * sb.unit,
+            f'ansa_{side}_cont': cont,
+            f'ansa_{side}_cont_err': cont_std * cont.unit,
+            f'ansa_{side}_slope': slope,
+            f'ansa_{side}_slope_err': slope_std * slope.unit}
 
 def closest_galsat_to_jupiter(ccd_in, bmp_meta=None, **kwargs):
     if bmp_meta is None:
@@ -370,11 +385,13 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
 
 def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):
     t['mask'] = False
-    if 'd_on_off' in t.colnames:
+    # These first few were masked when I added the columns
+    # after-the-fact in early 2023
+    if 'd_on_off' in t.colnames and not np.ma.is_masked(t['d_on_off']):        
         t['mask'] = np.logical_or(t['mask'], t['d_on_off'] > d_on_off_max)
-    if 'obj_to_ND' in t.colnames:
+    if 'obj_to_ND' in t.colnames and not np.ma.is_masked(t['obj_to_ND']):
         t['mask'] = np.logical_or(t['mask'], t['obj_to_ND'] > obj_to_ND_max)
-    if 'mean_image' in t.colnames:
+    if 'mean_image' in t.colnames and not np.ma.is_masked(t['mean_image']):
         # This is specific to the torus data
         t['mask'] = np.logical_or(t['mask'], t['mean_image'] < 35*u.R)
         t['mask'] = np.logical_or(t['mask'], t['mean_image'] > 200*u.R)
@@ -430,149 +447,258 @@ def add_interpolated(t, colname, kernel):
     vals = interpolate_replace_nans(vals, kernel, boundary='extend')
     t[f'{colname}_interp'] = vals*unit
     #t[f'{colname}_interp'] = interpolate_replace_nans(t[colname], kernel, boundary='extend')
+                  
+def plot_axhlines(ax, hlines=None, **kwargs):
+    if hlines is None:
+        return
+    for hline in hlines:
+        ax.axhline(hline)
 
-def add_ansa_surf_bright_medfilt(t, ansa_bright_filtwidth=21):
-    add_medfilt(t, 'ansa_right_surf_bright',
-                medfilt_width=ansa_bright_filtwidth)
-    add_medfilt(t, 'ansa_left_surf_bright',
-                medfilt_width=ansa_bright_filtwidth)
-    
+def plot_axvlines(ax, vlines=None, **kwargs):
+    if vlines is None:
+        return
+    for vline in vlines:
+        if isinstance(vline, tuple):
+            vline, color = vline
+        else:
+            color = None
+        vline = date.fromisoformat(vline)
+        ax.axvline(vline, color=color)
 
-def add_ansa_pos_medfilt(t, ansa_pos_filtwidth=21):
-    add_medfilt(t, 'ansa_right_r_peak', medfilt_width=ansa_pos_filtwidth)
-    add_medfilt(t, 'ansa_left_r_peak', medfilt_width=ansa_pos_filtwidth)
+def plot_column_vals(t,
+                     colnames,
+                     scale=None,
+                     fmts=None,
+                     labels=None,
+                     ylabel=None,
+                     medfilt_width=21,
+                     medfilt_colname=None, # medfilt col to plot
+                     medfilt_collabel=None,
+                     fig=None,
+                     ax=None,
+                     top_axis=False,
+                     ylim=None,
+                     tlim=None,
+                     show=False,
+                     max_night_gap=20,
+                     **kwargs): # These are passed to plot_[hv]lines
 
-def plot_ansa_brights(t,
-                      fig=None,
-                      ax=None,
-                      min_sb=0,
-                      max_sb=225,
-                      tlim=None,
-                      show=False,
-                      max_night_gap=20):
     if fig is None:
         fig = plt.figure()
     if ax is None:
         ax = plt.subplot()
+    if scale is None:
+        scale = np.full(len(colnames), 1)
 
     t = t[~t['mask']]    
     t.sort('tavg')
 
-    # --> vstack Doesn't work with masked columns
-    ## Insert NANs in the table at times > max_night_gap so that plotted
-    ## of line of median filter has gaps
-    ## Hack to get around astropy vstack bug with location
-    #loc = t['tavg'][0].location.copy()
-    #t['tavg'].location = None
-    #deltas = t['tavg'][1:] - t['tavg'][0:-1]
-    #gap_idx = np.flatnonzero(deltas > max_night_gap)
-    #gap_times = t['tavg'][gap_idx] + TimeDelta(1, format='jd')
-    #gap_t = t[0:len(gap_idx)]
-    #gap_t['tavg'] = gap_times
-    #t = vstack([t, gap_t])
-    #t.sort('tavg')
-    #t['tavg'].location = loc
+    biweights = []
+    mads = []
+    for ic, colname in enumerate(colnames):
+        add_medfilt(t, colname, medfilt_width=medfilt_width)
+        biweights.append(nan_biweight(scale[ic] * t[colname]))
+        mads.append(nan_mad(t[colname]))
+        log.info(f'{colname} * {scale[ic]} Biweight +/- MAD = {biweights[-1]} +/- {mads[-1]}')
 
-    add_ansa_surf_bright_medfilt(t)
-    right_sb_biweight = nan_biweight(t['ansa_right_surf_bright'])
-    right_sb_mad = nan_mad(t['ansa_right_surf_bright'])
-    left_sb_biweight = nan_biweight(t['ansa_left_surf_bright'])
-    left_sb_mad = nan_mad(t['ansa_left_surf_bright'])
-
-    mean_surf_bright = np.mean((left_sb_biweight.value,
-                                right_sb_biweight.value))
-    max_sb_mad = np.max((left_sb_mad.value, right_sb_mad.value))
-    ylim_surf_bright = (mean_surf_bright - 5*max_sb_mad,
-                        mean_surf_bright + 5*max_sb_mad)
-    if not np.isfinite(ylim_surf_bright[0]):
-        ylim_surf_bright = None
     datetimes = t['tavg'].datetime
-    if len(t) > 40:
+    if len(t) > 40 and medfilt_colname:
+        # Plot the median filter of the largest signal
+        ic = colnames.index(medfilt_colname)
+        if scale[ic] == 1:
+            scale_str = ''
+        else:
+            scale_str = f'{scale[ic]} * '
         alpha = 0.1
         p_med = ax.plot(datetimes,
-                         t['ansa_right_surf_bright_medfilt'],
-                         'k*', markersize=6, label='Dusk medfilt')
-        #plt.plot(t['tavg'].datetime, t['ansa_left_surf_bright_medfilt'],
-        #         'k+', markersize=6, label='Dawn medfilt')
-        ## Add gaps as NANs so plot with line makes gaps
-        #
-        ## --> This doesn't work because there are too many NANs from
-        ## the original median filtering
-        #times = t['tavg'].datetime
-        #deltas = times[1:] - times[0:-1]
-        ##print(len(deltas))
-        #one_day = datetime.timedelta(days=1)
-        #gap_idx = np.flatnonzero(deltas > max_night_gap*one_day)
-        ##print(len(gap_idx))
-        ##print(times[gap_idx])
-        ##print(times[gap_idx] + one_day)
-        #times = np.append(times, times[gap_idx] + one_day)
-        #vals = np.append(t['ansa_right_surf_bright_medfilt'],
-        #                 (np.NAN, ) * len(gap_idx))
-        #sort_idx = np.argsort(times)
-        ##print(sort_idx)
-        ##p_med = plt.plot(times[sort_idx], vals[sort_idx],
-        ##                 'k-', linewidth=2, label='Dusk medfilt')
-        #p_med = plt.plot(times[sort_idx], vals[sort_idx],
-        #                 'k*', markersize=6, label='Dusk medfilt')
+                        scale[ic] * t[f'{medfilt_colname}_medfilt'],
+                        'k*', markersize=6,
+                        label=scale_str + medfilt_collabel)
     else:
         alpha = 0.5
         p_med = None
 
-    p_left = ax.errorbar(datetimes,
-                          t['ansa_left_surf_bright'].value,
-                          t['ansa_left_surf_bright_err'].value,
-                          fmt='b.', alpha=alpha,
-                          label='Dawn')
-    p_right = ax.errorbar(datetimes,
-                           t['ansa_right_surf_bright'].value,
-                           t['ansa_right_surf_bright_err'].value,
-                           fmt='r.', alpha=alpha,
-                           label='Dusk')
-    handles = [p_left, p_right]
+    handles = []
+    for ic, colname in enumerate(colnames):
+        if scale[ic] == 1:
+            scale_str = ''
+        else:
+            scale_str = f'{scale[ic]} * '
+        h = ax.errorbar(datetimes,
+                        scale[ic] * t[colname].value,
+                        scale[ic] * t[f'{colname}_err'].value,
+                        fmt=fmts[ic], alpha=alpha,
+                        label=scale_str + labels[ic])
+        handles.append(h)
     if p_med:
+        # This gets the legend in the correct order
         handles.extend(p_med)
     if tlim is None:
         tlim = ax.get_xlim()
-    #plt.title(r'Torus Ansa Brightnesses in [SII] 6731 $\mathrm{\AA}$')
     ax.set_xlabel('date')
-    ax.set_ylabel(f'IPT Ansa Surf. Bright ({t["ansa_left_surf_bright"].unit})')
+    ax.set_ylabel(ylabel)
     ax.legend(handles=handles)
 
     ax.set_xlim(tlim)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
-    # #ax.set_ylim(ylim_surf_bright)
-    ax.set_ylim(min_sb, max_sb)
+    ax.set_ylim(ylim)
     fig.autofmt_xdate()
-    ax.format_coord = PJAXFormatter(datetimes,
-                                    t['ansa_right_surf_bright'])
+    ax.format_coord = PJAXFormatter(datetimes, t[colnames[0]])
 
-    #jts = JunoTimes()
-    #secax = ax.secondary_xaxis('top',
-    #                           functions=(jts.plt_date2pj, jts.pj2plt_date))
-    #secax.tick_params(tick1On=False)
-    #secax.tick_params(tick2On=False)
-    #secax.tick_params(label1On=False)
-    #secax.tick_params(label2On=False)
-    #
-    #secax.xaxis.set_minor_locator(MultipleLocator(1))
-    #secax.set_xlabel('PJ')
-                               
+    plot_axhlines(ax, **kwargs)
+    plot_axvlines(ax, **kwargs)
+
+    if top_axis:
+        jts = JunoTimes()
+        secax = ax.secondary_xaxis('top',
+                                   functions=(jts.plt_date2pj, jts.pj2plt_date))
+        secax.xaxis.set_minor_locator(MultipleLocator(1))
+        secax.set_xlabel('PJ')
+
+def plot_ansa_brights(t, **kwargs):
+    plot_column_vals(t, colnames=['ansa_left_surf_bright',
+                                  'ansa_right_surf_bright'],
+                     fmts=['b.', 'r.'],
+                     labels=['Dawn', 'Dusk'],
+                     ylabel=f'IPT Ansa Surf. Bright '\
+                     f'({t["ansa_left_surf_bright"].unit})',
+                     medfilt_colname='ansa_right_surf_bright',
+                     medfilt_collabel='Dusk medfilt',
+                     **kwargs)
+                     
+#def plot_ansa_brights(t,
+#                      fig=None,
+#                      ax=None,
+#                      min_sb=0,
+#                      max_sb=225,
+#                      tlim=None,
+#                      show=False,
+#                      max_night_gap=20):
+#    if fig is None:
+#        fig = plt.figure()
+#    if ax is None:
+#        ax = plt.subplot()
+#
+#    t = t[~t['mask']]    
+#    t.sort('tavg')
+#
+#    # --> vstack Doesn't work with masked columns
+#    ## Insert NANs in the table at times > max_night_gap so that plotted
+#    ## of line of median filter has gaps
+#    ## Hack to get around astropy vstack bug with location
+#    #loc = t['tavg'][0].location.copy()
+#    #t['tavg'].location = None
+#    #deltas = t['tavg'][1:] - t['tavg'][0:-1]
+#    #gap_idx = np.flatnonzero(deltas > max_night_gap)
+#    #gap_times = t['tavg'][gap_idx] + TimeDelta(1, format='jd')
+#    #gap_t = t[0:len(gap_idx)]
+#    #gap_t['tavg'] = gap_times
+#    #t = vstack([t, gap_t])
+#    #t.sort('tavg')
+#    #t['tavg'].location = loc
+#
+#    add_ansa_surf_bright_medfilt(t)
+#    right_sb_biweight = nan_biweight(t['ansa_right_surf_bright'])
+#    right_sb_mad = nan_mad(t['ansa_right_surf_bright'])
+#    left_sb_biweight = nan_biweight(t['ansa_left_surf_bright'])
+#    left_sb_mad = nan_mad(t['ansa_left_surf_bright'])
+#
+#    mean_surf_bright = np.mean((left_sb_biweight.value,
+#                                right_sb_biweight.value))
+#    max_sb_mad = np.max((left_sb_mad.value, right_sb_mad.value))
+#    ylim_surf_bright = (mean_surf_bright - 5*max_sb_mad,
+#                        mean_surf_bright + 5*max_sb_mad)
+#    if not np.isfinite(ylim_surf_bright[0]):
+#        ylim_surf_bright = None
+#    datetimes = t['tavg'].datetime
+#    if len(t) > 40:
+#        alpha = 0.1
+#        p_med = ax.plot(datetimes,
+#                         t['ansa_right_surf_bright_medfilt'],
+#                         'k*', markersize=6, label='Dusk medfilt')
+#        #plt.plot(t['tavg'].datetime, t['ansa_left_surf_bright_medfilt'],
+#        #         'k+', markersize=6, label='Dawn medfilt')
+#        ## Add gaps as NANs so plot with line makes gaps
+#        #
+#        ## --> This doesn't work because there are too many NANs from
+#        ## the original median filtering
+#        #times = t['tavg'].datetime
+#        #deltas = times[1:] - times[0:-1]
+#        ##print(len(deltas))
+#        #one_day = datetime.timedelta(days=1)
+#        #gap_idx = np.flatnonzero(deltas > max_night_gap*one_day)
+#        ##print(len(gap_idx))
+#        ##print(times[gap_idx])
+#        ##print(times[gap_idx] + one_day)
+#        #times = np.append(times, times[gap_idx] + one_day)
+#        #vals = np.append(t['ansa_right_surf_bright_medfilt'],
+#        #                 (np.NAN, ) * len(gap_idx))
+#        #sort_idx = np.argsort(times)
+#        ##print(sort_idx)
+#        ##p_med = plt.plot(times[sort_idx], vals[sort_idx],
+#        ##                 'k-', linewidth=2, label='Dusk medfilt')
+#        #p_med = plt.plot(times[sort_idx], vals[sort_idx],
+#        #                 'k*', markersize=6, label='Dusk medfilt')
+#    else:
+#        alpha = 0.5
+#        p_med = None
+#
+#    p_left = ax.errorbar(datetimes,
+#                          t['ansa_left_surf_bright'].value,
+#                          t['ansa_left_surf_bright_err'].value,
+#                          fmt='b.', alpha=alpha,
+#                          label='Dawn')
+#    p_right = ax.errorbar(datetimes,
+#                           t['ansa_right_surf_bright'].value,
+#                           t['ansa_right_surf_bright_err'].value,
+#                           fmt='r.', alpha=alpha,
+#                           label='Dusk')
+#    handles = [p_left, p_right]
+#    if p_med:
+#        handles.extend(p_med)
+#    if tlim is None:
+#        tlim = ax.get_xlim()
+#    #plt.title(r'Torus Ansa Brightnesses in [SII] 6731 $\mathrm{\AA}$')
+#    ax.set_xlabel('date')
+#    ax.set_ylabel(f'IPT Ansa Surf. Bright ({t["ansa_left_surf_bright"].unit})')
+#    ax.legend(handles=handles)
+#
+#    ax.set_xlim(tlim)
+#    ax.xaxis.set_minor_locator(mdates.MonthLocator())
+#    # #ax.set_ylim(ylim_surf_bright)
+#    ax.set_ylim(min_sb, max_sb)
+#    fig.autofmt_xdate()
+#    ax.format_coord = PJAXFormatter(datetimes,
+#                                    t['ansa_right_surf_bright'])
+#
+#    #jts = JunoTimes()
+#    #secax = ax.secondary_xaxis('top',
+#    #                           functions=(jts.plt_date2pj, jts.pj2plt_date))
+#    #secax.tick_params(tick1On=False)
+#    #secax.tick_params(tick2On=False)
+#    #secax.tick_params(label1On=False)
+#    #secax.tick_params(label2On=False)
+#    #
+#    #secax.xaxis.set_minor_locator(MultipleLocator(1))
+#    #secax.set_xlabel('PJ')
 
 def plot_epsilons(t,
                   fig=None,
                   ax=None,
+                  medfilt_width=21,
                   min_eps=-0.015,
                   max_eps=0.06,
                   tlim=None,
-                  show=False):
+                  show=False,
+                  **kwargs): # These are passed to plot_[hv]lines
     if fig is None:
         fig = plt.figure()
     if ax is None:
         ax = plt.subplot()
 
     t = t[~t['mask']]    
-    add_ansa_pos_medfilt(t)
+    add_medfilt(t, 'ansa_right_r_peak', medfilt_width=medfilt_width)
+    add_medfilt(t, 'ansa_left_r_peak', medfilt_width=medfilt_width)
 
     r_peak = t['ansa_right_r_peak']
     l_peak = t['ansa_left_r_peak']
@@ -643,6 +769,9 @@ def plot_epsilons(t,
     fig.autofmt_xdate()
     ax.format_coord = PJAXFormatter(t['tavg'].datetime, epsilon)
 
+    plot_axhlines(ax, **kwargs)
+    plot_axvlines(ax, **kwargs)
+
     #jts = JunoTimes()
     #secax = ax.secondary_xaxis('top',
     #                            functions=(jts.plt_date2pj, jts.pj2plt_date))
@@ -653,14 +782,17 @@ def plot_ansa_pos(t,
                   fig=None,
                   ax=None,
                   tlim=None,
-                  show=False):
+                  show=False,
+                  medfilt_width=21,
+                  **kwargs): # These are passed to plot_[hv]lines):
     if fig is None:
         fig = plt.figure()
     if ax is None:
         ax = plt.subplot()
 
     t = t[~t['mask']]    
-    add_ansa_pos_medfilt(t)
+    add_medfilt(t, 'ansa_right_r_peak', medfilt_width=medfilt_width)
+    add_medfilt(t, 'ansa_left_r_peak', medfilt_width=medfilt_width)
     # Make it clear we are plotting the perturbation from Io's orbital
     # position on the right and left sides of Jupiter.  We will make t
     # eastward (negative of these), when plotting
@@ -674,11 +806,11 @@ def plot_ansa_pos(t,
     medfilt_handles = []
     if len(rights) and len(lefts) > 40:
         alpha = 0.2
-        h = plt.plot(t['tavg'].datetime,
+        h = ax.plot(t['tavg'].datetime,
                      -(t['ansa_left_r_peak_medfilt'] - (-IO_ORBIT_R)),
                      'k*', markersize=12, label='Dawn medfilt')
         medfilt_handles.append(h[0])
-        h = plt.plot(t['tavg'].datetime,
+        h = ax.plot(t['tavg'].datetime,
                      -(t['ansa_right_r_peak_medfilt'] - IO_ORBIT_R),
                      'k+', markersize=12, label='Dusk medfilt')
         medfilt_handles.append(h[0])
@@ -711,6 +843,8 @@ def plot_ansa_pos(t,
     ax.format_coord = PJAXFormatter(t['tavg'].datetime,
                                     -(t['ansa_left_r_peak_medfilt'] +
                                       IO_ORBIT_R))
+    plot_axhlines(ax, **kwargs)
+    plot_axvlines(ax, **kwargs)
 
     #jts = JunoTimes()
     #secax = ax.secondary_xaxis('top',
@@ -718,8 +852,120 @@ def plot_ansa_pos(t,
     #secax.xaxis.set_minor_locator(MultipleLocator(1))
     #secax.set_xlabel('PJ')    
 
-def plot_ansa_r_amplitudes():
-    pass
+def plot_ansa_r_amplitudes(t, **kwargs):
+    plot_column_vals(t, colnames=['ansa_left_r_amplitude',
+                                  'ansa_right_r_amplitude'],
+                     fmts=['b.', 'r.'],
+                     labels=['Dawn', 'Dusk'],
+                     ylabel='r Gauss amplitude ' \
+                     f'({t["ansa_left_r_amplitude"].unit})',
+                     medfilt_colname='ansa_right_r_amplitude',
+                     medfilt_collabel='Dusk medfilt',                    
+                     **kwargs)
+
+def plot_ansa_r_stddevs(t, **kwargs):
+    # Too mixed in with large error bars
+    plot_column_vals(t, colnames=['ansa_left_r_stddev',
+                                  'ansa_right_r_stddev'],
+                     fmts=['b.', 'r.'],
+                     labels=['Dawn', 'Dusk'],
+                     ylabel='r Gauss stddev ' \
+                     f'({t["ansa_left_r_stddev"].unit})',
+                     medfilt_colname='ansa_right_r_stddev',
+                     medfilt_collabel='Dusk medfilt',
+                     **kwargs)
+
+def plot_dawn_r_stddev(t, **kwargs):
+    # Dawn and dusk modulations at the 0.15 Rj level, but they are not
+    # convincingly correlated with peak positions.  They are corelated
+    # with surface brightness & r amplitude in some cases, possibly
+    # via the bright = broad correlation that Nick has noted
+    plot_column_vals(t, colnames=['ansa_left_r_stddev'],
+                     fmts=['b.'],
+                     labels=['Dawn'],
+                     ylabel='r Gauss stddev ' \
+                     f'({t["ansa_left_r_stddev"].unit})',
+                     medfilt_colname='ansa_left_r_stddev',
+                     medfilt_collabel='Dawn medfilt',
+                     **kwargs)
+def plot_dusk_r_stddev(t, **kwargs):
+    plot_column_vals(t, colnames=['ansa_right_r_stddev'],
+                     fmts=['r.'],
+                     labels=['Dusk'],
+                     ylabel='r Gauss stddev ' \
+                     f'({t["ansa_right_r_stddev"].unit})',
+                     medfilt_colname='ansa_right_r_stddev',
+                     medfilt_collabel='Dusk medfilt',
+                     **kwargs)
+
+def plot_ansa_y_peaks(t, **kwargs):
+    # This shows flat trend
+    plot_column_vals(t, colnames=['ansa_left_y_peak',
+                                  'ansa_right_y_peak'],
+                     fmts=['b.', 'r.'],
+                     labels=['Dawn', 'Dusk'],
+                     ylabel='y peak pos' \
+                     f'({t["ansa_left_y_peak"].unit})',
+                     medfilt_colname=None,
+                     **kwargs)
+
+def plot_dawn_y_stddev(t, **kwargs):
+    plot_column_vals(t, colnames=['ansa_left_y_stddev'],
+                     fmts=['b.'],
+                     labels=['Dawn'],
+                     ylabel='y Gauss stddev' \
+                     f'({t["ansa_left_y_stddev"].unit})',
+                     medfilt_colname='ansa_left_y_stddev',
+                     medfilt_collabel='Dawn medfilt',
+                     **kwargs)
+def plot_dusk_y_stddev(t, **kwargs):
+    plot_column_vals(t, colnames=['ansa_right_y_stddev'],
+                     fmts=['r.'],
+                     labels=['Dusk'],
+                     ylabel='y Gauss stddev' \
+                     f'({t["ansa_right_y_stddev"].unit})',
+                     medfilt_colname='ansa_right_y_stddev',
+                     medfilt_collabel='Dusk medfilt',
+                     **kwargs)
+
+def plot_dawn_cont(t, **kwargs):
+    plot_column_vals(t, colnames=['ansa_left_cont'],
+                     fmts=['b.'],
+                     labels=['Dawn'],
+                     ylabel='r continuum' \
+                     f'({t["ansa_left_cont"].unit})',
+                     medfilt_colname='ansa_left_cont',
+                     medfilt_collabel='Dawn medfilt',
+                     **kwargs)
+def plot_dusk_cont(t, **kwargs):
+    plot_column_vals(t, colnames=['ansa_right_cont'],
+                     fmts=['r.'],
+                     labels=['Dusk'],
+                     ylabel='r continuum' \
+                     f'({t["ansa_right_cont"].unit})',
+                     medfilt_colname='ansa_right_cont',
+                     medfilt_collabel='Dusk medfilt',
+                     **kwargs)
+
+def plot_dawn_slope(t, **kwargs):
+    plot_column_vals(t, colnames=['ansa_left_slope'],
+                     fmts=['b.'],
+                     labels=['Dawn'],
+                     ylabel='r slope' \
+                     f'({t["ansa_left_slope"].unit})',
+                     medfilt_colname='ansa_left_slope',
+                     medfilt_collabel='Dawn medfilt',
+                     **kwargs)
+def plot_dusk_slope(t, **kwargs):
+    plot_column_vals(t, colnames=['ansa_right_slope'],
+                     scale=[-1],
+                     fmts=['r.'],
+                     labels=['Dusk'],
+                     ylabel='r slope' \
+                     f'({t["ansa_right_slope"].unit})',
+                     medfilt_colname='ansa_right_slope',
+                     medfilt_collabel='Dusk medfilt',
+                     **kwargs)
 
 # --> This is becoming obsolete
 def torus_stripchart(table_or_fname, outdir,
@@ -1343,7 +1589,10 @@ def phase_plot(start, stop, fold_period=SYSIII,
     mask = np.logical_and(mask, np.isfinite(t[f'ansa_{side}_surf_bright']))
     t = t[mask]
 
-    add_ansa_surf_bright_medfilt(t)
+    add_medfilt(t, 'ansa_right_surf_bright',
+                medfilt_width=21)
+    add_medfilt(t, 'ansa_left_surf_bright',
+                medfilt_width=21)
 
     ts = TimeSeries(time=t['tavg'])
     ts[f'{side}_ansa_surf_bright'] = t[f'ansa_{side}_surf_bright']
@@ -1447,28 +1696,31 @@ if __name__ == '__main__':
 #directory = '/data/IoIO/raw/2017-05-02'
 ## Good with ANSA_WIDTH_BOUNDS = (0.1*u.R_jup, 0.5*u.R_jup)
 #directory = '/data/IoIO/raw/2018-05-08/'
-directory = '/data/IoIO/raw/20221224/'
+#directory = '/data/IoIO/raw/20221224/'
 
-#outdir_root=TORUS_ROOT
-#rd = reduced_dir(directory, outdir_root, create=False)
-#t = cached_csv(torus_directory,
-#               csvnames=os.path.join(rd, 'Characterize_Ansas.ecsv'),
-#               directory=directory,
-#               standard_star_obj=None,
-#               read_csvs=False,
-#               write_csvs=True,
-#               read_pout=False,
-#               write_pout=True,
-#               fits_fixed_ignore=True,
-#               outdir=rd,
-#               create_outdir=True)
+# Good directory = '/data/IoIO/raw/20221224/'
+#
+##outdir_root=TORUS_ROOT
+#outdir_root = '/data/IoIO/NO_BACKUP/Torus_testing/'
+#
 #t = torus_directory(directory,
-#                    standard_star_obj=None,
-#                    read_pout=True,
-#                    write_pout=True,
-#                    fits_fixed_ignore=True,
-#                    create_outdir=True)
+#                    outdir_root=outdir_root)
+
+##rd = reduced_dir(directory, outdir_root, create=True)
+
                     
+# t = cached_csv(torus_directory,
+#                csvnames=os.path.join(rd, 'Characterize_Ansas.ecsv'),
+#                directory=directory,
+#                standard_star_obj=None,
+#                read_csvs=False,
+#                write_csvs=True,
+#                read_pout=False,
+#                write_pout=True,
+#                fits_fixed_ignore=True,
+#                outdir=rd,
+#                create_outdir=True)
+
 #_ , pipe_meta = zip(*pout)
 #t = QTable(rows=pipe_meta)
 

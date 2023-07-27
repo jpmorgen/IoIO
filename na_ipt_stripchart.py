@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 
 from IoIO.utils import savefig_overwrite
 from IoIO.na_nebula import plot_nightly_medians
-from IoIO.torus import plot_ansa_brights, plot_epsilons, plot_ansa_pos
+from IoIO.torus import (plot_ansa_brights, plot_epsilons, plot_ansa_pos,
+                        plot_ansa_r_amplitudes)
 
 def master_stripchart(t_na, t_torus, nplots=4, start=None, stop=None,
                       na_medfilt_width=11, outname=None, figsize=None):
