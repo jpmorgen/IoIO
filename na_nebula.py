@@ -30,6 +30,7 @@ from bigmultipipe import cached_pout
 from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 
 from IoIO.utils import (ColnameEncoder, get_dirs_dates, reduced_dir,
+                        nan_biweight, nan_mad,
                         valid_long_exposure, dict_to_ccd_meta,
                         multi_glob, sum_ccddata, csvname_creator,
                         daily_biweight, daily_convolve,
@@ -592,6 +593,9 @@ def plot_nightly_medians(table_or_fname,
                      label=f'{av_ap.value} R$_\mathrm{{J}}$ medfilt',
                      linewidth=2)
         medfilt_handles.append(h[0])
+        bwt = nan_biweight(day_table[bwt_col])
+        mad = nan_mad(day_table[bwt_col])
+        log.info(f'{bwt_col} Biweight +/- MAD = {bwt} +/- {mad}')
     handles = point_handles
     handles.extend(medfilt_handles)
 

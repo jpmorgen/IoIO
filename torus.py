@@ -184,6 +184,16 @@ def ansa_parameters(ccd,
     r_prof = np.sum(ansa, 0) * ansa.unit
     r_prof /= ansa.shape[1]
 
+    # --> Work in progress
+    #plot_left  = left  - 2*u.R_jup
+    #plot_right = right + 2*u.R_jup
+    #plot_r_ccd = ccd[bottom:top, plot_left:plot_right]
+    #
+    #full_r_pix = np.arange(ccd.shape[1]) * u.pixel
+    #full_r_Rj = full_r_pix / pix_per_Rj
+    #full_r_prof = np.sum(ccd, 0) * ansa.unit
+    #full_r_prof /= ansa.shape[1]
+
     # Fit is definitly better
     #r_ansa = (np.argmax(r_prof)*u.pixel
     #          + left*u.pixel - center[1]) / pix_per_Rj
@@ -237,6 +247,7 @@ def ansa_parameters(ccd,
         date_obs, _ = ccd.meta['DATE-OBS'].split('T') 
         #outname = outname_creator(in_name, outname=outname, **kwargs)
         #plt.title(f'{date_obs} {os.path.basename(outname)}')
+        plt.title(f'{date_obs}')
         plt.plot(r_Rj, r_prof)
         plt.plot(r_Rj, r_fit(r_Rj))
         plt.xlabel(r'Jovicentric radial distance (R$\mathrm{_J}$)')
