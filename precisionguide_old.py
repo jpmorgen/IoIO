@@ -108,7 +108,8 @@ default_guide_box_command_file = os.path.join(raw_data_root, 'GuideBoxCommand.tx
 default_guide_box_log_file = os.path.join(raw_data_root, 'GuideBoxLog.txt')
 
 run_level_main_astrometry = os.path.join(
-    raw_data_root, '2023-07_Astrometry/Main_Astrometry_East_of_Pier.fit')
+    raw_data_root, '2023-08_Astrometry/Main_Astrometry_East_of_Pier.fit')
+    #raw_data_root, '2023-07_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2022-09_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2022-05_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2021-04_Astrometry/Main_Astrometry_East_of_Pier.fit')
@@ -122,7 +123,8 @@ run_level_main_astrometry = os.path.join(
     #raw_data_root, '2018-04_Astrometry/PinPointSolutionEastofPier.fit')
 
 run_level_guider_astrometry = os.path.join(
-    raw_data_root, '2023-07_Astrometry/Guider_Astrometry_East_of_Pier.fit')
+    raw_data_root, '2023-08_Astrometry/Guider_Astrometry_East_of_Pier.fit')
+    #raw_data_root, '2023-07_Astrometry/Guider_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2022-09_Astrometry/Guider_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2022-05_Astrometry/Guider_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2021-04_Astrometry/Guider_Astrometry_East_of_Pier.fit')

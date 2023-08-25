@@ -882,7 +882,7 @@ def IPT_Na_R(args):
         P.MC.Application.ShutDownObservatory()
         return
     log.info('Starting with R')
-    P.MC.acquire_im(pg.uniq_fname('R_', d),
+    P.MC.acquire_im(pg.uniq_fname('r_sdss', d),
                     exptime=2,
                     filt=0)
     
@@ -907,13 +907,13 @@ def IPT_Na_R(args):
         log.info('Collecting Na')
         P.MC.acquire_im(pg.uniq_fname('Na_off-band_', d),
                         exptime=60,
-                        filt=4)
+                        filt=3)
         if P.MC.horizon_limit():
             log.debug('Horizon limit reached')
             return
         P.MC.acquire_im(pg.uniq_fname('Na_on-band_', d),
                         exptime=300,
-                        filt=2)
+                        filt=6)
         if P.MC.horizon_limit():
             log.debug('Horizon limit reached.  Shutting down observatory')
             P.MC.Application.ShutDownObservatory()
@@ -937,7 +937,7 @@ def IPT_Na_R(args):
                 return
             P.MC.acquire_im(pg.uniq_fname('SII_off-band_', d),
                             exptime=60,
-                            filt=3)
+                            filt=5)
             if P.MC.horizon_limit():
                 log.debug('Horizon limit reached.  Shutting down observatory')
                 P.MC.Application.ShutDownObservatory()
@@ -950,7 +950,7 @@ def IPT_Na_R(args):
                 P.MC.Application.ShutDownObservatory()
                 return
             log.info('Collecting R')
-            P.MC.acquire_im(pg.uniq_fname('R_', d),
+            P.MC.acquire_im(pg.uniq_fname('r_sdss_', d),
                             exptime=2,
                             filt=0)
 
@@ -1036,12 +1036,12 @@ def ACP_IPT_Na_R(args):
                 P.MC.acquire_im(pg.uniq_fname('SII_off_cal_07_', d),
                                 exptime=0.7,
                                 binning=1,
-                                filt=2)
+                                filt=5)
             for ifilt in range(1):
                 P.MC.acquire_im(pg.uniq_fname('SII_off_cal_071_', d),
                                 exptime=0.71,
                                 binning=1,
-                                filt=2)
+                                filt=5)
 
             for ifilt in range(1):
                 P.MC.acquire_im(pg.uniq_fname('Na_off_cal_07_', d),
@@ -1075,30 +1075,35 @@ def ACP_IPT_Na_R(args):
                                 binning=1,
                                 filt=6)
 
-            log.info('Collecting V, U, B, and R')
+            log.info('Collecting r_sdss, g_sdss, u_sdss, i_sdss, and z_sdss')
             if ((time.time() + downloadtime*4*2) > Tend):
                 log.info('Exposure would extend past end of ACP exposure, returning') 
                 return
             for ifilt in range(2):
-                P.MC.acquire_im(pg.uniq_fname('R_', d),
+                P.MC.acquire_im(pg.uniq_fname('r_sdss_', d),
                                 exptime=0.1,
                                 binning=1,
                                 filt=0)
             for ifilt in range(2):
-                P.MC.acquire_im(pg.uniq_fname('V_', d),
-                                exptime=0.2,
+                P.MC.acquire_im(pg.uniq_fname('g_sdss_', d),
+                                exptime=0.7,
+                                binning=1,
+                                filt=2)
+            for ifilt in range(2):
+                P.MC.acquire_im(pg.uniq_fname('u_sdss_', d),
+                                exptime=20,
                                 binning=1,
                                 filt=4)
             for ifilt in range(2):
-                P.MC.acquire_im(pg.uniq_fname('U_', d),
-                                exptime=20,
-                                binning=1,
-                                filt=5)
-            for ifilt in range(2):
-                P.MC.acquire_im(pg.uniq_fname('B_', d),
-                                exptime=0.7,
+                P.MC.acquire_im(pg.uniq_fname('i_sdss_', d),
+                                exptime=0.1,
                                 binning=1,
                                 filt=7)
+            for ifilt in range(2):
+                P.MC.acquire_im(pg.uniq_fname('z_sdss', d),
+                                exptime=10,
+                                binning=1,
+                                filt=8)
 
             while True:
                 if P.MC.Telescope.Altitude < P.MC.horizon_limit():
@@ -1163,7 +1168,7 @@ def ACP_IPT_Na_R(args):
                     ## Take an R exposure to get the filter wheel going
                     ## in the right direction and get the Galilean
                     ## satellites lined up
-                    #P.MC.acquire_im(pg.uniq_fname('moving_to_R_', d),
+                    #P.MC.acquire_im(pg.uniq_fname('moving_to_r_sdss_', d),
                     #                exptime=0.1,
                     #                binning=4,
                     #                filt=0)
@@ -1187,7 +1192,7 @@ def ACP_IPT_Na_R(args):
                         return
                     P.MC.acquire_im(pg.uniq_fname('SII_off-band_', d),
                                     exptime=exptime,
-                                    filt=2)
+                                    filt=5)
                     log.debug('CENTERING WITH GUIDEBOX MOVES') 
                     P.center_loop()
         except Exception as e:
