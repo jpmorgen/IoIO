@@ -1285,9 +1285,21 @@ class MaxImControl():
         self.guider_astrometry['CRVAL2'] = save_crval2
 
     def horizon_limit(self):
-        return (not self.Telescope.Tracking
-                or self.Telescope.Altitude < self.horizon_limit_value)
+        if (not self.Telescope.Tracking
+            or self.Telescope.Altitude < self.horizon_limit_value):
+            log.debug(f'Telescope Altitude = {self.Telescope.Altitude} Telescope Tracking: {self.Telescope.Tracking}')
+            if (not self.Telescope.Tracking and
+                self.Telescope.Altitude > self.horizon_limit_value + 3):
+                log.error('Telescope is not tracking for some weird reason, ignoring')
+                return False
+            log.info('Telescope horizon limit reached')
+            return True
+        return False
 
+        # return (not self.Telescope.Tracking
+        #         or self.Telescope.Altitude < self.horizon_limit_value)
+
+        
 
     # For now use self.Application.ShutDownObservatory()
     #def do_shutdown(self):

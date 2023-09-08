@@ -40,10 +40,15 @@ SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 #    = [[1.40749551e-02, 2.36320869e-02],
 #       [1.24240593e+03, 1.33789081e+03]]
 
-# Sun Apr 25 00:48:25 2021 EDT  jpmorgen@snipe
+## Sun Apr 25 00:48:25 2021 EDT  jpmorgen@snipe
+#run_level_default_ND_params \
+#    = [[-3.32901729e-01, -3.21280155e-01],
+#       [ 1.26037690e+03,  1.38195602e+03]]
+
+# Fri Aug 25 00:04:27 2023 EDT  jpmorgen@snipe
 run_level_default_ND_params \
-    = [[-3.32901729e-01, -3.21280155e-01],
-       [ 1.26037690e+03,  1.38195602e+03]]
+    = [[-3.70095154e-01, -3.57945037e-01],
+       [ 1.26900000e+03,  1.37000000e+03]]
 
 # Temporary set to 2 during really hazy weather 
 guider_nd_Filter_number = 3
@@ -1081,12 +1086,12 @@ def ACP_IPT_Na_R(args):
                 return
             for ifilt in range(2):
                 P.MC.acquire_im(pg.uniq_fname('r_sdss_', d),
-                                exptime=0.1,
+                                exptime=0.05,
                                 binning=1,
                                 filt=0)
             for ifilt in range(2):
                 P.MC.acquire_im(pg.uniq_fname('g_sdss_', d),
-                                exptime=0.7,
+                                exptime=0.05,
                                 binning=1,
                                 filt=2)
             for ifilt in range(2):
@@ -1096,12 +1101,12 @@ def ACP_IPT_Na_R(args):
                                 filt=4)
             for ifilt in range(2):
                 P.MC.acquire_im(pg.uniq_fname('i_sdss_', d),
-                                exptime=0.1,
+                                exptime=0.15,
                                 binning=1,
                                 filt=7)
             for ifilt in range(2):
                 P.MC.acquire_im(pg.uniq_fname('z_sdss', d),
-                                exptime=10,
+                                exptime=0.7,
                                 binning=1,
                                 filt=8)
 

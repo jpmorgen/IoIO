@@ -76,9 +76,14 @@ ND_REF_Y = sx694.naxis2 / 2
 #       [1.24240593e+03, 1.33789081e+03]]
 
 # Sun Apr 25 00:48:25 2021 EDT  jpmorgen@snipe
+#RUN_LEVEL_DEFAULT_ND_PARAMS \
+#    = [[-3.32901729e-01, -3.21280155e-01],
+#       [ 1.26037690e+03,  1.38195602e+03]]
+
+# Fri Aug 25 00:04:27 2023 EDT  jpmorgen@snipe
 RUN_LEVEL_DEFAULT_ND_PARAMS \
-    = [[-3.32901729e-01, -3.21280155e-01],
-       [ 1.26037690e+03,  1.38195602e+03]]
+    = [[-3.70095154e-01, -3.57945037e-01],
+       [ 1.26900000e+03,  1.37000000e+03]]
 
 def run_level_default_ND_params(hdr):
     """Returns run_level_default_ND_params for the DATE-OBS in hdr"""

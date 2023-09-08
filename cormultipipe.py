@@ -68,9 +68,13 @@ OUTNAME_APPEND = '_p'
 OUTNAME_EXT = '.fits'
 
 # Number of pixels to expand the ND filter over what CorData finds.
-# This is the negative of the CorData edge_mask parameter, since
-# that is designed to mask pixels inside the ND filter to make
-# centering of object more reliable
+# This is the negative of the CorData edge_mask parameter, since that
+# is designed to mask pixels inside the ND filter to make centering of
+# object more reliable
+# --> For optimal processing of U and u_sdss, this needs to be some
+# sort of function that checks against a list of filters that are out
+# of focus.  This function would process a list of tuples that would
+# contain (filter_name, nd_edge_expand) pairs.
 ND_EDGE_EXPAND = 40
 MIN_CENTER_QUALITY = 5
 
