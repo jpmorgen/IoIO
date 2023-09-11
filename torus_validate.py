@@ -126,14 +126,14 @@ def torus_validate(t_torus, nplots=7, start=None, stop=None,
 outdir = '/data/IoIO/analysis/'
 
 figsize = (10, 11)
-t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
-torus_validate(t_torus, 2)
+#t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
+#torus_validate(t_torus, 6)
 
 
-# t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
-# add_mask_col(t_torus)
-# t_torus = t_torus[~t_torus['mask']]
-# torus_validate(t_torus)
+t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
+add_mask_col(t_torus)
+t_torus = t_torus[~t_torus['mask']]
+torus_validate(t_torus)
 
 
 #import numpy as np

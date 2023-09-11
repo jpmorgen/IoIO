@@ -70,7 +70,20 @@ MEDFILT_WIDTH = 81 # GOING OBSOLETE
 # should be generalized
 MAX_24_Rj_SB = 35*u.R
 
-def na_apertures(ccd_in, bmp_meta=None, **kwargs):
+def draw_na_apertures(ax, ap_sequence=None,
+                      min_av_ap_dist=4*u.R_jup, # selects SB boxes
+                      max_av_ap_dist=128*u.R_jup,
+                      **kwargs):
+    # ap_sequence are the concentric
+    aps = [ap/2 for ap in ap_sequence
+           if min_av_ap_dist < ap and ap < max_av_ap_dist]
+    for ap in aps:
+        ax.axhline(ap.value)
+        ax.axhline(-ap.value)
+
+def na_apertures(ccd_in, bmp_meta=None,
+                 plot_planet_rot_from_key=None, # Capture here so no multiple
+                 **kwargs):
     # We don't yet rotate the ND filter when we rot_to, so mask it first
     ccd = nd_filter_mask(ccd_in)
     ccd = rot_to(ccd, rot_angle_from_key=['Jupiter_NPole_ang',
@@ -104,6 +117,22 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
     if bmp_meta is None:
         bmp_meta = {}
 
+    # Experimenting with plotting in rotated frame.
+
+    # Note that this has to be done with the rotated ccd, which is
+    # dereferenced, below
+    in_name = os.path.basename(ccd_in.meta['RAWFNAME'])
+    in_name, in_ext = os.path.splitext(in_name)
+    in_name = f'{in_name}_na_apertures{in_ext}'
+    plot_planet_subim(ccd,
+                      plot_planet_rot_from_key=None,
+                      plot_planet_overlay=draw_na_apertures,
+                      ap_sequence=ap_sequence,
+                      in_name=in_name,
+                      outname_append='',
+                      **kwargs)
+
+    # Modify the input ccddata's metadata
     ccd = ccd_meta_to_bmp_meta(ccd_in, bmp_meta=bmp_meta,
                                ccd_meta_to_bmp_meta_keys=
                                [('Jupiter_PDObsLon', u.deg),
@@ -111,6 +140,7 @@ def na_apertures(ccd_in, bmp_meta=None, **kwargs):
                                 ('Jupiter_PDSunLon', u.deg)])
         
     ccd = dict_to_ccd_meta(ccd, na_aps)
+
     bmp_meta.update(na_aps)
     return ccd
 
@@ -557,7 +587,7 @@ def plot_nightly_medians(table_or_fname,
     if fig is None:
         fig = plt.figure()
     if ax is None:
-        ax = plt.subplot()
+        ax = fig.add_subplot()
 
     custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f'])
     plt.rc('axes', prop_cycle=custom_cycler)

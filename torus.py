@@ -13,6 +13,7 @@ from scipy.ndimage import median_filter
 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.patches as patches
 from matplotlib.ticker import MultipleLocator
 
 from astropy import log
@@ -70,8 +71,11 @@ LEFT_INNER = -4.75 * u.R_jup
 # which the ansa peak can wander during the fit
 DR_BOUNDS_BUFFER = 0.25 * u.R_jup
 # Width wander.  Upper limit at 0.4 was a little too tight when there
-# is a big slope
-ANSA_WIDTH_BOUNDS = (0.1*u.R_jup, 0.5*u.R_jup)
+# is a big slope.
+# '/data/IoIO/Torus/20221109/SII_on-band_006-back-sub.fits' seems to
+# want 0.8 to kick-start the process
+#ANSA_WIDTH_BOUNDS = (0.1*u.R_jup, 0.5*u.R_jup)
+ANSA_WIDTH_BOUNDS = (0.1*u.R_jup, 0.8*u.R_jup)
 
 # How much above and below the centripetal plane to extract from our image.
 # There is a conflict between too much open torus and not allowing for
@@ -133,6 +137,8 @@ def ansa_parameters(ccd,
                     ansa_dr_bounds_buffer=DR_BOUNDS_BUFFER,
                     ansa_width_bounds=ANSA_WIDTH_BOUNDS,
                     ansa_dy=ANSA_DY,
+                    rprof_ax=None,
+                    vprof_ax=None,
                     show=False,
                     in_name=None,
                     outname=None,                    
@@ -170,8 +176,8 @@ def ansa_parameters(ccd,
 
     ansa = ccd[bottom:top, left:right]
 
-    if show:
-        simple_show(ansa)
+    #if show:
+    #    simple_show(ansa)
 
     mask_check = ansa.mask
     if np.sum(mask_check) > ansa_max_n_mask:
@@ -222,25 +228,26 @@ def ansa_parameters(ccd,
     # This is the fit object for both horizontal and vertical
     fit = fitting.LevMarLSQFitter(calc_uncertainties=True)
     #fit = fitting.LMLSQFitter(calc_uncertainties=True)
+    # Change from min to max for c0, since intercept is on that side of things
+    # np.max(r_prof)
     r_model_init = (
         models.Gaussian1D(mean=side_mult*IO_ORBIT_R,
                           stddev=0.3*u.R_jup,
                           amplitude=amplitude,
                           bounds={'mean': mean_bounds,
                                   'stddev': ansa_width_bounds})
-        + models.Polynomial1D(1, c0=np.min(r_prof)))
+        + models.Polynomial1D(1, c0=np.max(r_prof)))
     # The weights need to read in the same unit as the thing being
     # fitted for the std to come back with sensible units.
-    r_fit = fit(r_model_init, r_Rj, r_prof, weights=r_dev**-0.5)
+    r_fit = fit(r_model_init, r_Rj, r_prof, weights=r_dev**-0.5, maxiter=500)
     r_ansa = r_fit.mean_0.quantity
     dRj = r_fit.stddev_0.quantity
 
-    # #print(r_fit.fit_deriv(r_Rj))
-    # print(r_fit)
-    # print(r_fit.mean_0.std)
-    # print(r_ansa)
-    # print(dRj)
-    # print(r_amp)
+    #print(r_fit.fit_deriv(r_Rj))
+    print(r_fit)
+    print(f'r = {r_ansa} +/- {r_fit.mean_0.std}')
+    print(f'dRj = {dRj} +/- {r_fit.stddev_0.std}')
+    print(f'r_amp = {r_fit.amplitude_0.quantity} +/- {r_fit.amplitude_0.std}')
 
     if show:
         f = plt.figure(figsize=[5, 5])
@@ -256,6 +263,7 @@ def ansa_parameters(ccd,
         plt.show()
 
     if r_fit.mean_0.std is None:
+        print(fit.fit_info['message'])
         return bad_ansa(side)
 
     # Refine our left and right based on the above fit
@@ -362,6 +370,30 @@ def closest_galsat_to_jupiter(ccd_in, bmp_meta=None, **kwargs):
             bmp_meta['closest_galsat'] = closest_Rj
     return ccd        
 
+def draw_ansa_boxes(ax,
+                    right_inner=RIGHT_INNER,
+                    right_outer=RIGHT_OUTER,
+                    left_outer=LEFT_OUTER,
+                    left_inner=LEFT_INNER,
+                    ansa_dy=ANSA_DY,
+                    **kwargs):
+    left = patches.Rectangle((left_outer.value, -ansa_dy.value),
+                             (left_inner-left_outer).value,
+                             ansa_dy.value*2,
+                             linewidth=1,
+                             edgecolor='w',
+                             facecolor='none')
+    right = patches.Rectangle((right_outer.value, -ansa_dy.value),
+                             (right_inner-right_outer).value,
+                             ansa_dy.value*2,
+                             linewidth=1,
+                             edgecolor='w',
+                             facecolor='none')
+    ax.add_patch(left)
+    ax.add_patch(right)
+
+
+
 def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None, 
                        **kwargs):
     # MAKE SURE THIS IS CALLED BEFORE ANY ROTATIONS The underlying
@@ -388,10 +420,39 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
                                [('Jupiter_PDObsLon', u.deg),
                                 ('Jupiter_PDObsLat', u.deg),
                                 ('Jupiter_PDSunLon', u.deg)])
-    for side in ['left', 'right']:
-        ansa_meta = ansa_parameters(rccd, side=side, **kwargs)
+
+    # Prepare to create a multi-panel plot
+    fig = plt.figure()
+    gs = fig.add_gridspec(2, 4)
+    vprof_axes = (fig.add_subplot(gs[0,0]), fig.add_subplot(gs[0,3]))
+    im_ax = fig.add_subplot(gs[0,1:3])
+    rprof_axes = (fig.add_subplot(gs[1,0:2]), fig.add_subplot(gs[1,2:]))
+
+    # Experimenting with plotting in rotated frame.  This is not the
+    # right way to do
+
+    in_name = os.path.basename(ccd_in.meta['RAWFNAME'])
+    in_name, in_ext = os.path.splitext(in_name)
+    in_name = f'{in_name}_na_apertures{in_ext}'
+    plot_planet_subim(rccd,
+                      fig=fig,
+                      ax=im_ax,
+                      plot_planet_rot_from_key=None,
+                      plot_planet_overlay=draw_ansa_boxes,
+                      in_name=in_name,
+                      outname_append='',
+                      **kwargs)
+    
+    for side, rprof_ax, vprof_ax in zip(('left', 'right'), rprof_axes, vprof_axes):
+        ansa_meta = ansa_parameters(rccd, side=side,
+                                    rprof_ax=rprof_ax,
+                                    vprof_ax=vprof_ax,
+                                    **kwargs)
         ccd = dict_to_ccd_meta(ccd, ansa_meta)
         bmp_meta.update(ansa_meta)
+
+        
+
     return ccd
 
 def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):
@@ -497,7 +558,7 @@ def plot_column_vals(t,
     if fig is None:
         fig = plt.figure()
     if ax is None:
-        ax = plt.subplot()
+        ax = fig.add_subplot()
     if scale is None:
         scale = np.full(len(colnames), 1)
 

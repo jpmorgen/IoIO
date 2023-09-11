@@ -1088,6 +1088,8 @@ def pixel_per_Rj(ccd):
     return Rj_arcsec / pixscale / u.R_jup 
    
 def plot_planet_subim(ccd_in,
+                      fig=None,
+                      ax=None,
                       plot_planet_rot_from_key=None,
                       pix_per_planet_radius=pixel_per_Rj,
                       in_name=None,
@@ -1100,6 +1102,7 @@ def plot_planet_subim(ccd_in,
                       planet_subim_figsize=[5, 2.5],
                       plot_planet_cmap='gist_heat',
                       planet_subim_backcalc=None,
+                      plot_planet_overlay=None,
                       bmp_meta=None,
                       **kwargs):
     # https://stackoverflow.com/questions/4931376/generating-matplotlib-graphs-without-a-running-x-server
@@ -1107,6 +1110,11 @@ def plot_planet_subim(ccd_in,
     # imported before import matplotlib.pyplot 
     # import matplotlib as mpl
     # mpl.use('Agg')
+
+    if fig is None:
+        fig = plt.figure(figsize=planet_subim_figsize)
+    if ax is None:
+        ax = fig.add_subplot()
 
     if in_name is None or isinstance(in_name, list):
         # A bit of a hack to deal with the most common use of this
@@ -1128,22 +1136,35 @@ def plot_planet_subim(ccd_in,
                                        bmp_meta=bmp_meta, 
                                        **kwargs)
         
-    ccd = rot_to(ccd_in, rot_angle_from_key=plot_planet_rot_from_key)
+    # We are occationally using this to plot images that have aready
+    # been rotated.  rot_to is a bit brittle to multiple rotations, so
+    # don't call it if we aren't actually rotating.  This would cause
+    # a problem if we wanted to do WCS centering as part of this plot,
+    # but generally we already have our center set by this time
+    if plot_planet_rot_from_key:
+        ccd = rot_to(ccd_in, rot_angle_from_key=plot_planet_rot_from_key)
+    else:
+        ccd = ccd_in.copy()
     ccd = ccd.subtract(background, handle_meta='first_found') 
     pix_per_Rp = pix_per_planet_radius(ccd)
     center = ccd.wcs.world_to_pixel(ccd.sky_coord)*u.pixel
     # Trying to have the axes always read the same valuees
     center = np.floor(center).astype(int)
     if planet_subim_dx is None:
-        l, r = 0, ccd.shape[1]
+        l, r = 0*u.pixel, ccd.shape[1]*u.pixel
     else:
-        l = np.floor(center[0] - planet_subim_dx * pix_per_Rp).astype(int)
-        r = np.ceil(center[0] + planet_subim_dx * pix_per_Rp).astype(int)
+        l = np.floor(center[0] - planet_subim_dx * pix_per_Rp)
+        r = np.ceil(center[0] + planet_subim_dx * pix_per_Rp)
     if planet_subim_dy is None:
-        b, t = 0, ccd.shape[0]
+        b, t = 0*u.pixel, ccd.shape[0]*u.pixel
     else:
-        b = np.floor(center[1] - planet_subim_dy * pix_per_Rp).astype(int)
-        t = np.ceil(center[1] + planet_subim_dy * pix_per_Rp).astype(int)
+        b = np.floor(center[1] - planet_subim_dy * pix_per_Rp)
+        t = np.ceil(center[1] + planet_subim_dy * pix_per_Rp)
+    l = l.astype(int)
+    r = r.astype(int)
+    b = b.astype(int)
+    t = t.astype(int)
+    
 
     subim = flexi_slice(ccd, b.value, t.value, l.value, r.value)
     nr, nc = subim.shape
@@ -1151,26 +1172,28 @@ def plot_planet_subim(ccd_in,
     x = (np.arange(nc)*u.pixel - (center[0] - l)) / pix_per_Rp
     y = (np.arange(nr)*u.pixel - (center[1] - b)) / pix_per_Rp
     X, Y = np.meshgrid(x.value, y.value)
-    f = plt.figure(figsize=planet_subim_figsize)
     try:
-        plt.pcolormesh(X, Y, subim,
-                       norm=LogNorm(vmin=planet_subim_vmin,
-                                    vmax=planet_subim_vmax),
-                       cmap=plot_planet_cmap,
-                       shading='auto')
+        pcm = ax.pcolormesh(X, Y, subim,
+                            norm=LogNorm(vmin=planet_subim_vmin,
+                                         vmax=planet_subim_vmax),
+                            cmap=plot_planet_cmap,
+                            shading='auto')
     except Exception as e:
         log.error(f'RAWFNAME of problem: {ccd.meta["RAWFNAME"]} {e}')
         return ccd_in
-    plt.ylabel(planet_subim_axis_label)
-    plt.xlabel(planet_subim_axis_label)
-    plt.axis('scaled')
+    ax.set_ylabel(planet_subim_axis_label)
+    ax.set_xlabel(planet_subim_axis_label)
+    ax.axis('scaled')
     #plt.axis('equal')
-    cbar = plt.colorbar()
+    cbar = fig.colorbar(pcm, ax=ax)
     cbar.ax.set_xlabel(ccd.unit.to_string())
     date_obs, time_obs = ccd.tavg.fits.split('T')
     time_obs, _ = time_obs.split('.')
     #plt.title(f'{date_obs} {os.path.basename(outname)}')
-    plt.title(f'{date_obs} {time_obs} UT')
+    ax.set_title(f'{date_obs} {time_obs} UT')
+    if plot_planet_overlay:
+        plot_planet_overlay(ax, **kwargs)
+
     plt.tight_layout()
     outroot, _ = os.path.splitext(outname)
     d = os.path.dirname(outname)
