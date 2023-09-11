@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.patches as patches
 from matplotlib.ticker import MultipleLocator
+import matplotlib.transforms as transforms
 
 from astropy import log
 import astropy.units as u
@@ -243,28 +244,33 @@ def ansa_parameters(ccd,
     r_ansa = r_fit.mean_0.quantity
     dRj = r_fit.stddev_0.quantity
 
-    #print(r_fit.fit_deriv(r_Rj))
-    print(r_fit)
-    print(f'r = {r_ansa} +/- {r_fit.mean_0.std}')
-    print(f'dRj = {dRj} +/- {r_fit.stddev_0.std}')
-    print(f'r_amp = {r_fit.amplitude_0.quantity} +/- {r_fit.amplitude_0.std}')
+    # #print(r_fit.fit_deriv(r_Rj))
+    # print(r_fit)
+    # print(f'r = {r_ansa} +/- {r_fit.mean_0.std}')
+    # print(f'dRj = {dRj} +/- {r_fit.stddev_0.std}')
+    # print(f'r_amp = {r_fit.amplitude_0.quantity} +/- {r_fit.amplitude_0.std}')
 
-    if show:
-        f = plt.figure(figsize=[5, 5])
-        date_obs, _ = ccd.meta['DATE-OBS'].split('T') 
-        #outname = outname_creator(in_name, outname=outname, **kwargs)
-        #plt.title(f'{date_obs} {os.path.basename(outname)}')
-        plt.title(f'{date_obs}')
-        plt.plot(r_Rj, r_prof)
-        plt.plot(r_Rj, r_fit(r_Rj))
-        plt.xlabel(r'Jovicentric radial distance (R$\mathrm{_J}$)')
-        plt.ylabel(f'Surface brightness ({r_prof.unit})')
-        plt.tight_layout()
-        plt.show()
+    date_obs, _ = ccd.meta['DATE-OBS'].split('T') 
+    rprof_ax.plot(r_Rj, r_prof)
+    rprof_ax.plot(r_Rj, r_fit(r_Rj))
+    rprof_ax.set_xlabel(r'Jovicentric radial distance (R$\mathrm{_J}$)')
+    rprof_ax.set_ylabel(f'Surface brightness ({r_prof.unit})')
+    rprof_ax.axvline(r_ansa.value, color='k')
+    trans = transforms.blended_transform_factory(
+        rprof_ax.transData, rprof_ax.transAxes)
+    rprof_ax.text(r_ansa.value-0.13, 0.1,
+                  f'{r_ansa.value:4.2f}' + r' R$\mathrm{_J}$', rotation=90,
+                  transform=trans)
 
     if r_fit.mean_0.std is None:
+        # --> Consider incorporating this into the overall output,
+        # possibly being more forgiving in letting things go through
+        # and/or check for messages in an intelligent way
         print(fit.fit_info['message'])
         return bad_ansa(side)
+
+    rprof_ax.axvline((r_ansa-dRj).value, linestyle='--', color='k')
+    rprof_ax.axvline((r_ansa+dRj).value, linestyle='--', color='k')
 
     # Refine our left and right based on the above fit
     narrow_left = center[1] + (r_ansa - dRj) * pix_per_Rj
@@ -292,12 +298,10 @@ def ansa_parameters(ccd,
                     + models.Polynomial1D(0, c0=np.min(y_prof)))
     y_fit = fit(y_model_init, y_Rj, y_prof, weights=y_dev**-0.5)
 
-    if show:
-        plt.plot(y_Rj, y_prof)
-        plt.plot(y_Rj, y_fit(y_Rj))
-        plt.xlabel(y_Rj.unit)
-        plt.ylabel(y_prof.unit)
-        plt.show()
+    vprof_ax.plot(y_prof, y_Rj)
+    vprof_ax.plot(y_fit(y_Rj), y_Rj)
+    vprof_ax.set_ylabel(r'R$\mathrm{_J}$')
+    vprof_ax.set_xlabel(y_prof.unit)
 
     if y_fit.mean_0.std is None:
         return bad_ansa(side)
@@ -421,16 +425,34 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
                                 ('Jupiter_PDObsLat', u.deg),
                                 ('Jupiter_PDSunLon', u.deg)])
 
-    # Prepare to create a multi-panel plot
-    fig = plt.figure()
-    gs = fig.add_gridspec(2, 4)
+    # Prepare to create a multi-panel plot.  I play a little
+    # fast-and-lose with plot_planet_subim, since it does the figure
+    # writing, I create the figure and subplots here, fill all other
+    # subplots and lastly fill the image subim subplot and write to
+    # disk
+    fig = plt.figure(figsize=[7, 4.8], tight_layout=True)
+    gs = fig.add_gridspec(2, 4, width_ratios=(0.15, 0.35, 0.35, 0.15))
     vprof_axes = (fig.add_subplot(gs[0,0]), fig.add_subplot(gs[0,3]))
     im_ax = fig.add_subplot(gs[0,1:3])
     rprof_axes = (fig.add_subplot(gs[1,0:2]), fig.add_subplot(gs[1,2:]))
+    fig.subplots_adjust(wspace=0, hspace=0)    
+    vprof_axes[0].sharey(vprof_axes[1])
+    rprof_axes[0].sharey(rprof_axes[1])
 
-    # Experimenting with plotting in rotated frame.  This is not the
-    # right way to do
+    for side, rprof_ax, vprof_ax in zip(('left', 'right'), rprof_axes, vprof_axes):
+        ansa_meta = ansa_parameters(rccd, side=side,
+                                    rprof_ax=rprof_ax,
+                                    vprof_ax=vprof_ax,
+                                    **kwargs)
+        ccd = dict_to_ccd_meta(ccd, ansa_meta)
+        bmp_meta.update(ansa_meta)
 
+    max_vprof = np.max((vprof_axes[0].get_xlim(), vprof_axes[1].get_xlim()))
+    min_vprof = np.min((vprof_axes[0].get_xlim(), vprof_axes[1].get_xlim()))
+    for ax in vprof_axes:
+        ax.set_xlim((min_vprof, max_vprof))
+    vprof_axes[0].invert_xaxis()
+    
     in_name = os.path.basename(ccd_in.meta['RAWFNAME'])
     in_name, in_ext = os.path.splitext(in_name)
     in_name = f'{in_name}_na_apertures{in_ext}'
@@ -442,17 +464,6 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
                       in_name=in_name,
                       outname_append='',
                       **kwargs)
-    
-    for side, rprof_ax, vprof_ax in zip(('left', 'right'), rprof_axes, vprof_axes):
-        ansa_meta = ansa_parameters(rccd, side=side,
-                                    rprof_ax=rprof_ax,
-                                    vprof_ax=vprof_ax,
-                                    **kwargs)
-        ccd = dict_to_ccd_meta(ccd, ansa_meta)
-        bmp_meta.update(ansa_meta)
-
-        
-
     return ccd
 
 def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):

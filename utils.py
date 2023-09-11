@@ -18,6 +18,7 @@ from numpy.polynomial import Polynomial
 from scipy.signal import medfilt
 
 import matplotlib.pyplot as plt
+from matplotlib.ticker import AutoMinorLocator
 from matplotlib.colors import LogNorm
 
 from astropy import log
@@ -1183,6 +1184,8 @@ def plot_planet_subim(ccd_in,
         return ccd_in
     ax.set_ylabel(planet_subim_axis_label)
     ax.set_xlabel(planet_subim_axis_label)
+    ax.xaxis.set_minor_locator(AutoMinorLocator())
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.axis('scaled')
     #plt.axis('equal')
     cbar = fig.colorbar(pcm, ax=ax)
@@ -1190,6 +1193,7 @@ def plot_planet_subim(ccd_in,
     date_obs, time_obs = ccd.tavg.fits.split('T')
     time_obs, _ = time_obs.split('.')
     #plt.title(f'{date_obs} {os.path.basename(outname)}')
+    #fig.suptitle(f'{date_obs} {time_obs} UT')
     ax.set_title(f'{date_obs} {time_obs} UT')
     if plot_planet_overlay:
         plot_planet_overlay(ax, **kwargs)
