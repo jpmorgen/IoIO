@@ -1182,11 +1182,12 @@ def plot_planet_subim(ccd_in,
     except Exception as e:
         log.error(f'RAWFNAME of problem: {ccd.meta["RAWFNAME"]} {e}')
         return ccd_in
-    ax.set_ylabel(planet_subim_axis_label)
-    ax.set_xlabel(planet_subim_axis_label)
+    ax.set_ylabel(planet_subim_axis_label, labelpad=0)
+    ax.set_xlabel(planet_subim_axis_label, labelpad=0)
     ax.xaxis.set_minor_locator(AutoMinorLocator())
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.axis('scaled')
+    ax.margins(x=0, y=0)
     #plt.axis('equal')
     cbar = fig.colorbar(pcm, ax=ax)
     cbar.ax.set_xlabel(ccd.unit.to_string())

@@ -123,7 +123,7 @@ def na_apertures(ccd_in, bmp_meta=None,
     # dereferenced, below
     in_name = os.path.basename(ccd_in.meta['RAWFNAME'])
     in_name, in_ext = os.path.splitext(in_name)
-    in_name = f'{in_name}_na_apertures{in_ext}'
+    in_name = f'{in_name}_apertures{in_ext}'
     plot_planet_subim(ccd,
                       plot_planet_rot_from_key=None,
                       plot_planet_overlay=draw_na_apertures,
@@ -548,7 +548,7 @@ def na_nebula_directory(directory_or_collection,
                        post_process_list=[tavg_to_bmp_meta,
                                           calc_obj_to_ND, planet_to_object],
                        plot_planet_rot_from_key=['Jupiter_NPole_ang'],
-                       planet_subim_figsize=[6, 4],
+                       planet_subim_figsize=[5, 4],
                        planet_subim_dx=45*u.R_jup,
                        planet_subim_dy=40*u.R_jup, 
                        post_offsub=[sun_angles, na_meso_meta,

@@ -258,9 +258,14 @@ def ansa_parameters(ccd,
     rprof_ax.axvline(r_ansa.value, color='k')
     trans = transforms.blended_transform_factory(
         rprof_ax.transData, rprof_ax.transAxes)
-    rprof_ax.text(r_ansa.value-0.13, 0.1,
+    rprof_ax.text(r_ansa.value-0.13, 0.08,
                   f'{r_ansa.value:4.2f}' + r' R$\mathrm{_J}$', rotation=90,
                   transform=trans)
+    rprof_ax.text(r_ansa.value+dRj.value-0.13, 0.08,
+                  r'$\sigma$ = ' + f'{dRj.value:3.2f} ' + r'R$\mathrm{_J}$',
+                  rotation=90,
+                  transform=trans)
+    rprof_ax.margins(x=0, y=0)
 
     if r_fit.mean_0.std is None:
         # --> Consider incorporating this into the overall output,
@@ -300,8 +305,9 @@ def ansa_parameters(ccd,
 
     vprof_ax.plot(y_prof, y_Rj)
     vprof_ax.plot(y_fit(y_Rj), y_Rj)
-    vprof_ax.set_ylabel(r'R$\mathrm{_J}$')
+    vprof_ax.set_ylabel(r'R$\mathrm{_J}$', labelpad=0)
     vprof_ax.set_xlabel(y_prof.unit)
+    vprof_ax.margins(x=0, y=0)
 
     if y_fit.mean_0.std is None:
         return bad_ansa(side)
@@ -348,32 +354,6 @@ def ansa_parameters(ccd,
             f'ansa_{side}_slope': slope,
             f'ansa_{side}_slope_err': slope_std * slope.unit}
 
-def closest_galsat_to_jupiter(ccd_in, bmp_meta=None, **kwargs):
-    if bmp_meta is None:
-        bmp_meta = {}
-    ccd = ccd_in.copy()
-    galsats = list(GALSATS.keys())
-    g = galsats[0]
-    ra = ccd.meta[f'{g}_RA']
-    dec = ccd.meta[f'{g}_DEC']
-    jup_sc = SkyCoord(ra, dec, unit=u.deg)
-    galsats = galsats[1:]
-    min_ang = 90*u.deg
-    for g in galsats:
-        ra = ccd.meta[f'{g}_RA']
-        dec = ccd.meta[f'{g}_DEC']
-        sc = SkyCoord(ra, dec, unit=u.deg)
-        if sc.separation(jup_sc) < min_ang:
-            min_ang = sc.separation(jup_sc)
-            closest_galsat = g
-            Rj_arcsec = ccd.meta['Jupiter_ang_width'] * u.arcsec / 2
-            closest_Rj = min_ang.to(u.arcsec) / Rj_arcsec * u.R_jup
-            ccd.meta['HIERARCH CLOSEST_GALSAT'] = closest_galsat
-            ccd.meta['HIERARCH CLOSEST_GALSAT_DIST'] = (
-                closest_Rj.value, closest_Rj.unit)
-            bmp_meta['closest_galsat'] = closest_Rj
-    return ccd        
-
 def draw_ansa_boxes(ax,
                     right_inner=RIGHT_INNER,
                     right_outer=RIGHT_OUTER,
@@ -395,8 +375,6 @@ def draw_ansa_boxes(ax,
                              facecolor='none')
     ax.add_patch(left)
     ax.add_patch(right)
-
-
 
 def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None, 
                        **kwargs):
@@ -430,7 +408,7 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
     # writing, I create the figure and subplots here, fill all other
     # subplots and lastly fill the image subim subplot and write to
     # disk
-    fig = plt.figure(figsize=[7, 4.8], tight_layout=True)
+    fig = plt.figure(figsize=[7.25, 4.8], tight_layout=True)
     gs = fig.add_gridspec(2, 4, width_ratios=(0.15, 0.35, 0.35, 0.15))
     vprof_axes = (fig.add_subplot(gs[0,0]), fig.add_subplot(gs[0,3]))
     im_ax = fig.add_subplot(gs[0,1:3])
@@ -455,7 +433,7 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
     
     in_name = os.path.basename(ccd_in.meta['RAWFNAME'])
     in_name, in_ext = os.path.splitext(in_name)
-    in_name = f'{in_name}_na_apertures{in_ext}'
+    in_name = f'{in_name}_reduction{in_ext}'
     plot_planet_subim(rccd,
                       fig=fig,
                       ax=im_ax,
@@ -465,6 +443,32 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
                       outname_append='',
                       **kwargs)
     return ccd
+
+def closest_galsat_to_jupiter(ccd_in, bmp_meta=None, **kwargs):
+    if bmp_meta is None:
+        bmp_meta = {}
+    ccd = ccd_in.copy()
+    galsats = list(GALSATS.keys())
+    g = galsats[0]
+    ra = ccd.meta[f'{g}_RA']
+    dec = ccd.meta[f'{g}_DEC']
+    jup_sc = SkyCoord(ra, dec, unit=u.deg)
+    galsats = galsats[1:]
+    min_ang = 90*u.deg
+    for g in galsats:
+        ra = ccd.meta[f'{g}_RA']
+        dec = ccd.meta[f'{g}_DEC']
+        sc = SkyCoord(ra, dec, unit=u.deg)
+        if sc.separation(jup_sc) < min_ang:
+            min_ang = sc.separation(jup_sc)
+            closest_galsat = g
+            Rj_arcsec = ccd.meta['Jupiter_ang_width'] * u.arcsec / 2
+            closest_Rj = min_ang.to(u.arcsec) / Rj_arcsec * u.R_jup
+            ccd.meta['HIERARCH CLOSEST_GALSAT'] = closest_galsat
+            ccd.meta['HIERARCH CLOSEST_GALSAT_DIST'] = (
+                closest_Rj.value, closest_Rj.unit)
+            bmp_meta['closest_galsat'] = closest_Rj
+    return ccd        
 
 def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):
     t['mask'] = False
