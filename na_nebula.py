@@ -573,7 +573,7 @@ def plot_nightly_medians(table_or_fname,
                          ax=None,
                          tlim=None,
                          min_sb=0, # For plot ylim
-                         max_sb=275,
+                         max_sb=300,
                          min_av_ap_dist=6*u.R_jup, # selects SB boxes
                          max_av_ap_dist=25*u.R_jup,
                          show=False,

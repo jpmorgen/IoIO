@@ -10,8 +10,7 @@ instrument and its first results is contained in Morgenthaler, J.,
 Rathbun, J., Schmidt, C., Baumgardner, J, Schneider, N. "Large
 Volcanic Event on Io Inferred from Jovian Sodium Nebula Brightening,"
 ApJL L23, 2019.  This archive contains the latest code for recording,
-reducing and presenting the data for a planned 2023 publication
-reporting a large volcanic outburst in 2022.
+reducing and presenting the data.
 
 Portions of this software depend on the following packages/software:
 
