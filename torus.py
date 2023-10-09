@@ -377,6 +377,9 @@ def draw_ansa_boxes(ax,
     ax.add_patch(right)
 
 def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None, 
+                       plot_planet_rot_from_key=None,
+                       in_name=None,
+                       outname_append=None,
                        **kwargs):
     # MAKE SURE THIS IS CALLED BEFORE ANY ROTATIONS The underlying
     # reproject stuff in rot_to is a little unstable when it comes to
@@ -647,7 +650,7 @@ def plot_ansa_brights(t, **kwargs):
                                   'ansa_right_surf_bright'],
                      fmts=['b.', 'r.'],
                      labels=['Dawn', 'Dusk'],
-                     ylabel=f'IPT Ansa Surf. Bright '\
+                     ylabel=f'IPT Ribbon Surf. Bright '\
                      f'({t["ansa_left_surf_bright"].unit})',
                      medfilt_colname='ansa_right_surf_bright',
                      medfilt_collabel='Dusk medfilt',
@@ -920,7 +923,7 @@ def plot_ansa_pos(t,
     #plt.plot(t['tavg'].datetime,
     #         np.abs(t['ansa_right_r_peak']) + t['ansa_right_r_stddev'],
     #         'g^')
-    ax.set_ylabel(r'Dawnward ansa shift from Io orbit (R$_\mathrm{J}$)')
+    ax.set_ylabel(r'Dawnward ribbon shift from Io orbit (R$_\mathrm{J}$)')
     ax.axhline(0, color='y', label='Io orbit')
     ax.legend(handles=handles, ncol=2)
     ax.set_xlim(tlim)

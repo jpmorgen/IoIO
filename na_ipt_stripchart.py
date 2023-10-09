@@ -70,20 +70,22 @@ def master_stripchart(t_na, t_torus, nplots=4, start=None, stop=None,
 
 outdir = '/data/IoIO/analysis/'
 
-figsize = (10, 11)
-t_na = QTable.read('/home/jpmorgen/Papers/io/IoIO_2017--2023_Sublimation_JGR/Na_nebula_Morgenthaler_etal_2023.ecsv')
-t_torus = QTable.read('/home/jpmorgen/Papers/io/IoIO_2017--2023_Sublimation_JGR/Torus_Morgenthaler_etal_2023.ecsv')
-master_stripchart(t_na, t_torus, nplots=2, figsize = [11, 7],
-                  outname='/home/jpmorgen/Papers/io/IoIO_2017--2023_Sublimation_JGR/Na_SII_time_sequence.png')
+#figsize = (10, 11)
+#t_na = QTable.read('/home/jpmorgen/Papers/io/IoIO_2017--2023_Sublimation_JGR/Na_nebula_Morgenthaler_etal_2023.ecsv')
+#t_torus = QTable.read('/home/jpmorgen/Papers/io/IoIO_2017--2023_Sublimation_JGR/Torus_Morgenthaler_etal_2023.ecsv')
+#master_stripchart(t_na, t_torus, nplots=2, figsize = [11, 7],
+#                  outname='/home/jpmorgen/Papers/io/IoIO_2017--2023_Sublimation_JGR/Na_SII_time_sequence.png')
 
-#t_na = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
-#t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
+t_na = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
+t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
 #t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
 #master_stripchart(t_na, t_torus)
 #master_stripchart(t_na, t_torus, nplots=3)
 #master_stripchart(t_na, t_torus, nplots=2)
-#master_stripchart(t_na, t_torus, nplots=2, figsize = [12, 5.5],
-#                  outname='/home/jpmorgen/Conferences/DPS/2023_San_Antonio/Na_IPT_time_history.png')
+
+master_stripchart(t_na, t_torus, nplots=2, figsize = [12, 5.5],
+                  outname='/home/jpmorgen/Conferences/DPS/2023_San_Antonio/Na_IPT_time_history.png')
+
 #master_stripchart(t_na, t_torus, start='2018-01-01', stop='2018-08-01', figsize=figsize)
 #master_stripchart(t_na, t_torus, start='2019-01-01', stop='2019-12-31', figsize=figsize)
 #master_stripchart(t_na, t_torus, start='2019-01-01', stop='2019-12-31', nplots=2)

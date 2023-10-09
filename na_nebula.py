@@ -83,7 +83,12 @@ def draw_na_apertures(ax, ap_sequence=None,
 
 def na_apertures(ccd_in, bmp_meta=None,
                  plot_planet_rot_from_key=None, # Capture here so no multiple
+                 in_name=None,
+                 outname_append=None,
                  **kwargs):
+    # --> This would be *much* faster
+    # --> https://astropy-regions.readthedocs.io/en/latest/api/regions.RectanglePixelRegion.html
+
     # We don't yet rotate the ND filter when we rot_to, so mask it first
     ccd = nd_filter_mask(ccd_in)
     ccd = rot_to(ccd, rot_angle_from_key=['Jupiter_NPole_ang',

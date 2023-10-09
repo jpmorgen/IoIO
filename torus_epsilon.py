@@ -158,9 +158,29 @@ t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
 #torus_epsilon(t_torus, 3, start='2018-02-15', stop='2020-08-01',
 #              outname='/home/jpmorgen/Conferences/AGU/2023/IPT_epsilon_pos_2018--2020.png')
 
-torus_epsilon(t_torus, 2, start='2018-02-15', stop='2020-08-01',
-              figsize=(9, 5.5),
-              outname='/home/jpmorgen/Conferences/AGU/2023/IPT_epsilon_2018--2020.png')
+## torus_epsilon(t_torus, 2, start='2018-02-15', stop='2020-08-01',
+##               figsize=(9, 5.5),
+## #              outname='/home/jpmorgen/Conferences/AGU/2023/IPT_epsilon_2018--2020.png')
+##               outname='/home/jpmorgen/Conferences/DPS/2023_San_Antonio/IPT_epsilon_2018--2020.png')
+
+nplots = 3
+if nplots <= 2:
+    figsize=(5.5, 5.5)
+else:
+    figsize=(5.5, 8.5)
+
+torus_epsilon(t_torus, nplots, start='2018-02-15', stop='2018-07-01',
+              figsize=figsize, outname='/home/jpmorgen/Conferences/DPS/2023_San_Antonio/IPT_epsilon_pos_2018.png')
+
+torus_epsilon(t_torus, nplots, start='2019-02-01', stop='2019-11-01',
+              figsize=figsize, outname='/home/jpmorgen/Conferences/DPS/2023_San_Antonio/IPT_epsilon_pos_2019.png')
+
+torus_epsilon(t_torus, nplots, start='2020-03-27', stop='2020-08-01',
+              figsize=figsize, outname='/home/jpmorgen/Conferences/DPS/2023_San_Antonio/IPT_epsilon_pos_2020.png')
+
+torus_epsilon(t_torus, nplots, start='2022-05-24', stop='2023-02-01',
+              figsize=figsize, outname='/home/jpmorgen/Conferences/DPS/2023_San_Antonio/IPT_epsilon_pos_2022.png')
+
 
 
 # t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')

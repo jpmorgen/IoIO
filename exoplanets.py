@@ -30,7 +30,8 @@ from IoIO.cor_photometry import (KEYS_TO_SOURCE_TABLE, CorPhotometry,
 EXOPLANET_ROOT = '/data/Exoplanets'
 GLOB_INCLUDE = ['TOI*', 'WASP*', 'KPS*', 'HAT*', 'K2*', 'TrES*',
                 'Qatar*', 'GJ*', 'KELT*', 'KOI*', 'CoRoT*', 'Kepler*',
-                'MASCARA*', 'GPX*', 'NGTS*', 'OGLE*', 'LTT*', 'HIP*']
+                'MASCARA*', 'GPX*', 'NGTS*', 'OGLE*', 'LTT*', 'HIP*',
+                'WTS*']
 
 MIN_TRANSIT_OBS_TIME = 1*u.hour
 
@@ -39,6 +40,8 @@ MIN_TRANSIT_OBS_TIME = 1*u.hour
 # into cor_photometry
 KEYS_TO_SOURCE_TABLE = KEYS_TO_SOURCE_TABLE + [('MJDBARY', u.day)]
 KEEP_FITS = 100000
+BEST_NONLIN = 0.5
+MAX_NONLIN = 0.75
 # General FITS WCS reference:
 # https://fits.gsfc.nasa.gov/fits_wcs.html
 # https://heasarc.gsfc.nasa.gov/docs/fcg/standard_dict.html
@@ -88,20 +91,42 @@ class ExoMultiPipe(CorMultiPipeBase):
             log.warning(f'Not able to plot object for {outname}: {e}')
         return written_name
 
-def estimate_exposure(vmag):
-    # HAT-P-36b as ref
+#def estimate_exposure(vmag):
+#    # HAT-P-36b as ref
+#    expo_correct = 2.71*u.s
+#    ref_mag = 12.26*u.mag(u.electron)
+#    ref_expo = 102*u.s
+#    ref_frac_nonlin = 60
+#    target_nonlin = 50
+#    vmag = vmag*u.mag(u.electron)
+#    dmag = ref_mag - vmag
+#    expo = (target_nonlin/ref_frac_nonlin
+#            *(ref_expo * dmag.physical))
+#    if expo > 0.71*u.s + expo_correct:
+#        expo -= expo_correct
+#    elif expo > 0.71*u.s:
+#        expo = 0.7*u.s
+#    return expo
+
+def estimate_exposure(vmag_in, target_nonlin=BEST_NONLIN):
+    # TOI-2109 g_sdss as ref
     expo_correct = 2.71*u.s
-    ref_mag = 12.26*u.mag(u.electron)
-    ref_expo = 102*u.s
-    ref_frac_nonlin = 60
-    target_nonlin = 50
-    vmag = vmag*u.mag(u.electron)
+    ref_mag = 10.271*u.mag(u.electron)
+    ref_expo = 7.71*u.s
+    ref_frac_nonlin = .90
+    vmag = vmag_in*u.mag(u.electron)
     dmag = ref_mag - vmag
     expo = (target_nonlin/ref_frac_nonlin
             *(ref_expo * dmag.physical))
     if expo > 0.71*u.s + expo_correct:
         expo -= expo_correct
     elif expo > 0.71*u.s:
+        if target_nonlin == MAX_NONLIN:
+            # Prevent recursion
+            return 0.7*u.s
+        trial_expo = estimate_exposure(vmag_in, target_nonlin=MAX_NONLIN)
+        if trial_expo > 0.7*u.s:
+            return trial_expo
         expo = 0.7*u.s
     return expo
 

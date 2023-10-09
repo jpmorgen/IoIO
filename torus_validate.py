@@ -130,10 +130,15 @@ figsize = (10, 11)
 #torus_validate(t_torus, 6)
 
 
+#t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
+#add_mask_col(t_torus)
+#t_torus = t_torus[~t_torus['mask']]
+#torus_validate(t_torus)
+
 t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
 add_mask_col(t_torus)
 t_torus = t_torus[~t_torus['mask']]
-torus_validate(t_torus)
+torus_validate(t_torus, nplots=3, start='2018-01-01', stop='2020-07-15')
 
 
 #import numpy as np
