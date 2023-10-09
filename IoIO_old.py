@@ -959,7 +959,7 @@ def IPT_Na_R(args):
                             exptime=2,
                             filt=0)
 
-def ACP_IPT_Na_R(args):
+def ACP_IPT_Na_R(args, cal=True):
     Tstart = time.time()
     Tend = Tstart + float(args.interval)
     with pg.PrecisionGuide("CorObsData", "IoIO") as P:
@@ -1004,110 +1004,111 @@ def ACP_IPT_Na_R(args):
             P.center_loop()
             downloadtime = 10
             # Jupiter observations
-            log.info('Collecting [SII] and Na calibration images')
-            if ((time.time() + downloadtime*4*3) > Tend):
-                log.info('Exposure would extend past end of ACP exposure, returning') 
-                return
-            if P.MC.Telescope.Altitude < P.MC.horizon_limit():
-                log.info('Telescope below horizon limit')
-                return
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('SII_on_cal_07_', d),
-                                exptime=0.7,
-                                binning=1,
-                                filt=1)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('SII_on_cal_071_', d),
-                                exptime=0.71,
-                                binning=1,
-                                filt=1)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('SII_on_cal_10_', d),
-                                exptime=10,
-                                binning=1,
-                                filt=1)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('SII_on_cal_15_', d),
-                                exptime=15,
-                                binning=1,
-                                filt=1)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('SII_on_cal_20_', d),
-                                exptime=20,
-                                binning=1,
-                                filt=1)
+            if cal:
+                log.info('Collecting [SII] and Na calibration images')
+                if ((time.time() + downloadtime*4*3) > Tend):
+                    log.info('Exposure would extend past end of ACP exposure, returning') 
+                    return
+                if P.MC.Telescope.Altitude < P.MC.horizon_limit():
+                    log.info('Telescope below horizon limit')
+                    return
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('SII_on_cal_07_', d),
+                                    exptime=0.7,
+                                    binning=1,
+                                    filt=1)
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('SII_on_cal_071_', d),
+                                    exptime=0.71,
+                                    binning=1,
+                                    filt=1)
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('SII_on_cal_10_', d),
+                                    exptime=10,
+                                    binning=1,
+                                    filt=1)
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('SII_on_cal_15_', d),
+                                    exptime=15,
+                                    binning=1,
+                                    filt=1)
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('SII_on_cal_20_', d),
+                                    exptime=20,
+                                    binning=1,
+                                    filt=1)
 
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('SII_off_cal_07_', d),
-                                exptime=0.7,
-                                binning=1,
-                                filt=5)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('SII_off_cal_071_', d),
-                                exptime=0.71,
-                                binning=1,
-                                filt=5)
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('SII_off_cal_07_', d),
+                                    exptime=0.7,
+                                    binning=1,
+                                    filt=5)
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('SII_off_cal_071_', d),
+                                    exptime=0.71,
+                                    binning=1,
+                                    filt=5)
 
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_off_cal_07_', d),
-                                exptime=0.7,
-                                binning=1,
-                                filt=3)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_off_cal_071_', d),
-                                exptime=0.71,
-                                binning=1,
-                                filt=3)
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('Na_off_cal_07_', d),
+                                    exptime=0.7,
+                                    binning=1,
+                                    filt=3)
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('Na_off_cal_071_', d),
+                                    exptime=0.71,
+                                    binning=1,
+                                    filt=3)
 
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_07_', d),
-                                exptime=0.7,
-                                binning=1,
-                                filt=6)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_071_', d),
-                                exptime=0.71,
-                                binning=1,
-                                filt=6)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_10_', d),
-                                exptime=10,
-                                binning=1,
-                                filt=6)
-            for ifilt in range(1):
-                P.MC.acquire_im(pg.uniq_fname('Na_on_cal_15_', d),
-                                exptime=15,
-                                binning=1,
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('Na_on_cal_07_', d),
+                                    exptime=0.7,
+                                    binning=1,
+                                    filt=6)
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('Na_on_cal_071_', d),
+                                    exptime=0.71,
+                                    binning=1,
+                                    filt=6)
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('Na_on_cal_10_', d),
+                                    exptime=10,
+                                    binning=1,
+                                    filt=6)
+                for ifilt in range(1):
+                    P.MC.acquire_im(pg.uniq_fname('Na_on_cal_15_', d),
+                                    exptime=15,
+                                    binning=1,
                                 filt=6)
 
-            log.info('Collecting r_sdss, g_sdss, u_sdss, i_sdss, and z_sdss')
-            if ((time.time() + downloadtime*4*2) > Tend):
-                log.info('Exposure would extend past end of ACP exposure, returning') 
-                return
-            for ifilt in range(2):
-                P.MC.acquire_im(pg.uniq_fname('r_sdss_', d),
-                                exptime=0.05,
-                                binning=1,
-                                filt=0)
-            for ifilt in range(2):
-                P.MC.acquire_im(pg.uniq_fname('g_sdss_', d),
-                                exptime=0.05,
-                                binning=1,
-                                filt=2)
-            for ifilt in range(2):
-                P.MC.acquire_im(pg.uniq_fname('u_sdss_', d),
-                                exptime=20,
-                                binning=1,
-                                filt=4)
-            for ifilt in range(2):
-                P.MC.acquire_im(pg.uniq_fname('i_sdss_', d),
-                                exptime=0.15,
-                                binning=1,
-                                filt=7)
-            for ifilt in range(2):
-                P.MC.acquire_im(pg.uniq_fname('z_sdss', d),
-                                exptime=0.7,
-                                binning=1,
+                log.info('Collecting r_sdss, g_sdss, u_sdss, i_sdss, and z_sdss')
+                if ((time.time() + downloadtime*4*2) > Tend):
+                    log.info('Exposure would extend past end of ACP exposure, returning') 
+                    return
+                for ifilt in range(2):
+                    P.MC.acquire_im(pg.uniq_fname('r_sdss_', d),
+                                    exptime=0.05,
+                                    binning=1,
+                                    filt=0)
+                for ifilt in range(2):
+                    P.MC.acquire_im(pg.uniq_fname('g_sdss_', d),
+                                    exptime=0.05,
+                                    binning=1,
+                                    filt=2)
+                for ifilt in range(2):
+                    P.MC.acquire_im(pg.uniq_fname('u_sdss_', d),
+                                    exptime=20,
+                                    binning=1,
+                                    filt=4)
+                for ifilt in range(2):
+                    P.MC.acquire_im(pg.uniq_fname('i_sdss_', d),
+                                    exptime=0.15,
+                                    binning=1,
+                                    filt=7)
+                for ifilt in range(2):
+                    P.MC.acquire_im(pg.uniq_fname('z_sdss', d),
+                                    exptime=0.7,
+                                    binning=1,
                                 filt=8)
 
             while True:
@@ -1204,6 +1205,9 @@ def ACP_IPT_Na_R(args):
             log.error('Received the following error.  Attempting to return gracefully: ' + str(e))
             return
 
+def ACP_IPT_Na_nocal(args):
+    ACP_IPT_Na_r(args, cal=False)
+
 # --> this is hacked in here.  Should be modified to not need args.ObsClassName
 def cmd_center(args):
     with pg.PrecisionGuide("CorObsData", "IoIO") as P:
@@ -1276,6 +1280,14 @@ if __name__ == "__main__":
     ACP_IPT_Na_R_parser.add_argument(
         'fname', help='single fname from ACP -- will extract path and use own fnames')
     ACP_IPT_Na_R_parser.set_defaults(func=ACP_IPT_Na_R)
+
+    ACP_IPT_Na_nocal_parser = subparsers.add_parser(
+        'ACP_IPT_Na_nocal', help='Collect IPT and Na measurements using ACP UserActions simple shell-out')
+    ACP_IPT_Na_nocal_parser.add_argument(
+        'interval', help='ACP #interval value into which all exposure must fit')
+    ACP_IPT_Na_nocal_parser.add_argument(
+        'fname', help='single fname from ACP -- will extract path and use own fnames')
+    ACP_IPT_Na_nocal_parser.set_defaults(func=ACP_IPT_Na_nocal)
 
     ACP_status_parser = subparsers.add_parser(
         'ACP_status', help='Using ACP UserActions simple shell-out, print MaxIm internals')
