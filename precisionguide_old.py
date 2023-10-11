@@ -2426,6 +2426,7 @@ guide_box_log_file : str
                     tolerance=None,
                     max_tries=3,
                     start_PrecisionGuide=False,
+                    Tend=None,
                     **ObsClassArgs):
         """Loop max_tries times taking exposures and moving the telescope with guider slews or, if the guider is on, guide box moves to center the object
         """
@@ -2436,6 +2437,9 @@ guide_box_log_file : str
         while True:
             if self.MC.horizon_limit():
                 log.error('Horizon limit reached')
+                return False
+            if Tend and time.time() > Tend:
+                log.info('Centering would extend past specified end time, returning') 
                 return False
             log.debug('CENTER_LOOP TAKING EXPOSURE')
             HDUList = self.MC.take_im(exptime, filt)

@@ -881,7 +881,7 @@ def IPT_Na_R(args):
     log.debug('TURNING ON GUIDEBOX MOVER SYSTEM')
     P.diff_flex()
     log.debug('CENTERING WITH GUIDEBOX MOVES') 
-    P.center_loop()
+    P.center_loop(max_tries=5)
     if P.MC.horizon_limit():
         log.debug('Horizon limit reached.  Shutting down observatory')
         P.MC.Application.ShutDownObservatory()
@@ -924,7 +924,7 @@ def IPT_Na_R(args):
             P.MC.Application.ShutDownObservatory()
             return
         log.debug('CENTERING WITH GUIDEBOX MOVES') 
-        P.center_loop()
+        P.center_loop(max_tries=5)
         
         for i in range(4):
             if P.MC.horizon_limit():
@@ -949,7 +949,7 @@ def IPT_Na_R(args):
                 return
             P.diff_flex()
             log.debug('CENTERING WITH GUIDEBOX MOVES') 
-            P.center_loop()
+            P.center_loop(max_tries=5)
             if P.MC.horizon_limit():
                 log.debug('Horizon limit reached.  Shutting down observatory')
                 P.MC.Application.ShutDownObservatory()
@@ -989,7 +989,7 @@ def ACP_IPT_Na_R(args, cal=True):
                 # User could have had guider already on.  If not, center with
                 # guider slews and start the guider
                 log.debug('CENTERING WITH GUIDER SLEWS') 
-                P.center_loop(max_tries=5)
+                P.center_loop(max_tries=5, Tend=Tend)
                 if time.time() > Tend:
                     log.info('Past expected end of ACP exposure, returning') 
                     return
@@ -1001,7 +1001,7 @@ def ACP_IPT_Na_R(args, cal=True):
             log.debug('TURNING ON GUIDEBOX MOVER SYSTEM')
             P.diff_flex()
             log.debug('CENTERING WITH GUIDEBOX MOVES') 
-            P.center_loop()
+            P.center_loop(max_tries=5, Tend=Tend)
             downloadtime = 10
             # Jupiter observations
             if cal:
@@ -1140,7 +1140,7 @@ def ACP_IPT_Na_R(args, cal=True):
                 # 8 R125		  	~0.25 deg
         
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                P.center_loop()
+                P.center_loop(max_tries=5, Tend=Tend)
                 log.info('Collecting Na')
                 exptime=60
                 if ((time.time() + exptime) > Tend):
@@ -1153,7 +1153,7 @@ def ACP_IPT_Na_R(args, cal=True):
                                 exptime=exptime,
                                 filt=3)
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                P.center_loop()
+                P.center_loop(max_tries=5, Tend=Tend)
                 exptime=300
                 if ((time.time() + exptime) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
@@ -1200,13 +1200,13 @@ def ACP_IPT_Na_R(args, cal=True):
                                     exptime=exptime,
                                     filt=5)
                     log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                    P.center_loop()
+                    P.center_loop(max_tries=5, Tend=Tend)
         except Exception as e:
             log.error('Received the following error.  Attempting to return gracefully: ' + str(e))
             return
 
 def ACP_IPT_Na_nocal(args):
-    ACP_IPT_Na_r(args, cal=False)
+    ACP_IPT_Na_R(args, cal=False)
 
 # --> this is hacked in here.  Should be modified to not need args.ObsClassName
 def cmd_center(args):
