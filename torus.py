@@ -492,6 +492,7 @@ def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):
         t['mask'] = np.logical_or(t['mask'],
                                   t['ansa_left_surf_bright_err'] > 10*u.R)
 
+# --> These should probably be in utils.py
 def nan_median_filter(data, mask=True, **kwargs):
     ndata = data.copy()
     mask = np.logical_and(mask, ~np.isnan(data))

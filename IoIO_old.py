@@ -1000,11 +1000,11 @@ def ACP_IPT_Na_R(args, cal=True):
                 return
             log.debug('TURNING ON GUIDEBOX MOVER SYSTEM')
             P.diff_flex()
-            log.debug('CENTERING WITH GUIDEBOX MOVES') 
-            P.center_loop(max_tries=5, Tend=Tend)
             downloadtime = 10
             # Jupiter observations
             if cal:
+                log.debug('CENTERING WITH GUIDEBOX MOVES') 
+                P.center_loop(max_tries=5, Tend=Tend)
                 log.info('Collecting [SII] and Na calibration images')
                 if ((time.time() + downloadtime*4*3) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
