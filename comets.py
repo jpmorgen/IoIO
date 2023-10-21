@@ -194,7 +194,7 @@ log.setLevel('DEBUG')
 #c = comet_collection('/data/IoIO/raw/20220112/')
 
 cl = comet_list(include_PSIScope=False)
-print(f'Number of IoIO comets = {len(cl[0])} Total observations {cl[1]}')
+print(f'Number of IoIO comets = {len(cl[0])} Total nights {cl[1]}')
 cl = comet_list()
 print('Including PSIScope')
 print(len(cl[0]), cl[1])
