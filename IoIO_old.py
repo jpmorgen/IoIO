@@ -353,8 +353,8 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         sum_on_ND_filter -= NDmed * len(boost_NDc0)
         
         #log.debug('sum of significant pixels on ND filter = ' + str(sum_on_ND_filter))
-        print('sum_on_ND_filter = ', sum_on_ND_filter)
-        print(f'num_sat = {num_sat}')
+        log.debug(f'sum_on_ND_filter = {sum_on_ND_filter}')
+        log.debug(f'num_sat = {num_sat}')
         
         #if num_sat > 1000 or sum_on_ND_filter < 1E6:
         # Vega is 950,000
@@ -363,7 +363,9 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         # Was using num_sat>1000.  Now >500 for Vega
         # Sat May 01 07:01:06 2021 EDT  jpmorgen@snipe
         # Has to be >1000 when it is genuinly Jupiter
-        if num_sat > 1000 or sum_on_ND_filter < 200000: #< 0.75E6:
+        # Fri Oct 20 10:51:19 2023 EDT  jpmorgen@snipe
+        # New r_sdss filter is more efficient.  Try 1200
+        if num_sat > 1200 or sum_on_ND_filter < 200000: #< 0.75E6:
             log.warning('Jupiter outside of ND filter?')
             # Outside the ND filter, Jupiter should be saturating.  To
             # make the center of mass calc more accurate, just set
@@ -875,13 +877,15 @@ def IPT_Na_R(args):
         # User could have had guider already on.  If not, center with
         # guider slews and start the guider
         log.debug('CENTERING WITH GUIDER SLEWS') 
-        P.center_loop(max_tries=5)
+        P.center_loop(max_tries=5, dead_zone=(25, 100),
+                      dead_zone_move=(0, 200))
         log.debug('STARTING GUIDER') 
         P.MC.guider_start(filter=guider_nd_Filter_number)
     log.debug('TURNING ON GUIDEBOX MOVER SYSTEM')
     P.diff_flex()
     log.debug('CENTERING WITH GUIDEBOX MOVES') 
-    P.center_loop(max_tries=5)
+    P.center_loop(max_tries=5, dead_zone=(25, 100),
+                  dead_zone_move=(0, 200))
     if P.MC.horizon_limit():
         log.debug('Horizon limit reached.  Shutting down observatory')
         P.MC.Application.ShutDownObservatory()
@@ -924,7 +928,8 @@ def IPT_Na_R(args):
             P.MC.Application.ShutDownObservatory()
             return
         log.debug('CENTERING WITH GUIDEBOX MOVES') 
-        P.center_loop(max_tries=5)
+        P.center_loop(max_tries=5, dead_zone=(25, 100),
+                      dead_zone_move=(0, 200))
         
         for i in range(4):
             if P.MC.horizon_limit():
@@ -949,7 +954,8 @@ def IPT_Na_R(args):
                 return
             P.diff_flex()
             log.debug('CENTERING WITH GUIDEBOX MOVES') 
-            P.center_loop(max_tries=5)
+            P.center_loop(max_tries=5, dead_zone=(25, 100),
+                          dead_zone_move=(0, 200))
             if P.MC.horizon_limit():
                 log.debug('Horizon limit reached.  Shutting down observatory')
                 P.MC.Application.ShutDownObservatory()
@@ -989,7 +995,8 @@ def ACP_IPT_Na_R(args, cal=True):
                 # User could have had guider already on.  If not, center with
                 # guider slews and start the guider
                 log.debug('CENTERING WITH GUIDER SLEWS') 
-                P.center_loop(max_tries=5, Tend=Tend)
+                P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                              dead_zone_move=(0, 200))
                 if time.time() > Tend:
                     log.info('Past expected end of ACP exposure, returning') 
                     return
@@ -1004,7 +1011,8 @@ def ACP_IPT_Na_R(args, cal=True):
             # Jupiter observations
             if cal:
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                P.center_loop(max_tries=5, Tend=Tend)
+                P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                              dead_zone_move=(0, 200))
                 log.info('Collecting [SII] and Na calibration images')
                 if ((time.time() + downloadtime*4*3) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
@@ -1140,7 +1148,8 @@ def ACP_IPT_Na_R(args, cal=True):
                 # 8 R125		  	~0.25 deg
         
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                P.center_loop(max_tries=5, Tend=Tend)
+                P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                              dead_zone_move=(0, 200))
                 log.info('Collecting Na')
                 exptime=60
                 if ((time.time() + exptime) > Tend):
@@ -1153,7 +1162,8 @@ def ACP_IPT_Na_R(args, cal=True):
                                 exptime=exptime,
                                 filt=3)
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                P.center_loop(max_tries=5, Tend=Tend)
+                P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                              dead_zone_move=(0, 200))
                 exptime=300
                 if ((time.time() + exptime) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
@@ -1200,7 +1210,8 @@ def ACP_IPT_Na_R(args, cal=True):
                                     exptime=exptime,
                                     filt=5)
                     log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                    P.center_loop(max_tries=5, Tend=Tend)
+                    P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                                  dead_zone_move=(0, 200))
         except Exception as e:
             log.error('Received the following error.  Attempting to return gracefully: ' + str(e))
             return
@@ -1212,7 +1223,8 @@ def ACP_IPT_Na_nocal(args):
 def cmd_center(args):
     with pg.PrecisionGuide("CorObsData", "IoIO") as P:
         try:
-            P.center_loop()
+            P.center_loop(dead_zone=(25, 100),
+                          dead_zone_move=(0, 200))
             # Upset the centering a bit
             log.info("JOGGING TELESCOPE A BIT TO FORCE GUIDEBOX CENTERING")
             # Sun Apr 25 04:48:45 2021 EDT  jpmorgen@snipe
@@ -1222,7 +1234,8 @@ def cmd_center(args):
             #P.MC.move_with_guider_slews(np.asarray([10,3])/3600)
             #P.MC.move_with_guider_slews(np.asarray([20,5])/3600)
             P.MC.guider_start(filter=guider_nd_Filter_number)
-            P.center_loop()
+            P.center_loop(dead_zone=(25, 100),
+                          dead_zone_move=(0, 200))
             for ifilt in np.arange(8):
                 log.info("recording 2 images in filter # " + str(ifilt))
                 for iim in np.arange(2):
@@ -1234,7 +1247,8 @@ def cmd_center(args):
                                     exptime=10,
                                     filt=str(ifilt))
             log.info("Centering telescope to see how far off we got")
-            P.center_loop()
+            P.center_loop(dead_zone=(25, 100),
+                          dead_zone_move=(0, 200))
         except Exception as e:
             log.error('Received the following error.  Attempting to return gracefully: ' + str(e))
             return

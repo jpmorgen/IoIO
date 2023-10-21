@@ -2279,6 +2279,9 @@ guide_box_log_file : str
                scaling_astrometry=None,
                ignore_ObsData_astrometry=False,
                recursive_count=0,
+               Tend=None, # These are for awkward loop from center_loop
+               dead_zone=None, # Pixels
+               dead_zone_move=None, # Pixels
                **ObsClassArgs):
         """Move the object to desired_center using guider slews OR
                guide box moves, if the guider is running.  Takes
@@ -2400,7 +2403,9 @@ guide_box_log_file : str
                 log.debug('TURNING GUIDER OFF AND CENTERING WITH GUIDER SLEWS')
                 self.MC.guider_stop()
                 # --> Consider using center here instead of move_with_guider_slews
-                self.center_loop()
+                self.center_loop(Tend=Tend,
+                                 dead_zone=dead_zone,
+                                 dead_zone_move=dead_zone_move)
                 #self.MC.move_with_guider_slews(dw_coords)
                 # --> Need to add logic to capture guider stuff,
                 # though filter should be the same.  It is just
@@ -2410,14 +2415,20 @@ guide_box_log_file : str
                 log.debug('RESTARTING GUIDER AND CENTERING WITH GUIDEBOX MOVES')
                 self.MC.guider_start()
                 recursive_count += 1
-                self.center(recursive_count=recursive_count)
+                self.center(recursive_count=recursive_count,
+                            Tend=Tend,
+                            dead_zone=dead_zone,
+                            dead_zone_move=dead_zone_move)
         else:
             log.debug('CENTERING TARGET WITH GUIDER SLEWS')
             self.MC.move_with_guider_slews(dw_coords)
             if self.MC.guider_commanded_running:
                 log.debug('Guider was turned off unexpectedly.  Turning it back on and recentering with guidebox moves')
                 self.MC.guider_start()
-                self.center(recursive_count=recursive_count)
+                self.center(recursive_count=recursive_count,
+                            Tend=Tend,
+                            dead_zone=dead_zone,
+                            dead_zone_move=dead_zone_move)
         return True
 
     def center_loop(self,
@@ -2427,6 +2438,8 @@ guide_box_log_file : str
                     max_tries=3,
                     start_PrecisionGuide=False,
                     Tend=None,
+                    dead_zone=None, # Pixels
+                    dead_zone_move=None, # Pixels
                     **ObsClassArgs):
         """Loop max_tries times taking exposures and moving the telescope with guider slews or, if the guider is on, guide box moves to center the object
         """
@@ -2454,8 +2467,8 @@ guide_box_log_file : str
                         + str(fails))
                     return False
                 continue
-            if (np.linalg.norm(O.obj_center - O.desired_center)
-                < tolerance):
+            d_center = np.linalg.norm(O.obj_center - O.desired_center)
+            if (d_center < tolerance):
                 log.debug('Target centered to ' + str(tolerance) +
                           ' pixels')
                 if start_PrecisionGuide:
@@ -2463,13 +2476,40 @@ guide_box_log_file : str
                     self.reinitialize()
                     self.update_flex_pix_rate(0)
                 return True
+            if (dead_zone is not None
+                and dead_zone[0] < d_center
+                and d_center < dead_zone[1]):
+                # Kick ourselves out of the dead zone and get a running
+                # start from outside
+                if self.MC.CCDCamera.GuiderRunning:
+                    log.debug('TURNING GUIDER OFF AND...')
+                    self.MC.guider_stop()
+                log.debug('MOVING OUT OF DEAD ZONE')
+                if dead_zone_move is None:
+                    dead_zone_move = (dead_zone[1], dead_zone[1])
+                # These need to be float
+                dead_zone = np.asarray(dead_zone)
+                dead_zone = dead_zone.astype(float)
+                dead_zone_move = np.asarray(dead_zone_move)
+                dead_zone_move = dead_zone_move.astype(float)
+                dra_ddec = self.MC.scope_wcs(dead_zone_move,
+                                             to_world=True,
+                                             delta=True)
+                self.MC.move_with_guider_slews(dra_ddec)
+                # Try only once to kick ourselves out, otherwise
+                # unpleasant looping occurs!
+                return self.center_loop(Tend=Tend)
+                
             if tries >= max_tries:
                 log.error('Failed to center target to ' +
                           str(tolerance) + ' pixels after '
                           + str(tries) + ' tries')
                 return False
             # Here is where we actually call the center algorithm
-            if not self.center(O):
+            if not self.center(O,
+                               Tend=Tend,
+                               dead_zone=dead_zone,
+                               dead_zone_move=dead_zone_move):
                 log.error('center_loop: could not center target')
                 return False
             tries += 1
