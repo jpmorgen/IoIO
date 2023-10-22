@@ -29,7 +29,9 @@ from IoIO.simple_show import simple_show
 # Noisey sky = 18
 PROFILE_PEAK_THRESHOLD = 20
 
-# Definitive Jupiter good conditions 
+# Definitive Jupiter good conditions
+# --> Sun Oct 22 06:45:56 2023 EDT  jpmorgen@snipe
+# --> This needs to change to a function after 2023-08-
 BRIGHT_SAT_THRESHOLD = 1000
 # 25 worked for a star, 250 should be conservative for Jupiter
 # when it is attenuated by clouds.  As noted below, only works

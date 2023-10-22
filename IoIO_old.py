@@ -1167,10 +1167,6 @@ def ACP_IPT_Na_R(args, cal=True):
                 P.MC.acquire_im(pg.uniq_fname('Na_off-band_', d),
                                 exptime=exptime,
                                 filt=3)
-                log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
-                              dead_zone_move=(0, 200))
-                exptime=300
                 if ((time.time() + exptime) > Tend):
                     log.info('Exposure would extend past end of ACP exposure, returning') 
                     return
@@ -1182,6 +1178,9 @@ def ACP_IPT_Na_R(args, cal=True):
                                 filt=6)
 
                 for i in range(4):
+                    log.debug('CENTERING WITH GUIDEBOX MOVES') 
+                    P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                                  dead_zone_move=(0, 200))
                     P.diff_flex()
                     log.info('Collecting [SII]')
                     # Wed Jun 16 22:44:52 2021 EDT  jpmorgen@snipe
@@ -1215,9 +1214,6 @@ def ACP_IPT_Na_R(args, cal=True):
                     P.MC.acquire_im(pg.uniq_fname('SII_off-band_', d),
                                     exptime=exptime,
                                     filt=5)
-                    log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                    P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
-                                  dead_zone_move=(0, 200))
         except Exception as e:
             log.error('Received the following error.  Attempting to return gracefully: ' + str(e))
             return
