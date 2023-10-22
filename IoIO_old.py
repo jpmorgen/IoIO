@@ -363,9 +363,9 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         # Was using num_sat>1000.  Now >500 for Vega
         # Sat May 01 07:01:06 2021 EDT  jpmorgen@snipe
         # Has to be >1000 when it is genuinly Jupiter
-        # Fri Oct 20 10:51:19 2023 EDT  jpmorgen@snipe
-        # New r_sdss filter is more efficient.  Try 1200
-        if num_sat > 1200 or sum_on_ND_filter < 200000: #< 0.75E6:
+        # Sun Oct 22 06:34:30 2023 EDT  jpmorgen@snipe
+        # New r_sdss filter is more efficient.  Try 3000 (1200 way to small)
+        if num_sat > 3000 or sum_on_ND_filter < 200000: #< 0.75E6:
             log.warning('Jupiter outside of ND filter?')
             # Outside the ND filter, Jupiter should be saturating.  To
             # make the center of mass calc more accurate, just set
@@ -425,6 +425,12 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
         self.header['OBJ_CR1'] = (self._obj_center[0], 'Object center Y')
         self.header['QUALITY'] = (self.quality, 'Quality on 0-10 scale of center determination')
         return self._obj_center
+
+        self.header['OBJ_CR0'] = (self._obj_center[1], 'Object center X')
+        self.header['OBJ_CR1'] = (self._obj_center[0], 'Object center Y')
+        self.header['QUALITY'] = (self.quality, 'Quality on 0-10 scale of center determination')
+        return self._obj_center
+
 
     @property
     def desired_center(self):
