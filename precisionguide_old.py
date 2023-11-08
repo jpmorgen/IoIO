@@ -2254,8 +2254,8 @@ guide_box_log_file : str
         #     return self.GuideBoxCommander(np.asarray((dec_pix_rate, ra_pix_rate)))
         # 2021 after guider change
         if (-40 < self.MC.Telescope.Declination
-            and self.MC.Telescope.Declination < +10
-            and self.MC.Telescope.Altitude < 30):
+            and self.MC.Telescope.Declination < +40
+            and self.MC.Telescope.Altitude < 40):
             # Change from guider pixels per 10s to main camera pixels per s
             ra_pix_rate = -0.010/10 * plate_ratio
             # Fri May 14 10:24:04 2021 EDT  jpmorgen@snipe
