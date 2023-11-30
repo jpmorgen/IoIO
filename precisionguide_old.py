@@ -2440,6 +2440,7 @@ guide_box_log_file : str
                     Tend=None,
                     dead_zone=None, # Pixels
                     dead_zone_move=None, # Pixels
+                    was_guiding=None,
                     **ObsClassArgs):
         """Loop max_tries times taking exposures and moving the telescope with guider slews or, if the guider is on, guide box moves to center the object
         """
@@ -2471,6 +2472,19 @@ guide_box_log_file : str
             if (d_center < tolerance):
                 log.debug('Target centered to ' + str(tolerance) +
                           ' pixels')
+                if was_guiding:
+                    # Turn our guider back on after a dead_zone
+                    # incident in the case that it happened to be
+                    # running while we wondered out (hopefully rare --
+                    # usually a wind or cloud event)
+                    log.debug('TURNING GUIDER BACK ON AND...')
+                    self.MC.guider_start()
+                    log.debug('CENTERING WITH GUIDEBOX MOVES') 
+                    return self.center_loop(exptime=exptime,
+                                            filt=filt,
+                                            tolerance=tolerance,
+                                            max_tries=max_tries,
+                                            Tend=Tend)
                 if start_PrecisionGuide:
                     # We have moved the telescope, so our Obs
                     self.reinitialize()
@@ -2482,6 +2496,7 @@ guide_box_log_file : str
                 # Kick ourselves out of the dead zone and get a running
                 # start from outside
                 if self.MC.CCDCamera.GuiderRunning:
+                    was_guiding = True
                     log.debug('TURNING GUIDER OFF AND...')
                     self.MC.guider_stop()
                 log.debug('MOVING OUT OF DEAD ZONE')
@@ -2498,7 +2513,12 @@ guide_box_log_file : str
                 self.MC.move_with_guider_slews(dra_ddec)
                 # Try only once to kick ourselves out, otherwise
                 # unpleasant looping occurs!
-                return self.center_loop(Tend=Tend)
+                return self.center_loop(exptime=exptime,
+                                        filt=filt,
+                                        tolerance=tolerance,
+                                        max_tries=max_tries,
+                                        Tend=Tend,
+                                        was_guiding=was_guiding)
                 
             if tries >= max_tries:
                 log.error('Failed to center target to ' +
