@@ -53,9 +53,9 @@ stop = None
 # start = '2018-05-11'
 # stop = '2018-05-20'
 
-# 2022-11-09
-start = '2022-10-21'
-stop = '2022-11-22'
+## 2022-11-09
+#start = '2022-10-21'
+#stop = '2022-11-22'
 
 ## Looking for bright start of 2022 Na outburst
 #start = '2022-05-29'

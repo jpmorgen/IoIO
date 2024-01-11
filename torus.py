@@ -57,6 +57,9 @@ from IoIO.juno import JunoTimes, PJAXFormatter
 TORUS_ROOT = os.path.join(IoIO_ROOT, 'Torus')
 MAX_ROOT = os.path.join(IoIO_ROOT, 'for_Max')
 
+# --> from Barbosa & Kivelson (1983)
+# Corotation electric field = 150 mV/m
+
 # https://lasp.colorado.edu/home/mop/files/2015/02/CoOrd_systems7.pdf
 # Has sysIII of intersection of mag and equatorial plains at 290.8.
 # That means tilt is toward 200.8, which is my basic recollection
@@ -271,7 +274,7 @@ def ansa_parameters(ccd,
         # --> Consider incorporating this into the overall output,
         # possibly being more forgiving in letting things go through
         # and/or check for messages in an intelligent way
-        print(fit.fit_info['message'])
+        #print(fit.fit_info['message'])
         return bad_ansa(side)
 
     rprof_ax.axvline((r_ansa-dRj).value, linestyle='--', color='k')
@@ -570,6 +573,7 @@ def plot_column_vals(t,
                      top_axis=False,
                      ylim=None,
                      tlim=None,
+                     legend=True,
                      show=False,
                      max_night_gap=20,
                      **kwargs): # These are passed to plot_[hv]lines
@@ -628,7 +632,8 @@ def plot_column_vals(t,
         tlim = ax.get_xlim()
     ax.set_xlabel('date')
     ax.set_ylabel(ylabel)
-    ax.legend(handles=handles)
+    if legend:
+        ax.legend(handles=handles)
 
     ax.set_xlim(tlim)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
@@ -781,6 +786,7 @@ def plot_epsilons(t,
                   max_eps=0.06,
                   tlim=None,
                   show=False,
+                  legend=True,
                   **kwargs): # These are passed to plot_[hv]lines
     if fig is None:
         fig = plt.figure()
@@ -852,7 +858,8 @@ def plot_epsilons(t,
                linestyles=('-', '--', '--'),
                label=f'{epsilon_biweight:.3f} +/- {epsilon_mad:.3f}')
     ax.axhline(0.025, color='y', label='Nominal 0.025')
-    ax.legend(handles=handles)
+    if legend:
+        ax.legend(handles=handles)
     #plt.title('Epsilon')
     ax.set_xlim(tlim)
     ax.set_ylim(min_eps, max_eps)
@@ -875,6 +882,7 @@ def plot_ansa_pos(t,
                   tlim=None,
                   show=False,
                   medfilt_width=21,
+                  legend=True,
                   **kwargs): # These are passed to plot_[hv]lines):
     if fig is None:
         fig = plt.figure()
@@ -926,7 +934,8 @@ def plot_ansa_pos(t,
     #         'g^')
     ax.set_ylabel(r'Dawnward ribbon shift from Io orbit (R$_\mathrm{J}$)')
     ax.axhline(0, color='y', label='Io orbit')
-    ax.legend(handles=handles, ncol=2)
+    if legend:
+        ax.legend(handles=handles, ncol=2)
     ax.set_xlim(tlim)
     ax.set_ylim(-0.3, 0.4)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())

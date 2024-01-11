@@ -749,6 +749,9 @@ class CorPhotometry(Photometry):
                 #self.source_table.show_in_browser()
                 self._solved = True
                 log.debug(f'SOLVED {self.ccd.meta["rawfname"]}')
+                if self.ccd.meta['PIERSIDE'] == 'UNKNOWN':
+                    self.ccd.meta['PIERSIDE'] = self._pierside
+                    log.debug(f'updating PIERSIDE UNKNOWN to {self._pierside}')
             elif not self.solve_by_proxy:
                 # For the Astrometry base files just in case one
                 # doesn't get solved.  Initial trouble I had with

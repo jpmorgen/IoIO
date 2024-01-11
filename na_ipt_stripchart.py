@@ -83,8 +83,20 @@ t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
 #master_stripchart(t_na, t_torus, nplots=3)
 #master_stripchart(t_na, t_torus, nplots=2)
 
-master_stripchart(t_na, t_torus, nplots=2, figsize = [12, 5.5],
-                  outname='/home/jpmorgen/Conferences/DPS/2023_San_Antonio/Na_IPT_time_history.png')
+master_stripchart(t_na, t_torus, nplots=2, figsize = [12, 5.5])
+#master_stripchart(t_na, t_torus, nplots=2, figsize = [12, 10])
+
+#master_stripchart(t_na, t_torus, nplots=2, figsize = [12, 10],
+#                  stop='2024-01-01',
+#                  outname='/home/jpmorgen/Conferences/AGU/2023/Na_IPT_time_history.png')
+
+#master_stripchart(t_na, t_torus, nplots=2, figsize = [12, 5.5],
+#                  stop='2024-01-01',
+#                  outname='/home/jpmorgen/Conferences/AGU/2023/Na_IPT_time_history_wide.png')
+
+ 
+#master_stripchart(t_na, t_torus, nplots=2, figsize = [12, 5.5],
+#                  outname='/home/jpmorgen/Conferences/DPS/2023_San_Antonio/Na_IPT_time_history.png')
 
 #master_stripchart(t_na, t_torus, start='2018-01-01', stop='2018-08-01', figsize=figsize)
 #master_stripchart(t_na, t_torus, start='2019-01-01', stop='2019-12-31', figsize=figsize)

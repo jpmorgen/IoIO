@@ -6,7 +6,7 @@ import numpy as np
 from astropy import log
 from astropy import units as u
 from astropy.nddata import CCDData, StdDevUncertainty
-from astropy.coordinates import (Angle, SkyCoord, AltAz, HADec,
+from astropy.coordinates import (Angle, SkyCoord, HADec,
                                  solar_system_ephemeris, get_body)
 
 import ccdproc as ccdp

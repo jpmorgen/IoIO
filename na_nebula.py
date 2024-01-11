@@ -206,7 +206,7 @@ def add_daily_biweights(summary_table,
                        data_col=sb_col,
                        biweight_col='biweight_' + sb_col,
                        std_col='std_' + sb_col)
-        print(av_ap)
+        #print(av_ap)
         
 def boxcar_medians(
         summary_table,
@@ -221,7 +221,7 @@ def boxcar_medians(
         day_table.colnames)
     day_table_colnames = ['ijd'] + list(include_colnames)
     day_table = QTable(day_table[day_table_colnames])
-    print(day_table_colnames)
+    #print(day_table_colnames)
 
     # Boxcar median each biweight column
     first_day = np.min(day_table['ijd'])
@@ -229,7 +229,7 @@ def boxcar_medians(
     all_days = np.arange(first_day, last_day+1)
     med_colnames = median_col_encoder.colbase_list(day_table.colnames)
     for med_col in med_colnames:
-        print(med_col)
+        #print(med_col)
         day_table = daily_convolve(day_table,
                                    'ijd',
                                    med_col,
@@ -754,7 +754,7 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
     largest_sub_encoder = ColnameEncoder('largest_sub', formatter='.1f')
     ls_cols = largest_sub_encoder.colbase_list(summary_table.colnames)
 
-    print('len(summary_table): ', len(summary_table))
+    #print('len(summary_table): ', len(summary_table))
     # Mask bad measurements
     # This is pretty effective and may be useful for eventually making
     # a movie, as long as I capture the appropriate filenames in summary_table
@@ -767,7 +767,7 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
     mask = np.logical_and(mask, summary_table[ls_cols[-2]] < MAX_24_Rj_SB)
 
     clean_t = summary_table[mask]
-    print('len(clean_t): ', len(clean_t))
+    #print('len(clean_t): ', len(clean_t))
     add_daily_biweights(clean_t, encoder=largest_sub_encoder)
     clean_t.write(os.path.join(outdir_root, BASE + '_cleaned.ecsv'),
                   overwrite=True)
