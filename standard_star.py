@@ -56,6 +56,8 @@ FILT_ROOT = os.path.join(IoIO_ROOT, 'observing')
 
 LOCKFILE = '/tmp/standard_star_reduce.lock'
 
+BACK_RMS_SCALE = 5
+
 # Small filters are 15 arcmin.  Could even fluf this out if I think I
 # haven't synced the telescope on some old observations
 POINTING_TOLERANCE = 15*u.arcmin
@@ -447,10 +449,9 @@ def standard_star_pipeline(directory,
         glob_include = ['HD*']
     glob_include = assure_list(glob_include)
 
-    if calibration is None:
-        calibration = Calibration(reduce=True)
+    calibration = calibration or Calibration(reduce=True)
     if photometry is None:
-        photometry = Photometry(precalc=True, **kwargs)
+        photometry = Photometry(precalc=True, back_rms_scale=BACK_RMS_SCALE)
 
     flist = []
     for gi in glob_include:
@@ -846,6 +847,11 @@ def standard_star_directory(directory,
                     # one, so calculate for each individually
                     ec_idx = np.flatnonzero(valid_uoes
                                             > sx694.max_accurate_exposure)
+                    # This assumes that there is a negligable
+                    # difference between the exposure times on either
+                    # side of sx694.max_accurate_exposure such that
+                    # true_flux is the flux in the longer exposure as
+                    # well
                     exposure_corrects = (counts[ec_idx]/true_flux
                                         - valid_uoes[ec_idx])
                     exposure_corrects = exposure_corrects.tolist()
@@ -1286,7 +1292,8 @@ def standard_star_tree(raw_data_root=RAW_DATA_ROOT,
         log.warning('No directories found')
         return
     calibration = calibration or Calibration(reduce=True)
-    photometry = Photometry(precalc=True, **kwargs)
+    if photometry is None:
+        photometry = Photometry(precalc=True, back_rms_scale=BACK_RMS_SCALE)
 
     extinction_data = []
     exposure_correct_data = []
