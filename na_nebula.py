@@ -612,9 +612,9 @@ def plot_nightly_medians(table_or_fname,
         av_ap = biweight_encoder.from_colname(bwt_col)
         if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
             continue
-        h = ax.errorbar(day_table['itdatetime'], day_table[bwt_col].value, 
-                         day_table[std_col].value, fmt='.', 
-                         label=f'{av_ap.value} R$_\mathrm{{J}}$', alpha=0.25)
+        h = ax.errorbar(day_table['itdatetime'], day_table[bwt_col], 
+                         day_table[std_col], fmt='.', 
+                         label=f'{av_ap} R$_\mathrm{{J}}$', alpha=0.25)
         point_handles.append(h)        
         add_medfilt(day_table, bwt_col, medfilt_width=medfilt_width)
         # Quick-and-dirty gap work.  Could do this in the day_table,
@@ -656,6 +656,11 @@ def plot_nightly_medians(table_or_fname,
         plt.show()
     if fig_close:
         plt.close()
+
+    # --> day_table might also be useful to return, but it has a
+    # non-serializable datetime object in it.  I think astropy times
+    # plot properly these days, so this could be ammended
+    return t
 
 def plot_obj_surf_bright(table_or_fname,
                          fig=None,

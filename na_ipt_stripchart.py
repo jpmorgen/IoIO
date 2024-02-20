@@ -37,29 +37,31 @@ def master_stripchart(t_na, t_torus, nplots=4, start=None, stop=None,
     axs = gs.subplots(sharex=True)
     #axs = gs.subplots()
 
-    #fig, axs = plt.subplots(nplots, figsize=figsize)
-    plot_nightly_medians(t_na,
-                         fig=fig, ax=axs[0],
+    if nplots == 1:
+        ax0 = axs
+    else:
+        ax0 = axs[0]
+    t_na = plot_nightly_medians(t_na,
+                         fig=fig, ax=ax0,
                          tlim=(start, stop),
-                         show=False,
                          medfilt_width=na_medfilt_width)
 
-    plot_ansa_brights(t_torus,
-                      fig=fig, ax=axs[1],
-                      tlim=(start, stop))
+    if nplots > 1:
+        t_torus = plot_ansa_brights(t_torus,
+                                    fig=fig, ax=axs[1],
+                                    tlim=(start, stop))
 
     if nplots > 2:
-        plot_epsilons(t_torus, fig=fig, ax=axs[2],
-                      tlim=(start, stop),
-                      show=False)
+        t_torus = plot_epsilons(t_torus, fig=fig, ax=axs[2],
+                                tlim=(start, stop))
 
     if nplots > 3:
-        plot_ansa_pos(t_torus, fig=fig, ax=axs[3],
-                      tlim=(start, stop),
-                      show=False)
+        t_torus = plot_ansa_pos(t_torus, fig=fig, ax=axs[3],
+                                tlim=(start, stop))
 
-    for ax in axs:
-        ax.label_outer()
+    if nplots > 1:
+        for ax in axs:
+            ax.label_outer()
 
     plt.tight_layout()
     if outname is None:
@@ -67,6 +69,8 @@ def master_stripchart(t_na, t_torus, nplots=4, start=None, stop=None,
     else:
         savefig_overwrite(outname)
         plt.close()
+
+    return t_na, t_torus
 
 outdir = '/data/IoIO/analysis/'
 
@@ -79,11 +83,21 @@ outdir = '/data/IoIO/analysis/'
 t_na = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
 t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
 #t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
+
+# Clean up masked values
+t_na = t_na[~t_na['mask']]
+t_torus = t_torus[~t_torus['mask']]
+
+
 #master_stripchart(t_na, t_torus)
+#master_stripchart(t_na, t_torus, nplots=1, figsize=[12,8])
 #master_stripchart(t_na, t_torus, nplots=3)
+t_na, t_torus = master_stripchart(
+    t_na, t_torus, nplots=3, figsize=[12, 10],
+    outname='/home/jpmorgen/Conferences/JpGU/2024/IoIO_Na_IPT_epsilon_2017--2024.png')
 #master_stripchart(t_na, t_torus, nplots=2)
 
-master_stripchart(t_na, t_torus, nplots=2, figsize = [12, 5.5])
+#master_stripchart(t_na, t_torus, nplots=2, figsize = [12, 5.5])
 #master_stripchart(t_na, t_torus, nplots=2, figsize = [12, 10])
 
 #master_stripchart(t_na, t_torus, nplots=2, figsize = [12, 10],

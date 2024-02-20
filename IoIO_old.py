@@ -667,7 +667,7 @@ bins.  Uses readnoise (default = 5 e- RMS) to define bin widths
                     # determine how many columns we will shift each row by
                     # using the default_ND_params
                     this_ND_center \
-                        = np.int(
+                        = int(
                             np.round(
                                 np.mean(
                                     self.ND_edges(

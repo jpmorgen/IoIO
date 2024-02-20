@@ -703,7 +703,6 @@ class Photometry:
         segm_deblend = deblend_sources(self.convolved_data,
                                        self.segm_image, 
                                        npixels=self.n_connected_pixels,
-                                       kernel=self.kernel,
                                        nlevels=self.deblend_nlevels,
                                        contrast=self.deblend_contrast)
         self._segm_deblend = segm_deblend

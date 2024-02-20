@@ -850,7 +850,7 @@ class CorDataNDparams(CorDataBase):
         x_filt_width = self.x_filt_width/self.binning[1]
         x_filt_width /= 2
         x_filt_width = 2 * np.round(x_filt_width)
-        x_filt_width = np.int(x_filt_width + 1)
+        x_filt_width = int(x_filt_width + 1)
         search_margin = self.search_margin / self.binning[1]
         max_ND_width_range = self.max_ND_width_range / self.binning[1]
         
@@ -935,7 +935,7 @@ class CorDataNDparams(CorDataBase):
         # Create yrange at y_bin intervals starting at ytop (low
         # number in C fashion) and extending to ybot (high number),
         # chopping of the last one if it goes too far
-        y_bin = np.int((ybot-ytop)/n_y_steps)
+        y_bin = int((ybot-ytop)/n_y_steps)
         yrange = np.arange(ytop, ybot, y_bin)
         if yrange[-1] + y_bin > ybot:
             yrange = yrange[0:-1]
