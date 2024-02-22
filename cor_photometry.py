@@ -15,6 +15,7 @@ import subprocess
 import numpy as np
 
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from astropy import log
 from astropy import units as u
@@ -263,6 +264,19 @@ def astrometry_outname_as_outname(ccd, bmp_meta=None,
     outname = astrometry_outname(in_name, date)
     bmp_meta['outname'] = outname
     return ccd
+
+class NonlinConverter():
+    def __init__(self, ccd):
+        self.nonlin = ccd.meta.get('NONLIN') or 1
+        
+    def val2nonlin(self, val):
+        """Returns percent of CCD nonlinear value given CCD pixel value"""
+        return val/self.nonlin*100
+    
+    def nonlin2val(self, percent_nonlin):
+        """Returns CCD pixel value given percent of CCD nonlinear value"""
+        return percent_nonlin*100/self.nonlin
+    
 
 class CorPhotometry(Photometry):
     """Subclass of Photometry to deal with specifics of IoIO coronagraph
@@ -873,30 +887,28 @@ class CorPhotometry(Photometry):
         back = self.background[ymin:ymax, xmin:xmax]
         # Take median back_rms for plotting purposes
         back_rms = np.median(self.back_rms[ymin:ymax, xmin:xmax])
-        #https://pythonmatplotlibtips.blogspot.com/2019/07/draw-two-axis-to-one-colorbar.html
         ax = plt.subplot(projection=source_ccd.wcs)
         ims = plt.imshow(source_ccd)
-        cbar = plt.colorbar(ims, fraction=0.03, pad=0.11)
-        pos = cbar.ax.get_position()
+        cbar = plt.colorbar(ims, pad=0.11)
         cax1 = cbar.ax
-        cax1.set_aspect('auto')
-        cax2 = cax1.twinx()
-        ylim = np.asarray(cax1.get_ylim())
-        nonlin = source_ccd.meta['NONLIN']
+        nc = NonlinConverter(self.ccd)
+        cax2 = cax1.secondary_yaxis('right',
+                                    functions=(nc.val2nonlin, nc.nonlin2val))
+        cax1.yaxis.tick_left()
         cax1.set_ylabel(source_ccd.unit)
-        cax2.set_ylim(ylim/nonlin*100)
         cax1.yaxis.set_label_position('left')
         cax1.tick_params(labelrotation=90)
         cax2.set_ylabel('% nonlin')
 
         ax.contour(segm, levels=0, colors='white')
-        ax.contour(source_ccd - back,
+        ax.contour((source_ccd - back).value,
                    levels=np.arange(2,11)*back_rms, colors='gray')
-        ax.contour(source_ccd - threshold,
+        ax.contour((source_ccd - threshold).value,
                    levels=0, colors='green')
         ax.set_title(f'{self.ccd.meta["OBJECT"]} {self.ccd.meta["DATE-AVG"]}')
         ax.text(0.1, 0.9, f'back_rms_scale = {self.back_rms_scale}',
                 color='white', transform=ax.transAxes)
+        plt.tight_layout()
         if show:
             plt.show()
         if outname is not None:
