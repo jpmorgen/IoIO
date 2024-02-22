@@ -11,9 +11,8 @@ from astropy.convolution import Gaussian2DKernel, convolve
 from astropy.stats import gaussian_fwhm_to_sigma, sigma_clipped_stats
 from astropy.coordinates import Angle, SkyCoord
 
-from photutils import (make_source_mask, detect_sources,
-                       deblend_sources)
-from photutils import SourceCatalog
+from photutils.segmentation import (detect_sources, deblend_sources,
+                                    SourceCatalog)
 from photutils.background import Background2D
 from photutils.utils import calc_total_error
 
@@ -66,10 +65,12 @@ class control_property(pgproperty):
             # these simple properties don't need custom setters
             val = self.fset(obj, val)
         old_val = obj_dict.get(self._key)
-        if old_val is val or old_val == val:
-            # Just in case == doesn't check "is" first  If nothing
-            # changes, nothing changes
+        if (old_val is val
+            or np.isscalar(old_val) and np.isscalar(val) and old_val == val):
             return
+        # Anything more complex that these cases is too hard to check
+        # for so just do the init_calc.  If you know you can avoid
+        # this, inject value directly into '_' or
         if old_val is not None:
             # This is our initial set or changing from nothing to something
             #log.debug(f'resetting {self._key} requires re-initialization of calculated quantities')
@@ -571,16 +572,36 @@ class Photometry:
 
     @property
     def source_mask(self):
-        """Make a source mask to enable optimal background estimation"""
+        """Make a source mask to enable optimal background estimation
+
+        """
+        # This was handled by a convenience function,
+        # "make_source_mask," which was depreciated.  So do it with a
+        # quick-and-dirty Photometry object
+
         if self._source_mask is not None:
             return self._source_mask
         try:
-            source_mask = make_source_mask(
-                self.convolved_data,
-                nsigma=self.source_mask_nsigma,
-                npixels=self.n_connected_pixels,
-                mask=self.coverage_mask,
-                dilate_size=self.source_mask_dilate)
+            # Create a source_mask_photometry object & populate it
+            # with enough property to be able to calculate a
+            # source_mask
+            smp = self.copy()
+            smp._ccd = self.convolved_data
+            smp._source_mask = np.zeros_like(self.ccd.mask, dtype=bool)
+            smp._back_rms_scale = self.source_mask_nsigma
+            # --> backport from 1.11. When upgrading, use
+            # --> size=self.source_mask_dilate
+            footprint = np.ones((self.source_mask_dilate,
+                                 self.source_mask_dilate), dtype=bool)
+            source_mask = smp.segm_image.make_source_mask(
+                footprint=footprint)
+            
+            #source_mask = make_source_mask(
+            #    self.convolved_data,
+            #    nsigma=self.source_mask_nsigma,
+            #    npixels=self.n_connected_pixels,
+            #    mask=self.coverage_mask,
+            #    dilate_size=self.source_mask_dilate)
         except Exception as e:
             log.warning('Received the following error, preventing use of source_mask: ' + str(e))
             source_mask = np.zeros_like(self.ccd.mask, dtype=bool)
@@ -704,7 +725,8 @@ class Photometry:
                                        self.segm_image, 
                                        npixels=self.n_connected_pixels,
                                        nlevels=self.deblend_nlevels,
-                                       contrast=self.deblend_contrast)
+                                       contrast=self.deblend_contrast,
+                                       progress_bar=False)
         self._segm_deblend = segm_deblend
         return self._segm_deblend
 
