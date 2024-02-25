@@ -75,15 +75,19 @@ class Lockfile():
 def dict_to_ccd_meta(ccd_in, d):
     ccd = ccd_in.copy()
     for k in d.keys():
+        if len(k) > 8:
+            kname = f'HIERARCH {k}'
+        else:
+            kname = k
         if np.isnan(d[k]):
-            ccd.meta[f'HIERARCH {k}'] = 'NAN'
+            ccd.meta[kname] = 'NAN'
         elif np.isinf(d[k]):
-            ccd.meta[f'HIERARCH {k}'] = 'INF'
+            ccd.meta[kname] = 'INF'
         elif isinstance(d[k], u.Quantity):
-            ccd.meta[f'HIERARCH {k}'] = (d[k].value,
+            ccd.meta[kname] = (d[k].value,
                                          f'[{d[k].unit}]')
         else:
-            ccd.meta[f'HIERARCH {k}'] = d[k]
+            ccd.meta[kname] = d[k]
     return ccd
 
 def sum_ccddata(ccd):
