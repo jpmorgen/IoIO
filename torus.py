@@ -41,6 +41,7 @@ from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                planet_to_object, mean_image,
                                objctradec_to_obj_center, obj_surface_bright)
 from IoIO.calibration import Calibration, CalArgparseHandler
+from IoIO.cor_boltwood import CorBoltwood, weather_to_bmp_meta
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE,
                              JOIN_TOLERANCE_UNIT, rot_to)
 from IoIO.cor_photometry import (CorPhotometry,
@@ -630,6 +631,9 @@ def plot_column_vals(t,
             scale_str = ''
         else:
             scale_str = f'{scale[ic]} * '
+        # --> This only works for masked array.  I should slow down
+        # --> and create val and val_err with the appropriate typing
+        # --> logic
         h = ax.errorbar(datetimes,
                         scale[ic] * t[colname].filled(np.NAN),
                         scale[ic] * t[f'{colname}_err'].filled(np.NAN),
@@ -975,6 +979,7 @@ def plot_dusk_slope(t, **kwargs):
                      medfilt_collabel='Dusk medfilt',
                      **kwargs)
 
+#--> This is obsolete
 def torus_stripchart(t, outdir,
                      figsize=None,
                      nplots=6,
@@ -1054,6 +1059,7 @@ def torus_directory(directory,
                        planet='Jupiter',
                        crop_ccd_coord=SMALL_FILT_CROP,
                        post_process_list=[tavg_to_bmp_meta,
+                                          weather_to_bmp_meta,
                                           calc_obj_to_ND, crop_ccd,
                                           planet_to_object],
                        plot_planet_rot_from_key=['Jupiter_NPole_ang'],
@@ -1072,13 +1078,15 @@ def torus_directory(directory,
     _ , pipe_meta = zip(*pout)
     t = QTable(rows=pipe_meta)
     add_mask_col(t)
-    torus_stripchart(t, outdir)
+    # --> Fix plotting
+    #torus_stripchart(t, outdir)
     return t
 
 def torus_tree(raw_data_root=RAW_DATA_ROOT,
                start=None,
                stop=None,
                calibration=None,
+               cor_boltwood=None,
                photometry=None,
                keep_intermediate=None,
                solve_timeout=SOLVE_TIMEOUT,
@@ -1097,6 +1105,7 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
         log.warning('No directories found')
         return
     calibration = calibration or Calibration()
+    cor_boltwood = cor_boltwood or CorBoltwood(precalc=True)
     if photometry is None:
         photometry = CorPhotometry(
             precalc=True,
@@ -1111,6 +1120,7 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
                        code=torus_directory,
                        csvnames=os.path.join(rd, 'Characterize_Ansas.ecsv'),
                        calibration=calibration,
+                       cor_boltwood=cor_boltwood,
                        standard_star_obj=standard_star_obj,
                        read_csvs=read_csvs,
                        write_csvs=write_csvs,
@@ -1129,7 +1139,7 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
     summary_table['tavg'].location = loc
     summary_table.write(os.path.join(outdir_root, 'Torus.ecsv'),
                                      overwrite=True)
-    torus_stripchart(summary_table, outdir_root, show=show)
+    #torus_stripchart(summary_table, outdir_root, show=show)
 
     return summary_table
 
@@ -1502,6 +1512,7 @@ class TorusArgparseHandler(SSArgparseHandler,
                        start=args.start,
                        stop=args.stop,
                        calibration=c,
+                       cor_boltwood=CorBoltwood(precalc=True),
                        keep_intermediate=args.keep_intermediate,
                        solve_timeout=args.solve_timeout,
                        join_tolerance=(
@@ -1516,7 +1527,8 @@ class TorusArgparseHandler(SSArgparseHandler,
                        outdir_root=args.reduced_root,
                        num_processes=args.num_processes,
                        mem_frac=args.mem_frac,
-                       fits_fixed_ignore=args.fits_fixed_ignore)
+                       fits_fixed_ignore=args.fits_fixed_ignore,
+                       fits_verify_ignore=args.fits_verify_ignore)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(

@@ -18,6 +18,7 @@ from IoIO.utils import (reduced_dir, multi_glob, closest_in_time,
                         valid_long_exposure, add_history)
 from IoIO.cor_process import standardize_filt_name
 from IoIO.calibration import Calibration
+from IoIO.cor_boltwood import CorBoltwood
 from IoIO.cordata import CorData
 from IoIO.cormultipipe import (IoIO_ROOT, COR_PROCESS_EXPAND_FACTOR,
                                CorMultiPipeBase,
@@ -156,6 +157,7 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
                     glob_exclude_list=None,
                     PipeObj=None,
                     calibration=None,
+                    cor_boltwood=None,
                     photometry=None,
                     add_ephemeris=None,
                     pre_process_list=None, # I don't think I need this anymore
@@ -174,6 +176,7 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
         PipeObj = CorMultiPipeBase
     #calibration = calibration or Calibration(reduce=True)
     calibration = calibration or Calibration()
+    cor_boltwood = cor_boltwood or CorBoltwood()
     photometry = photometry or CorPhotometry()
     add_ephemeris = assure_list(add_ephemeris)
     pre_process_list = assure_list(pre_process_list)
@@ -223,6 +226,7 @@ def on_off_pipeline(directory=None, # raw day directory, specify even if collect
     cmp = PipeObj(
         ccddata_cls=CorData,
         calibration=calibration,
+        cor_boltwood=cor_boltwood,
         auto=True,
         photometry=photometry,
         mask_ND_before_astrometry=True, 

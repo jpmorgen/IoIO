@@ -14,6 +14,7 @@ import ccdproc as ccdp
 import IoIO.sx694 as sx694
 from IoIO.cordata_base import (IOIO_1_LOCATION, overscan_estimate,
                                CorDataBase, CorDataNDparams)
+from IoIO.cor_boltwood import CorBoltwood
 
 # These are OBJECT names that come from the early MaxIm autosave
 # observations and need to be properly renamed
@@ -394,6 +395,7 @@ def subtract_overscan(ccd, oscan=None, *args, **kwargs):
 
 def cor_process(ccd,
                 calibration=None,
+                cor_boltwood=None,
                 auto=False,
                 imagetyp=None,
                 ccd_meta=True,
@@ -406,6 +408,7 @@ def cor_process(ccd,
                 correct_obj_and_coord=True,
                 correct_obj_offset=True,
                 airmass_correct=True,
+                add_weather=True,
                 oscan=None,
                 trim=None,
                 error=False,
@@ -523,6 +526,9 @@ def cor_process(ccd,
         Correct for curvature of earth airmass for very low elevation
         observations
         Default is ``True``
+
+    add_weather : bool
+        Add weather keywords where they are missing
 
     oscan : number, bool, or None, optional
         Single pedistal value to subtract from image.  If True, oscan
@@ -743,6 +749,10 @@ def cor_process(ccd,
         # I think this is better at large airmass than what ACP uses,
         # plus it standardizes everything for times I didn't use ACP
         nccd = kasten_young_airmass(nccd)
+
+    if add_weather:
+        cor_boltwood = cor_boltwood or CorBoltwood()
+        nccd = cor_boltwood.boltwood_to_ccd_meta(nccd)
 
     # Convert "yes use this calibration" to calibration _filenames_
     # now that we have good metadata

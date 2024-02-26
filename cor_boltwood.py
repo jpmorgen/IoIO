@@ -1,4 +1,5 @@
 import os
+import re
 import glob
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -17,9 +18,14 @@ AAG_DIRECTORY = os.path.join(RAW_DATA_ROOT, 'AAG')
 CURRENT_AAG_FNAME = os.path.join(AAG_DIRECTORY,'AAG_SLD.log')
 PAST_AAG_GLOB = 'AAG_SLD_*.log'
 WEATHER_MAX_DELTA_TIME = 1800 # s
+# The first four of these are provided by the Boltwood II single-line
+# data format.  PRESSURE and HUMIDITY are provided by the mount, which
+# it is connected to MaxIm
+WEATHER_KEYS = ['AMBTEMP', 'DEWPOINT', 'WINDSPD', 'SKYTEMP',
+                'PRESSURE', 'HUMIDITY']
 
-
-log.setLevel('DEBUG')
+# Enable imperial units for this and all modules that import it
+imperial.enable()
 
 class CorBoltwood():
     def __init__(self,
@@ -27,13 +33,13 @@ class CorBoltwood():
                  current_aag_fname=CURRENT_AAG_FNAME,
                  past_aag_glob=PAST_AAG_GLOB,
                  weather_max_delta_time=WEATHER_MAX_DELTA_TIME,
-                 init_calc=False):
+                 precalc=False):
         self.raw_data_root = raw_data_root
         self.current_aag_fname = current_aag_fname
         self.past_aag_glob = past_aag_glob
         self.weather_max_delta_time = weather_max_delta_time
         self._aag_fdicts = None
-        if init_calc:
+        if precalc:
             _ = self.aag_fdicts
     
     @property
@@ -114,9 +120,9 @@ class CorBoltwood():
             return None
         return nearest_entry
 
-    def boltwood_to_meta(self, ccd, bmp_meta=None, **kwargs):
-        """Put Boltwood entries into CCD metadata (if missing) and
-        transcribe into bmp_meta
+    def boltwood_to_ccd_meta(self, ccd):
+        """Put Boltwood entries into CCD metadata if missing.  If
+        present, indicate likely units in comet area of FITS cards
 
         Parameters
         ----------
@@ -129,26 +135,27 @@ class CorBoltwood():
         Returns
         -------
         ccd : CorData
-            Copy of original CCD if CCD modified 
+            Copy of original CCD if CCD modified
 
         """
         imperial.enable()
-        if bmp_meta is None:
-            bmp_meta = {}
+        weather_meta = {}
         if ccd.meta.get('AMBTEMP'):
             # ACP was writing Boltwood values into FITS headers, but
-            # not recording their units.  This is what I had things set for
+            # not recording their units.  Write the units I configured
+            # the weather station for in by hand into the FITS card
+            # comment area
             temp_unit = u.C
             wind_unit = u.imperial.mi/u.hr
-            bmp_meta['AMBTEMP']  = ccd.meta['AMBTEMP']*temp_unit
-            bmp_meta['DEWPOINT'] = ccd.meta['DEWPOINT']*temp_unit
-            bmp_meta['WINDSPD']  = ccd.meta['WINDSPD']*wind_unit 
-            bmp_meta['SKYTEMP']  = ccd.meta['SKYTEMP']*temp_unit
-            return ccd
+            weather_meta['AMBTEMP']  = ccd.meta['AMBTEMP']*temp_unit
+            weather_meta['DEWPOINT'] = ccd.meta['DEWPOINT']*temp_unit
+            weather_meta['WINDSPD']  = ccd.meta['WINDSPD']*wind_unit 
+            weather_meta['SKYTEMP']  = ccd.meta['SKYTEMP']*temp_unit
+            return dict_to_ccd_meta(ccd, weather_meta)
+
         be = self.boltwood_entry(ccd)
         if be is None:
             return ccd
-        weather_meta = {}
         if be.temp_scale == 'F':
             temp_unit = u.imperial.deg_F
         else:
@@ -163,19 +170,38 @@ class CorBoltwood():
         weather_meta['DEWPOINT'] = be.dew_point*temp_unit
         weather_meta['WINDSPD']  = be.wind_speed*wind_unit
         weather_meta['SKYTEMP']  = be.sky_temperature*temp_unit
-        bmp_meta.update(weather_meta)
         return dict_to_ccd_meta(ccd, weather_meta)
 
-bmp_meta = {}
-cb = CorBoltwood(init_calc=True)
-#ccd = CorData.read('/data/IoIO/raw/2018-05-16/SII_on-band_026.fits')
-#ccd = CorData.read('/data/IoIO/raw/20210520/SII_on-band_002.fits')
-#ccd = CorData.read('/data/IoIO/raw/20231208/0012P-S001-R001-C001-Na_off.fts')
-ccd = CorData.read('/data/IoIO/raw/20240224/SII_on-band_004.fits')
-ccd = cb.boltwood_to_meta(ccd, bmp_meta=bmp_meta)
-print(bmp_meta)
-print(ccd.meta)
-
+def weather_to_bmp_meta(ccd_in, bmp_meta=None, **kwargs):
+    if isinstance(ccd_in, list):
+        return [weather_to_bmp_meta(ccd, bmp_meta=bmp_meta,
+                                 **kwargs)
+                for ccd in ccd_in]
+    if bmp_meta is None:
+        bmp_meta = {}
+    imperial.enable()
+    for k in WEATHER_KEYS:
+        # Units are of the format '[unit] <other possible text>'
+        val = ccd_in.meta.get(k)
+        if val is None:
+            # Not all of the keys are present all the time
+            continue
+        unit = ccd_in.meta.comments[k]
+        unit = re.search(r'\[(.*)\]', unit)
+        unit = unit.group(1)
+        unit = u.Unit(unit)
+        bmp_meta[k] = val*unit
+    return ccd_in
+        
+#cb = CorBoltwood(precalc=True)
+##ccd = CorData.read('/data/IoIO/raw/2018-05-16/SII_on-band_026.fits')
+##ccd = CorData.read('/data/IoIO/raw/20210520/SII_on-band_002.fits')
+##ccd = CorData.read('/data/IoIO/raw/20231208/0012P-S001-R001-C001-Na_off.fts')
+#ccd = CorData.read('/data/IoIO/raw/20240224/SII_on-band_004.fits')
+#ccd = cb.boltwood_to_ccd_meta(ccd)
+#print(ccd.meta)
+#bmp_meta = {}
+#ccd = weather_to_bmp_meta(ccd, bmp_meta)
 
 #if ccd.meta.get('AMBTEMP'):
 #    # Weather data has already been entered by ACP

@@ -84,8 +84,7 @@ def dict_to_ccd_meta(ccd_in, d):
         elif np.isinf(d[k]):
             ccd.meta[kname] = 'INF'
         elif isinstance(d[k], u.Quantity):
-            ccd.meta[kname] = (d[k].value,
-                                         f'[{d[k].unit}]')
+            ccd.meta[kname] = (d[k].value, f'[{d[k].unit}]')
         else:
             ccd.meta[kname] = d[k]
     return ccd

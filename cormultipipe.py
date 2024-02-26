@@ -20,6 +20,7 @@ from bigmultipipe.argparse_handler import ArgparseHandler, BMPArgparseMixin
 
 from ccdmultipipe import CCDMultiPipe, CCDArgparseMixin
 
+from IoIO.ioio_directories import IoIO_ROOT, RAW_DATA_ROOT
 import IoIO.sx694 as sx694
 from IoIO.utils import (add_history, im_med_min_max, sum_ccddata, cached_csv,
                         dict_to_ccd_meta, pixel_per_Rj)
@@ -57,8 +58,6 @@ MAX_MEM_FRAC = 0.92
 MAX_CCDDATA_BITPIX = 2*64 + 8
 COR_PROCESS_EXPAND_FACTOR = 3.5
 
-IoIO_ROOT = '/data/IoIO'
-RAW_DATA_ROOT = os.path.join(IoIO_ROOT, 'raw')
 # This is not intended for production use.  Everything should go into
 # its own specific directory (e.g. Calibration, StandardStar, etc.)
 REDUCED_ROOT = os.path.join(IoIO_ROOT, 'reduced')
@@ -89,6 +88,7 @@ obj_center calculations by using CorDataBase as CCDData
     ccddata_cls = CorDataBase
     def __init__(self,
                  calibration=None,
+                 cor_boltwood=None,
                  auto=False,
                  outname_append=OUTNAME_APPEND,
                  outname_ext=OUTNAME_EXT,
@@ -97,6 +97,7 @@ obj_center calculations by using CorDataBase as CCDData
                  process_expand_factor=COR_PROCESS_EXPAND_FACTOR,
                  **kwargs):
         self.calibration = calibration
+        self.cor_boltwood = cor_boltwood
         self.auto = auto
         super().__init__(outname_append=outname_append,
                          outname_ext=outname_ext,
@@ -117,18 +118,22 @@ obj_center calculations by using CorDataBase as CCDData
 
     def data_process(self, data,
                      calibration=None,
+                     cor_boltwood=None,
                      auto=None,
                      **kwargs):
         """Process data, adding RAWFNAME keyword"""
         kwargs = self.kwargs_merge(**kwargs)
         if calibration is None:
             calibration = self.calibration
+        if cor_boltwood is None:
+            cor_boltwood = self.cor_boltwood
         if auto is None:
             auto = self.auto
         if isinstance(data, CCDData):
             data = add_raw_fname(data, **kwargs)
             data = cor_process(data,
                                calibration=calibration,
+                               cor_boltwood=cor_boltwood,
                                auto=auto,
                                **kwargs)
             return data
@@ -915,6 +920,7 @@ class CorArgparseHandler(CorArgparseMixin, CCDArgparseMixin,
         self.add_outname_append()
         self.add_outname_ext()
         self.add_fits_fixed_ignore(default=True)
+        self.add_fits_verify_ignore(default=True)
         self.add_num_processes(default=MAX_NUM_PROCESSES)
         self.add_mem_frac(default=MAX_MEM_FRAC)
         super().add_all()

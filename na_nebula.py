@@ -46,6 +46,7 @@ from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
                                nd_filter_mask, parallel_cached_csvs,
                                obj_surface_bright)
 from IoIO.calibration import Calibration, CalArgparseHandler
+from IoIO.cor_boltwood import CorBoltwood, weather_to_bmp_meta
 from IoIO.photometry import (SOLVE_TIMEOUT, JOIN_TOLERANCE,
                              JOIN_TOLERANCE_UNIT, rot_to)
 from IoIO.cor_photometry import (CorPhotometry,
@@ -551,7 +552,9 @@ def na_nebula_directory(directory_or_collection,
                        add_ephemeris=galsat_ephemeris,
                        planet='Jupiter',
                        post_process_list=[tavg_to_bmp_meta,
-                                          calc_obj_to_ND, planet_to_object],
+                                          weather_to_bmp_meta,
+                                          calc_obj_to_ND,
+                                          planet_to_object],
                        plot_planet_rot_from_key=['Jupiter_NPole_ang'],
                        planet_subim_figsize=[5, 4],
                        planet_subim_dx=45*u.R_jup,
@@ -702,6 +705,7 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
                    start=None,
                    stop=None,
                    calibration=None,
+                   cor_boltwood=None,
                    photometry=None,
                    standard_star_obj=None,
                    na_meso_obj=None,
@@ -720,6 +724,7 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
         log.warning('No directories found')
         return []
     calibration = calibration or Calibration()
+    cor_boltwood = cor_boltwood or CorBoltwood(precalc=True)
     if photometry is None:
         photometry = CorPhotometry(
             precalc=True,
@@ -732,6 +737,7 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
         'csv_base': BASE + '.ecsv',
         'write_csvs': write_csvs,
         'calibration': calibration,
+        'cor_boltwood': cor_boltwood,
         'photometry': photometry,
         'standard_star_obj': standard_star_obj,
         'na_meso_obj': na_meso_obj,
@@ -803,6 +809,7 @@ class NaNebulaArgparseHandler(NaMesoArgparseHandler, SSArgparseHandler,
                            start=args.start,
                            stop=args.stop,
                            calibration=c,
+                           cor_boltwood=CorBoltwood(precalc=True),
                            keep_intermediate=args.keep_intermediate,
                            solve_timeout=args.solve_timeout,
                            join_tolerance=(
@@ -819,7 +826,8 @@ class NaNebulaArgparseHandler(NaMesoArgparseHandler, SSArgparseHandler,
                            outdir_root=args.reduced_root,
                            num_processes=args.num_processes,
                            mem_frac=args.mem_frac,
-                           fits_fixed_ignore=args.fits_fixed_ignore)
+                           fits_fixed_ignore=args.fits_fixed_ignore,
+                           fits_verify_ignore=args.fits_verify_ignore)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(

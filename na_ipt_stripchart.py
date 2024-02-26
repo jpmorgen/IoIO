@@ -90,11 +90,11 @@ t_torus = t_torus[~t_torus['mask']]
 
 
 #master_stripchart(t_na, t_torus)
-#master_stripchart(t_na, t_torus, nplots=1, figsize=[12,8])
+master_stripchart(t_na, t_torus, nplots=1, figsize=[12,8])
 #master_stripchart(t_na, t_torus, nplots=3)
-t_na, t_torus = master_stripchart(
-    t_na, t_torus, nplots=3, figsize=[12, 10],
-    outname='/home/jpmorgen/Conferences/JpGU/2024/IoIO_Na_IPT_epsilon_2017--2024.png')
+#t_na, t_torus = master_stripchart(
+#    t_na, t_torus, nplots=3, figsize=[12, 10],
+#    outname='/home/jpmorgen/Conferences/JpGU/2024/IoIO_Na_IPT_epsilon_2017--2024.png')
 #master_stripchart(t_na, t_torus, nplots=2)
 
 #master_stripchart(t_na, t_torus, nplots=2, figsize = [12, 5.5])
