@@ -840,11 +840,16 @@ image
             return False
         if 'coord' in self.source_table.colnames:
             return True
-        skies = self.wcs.pixel_to_world(
-            self.source_table['xcentroid'],
-            self.source_table['ycentroid'])
-        self.source_table['coord'] = skies
-        return True
+        try:
+            skies = self.wcs.pixel_to_world(
+                self.source_table['xcentroid'],
+                self.source_table['ycentroid'])
+            self.source_table['coord'] = skies
+            return True
+        except Exception as e:
+            log.warning('Received the following source_table_has_coord error: ' + str(e))
+            log.warning(f"xy centroid {self.source_table['xcentroid']}, {self.source_table['ycentroid']}")
+            return False
 
     @property
     def source_table_has_key_cols(self):
