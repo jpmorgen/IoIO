@@ -69,7 +69,9 @@ BOX_NDAYS = 20 # GOING OBSOLETE
 MEDFILT_WIDTH = 81 # GOING OBSOLETE
 # Filter applied to 24 Rj aperture --> To be robust, this/code below
 # should be generalized
-MAX_24_Rj_SB = 35*u.R
+# Fri Mar 01 12:24:18 2024 EST  jpmorgen@snipe
+# Increased from 35*u.R to check for outburst
+MAX_24_Rj_SB = 40*u.R
 
 def draw_na_apertures(ax, ap_sequence=None,
                       min_av_ap_dist=4*u.R_jup, # selects SB boxes
