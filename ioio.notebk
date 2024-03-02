@@ -11161,3 +11161,21 @@ found.  Might be because I got the cameras confused by recording
 guider astrometry and then calling my script
 
 Indeed, restart helps
+
+Fri Mar 01 20:00:19 2024 EST  jpmorgen@snipe
+
+Time to separate out software-specific development which might lead to
+the refactoring of the IoIO codebase.  Science code issues are still
+addressed in ~/IoIO.notebk
+
+Time to start using pipenv to add packages not otherwise distributed
+through Debian's package management system.  And a case could be made
+for even getting rid of those Debian packages so that I have a
+complete deterministic build.
+
+In the mean time, start with packages I know aren't in Debian, with
+Daniel's boltwood-parser being the first!
+
+pipenv install boltwood-parser
+
+In a Python buffer, C-c C-p i photutils==1.6
