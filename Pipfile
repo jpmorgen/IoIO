@@ -6,6 +6,15 @@ name = "pypi"
 [packages]
 boltwood-parser = "*"
 moviepy = "*"
+matplotlib = "*"
+astropy = "*"
+scipy = "*"
+ccdproc = "*"
+bigmultipipe = "*"
+photutils = "*"
+astroquery = "*"
+pandas = "*"
+specutils = "*"
 
 [dev-packages]
 

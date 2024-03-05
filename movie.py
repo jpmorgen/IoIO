@@ -61,6 +61,8 @@ stop = None
 #start = '2022-05-29'
 #stop =  '2022-09-17'
 
+start = '2023-06-01'
+
 t = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
 make_movie(t, '/tmp/test_Na.mp4', start=start, stop=stop)
 t = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')

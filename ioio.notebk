@@ -11179,3 +11179,21 @@ Daniel's boltwood-parser being the first!
 pipenv install boltwood-parser
 
 In a Python buffer, C-c C-p i photutils==1.6
+
+Well, I guess I am going to go down the add everything path before I
+really wanted to.  pipenv does not by default include
+/usr/lib/python3/dist-packages/ in the sys.path (that is the
+Debian-installed package directory).  Fortunately, this is reversable,
+more or less.
+
+Tue Mar 05 17:02:55 2024 EST  jpmorgen@snipe
+
+Current processing is currently being done with the Debian-installed
+versions of everything.  I'd need to do
+
+cd ~/py/IoIO/ [or whever I want to put the production version]
+pipenv activate
+
+in remote_pipeline.sh to use these new versions.  This was just for
+moviepy for now.
+
