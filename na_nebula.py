@@ -198,14 +198,24 @@ def subtract_col_from(t,
 
 def add_daily_biweights(summary_table,
                         encoder=None):
+    """Add daily biweight locations to summary_table"""
 
-    # Add daily biweight locations to summary_table
-    summary_table['ijd'] = summary_table['tavg'].jd.astype(int)
+    # We want to have one biweight point per night's observations
+    # period.  Make that start at 00:00 UT, since that is pretty close
+    # to right for us.
+
+    # Julian day rolls over at 12:00 UT, not 00:00 UT, which is
+    # awkward since my observations sometimes straddle this boundary.
+    # Define integer UT day as the JD corresponding to 00:00UT.  So if
+    # we start from the JD scale to begin with, we need to add 0.5 to
+    # it
+    iut = summary_table['tavg'].jd + 0.5
+    summary_table['iut'] = iut.astype(int)
     sb_colnames = encoder.colbase_list(summary_table.colnames)
     for sb_col in sb_colnames:
         av_ap = encoder.from_colname(sb_col)
         daily_biweight(summary_table,
-                       day_col='ijd',
+                       day_col='iut',
                        data_col=sb_col,
                        biweight_col='biweight_' + sb_col,
                        std_col='std_' + sb_col)
@@ -219,22 +229,22 @@ def boxcar_medians(
     # Create a new table, one row per day with biweight & mad_std
     # columns This assumes that it is OK if any other prepends come
     # along for the ride.  And yes, it does exclude the original
-    day_table = unique(summary_table, keys='ijd')
+    day_table = unique(summary_table, keys='iut')
     include_colnames = include_col_encoder.colbase_middle_list(
         day_table.colnames)
-    day_table_colnames = ['ijd'] + list(include_colnames)
+    day_table_colnames = ['iut'] + list(include_colnames)
     day_table = QTable(day_table[day_table_colnames])
     #print(day_table_colnames)
 
     # Boxcar median each biweight column
-    first_day = np.min(day_table['ijd'])
-    last_day = np.max(day_table['ijd'])
+    first_day = np.min(day_table['iut'])
+    last_day = np.max(day_table['iut'])
     all_days = np.arange(first_day, last_day+1)
     med_colnames = median_col_encoder.colbase_list(day_table.colnames)
     for med_col in med_colnames:
         #print(med_col)
         day_table = daily_convolve(day_table,
-                                   'ijd',
+                                   'iut',
                                    med_col,
                                    'boxfilt_' + med_col,
                                    Box1DKernel(BOX_NDAYS),
@@ -602,11 +612,15 @@ def plot_nightly_medians(table_or_fname,
     custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f'])
     plt.rc('axes', prop_cycle=custom_cycler)
         
-    day_table = unique(t, keys='ijd')
-    day_table.sort('ijd')
-    deltas = day_table['ijd'][1:] - day_table['ijd'][0:-1]
+    day_table = unique(t, keys='iut')
+    day_table.sort('iut')
+    deltas = day_table['iut'][1:] - day_table['iut'][0:-1]
     gap_idx = np.flatnonzero(deltas > max_night_gap)
-    day_table['itdatetime'] = Time(day_table['ijd'], format='jd').datetime
+    # Plot our points at 07:00 UT, which is midnight localtime
+    utm = day_table['iut'] + 7/24
+    # Convert back to Julian day
+    jd = utm - 0.5
+    day_table['itdatetime'] = Time(jd, format='jd').datetime
     biweight_encoder = ColnameEncoder('biweight', formatter='.1f')
     biweight_cols = biweight_encoder.colbase_list(day_table.colnames)
     std_encoder = ColnameEncoder('std', formatter='.1f')
