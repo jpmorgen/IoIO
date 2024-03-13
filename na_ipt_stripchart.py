@@ -91,6 +91,15 @@ t_torus = t_torus[~t_torus['mask']]
 
 #master_stripchart(t_na, t_torus)
 master_stripchart(t_na, t_torus, nplots=1, figsize=[12,8])
+
+# Morgenthaler et al. 2019 errata
+#_ = master_stripchart(t_na, t_torus, nplots=1, figsize=[6,6],
+#                  start='2017-04-01', stop='2018-07-10',
+#                  outname='/home/jpmorgen/Papers/IoIO/2018_event/IoIO_errata/Na_vs_T.png')
+#_ = master_stripchart(t_na, t_torus, nplots=1, figsize=[6,6],
+#                  start='2018-01-15', stop='2018-07-10',
+#                  outname='/home/jpmorgen/Papers/IoIO/2018_event/IoIO_errata/Na_vs_T_2018.png')
+
 #master_stripchart(t_na, t_torus, nplots=3)
 #t_na, t_torus = master_stripchart(
 #    t_na, t_torus, nplots=3, figsize=[12, 10],

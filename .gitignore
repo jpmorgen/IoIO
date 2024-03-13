@@ -1,6 +1,7 @@
 *~
 *.png
 *.mp4
+*.ps
 __pycache__
 *.pyc
 *.log

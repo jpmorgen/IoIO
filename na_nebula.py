@@ -633,7 +633,7 @@ def plot_nightly_medians(table_or_fname,
             continue
         h = ax.errorbar(day_table['itdatetime'], day_table[bwt_col], 
                          day_table[std_col], fmt='.', 
-                         label=f'{av_ap} R$_\mathrm{{J}}$', alpha=0.25)
+                         label=f'{av_ap.value} R$_\mathrm{{J}}$', alpha=0.25)
         point_handles.append(h)        
         add_medfilt(day_table, bwt_col, medfilt_width=medfilt_width)
         # Quick-and-dirty gap work.  Could do this in the day_table,
