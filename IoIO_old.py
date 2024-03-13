@@ -1157,6 +1157,43 @@ def ACP_IPT_Na_R(args, cal=True):
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
                 P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
                               dead_zone_move=(0, 200))
+                log.info('Collecting [SII]')
+                # Wed Jun 16 22:44:52 2021 EDT  jpmorgen@snipe
+                # Don't need this as much with fixed filter wheel.
+                # Note before this date, the filter was SII!
+                ## Take an R exposure to get the filter wheel going
+                ## in the right direction and get the Galilean
+                ## satellites lined up
+                #P.MC.acquire_im(pg.uniq_fname('moving_to_r_sdss_', d),
+                #                exptime=0.1,
+                #                binning=4,
+                #                filt=0)
+                exptime=300
+                if ((time.time() + exptime) > Tend):
+                    log.info('Exposure would extend past end of ACP exposure, returning') 
+                    return
+                if P.MC.horizon_limit():
+                    log.info('Telescope below horizon limit')
+                    return
+                P.MC.acquire_im(pg.uniq_fname('SII_on-band_', d),
+                                exptime=exptime,
+                                filt=1)
+                exptime=60
+                if ((time.time() + exptime) > Tend):
+                    log.info('Exposure would extend past end of ACP exposure, returning') 
+                    return
+                if P.MC.horizon_limit():
+                    log.info('Telescope below horizon limit')
+                    return
+                P.MC.acquire_im(pg.uniq_fname('SII_off-band_', d),
+                                exptime=exptime,
+                                filt=5)
+
+                P.diff_flex()
+                log.debug('CENTERING WITH GUIDEBOX MOVES') 
+                P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                              dead_zone_move=(0, 200))
+
                 log.info('Collecting Na')
                 exptime=60
                 if ((time.time() + exptime) > Tend):
@@ -1179,42 +1216,6 @@ def ACP_IPT_Na_R(args, cal=True):
                                 exptime=exptime,
                                 filt=6)
 
-                for i in range(4):
-                    P.diff_flex()
-                    log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                    P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
-                                  dead_zone_move=(0, 200))
-                    log.info('Collecting [SII]')
-                    # Wed Jun 16 22:44:52 2021 EDT  jpmorgen@snipe
-                    # Don't need this as much with fixed filter wheel.
-                    # Note before this date, the filter was SII!
-                    ## Take an R exposure to get the filter wheel going
-                    ## in the right direction and get the Galilean
-                    ## satellites lined up
-                    #P.MC.acquire_im(pg.uniq_fname('moving_to_r_sdss_', d),
-                    #                exptime=0.1,
-                    #                binning=4,
-                    #                filt=0)
-                    exptime=300
-                    if ((time.time() + exptime) > Tend):
-                        log.info('Exposure would extend past end of ACP exposure, returning') 
-                        return
-                    if P.MC.horizon_limit():
-                        log.info('Telescope below horizon limit')
-                        return
-                    P.MC.acquire_im(pg.uniq_fname('SII_on-band_', d),
-                                    exptime=exptime,
-                                    filt=1)
-                    exptime=60
-                    if ((time.time() + exptime) > Tend):
-                        log.info('Exposure would extend past end of ACP exposure, returning') 
-                        return
-                    if P.MC.horizon_limit():
-                        log.info('Telescope below horizon limit')
-                        return
-                    P.MC.acquire_im(pg.uniq_fname('SII_off-band_', d),
-                                    exptime=exptime,
-                                    filt=5)
         except Exception as e:
             log.error('Received the following error.  Attempting to return gracefully: ' + str(e))
             return
