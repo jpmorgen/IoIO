@@ -11,7 +11,7 @@ from astropy.units import imperial
 from boltwood_parser import EntryCollection
 
 from IoIO.utils import dict_to_ccd_meta
-from IoIO.cormultipipe import RAW_DATA_ROOT
+from IoIO.ioio_directories import RAW_DATA_ROOT
 from IoIO.cordata import CorData
 
 AAG_DIRECTORY = os.path.join(RAW_DATA_ROOT, 'AAG')
