@@ -12,6 +12,7 @@ from IoIO.horizons import OBJ_COL_NUMS
 
 MJD_MATPLOTLIB0 = Time(plt.rcParams['date.epoch'], format='fits')
 MJD_MATPLOTLIB0 = MJD_MATPLOTLIB0.mjd
+PRE_POST_JUNO_PJ = 100*u.yr.to(u.day)
 
 JUNO_PERIJOVES = [
     '2016-07-05T02:47:32', 
@@ -176,7 +177,7 @@ JUNO_APOJOVES = [
 # location:
 #loc = location_to_dict(IOIO_1_LOCATION)
 #loc['body'] = 399
-#h = HorizonsClass(id=loc, epochs=pjs.mjd,
+#h = HorizonsClass(id=loc, epochs=pj_ts.mjd,
 #                  location='500@-61')
 #e = h.ephemerides(quantities=OBJ_COL_NUMS)
 #
@@ -247,17 +248,17 @@ def scet2body(t, spacecraft=-61, body=399, tformat='fits'):
     return t
 
 #scet2body(59945)
-#pjs = scet2body(JUNO_PERIJOVES)
+#pj_ts = scet2body(JUNO_PERIJOVES)
 #
 ## Set up interpolation between PJ number and body time
 #
 #pj_list = np.arange(len(JUNO_PERIJOVES))
-#a = np.interp(3, pj_list, pjs.mjd, left=-1, right=-1)
+#a = np.interp(3, pj_list, pj_ts.mjd, left=-1, right=-1)
 #a = Time(a, format='mjd')
 #a.format = 'fits'
 #print(a)
 #def pj2mjd(pj):
-#    np.interp(pj, pj_list, pjs.mjd, left=-1, right=-1)
+#    np.interp(pj, pj_list, pj_ts.mjd, left=-1, right=-1)
 #    pass
 
 #def mjd2pj(mjd):
@@ -268,7 +269,7 @@ class JunoTimes():
                  body=399):
         self.body = body
         self._pj_list = None
-        self._pjs = None
+        self._pj_ts = None
 
     @property
     def pj_list(self):
@@ -277,24 +278,53 @@ class JunoTimes():
         return self._pj_list
     
     @property
-    def pjs(self):
-        if self._pjs is None:
-            self._pjs = scet2body(JUNO_PERIJOVES, body=self.body, tformat='mjd')
-        return self._pjs
+    def pj_ts(self):
+        if self._pj_ts is None:
+            self._pj_ts = scet2body(JUNO_PERIJOVES, body=self.body,
+                                    tformat='mjd')
+        return self._pj_ts
 
-    def pj2mjd(self, pj):
-        return np.interp(pj, self.pj_list, self.pjs.mjd)
-
-    def mjd2pj(self, mjd):
-        return np.interp(mjd, self.pjs.mjd, self.pj_list)
+    #def pj2mjd(self, pj):
+    #    if pj < 0:
+    #        return self.pj_ts[0].mjd - pj*PRE_POST_JUNO_PJ
+    #    if pj > len(JUNO_PERIJOVES):
+    #        return self.pj_ts[-1].mjd + pj*PRE_POST_JUNO_PJ
+    #    return np.interp(pj, self.pj_list, self.pj_ts.mjd)
+    #
+    #def mjd2pj(self, mjd):
+    #    if mjd < self.pj_ts[0].mjd:
+    #        return (self.pj_ts[0].mjd - mjd)/PRE_POST_JUNO_PJ
+    #    if mjd > self.pj_ts[-1]:
+    #        return (mjd - self.pj_ts[-1].mjd)/PRE_POST_JUNO_PJ
+    #    return np.interp(mjd, self.pj_ts.mjd, self.pj_list)
 
     def pj2plt_date(self, pj):
-        t = np.interp(pj, self.pj_list, self.pjs.mjd)
-        return t - MJD_MATPLOTLIB0
+        lowidx = np.flatnonzero(pj < 0)
+        highidx = np.flatnonzero(pj > self.pj_list[-1])
+        mjd = np.interp(pj, self.pj_list, self.pj_ts.mjd,
+                        left=np.NAN, right=np.NAN)
+        if not np.isscalar(mjd):
+            # The axis likes to be monotonic, but single values for
+            # the AXFormatter can be NAN
+            mjd[lowidx] = pj[lowidx]*PRE_POST_JUNO_PJ + self.pj_ts[0].mjd
+            mjd[highidx] = ((pj[highidx] - self.pj_list[-1])*PRE_POST_JUNO_PJ
+                            + self.pj_ts[-1].mjd)
+        return mjd - MJD_MATPLOTLIB0
 
     def plt_date2pj(self, plt_date):
         t = Time(plt_date + MJD_MATPLOTLIB0, format='mjd')
-        return np.interp(t.mjd, self.pjs.mjd, self.pj_list)
+        mjd = t.mjd
+        lowidx = np.flatnonzero(mjd < self.pj_ts[0].mjd)
+        highidx = np.flatnonzero(mjd > self.pj_ts[-1].mjd)
+        pj = np.interp(mjd, self.pj_ts.mjd, self.pj_list,
+                       left=np.NAN, right=np.NAN)
+        if not np.isscalar(mjd):
+            pj[lowidx] = -(self.pj_ts[0].mjd - mjd[lowidx])/PRE_POST_JUNO_PJ
+            pj[highidx] = (self.pj_list[-1]
+                           + (mjd[highidx]
+                              - self.pj_ts[-1].mjd)
+                           /PRE_POST_JUNO_PJ)
+        return pj
 
 
 class PJAXFormatter():

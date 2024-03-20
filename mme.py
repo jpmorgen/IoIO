@@ -10,14 +10,17 @@ from IoIO.juno import JunoTimes, PJAXFormatter
 
 MME = '/data/sun/Jupiter_MME/JupiterMME.csv'
 
-#mme = Table.read('/data/sun/Jupiter_MME/JupiterMME_single_hdr.csv')
-
 mme=MME
 fig=None
 ax=None
 top_axis=True
 tlim = None
 ylim = None
+
+if fig is None:
+    fig = plt.figure()
+if ax is None:
+    ax = fig.add_subplot()
 
 df = pd.read_csv(MME, delimiter=',',
                  comment='#')
@@ -27,7 +30,6 @@ datetime = pd.to_datetime(datetime)
 p_dyn = df['ensemble.7'][2:]
 p_dyn = p_dyn.astype(float)
 
-fig, ax = plt.subplots()
 ax.plot(datetime, p_dyn)
 ax.set_xlabel('date')
 ax.set_yscale('log')
