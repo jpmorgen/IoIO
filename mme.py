@@ -91,28 +91,38 @@ def plot_mme(mme=MME,
 
 #plot_mme(top_axis=True, show=True)
 
-import astropy.units as u
-from astropy.time import TimeDelta
-import datetime
+from cycler import cycler
+
+
 
 colname = 'u_mag'
-filt_width = np.timedelta64(1000, 'D')
-#filt_width = datetime.timedelta(days=100)
-#filt_width = 100*u.day
-#filt_width = TimeDelta(filt_width)
+#filt_width = np.timedelta64(1000, 'D')
+filt_width = [np.timedelta64(1000, 'D'),
+              np.timedelta64(100, 'D'),
+              np.timedelta64(10, 'D')]
 
 df = readMMESH_fromFile(MME)
-dt = np.median(df.index[1:] - df.index[0:-1])
-filt_points = filt_width/dt
-filt_points = filt_points.astype(int)
 goodidx = df[('ensemble', 'u_mag')] != 0
 df = df[goodidx]
 colval = df[('ensemble', colname)]
 col_neg_unc = df[('ensemble', f'{colname}_neg_unc')]
 col_pos_unc = df[('ensemble', f'{colname}_pos_unc')]
-colavg = uniform_filter1d(colval, size=filt_points)
 
 plt.errorbar(df.index, colval, (col_neg_unc, col_pos_unc))
-plt.plot(df.index, colavg, 'r-')
 
+
+custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'])
+
+# Plot running averages
+# median delta T beween model points
+dt = np.median(df.index[1:] - df.index[0:-1])
+if np.isscalar(filt_width):
+    filt_width = [filt_width]
+for fw in filt_width:
+    filt_points = fw/dt
+    filt_points = filt_points.astype(int)
+    colavg = uniform_filter1d(colval, size=filt_points)
+    plt.plot(df.index, colavg, label=fw)
+
+plt.legend()
 plt.show()
