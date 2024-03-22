@@ -653,7 +653,7 @@ def plot_nightly_medians(table_or_fname,
     handles = point_handles
     handles.extend(medfilt_handles)
 
-    ax.set_xlabel('date')
+    ax.set_xlabel('Date')
     ax.set_ylabel(f'Na Neb. Surf. Bright ({t[bwt_col].unit})')
     #plt.title('Na nebula -- nightly medians')
     if tlim is None:

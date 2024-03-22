@@ -14,6 +14,7 @@ from IoIO.torus import (add_mask_col, plot_ansa_brights, plot_epsilons,
                         plot_dawn_y_stddev, plot_dusk_y_stddev,
                         plot_dawn_cont, plot_dusk_cont,
                         plot_dawn_slope, plot_dusk_slope)
+from IoIO.mme import plot_mme
 
 def torus_epsilon(t_torus, nplots=2, start=None, stop=None,
                    outname=None, figsize=None, **kwargs):
@@ -79,7 +80,12 @@ def torus_epsilon(t_torus, nplots=2, start=None, stop=None,
                       **kwargs)
 
     if nplots > 2:
-        plot_ansa_pos(t_torus, fig=fig, ax=axs[2],
+        plot_mme(fig=fig, ax=axs[2],
+                 tlim=(start, stop),
+                 show=False)
+
+    if nplots > 3:
+        plot_ansa_pos(t_torus, fig=fig, ax=axs[3],
                       vlines=vlines,
                       tlim=(start, stop),
                       show=False,
@@ -102,23 +108,23 @@ def torus_epsilon(t_torus, nplots=2, start=None, stop=None,
     #                        tlim=(start, stop),
     #                        show=False)
 
-    if nplots > 3:
-        plot_dusk_cont(t_torus, fig=fig, ax=axs[3],
-                       tlim=(start, stop),
-                       show=False)
-    
     if nplots > 4:
-        plot_dawn_cont(t_torus, fig=fig, ax=axs[4],
+        plot_dusk_cont(t_torus, fig=fig, ax=axs[4],
                        tlim=(start, stop),
                        show=False)
     
     if nplots > 5:
-        plot_dusk_slope(t_torus, fig=fig, ax=axs[5],
+        plot_dawn_cont(t_torus, fig=fig, ax=axs[5],
                        tlim=(start, stop),
                        show=False)
     
     if nplots > 6:
-        plot_dawn_slope(t_torus, fig=fig, ax=axs[6],
+        plot_dusk_slope(t_torus, fig=fig, ax=axs[6],
+                       tlim=(start, stop),
+                       show=False)
+    
+    if nplots > 7:
+        plot_dawn_slope(t_torus, fig=fig, ax=axs[7],
                        tlim=(start, stop),
                        show=False)
 
@@ -168,7 +174,7 @@ t_torus = t_torus[~t_torus['mask']]
 ## #              outname='/home/jpmorgen/Conferences/AGU/2023/IPT_epsilon_2018--2020.png')
 ##               outname='/home/jpmorgen/Conferences/DPS/2023_San_Antonio/IPT_epsilon_2018--2020.png')
 
-nplots = 3
+nplots = 2
 figsize=(12.5, 5.5)
 #if nplots <= 2:
 #    figsize=(5.5, 5.5)
@@ -178,7 +184,9 @@ figsize=(12.5, 5.5)
 #torus_epsilon(t_torus, figsize=figsize, nplots=2, start='2018-02-15')
 #torus_epsilon(t_torus, figsize=figsize, nplots=2, start='2018-02-15', stop='2018-07-01')
 
-torus_epsilon(t_torus, figsize=figsize, nplots=2, start='2017-10-01', stop='2021-03-01')
+torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3)
+
+#torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3, start='2017-10-01', stop='2021-03-01')
 
 #torus_epsilon(t_torus, nplots, start='2018-02-15', stop='2018-07-01',
 #              figsize=figsize, outname='/home/jpmorgen/Conferences/DPS/2023_San_Antonio/IPT_epsilon_pos_2018.png')

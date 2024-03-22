@@ -645,7 +645,7 @@ def plot_column_vals(t,
         handles.extend(p_med)
     if tlim is None:
         tlim = ax.get_xlim()
-    ax.set_xlabel('date')
+    ax.set_xlabel('Date')
     ax.set_ylabel(ylabel)
     if legend:
         ax.legend(handles=handles)
