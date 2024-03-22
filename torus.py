@@ -505,8 +505,9 @@ def nan_median_filter(data, mask=False, **kwargs):
     data : ndarray-like
         data to be median filtered
     mask : bool
-        
         default = ``False''
+    **kwargs : dict
+        passed on to scipy.ndimage median_filter
     """
     ndata = data.copy()
     mask = np.logical_or(mask, np.isnan(data))
@@ -516,9 +517,8 @@ def nan_median_filter(data, mask=False, **kwargs):
     ndata[~mask] = meds
     return ndata
     
-def add_medfilt(t, colname, mask_col='mask', medfilt_width=21):
-    """TABLE MUST BE SORTED FIRST
-    uses astropy"""
+def add_medfilt(t, colname, mask_col='mask', medfilt_width=21, mode='mirror'):
+    """TABLE MUST BE SORTED FIRST"""
     
     if len(t) < medfilt_width/2:
         return
@@ -526,8 +526,10 @@ def add_medfilt(t, colname, mask_col='mask', medfilt_width=21):
         bad_mask = t[mask_col]
     else:
         bad_mask = False
+    # mirror might be a little more physical than reflect, though
+    # edges are just hard, period
     meds = nan_median_filter(t[colname], mask=bad_mask,
-                             size=medfilt_width, mode='reflect')
+                             size=medfilt_width, mode=mode)
     #bad_mask = np.logical_or(bad_mask, np.isnan(t[colname]))
     #vals = t[colname][~bad_mask]
     #meds = medfilt(vals, medfilt_width)
