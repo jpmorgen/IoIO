@@ -1,5 +1,7 @@
 """Module to read and plot Multi-Model Ensemble System for the outer Heliosphere (MMESH) outputs"""
 
+from cycler import cycler
+
 import numpy as np
 
 from scipy.ndimage import uniform_filter1d
@@ -43,6 +45,8 @@ def readMMESH_fromFile(fullfilename):
     return mmesh_results
 
 def plot_mme(mme=MME,
+             colname=None,
+             filt_width=None,
              fig=None,
              ax=None,
              top_axis=False,
@@ -52,77 +56,100 @@ def plot_mme(mme=MME,
              show=False,
              **kwargs):
 
+    if filt_width is None:
+        filt_width = np.asarray((300, 100, 30, 7))
+        filt_width = filt_width*np.timedelta64(1, 'D')
     if fig is None:
         fig = plt.figure()
     if ax is None:
         ax = fig.add_subplot()
 
     df = readMMESH_fromFile(mme)
+    col_labels = {'B_mag': r'$|\vec B_{\mathrm{IMF}}|$ (nT)',
+                  'n_tot': r'Solar wind $\rho$ (cm$^{-3}$)',
+                  'p_dyn': r'Solar wind $P_{\mathrm{dynamic}}$ (nPa)',
+                  'u_mag': r'Solar wind velocity (km s$^{-1}$)'}
 
 
-    df = pd.read_csv(MME, delimiter=',',
-                     comment='#')
+    goodidx = df[('ensemble', 'u_mag')] != 0
+    df = df[goodidx]
+    colval = df[('ensemble', colname)]
+    col_neg_unc = df[('ensemble', f'{colname}_neg_unc')]
+    col_pos_unc = df[('ensemble', f'{colname}_pos_unc')]
 
-    datetime = df['Unnamed: 0'][2:]
-    datetime = pd.to_datetime(datetime)
-    p_dyn = df['ensemble.7'][2:]
-    p_dyn = p_dyn.astype(float)
+    plt.errorbar(df.index, colval, (col_neg_unc, col_pos_unc), alpha=0.1)
 
-    ax.plot(datetime, p_dyn)
+    # Plot running averages
+    custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'])
+    # median delta T beween model points
+    dt = np.median(df.index[1:] - df.index[0:-1])
+    if np.isscalar(filt_width):
+        filt_width = [filt_width]
+    for fw in filt_width:
+        filt_points = fw/dt
+        filt_points = filt_points.astype(int)
+        colavg = uniform_filter1d(colval, size=filt_points)
+        plt.plot(df.index, colavg, linewidth=5, label=fw)
+
+    plt.legend()
+
     ax.set_xlabel('Date')
     ax.set_yscale(yscale)
-    ax.set_ylabel('Solar Wind Dynamic Pressure (nPa)') 
+    ax.set_ylabel(col_labels[colname])
 
     ax.set_xlim(tlim)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
     ax.set_ylim(ylim)
     fig.autofmt_xdate()
-    ax.format_coord = PJAXFormatter(datetime, 'p_dyn')
+    ax.format_coord = PJAXFormatter(df.index, colval)
 
     if top_axis:
         jts = JunoTimes()
         secax = ax.secondary_xaxis('top',
-                                   functions=(jts.plt_date2pj, jts.pj2plt_date))
+                                   functions=(jts.plt_date2pj,
+                                              jts.pj2plt_date))
         secax.xaxis.set_minor_locator(MultipleLocator(1))
         secax.set_xlabel('PJ')
 
     if show:
         plt.show()
 
-#plot_mme(top_axis=True, show=True)
-
-from cycler import cycler
-
-
-
-colname = 'u_mag'
-#filt_width = np.timedelta64(1000, 'D')
-filt_width = [np.timedelta64(1000, 'D'),
-              np.timedelta64(100, 'D'),
-              np.timedelta64(10, 'D')]
-
-df = readMMESH_fromFile(MME)
-goodidx = df[('ensemble', 'u_mag')] != 0
-df = df[goodidx]
-colval = df[('ensemble', colname)]
-col_neg_unc = df[('ensemble', f'{colname}_neg_unc')]
-col_pos_unc = df[('ensemble', f'{colname}_pos_unc')]
-
-plt.errorbar(df.index, colval, (col_neg_unc, col_pos_unc))
+#plot_mme(colname='B_mag', top_axis=True, show=True)
+#plot_mme(colname='n_tot', top_axis=True, show=True)
+#plot_mme(colname='p_dyn', top_axis=True, show=True)
+#plot_mme(colname='u_mag', top_axis=True, show=True)
 
 
-custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'])
 
-# Plot running averages
-# median delta T beween model points
-dt = np.median(df.index[1:] - df.index[0:-1])
-if np.isscalar(filt_width):
-    filt_width = [filt_width]
-for fw in filt_width:
-    filt_points = fw/dt
-    filt_points = filt_points.astype(int)
-    colavg = uniform_filter1d(colval, size=filt_points)
-    plt.plot(df.index, colavg, label=fw)
 
-plt.legend()
-plt.show()
+#colname = 'u_mag'
+##filt_width = np.timedelta64(1000, 'D')
+#filt_width = [np.timedelta64(1000, 'D'),
+#              np.timedelta64(100, 'D'),
+#              np.timedelta64(10, 'D')]
+#
+#df = readMMESH_fromFile(MME)
+#goodidx = df[('ensemble', 'u_mag')] != 0
+#df = df[goodidx]
+#colval = df[('ensemble', colname)]
+#col_neg_unc = df[('ensemble', f'{colname}_neg_unc')]
+#col_pos_unc = df[('ensemble', f'{colname}_pos_unc')]
+#
+#plt.errorbar(df.index, colval, (col_neg_unc, col_pos_unc))
+#
+#
+#custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'])
+#
+## Plot running averages
+## median delta T beween model points
+#dt = np.median(df.index[1:] - df.index[0:-1])
+#if np.isscalar(filt_width):
+#    filt_width = [filt_width]
+#for fw in filt_width:
+#    filt_points = fw/dt
+#    filt_points = filt_points.astype(int)
+#    colavg = uniform_filter1d(colval, size=filt_points)
+#    plt.plot(df.index, colavg, label=fw)
+#
+#plt.legend()
+#plt.show()

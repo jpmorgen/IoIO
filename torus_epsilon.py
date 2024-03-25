@@ -82,7 +82,8 @@ def torus_epsilon(t_torus, nplots=2, start=None, stop=None,
     if nplots > 2:
         plot_mme(fig=fig, ax=axs[2],
                  tlim=(start, stop),
-                 show=False)
+                 show=False,
+                 **kwargs)
 
     if nplots > 3:
         plot_ansa_pos(t_torus, fig=fig, ax=axs[3],
@@ -184,7 +185,10 @@ figsize=(12.5, 5.5)
 #torus_epsilon(t_torus, figsize=figsize, nplots=2, start='2018-02-15')
 #torus_epsilon(t_torus, figsize=figsize, nplots=2, start='2018-02-15', stop='2018-07-01')
 
-torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3)
+#torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3, colname='B_mag')
+#torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3, colname='n_tot')
+torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3, colname='p_dyn')
+#torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3, colname='u_mag')
 
 #torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3, start='2017-10-01', stop='2021-03-01')
 
