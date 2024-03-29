@@ -652,7 +652,7 @@ class Photometry:
 
         mean, median, std = self.sig_clipped_stats
         log.warning(f'Setting background using median {median}')
-        back = np.full_like(self.ccd, median)
+        back = np.full_like(self.ccd.data, median.value)
         # np doesn't propagate units
         self._background = back*self.ccd.unit
         return self._background
@@ -674,7 +674,7 @@ class Photometry:
         
         mean, median, std = self.sig_clipped_stats
         log.warning(f'Setting background rms using image std {std}')
-        rms = np.full_like(self.ccd, std)
+        rms = np.full_like(self.ccd.data, std.value)
         # np doesn't propagate units
         self._back_rms = rms*self.ccd.unit
         return self._back_rms

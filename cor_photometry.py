@@ -564,12 +564,15 @@ class CorPhotometry(Photometry):
         ccd_xy_binning = self.ccd.binning[::-1]
         try:
             # The way filter works, this is the best we can do to
-            # guard against not finding our target
-            wcs_collect = wcs_collect.filter(
+            # guard against not finding our target.  This seems to
+            # have changed with Debian 12 update
+            nc = wcs_collect.filter(
                 xbinning=ccd_xy_binning[0],
                 ybinning=ccd_xy_binning[1])
+            if len(nc.files) > 0:
+                wcs_collect = nc
         except FileNotFoundError:
-            wcs_collect = wcs_collect
+            pass
         except TypeError:
             rawfname = self.ccd.meta.get('RAWFNAME')
             log.warning(f'Likely process collision.  '
@@ -597,10 +600,12 @@ class CorPhotometry(Photometry):
         ccd_pierside = self.ccd.meta['pierside']
         # Match PIERSIDE, if possible
         try:
-            wcs_collect = wcs_collect.filter(
+            nc = wcs_collect.filter(
                 pierside=ccd_pierside)
+            if len(nc.files) > 0:
+                wcs_collect = nc
         except FileNotFoundError:
-            wcs_collect = wcs_collect
+            pass
 
         # Get our best wcs and scale and center it
         wcs_tobs = Time(wcs_collect.values('date-obs'))
