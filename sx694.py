@@ -181,8 +181,12 @@ def exp_correct_value(date_obs):
         exposure_correct = 2.19 # s
         exposure_correct_uncertainty = 0.31 # s 
     else:
-        exposure_correct = 2.71 # s
-        exposure_correct_uncertainty = 0.47 # s
+        # Mon Mar 25 09:02:36 2024 EDT  jpmorgen@snipe
+        # Latest numbers
+        exposure_correct = 2.59 # s
+        exposure_correct_uncertainty = 0.31 # s
+        #exposure_correct = 2.71 # s
+        #exposure_correct_uncertainty = 0.47 # s
     #Sat May 15 22:42:42 2021 EDT  jpmorgen@snipe
     # Old photometry code
     #if date_obs < latency_change_dates[0]:
