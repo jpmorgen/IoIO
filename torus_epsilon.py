@@ -187,7 +187,14 @@ figsize=(12.5, 5.5)
 
 #torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3, colname='B_mag')
 #torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3, colname='n_tot')
-torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3, colname='p_dyn')
+#torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3,
+#              colname='p_dyn', alpha=0.01)#, hourly=False)
+filt_width = np.asarray((300, 100))
+filt_width = np.asarray((30, 2))
+filt_width = filt_width*np.timedelta64(1, 'D')
+torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3,
+              colname='p_dyn', filt_width=filt_width, alpha=0.01)#, hourly=False)
+
 #torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3, colname='u_mag')
 
 #torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3, start='2017-10-01', stop='2021-03-01')

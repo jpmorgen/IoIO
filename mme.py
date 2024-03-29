@@ -46,6 +46,8 @@ def readMMESH_fromFile(fullfilename):
 
 def plot_mme(mme=MME,
              colname=None,
+             hourly=True,
+             alpha=0.1,
              filt_width=None,
              fig=None,
              ax=None,
@@ -77,7 +79,8 @@ def plot_mme(mme=MME,
     col_neg_unc = df[('ensemble', f'{colname}_neg_unc')]
     col_pos_unc = df[('ensemble', f'{colname}_pos_unc')]
 
-    plt.errorbar(df.index, colval, (col_neg_unc, col_pos_unc), alpha=0.1)
+    if hourly:
+        plt.errorbar(df.index, colval, (col_neg_unc, col_pos_unc), alpha=alpha)
 
     # Plot running averages
     custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'])
