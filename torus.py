@@ -190,10 +190,16 @@ def ansa_parameters(ccd,
 
     # Calculate profile along centripetal equator, keeping it in units
     # of rayleighs
+    # --> I don't properly handle masked pixels here!  I should use
+    # ansa.sum method, but only after upgrade.  I should also make
+    # sure to poke holes in the r_Rj axis
     r_pix = np.arange(ansa.shape[1]) * u.pixel
     r_Rj = (r_pix + left*u.pixel - center[1]) / pix_per_Rj
     r_prof = np.sum(ansa, 0) * ansa.unit
     r_prof /= ansa.shape[1]
+    if not np.all(np.isfinite(r_prof)):
+        # This may be a stop-gap measure that apparently didn't work
+        return bad_ansa(side)
 
     # --> Work in progress
     #plot_left  = left  - 2*u.R_jup
@@ -244,7 +250,13 @@ def ansa_parameters(ccd,
         + models.Polynomial1D(1, c0=np.max(r_prof)))
     # The weights need to read in the same unit as the thing being
     # fitted for the std to come back with sensible units.
-    r_fit = fit(r_model_init, r_Rj, r_prof, weights=r_dev**-0.5, maxiter=500)
+    try:
+        r_fit = fit(r_model_init, r_Rj, r_prof,
+                    weights=r_dev**-0.5, maxiter=500)
+    except Exception as e:
+        log.error(f'RAWFNAME of problem: {ccd.meta["RAWFNAME"]} {e}')
+        return bad_ansa(side)
+
     r_ansa = r_fit.mean_0.quantity
     dRj = r_fit.stddev_0.quantity
 

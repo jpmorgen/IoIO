@@ -257,6 +257,10 @@ class CorData(CorDataNDparams, NoCenterPGD):
         if self.show:
             simple_show(patch, norm=LogNorm())
 
+        if np.all(patch.mask):
+            log.warning('All pixels are masked in patch.  Very bright conditions?  Consider using OffCorData')
+            return NoCenterPGD(self).obj_center
+
         boost_factor = ccd.nonlin*1000
 
         # Zero out all pixels that (1) are not on the ND filter and
