@@ -565,16 +565,16 @@ class ObsTerminator():
         # --> Hope telescope location is set correctly.  If not able
         # --> to do this, should have a property somewhere for user
         e_loc = EarthLocation.from_geodetic(
-            MC.Telescope.SiteLongitude(),
-            MC.Telescope.SiteLatitude(),
-            MC.Telescope.SiteAltitude,
+            MC.Telescope.SiteLongitude,
+            MC.Telescope.SiteLatitude,
+            MC.Telescope.SiteElevation,
             'WGS84')
         t = Time(t, format='unix', location=e_loc)
         sc =  get_sun(t)
         alt_az = sc.transform_to(
             AltAz(obstime=t, location=e_loc))
         return (self.below_horizon(MC, self.horizon_limit)
-                or alt_az.alt.value > self.sundown_angle)
+                or alt_az.alt.value > self.sundown_limit)
 
 class MaxImControl():
     """Controls MaxIm DL via ActiveX/COM events.

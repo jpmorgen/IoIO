@@ -1001,7 +1001,7 @@ def ACP_IPT_Na_R_IPT4x_Na(args, cal=True):
                 # User could have had guider already on.  If not, center with
                 # guider slews and start the guider
                 log.debug('CENTERING WITH GUIDER SLEWS') 
-                P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                P.center_loop(max_tries=5, dead_zone=(25, 100),
                               dead_zone_move=(0, 200))
                 if time.time() > Tend:
                     log.info('Past expected end of ACP exposure, returning') 
@@ -1017,7 +1017,7 @@ def ACP_IPT_Na_R_IPT4x_Na(args, cal=True):
             # Jupiter observations
             if cal:
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                P.center_loop(max_tries=5, dead_zone=(25, 100),
                               dead_zone_move=(0, 200))
                 log.info('Collecting [SII] and Na calibration images')
                 if ((time.time() + downloadtime*4*3) > Tend):
@@ -1155,7 +1155,7 @@ def ACP_IPT_Na_R_IPT4x_Na(args, cal=True):
         
                 P.diff_flex()
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                P.center_loop(max_tries=5, dead_zone=(25, 100),
                               dead_zone_move=(0, 200))
                 log.info('Collecting Na')
                 exptime=60
@@ -1182,7 +1182,7 @@ def ACP_IPT_Na_R_IPT4x_Na(args, cal=True):
                 for i in range(4):
                     P.diff_flex()
                     log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                    P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                    P.center_loop(max_tries=5, dead_zone=(25, 100),
                                   dead_zone_move=(0, 200))
                     log.info('Collecting [SII]')
                     # Wed Jun 16 22:44:52 2021 EDT  jpmorgen@snipe
@@ -1251,7 +1251,7 @@ def ACP_IPT_Na_R(args, cal=True):
                 # User could have had guider already on.  If not, center with
                 # guider slews and start the guider
                 log.debug('CENTERING WITH GUIDER SLEWS') 
-                P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                P.center_loop(max_tries=5, dead_zone=(25, 100),
                               dead_zone_move=(0, 200))
                 if obs_terminator.end_of_obs(P.MC):
                     log.error('End of observation')
@@ -1267,7 +1267,7 @@ def ACP_IPT_Na_R(args, cal=True):
             # Jupiter observations
             if cal:
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                P.center_loop(max_tries=5, dead_zone=(25, 100),
                               dead_zone_move=(0, 200))
                 log.info('Collecting [SII] and Na calibration images')
                 if obs_terminator.end_of_obs(P.MC):
@@ -1405,7 +1405,7 @@ def ACP_IPT_Na_R(args, cal=True):
         
                 P.diff_flex()
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                P.center_loop(max_tries=5, dead_zone=(25, 100),
                               dead_zone_move=(0, 200))
                 log.info('Collecting [SII]')
                 # Wed Jun 16 22:44:52 2021 EDT  jpmorgen@snipe
@@ -1435,7 +1435,7 @@ def ACP_IPT_Na_R(args, cal=True):
 
                 P.diff_flex()
                 log.debug('CENTERING WITH GUIDEBOX MOVES') 
-                P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
+                P.center_loop(max_tries=5, dead_zone=(25, 100),
                               dead_zone_move=(0, 200))
 
                 log.info('Collecting Na')
