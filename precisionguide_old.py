@@ -24,11 +24,13 @@ import json
 
 import numpy as np
 from scipy import signal
+
 from astropy import log
 from astropy import wcs
 from astropy.io import fits
 from astropy import units as u
 from astropy.time import Time, TimeDelta
+from astropy.coordinates import EarthLocation, AltAz, get_sun
 
 if sys.platform == 'win32':
     # --> also check out pythonnet
@@ -86,8 +88,8 @@ guider_motor_control_reverseY = False
 # Misalignment in deg
 guider_cal_astrometry_max_misalignment = 10
 
-horizon_limit = 8.5
-
+horizon_limit = 8.5 # Reasonable western horion until you get south
+sundown_limit = -12 # Nautical twilight
 
 # --> I may improve this location or the technique of message passing
 hostname = socket.gethostname()
@@ -530,6 +532,50 @@ class FakeWeather():
     def __init__(self):
         self.Safe = True
 
+# --> This really needs to be in MaxImControl
+class ObsTerminator():
+    """Determines when an observation will end"""
+    def __init__(self,
+                 Tend=None, # unix seconds (time.time() + exposure_time)
+                 horizon_limit=horizon_limit,
+                 sundown_limit=sundown_limit):
+        self.Tend = Tend
+        self.horizon_limit = horizon_limit
+        self.sundown_limit = sundown_limit
+
+    def below_horizon(self, MC, horizon_limit):
+        if (not MC.Telescope.Tracking
+            or MC.Telescope.Altitude < horizon_limit):
+            log.debug(f'Telescope Altitude = {MC.Telescope.Altitude} Telescope Tracking: {MC.Telescope.Tracking}')
+            if (not MC.Telescope.Tracking and
+                MC.Telescope.Altitude > horizon_limit + 3):
+                log.error('Telescope is not tracking for some weird reason, ignoring')
+                return False
+            log.info('Telescope horizon limit reached')
+            return True
+        return False
+
+        # return (not MC.Telescope.Tracking
+        #         or MC.Telescope.Altitude < MC.horizon_limit_value)
+
+    def end_of_obs(self, MC):
+        t = time.time()
+        if self.Tend is not None and t > self.Tend:
+            return True
+        # --> Hope telescope location is set correctly.  If not able
+        # --> to do this, should have a property somewhere for user
+        e_loc = EarthLocation.from_geodetic(
+            MC.Telescope.SiteLongitude(),
+            MC.Telescope.SiteLatitude(),
+            MC.Telescope.SiteAltitude,
+            'WGS84')
+        t = Time(t, format='unix', location=e_loc)
+        sc =  get_sun(t)
+        alt_az = sc.transform_to(
+            AltAz(obstime=t, location=e_loc))
+        return (self.below_horizon(MC, self.horizon_limit)
+                or alt_az.alt.value > self.sundown_angle)
+
 class MaxImControl():
     """Controls MaxIm DL via ActiveX/COM events.
 
@@ -562,7 +608,8 @@ class MaxImControl():
     def __init__(self,
                  main_astrometry=None,
                  guider_astrometry=None,
-                 default_filt=default_filt):
+                 default_filt=default_filt,
+                 obs_terminator=None):
         if sys.platform != 'win32':
             raise EnvironmentError('Can only control camera and telescope from Windows platform')
         self.main_astrometry = main_astrometry
@@ -579,6 +626,7 @@ class MaxImControl():
                 self.guider_astrometry = HDUList[0].header
 
         self.default_filt = default_filt
+        self.obs_terminator = obs_terminator or ObsTerminator()
 
         self.alignment_mode = None
         self.guider_cal_pierside = None
@@ -637,7 +685,6 @@ class MaxImControl():
         self.guider_max_move_multiplier = 20
         #  --> Too little motion seems to freeze the system, at
         # least sometimes
-        self.horizon_limit_value = horizon_limit
         self.max_guide_num_steps = 8
         self.connect()
         if self.telescope_connectable:
@@ -1282,24 +1329,7 @@ class MaxImControl():
             if dr > 0.1 * dgrp:
                 log.warning('Guider calibration rate is off by more than 10% of the scope reported rate: ' + repr((self.guide_rates, np.abs(guider_cal_guide_rates))) + '.  Norm of these: ' + repr((np.linalg.norm(self.guide_rates), np.linalg.norm(guider_cal_guide_rates))) + '.  Have you specified the correct guider astrometery image?  Have you changed the guide rates changed since calibrating the guider?  Assuming reported telescope guide rates are correct.')
 
-        self.guider_astrometry['CRVAL2'] = save_crval2
-
-    def horizon_limit(self):
-        if (not self.Telescope.Tracking
-            or self.Telescope.Altitude < self.horizon_limit_value):
-            log.debug(f'Telescope Altitude = {self.Telescope.Altitude} Telescope Tracking: {self.Telescope.Tracking}')
-            if (not self.Telescope.Tracking and
-                self.Telescope.Altitude > self.horizon_limit_value + 3):
-                log.error('Telescope is not tracking for some weird reason, ignoring')
-                return False
-            log.info('Telescope horizon limit reached')
-            return True
-        return False
-
-        # return (not self.Telescope.Tracking
-        #         or self.Telescope.Altitude < self.horizon_limit_value)
-
-        
+        self.guider_astrometry['CRVAL2'] = save_crval2  
 
     # For now use self.Application.ShutDownObservatory()
     #def do_shutdown(self):
@@ -1369,8 +1399,8 @@ class MaxImControl():
         while (rms > self.guider_settle_tolerance
                and av > self.guider_settle_tolerance
                and time.time() <= start + self.guider_max_settle_time):
-            if self.horizon_limit():
-                log.error('Horizon limit reached')
+            if self.obs_terminator.end_of_obs(self):
+                log.error('End of observation reached, terminating guider_settle')
                 return False
             av, rms = self.guider_cycle(self.guider_settle_cycle)
             log.debug('guider AV, RMS = ' + str((av, rms)))
@@ -1461,8 +1491,8 @@ class MaxImControl():
             log.debug('Setting to: ' + str(tp_coords[::-1]))
             # !!! TRANSPOSE !!!
             self.CCDCamera.GuiderMoveStar(tp_coords[1], tp_coords[0])
-            if self.horizon_limit():
-                log.error('Horizon limit reached')
+            if self.obs_terminator.end_of_obs(self):
+                log.error('End of observation reached, terminating move_with_guuide_box')
                 return False
             self.guider_settle()
         
@@ -2035,6 +2065,7 @@ guide_box_log_file : str
             ObsClassName=None, 
             ObsClassModule=None,
             MC=None,
+            obs_terminator=None,            
             guide_box_command_file=default_guide_box_command_file,
             guide_box_log_file=default_guide_box_log_file,
             **ObsClassArgs): # args to use to instantiate ObsClassName
@@ -2064,6 +2095,7 @@ guide_box_log_file : str
         self.ObsClassArgs = ObsClassArgs
         if MC is None:
             self.MC = MaxImControl()
+        self.obs_terminator = obs_terminator or ObsTerminator()
         self.guide_box_command_file = guide_box_command_file
         self.guide_box_log_file = guide_box_log_file
 
@@ -2139,12 +2171,14 @@ guide_box_log_file : str
         if value and self._GuideBoxMoverSubprocess is None:
             # --> I may need a better path to this
             # https://stackoverflow.com/questions/4152963/get-the-name-of-current-script-with-python
+            Tend = Tend or ''
             self._GuideBoxMoverSubprocess \
                 = subprocess.Popen(['python',
                                     #'ioio.py',
                                     __file__,
                                     'GuideBoxMover',
-                                    self.guide_box_command_file])
+                                    self.guide_box_command_file,
+                                    Tend])
             # Make sure we are up and running before moving on
             # --> Needs a timeout
             while self._GuideBoxMoverSubprocess is None:
@@ -2279,7 +2313,6 @@ guide_box_log_file : str
                scaling_astrometry=None,
                ignore_ObsData_astrometry=False,
                recursive_count=0,
-               Tend=None, # These are for awkward loop from center_loop
                dead_zone=None, # Pixels
                dead_zone_move=None, # Pixels
                **ObsClassArgs):
@@ -2319,8 +2352,8 @@ guide_box_log_file : str
             present.  Default: False
 
         """
-        if self.MC.horizon_limit():
-            log.error('Horizon limit reached')
+        if self.obs_terminator.end_of_obs(self.MC):
+            log.error('End of observation reached, terminating center')
             return False
 
         # save some typing
@@ -2403,8 +2436,7 @@ guide_box_log_file : str
                 log.debug('TURNING GUIDER OFF AND CENTERING WITH GUIDER SLEWS')
                 self.MC.guider_stop()
                 # --> Consider using center here instead of move_with_guider_slews
-                self.center_loop(Tend=Tend,
-                                 dead_zone=dead_zone,
+                self.center_loop(dead_zone=dead_zone,
                                  dead_zone_move=dead_zone_move)
                 #self.MC.move_with_guider_slews(dw_coords)
                 # --> Need to add logic to capture guider stuff,
@@ -2416,7 +2448,6 @@ guide_box_log_file : str
                 self.MC.guider_start()
                 recursive_count += 1
                 self.center(recursive_count=recursive_count,
-                            Tend=Tend,
                             dead_zone=dead_zone,
                             dead_zone_move=dead_zone_move)
         else:
@@ -2426,7 +2457,6 @@ guide_box_log_file : str
                 log.debug('Guider was turned off unexpectedly.  Turning it back on and recentering with guidebox moves')
                 self.MC.guider_start()
                 self.center(recursive_count=recursive_count,
-                            Tend=Tend,
                             dead_zone=dead_zone,
                             dead_zone_move=dead_zone_move)
         return True
@@ -2437,7 +2467,6 @@ guide_box_log_file : str
                     tolerance=None,
                     max_tries=3,
                     start_PrecisionGuide=False,
-                    Tend=None,
                     dead_zone=None, # Pixels
                     dead_zone_move=None, # Pixels
                     was_guiding=None,
@@ -2449,11 +2478,8 @@ guide_box_log_file : str
         tries = 0
         fails = 0
         while True:
-            if self.MC.horizon_limit():
-                log.error('Horizon limit reached')
-                return False
-            if Tend and time.time() > Tend:
-                log.info('Centering would extend past specified end time, returning') 
+            if self.obs_terminator.end_of_obs(self.MC):
+                log.error('End of observation reached, terminating center_loop')
                 return False
             log.debug('CENTER_LOOP TAKING EXPOSURE')
             HDUList = self.MC.take_im(exptime, filt)
@@ -2483,8 +2509,7 @@ guide_box_log_file : str
                     return self.center_loop(exptime=exptime,
                                             filt=filt,
                                             tolerance=tolerance,
-                                            max_tries=max_tries,
-                                            Tend=Tend)
+                                            max_tries=max_tries)
                 if start_PrecisionGuide:
                     # We have moved the telescope, so our Obs
                     self.reinitialize()
@@ -2517,7 +2542,6 @@ guide_box_log_file : str
                                         filt=filt,
                                         tolerance=tolerance,
                                         max_tries=max_tries,
-                                        Tend=Tend,
                                         was_guiding=was_guiding)
                 
             if tries >= max_tries:
@@ -2527,7 +2551,6 @@ guide_box_log_file : str
                 return False
             # Here is where we actually call the center algorithm
             if not self.center(O,
-                               Tend=Tend,
                                dead_zone=dead_zone,
                                dead_zone_move=dead_zone_move):
                 log.error('center_loop: could not center target')
@@ -3345,12 +3368,21 @@ def cmd_guide(args):
 # --> a guidebox command
 def GuideBoxMover(args):
     log.debug('Starting GuideBoxMover')
+    Tend = args.Tend or None
+    obs_terminator = ObsTerminator(Tend=Tend,
+                                   horizon_limit=horizon_limit,
+                                   sundown_limit=sundown_limit)
+    
     with MaxImControl() as MC:
         last_modtime = 0
         while True:
-            if MC.horizon_limit():
-                # Returning false seemed to confuse process that popened us 
-                log.error('GuideBoxMover: Horizon limit reached.  Doing nothing')
+            if obs_terminator(MC):
+                # Returning false seemed to confuse process that
+                # popened us
+                # --> This might be the cause of the
+                # confusion at the end of observations that requires
+                # long wait times for things to exit!
+                log.error('GuideBoxMover: End of observation time reached.  Doing nothing')
                 time.sleep(3)
                 continue
     
@@ -3501,6 +3533,9 @@ if __name__ == "__main__":
         'GuideBoxMover', help='Start guide box mover process')
     GuideBox_parser.add_argument(
         'command_file', help='Full path to file used to pass rates from GuideBoxCommander  to GuideBoxMover')
+    GuideBox_parser.add_argument(
+        'Tend', help='Time in UNIX seconds past which observations are invalid',
+        default='')
     GuideBox_parser.set_defaults(func=GuideBoxMover)
 
     Collector_parser = subparsers.add_parser(

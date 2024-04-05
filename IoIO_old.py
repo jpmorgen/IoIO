@@ -1222,6 +1222,8 @@ def ACP_IPT_Na_R_IPT4x_Na(args, cal=True):
 def ACP_IPT_Na_R(args, cal=True):
     Tstart = time.time()
     Tend = Tstart + float(args.interval)
+    # Use the default horizon stuff in precisionguide_old 
+    obs_terminator = pg.ObsTerminator(Tend)
     with pg.PrecisionGuide("CorObsData", "IoIO") as P:
         # This with block enables us to turn off some things in
         # PrecisionGuide that ACP needsgraceful __exit__.  Instantiating
@@ -1251,8 +1253,8 @@ def ACP_IPT_Na_R(args, cal=True):
                 log.debug('CENTERING WITH GUIDER SLEWS') 
                 P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
                               dead_zone_move=(0, 200))
-                if time.time() > Tend:
-                    log.info('Past expected end of ACP exposure, returning') 
+                if obs_terminator.end_of_obs(P.MC):
+                    log.error('End of observation')
                     return
                 log.debug('STARTING GUIDER') 
                 P.MC.guider_start(filter=guider_nd_Filter_number)
@@ -1268,11 +1270,8 @@ def ACP_IPT_Na_R(args, cal=True):
                 P.center_loop(max_tries=5, Tend=Tend, dead_zone=(25, 100),
                               dead_zone_move=(0, 200))
                 log.info('Collecting [SII] and Na calibration images')
-                if ((time.time() + downloadtime*4*3) > Tend):
-                    log.info('Exposure would extend past end of ACP exposure, returning') 
-                    return
-                if P.MC.horizon_limit():
-                    log.info('Telescope below horizon limit')
+                if obs_terminator.end_of_obs(P.MC):
+                    log.error('End of observation')
                     return
                 for ifilt in range(1):
                     P.MC.acquire_im(pg.uniq_fname('SII_on_cal_07_', d),
@@ -1294,6 +1293,9 @@ def ACP_IPT_Na_R(args, cal=True):
                                     exptime=15,
                                     binning=1,
                                     filt=1)
+                if obs_terminator.end_of_obs(P.MC):
+                    log.error('End of observation')
+                    return
                 for ifilt in range(1):
                     P.MC.acquire_im(pg.uniq_fname('SII_on_cal_20_', d),
                                     exptime=20,
@@ -1344,8 +1346,8 @@ def ACP_IPT_Na_R(args, cal=True):
                                 filt=6)
 
                 log.info('Collecting r_sdss, g_sdss, u_sdss, i_sdss, and z_sdss')
-                if ((time.time() + downloadtime*4*2) > Tend):
-                    log.info('Exposure would extend past end of ACP exposure, returning') 
+                if obs_terminator.end_of_obs(P.MC):
+                    log.error('End of observation')
                     return
                 for ifilt in range(2):
                     P.MC.acquire_im(pg.uniq_fname('r_sdss_', d),
@@ -1374,8 +1376,8 @@ def ACP_IPT_Na_R(args, cal=True):
                                 filt=8)
 
             while True:
-                if P.MC.horizon_limit():
-                    log.info('Telescope below horizon limit')
+                if obs_terminator.end_of_obs(P.MC):
+                    log.error('End of observation')
                     return
                 #fname = pg.uniq_fname(basename, d)
                 #log.debug('data_collector preparing to record ' + fname)
@@ -1417,21 +1419,15 @@ def ACP_IPT_Na_R(args, cal=True):
                 #                binning=4,
                 #                filt=0)
                 exptime=300
-                if ((time.time() + exptime) > Tend):
-                    log.info('Exposure would extend past end of ACP exposure, returning') 
-                    return
-                if P.MC.horizon_limit():
-                    log.info('Telescope below horizon limit')
+                if obs_terminator.end_of_obs(P.MC):
+                    log.error('End of observation')
                     return
                 P.MC.acquire_im(pg.uniq_fname('SII_on-band_', d),
                                 exptime=exptime,
                                 filt=1)
                 exptime=60
-                if ((time.time() + exptime) > Tend):
-                    log.info('Exposure would extend past end of ACP exposure, returning') 
-                    return
-                if P.MC.horizon_limit():
-                    log.info('Telescope below horizon limit')
+                if obs_terminator.end_of_obs(P.MC):
+                    log.error('End of observation')
                     return
                 P.MC.acquire_im(pg.uniq_fname('SII_off-band_', d),
                                 exptime=exptime,
@@ -1444,20 +1440,14 @@ def ACP_IPT_Na_R(args, cal=True):
 
                 log.info('Collecting Na')
                 exptime=60
-                if ((time.time() + exptime) > Tend):
-                    log.info('Exposure would extend past end of ACP exposure, returning') 
-                    return
-                if P.MC.horizon_limit():
-                    log.info('Telescope below horizon limit')
+                if obs_terminator.end_of_obs(P.MC):
+                    log.error('End of observation')
                     return
                 P.MC.acquire_im(pg.uniq_fname('Na_off-band_', d),
                                 exptime=exptime,
                                 filt=3)
-                if ((time.time() + exptime) > Tend):
-                    log.info('Exposure would extend past end of ACP exposure, returning') 
-                    return
-                if P.MC.horizon_limit():
-                    log.info('Telescope below horizon limit')
+                if obs_terminator.end_of_obs(P.MC):
+                    log.error('End of observation')
                     return
                 exptime=300
                 P.MC.acquire_im(pg.uniq_fname('Na_on-band_', d),
