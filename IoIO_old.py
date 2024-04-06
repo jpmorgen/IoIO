@@ -1258,8 +1258,8 @@ def ACP_IPT_Na_R(args, cal=True):
                     return
                 log.debug('STARTING GUIDER') 
                 P.MC.guider_start(filter=guider_nd_Filter_number)
-            if time.time() > Tend:
-                log.info('Past expected end of ACP exposure, returning') 
+            if obs_terminator.end_of_obs(P.MC):
+                log.error('End of observation')
                 return
             log.debug('TURNING ON GUIDEBOX MOVER SYSTEM')
             P.diff_flex()
