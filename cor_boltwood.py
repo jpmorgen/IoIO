@@ -153,7 +153,11 @@ class CorBoltwood():
             weather_meta['SKYTEMP']  = ccd.meta['SKYTEMP']*temp_unit
             return dict_to_ccd_meta(ccd, weather_meta)
 
-        be = self.boltwood_entry(ccd)
+        try:
+            be = self.boltwood_entry(ccd)
+        except Exception as e:
+            log.error(f'RAWFNAME of problem: {ccd.meta["RAWFNAME"]} {e}')
+            return ccd
         if be is None:
             return ccd
         if be.temp_scale == 'F':
