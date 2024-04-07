@@ -2211,7 +2211,7 @@ guide_box_log_file : str
 
         log.debug('IN GuideBoxCommander')
         n_pix_rate = np.linalg.norm(pix_rate)
-        if n_pix_rate < 1000 * np.finfo(np.float).eps:
+        if n_pix_rate < 1000 * np.finfo(float).eps:
             # Avoid zero divide
             # This needs to be float
             dra_ddec_rate = np.zeros(2)

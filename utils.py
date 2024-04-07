@@ -1170,13 +1170,13 @@ def plot_planet_subim(ccd_in,
     t = t.astype(int)
     
 
-    subim = flexi_slice(ccd, b.value, t.value, l.value, r.value)
-    nr, nc = subim.shape
-    subim.data[subim.data < planet_subim_vmin] = planet_subim_vmin
-    x = (np.arange(nc)*u.pixel - (center[0] - l)) / pix_per_Rp
-    y = (np.arange(nr)*u.pixel - (center[1] - b)) / pix_per_Rp
-    X, Y = np.meshgrid(x.value, y.value)
     try:
+        subim = flexi_slice(ccd, b.value, t.value, l.value, r.value)
+        nr, nc = subim.shape
+        subim.data[subim.data < planet_subim_vmin] = planet_subim_vmin
+        x = (np.arange(nc)*u.pixel - (center[0] - l)) / pix_per_Rp
+        y = (np.arange(nr)*u.pixel - (center[1] - b)) / pix_per_Rp
+        X, Y = np.meshgrid(x.value, y.value)
         pcm = ax.pcolormesh(X, Y, subim,
                             norm=LogNorm(vmin=planet_subim_vmin,
                                          vmax=planet_subim_vmax),
