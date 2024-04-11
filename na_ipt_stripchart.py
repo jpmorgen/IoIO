@@ -81,16 +81,16 @@ outdir = '/data/IoIO/analysis/'
 #                  outname='/home/jpmorgen/Papers/io/IoIO_2017--2023_Sublimation_JGR/Na_SII_time_sequence.png')
 
 t_na = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
-t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
-#t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
+#t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
+t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
 
 # Clean up masked values
 t_na = t_na[~t_na['mask']]
 t_torus = t_torus[~t_torus['mask']]
 
 
-#master_stripchart(t_na, t_torus)
-master_stripchart(t_na, t_torus, nplots=1, figsize=[12,8])
+master_stripchart(t_na, t_torus)
+#master_stripchart(t_na, t_torus, nplots=1, figsize=[12,8])
 
 # Morgenthaler et al. 2019 errata
 #_ = master_stripchart(t_na, t_torus, nplots=1, figsize=[6,6],

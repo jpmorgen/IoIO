@@ -561,6 +561,10 @@ class ObsTerminator():
     def end_of_obs(self, MC):
         t = time.time()
         if self.Tend is not None and t > self.Tend:
+            log.info('End of observation reached')
+            return True
+        if self.below_horizon(MC, self.horizon_limit):
+            # Self documenting
             return True
         # --> Hope telescope location is set correctly.  If not able
         # --> to do this, should have a property somewhere for user
@@ -570,11 +574,13 @@ class ObsTerminator():
             MC.Telescope.SiteElevation,
             'WGS84')
         t = Time(t, format='unix', location=e_loc)
-        sc =  get_sun(t)
-        alt_az = sc.transform_to(
+        sun =  get_sun(t)
+        sun_alt_az = sun.transform_to(
             AltAz(obstime=t, location=e_loc))
-        return (self.below_horizon(MC, self.horizon_limit)
-                or alt_az.alt.value > self.sundown_limit)
+        if sun_alt_az.alt.value > self.sundown_limit:
+            log.info('Sun is too high')
+            return True
+        return False
 
 class MaxImControl():
     """Controls MaxIm DL via ActiveX/COM events.
@@ -2171,7 +2177,7 @@ guide_box_log_file : str
         if value and self._GuideBoxMoverSubprocess is None:
             # --> I may need a better path to this
             # https://stackoverflow.com/questions/4152963/get-the-name-of-current-script-with-python
-            Tend = Tend or ''
+            Tend = self.obs_terminator.Tend or ''
             self._GuideBoxMoverSubprocess \
                 = subprocess.Popen(['python',
                                     #'ioio.py',
@@ -3376,7 +3382,7 @@ def GuideBoxMover(args):
     with MaxImControl() as MC:
         last_modtime = 0
         while True:
-            if obs_terminator(MC):
+            if obs_terminator.end_of_obs(MC):
                 # Returning false seemed to confuse process that
                 # popened us
                 # --> This might be the cause of the
