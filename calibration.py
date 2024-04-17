@@ -23,7 +23,7 @@ from astropy.nddata import CCDData
 from astropy.time import Time
 from astropy.stats import mad_std, biweight_location
 
-from photutils import Background2D, MedianBackground
+from photutils.background import Background2D, MedianBackground
 import ccdproc as ccdp
 
 from bigmultipipe import WorkerWithKwargs, NestablePool
@@ -1282,6 +1282,8 @@ class Calibration():
         self._flat_dirs_dates_checked = None
         if reduce:
             self.reduce()
+        if self.plot_flat_ratios:
+            _ = self.flat_ratio_list
 
     @property
     def gain_correct(self):
@@ -1799,23 +1801,23 @@ class Calibration():
                 ratio = off_flux / on_flux
                 ratio_dict = {'band': band,
                               'date': date,
-                              'time': tm.tt.datetime,
+                              'time': tm.datetime,
                               'ratio': ratio}
                 ratio_dlist.append(ratio_dict)
         tbl = QTable(rows=ratio_dlist)
             
         flat_ratio_list = []
+
         if self.plot_flat_ratios:
-            f = plt.figure(figsize=[8.5, 11])
-            plt.title('Sky flat ratios')
+            fig = plt.figure(figsize=[8.5, 11])
+            gs = fig.add_gridspec(2, hspace=0)
+            axs = gs.subplots(sharex=True)
         #print('Narrow-band sky flat ratios fit to >2020-01-01 data only')
         #print('Day sky does have Na on-band emission, however, Greet 1988 PhD suggests')
         #print('it is so hard to measure with a good Fabry-Perot, that we are')
         #print('dominated by continuum')
         #print('COPY THESE INTO cormultipipe.py globals')
         for ib, band in enumerate(['Na', 'SII']):
-            if self.plot_flat_ratios:
-                plt.title(f'Sky flat ratios fit to > {self.stable_flat_date}')
             this_band = tbl[tbl['band'] == band]
             # Started taking flats in a more uniform way after 2020-01-01
             good_dates = this_band[this_band['date']
@@ -1834,27 +1836,30 @@ class Calibration():
             flat_ratio_list.append(t_flat_ratio)
 
             if self.plot_flat_ratios:
-                ax = plt.subplot(2, 1, ib+1)
-                ax.yaxis.set_minor_locator(AutoMinorLocator())
-                ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
+                ax = axs[ib]
+                #ax.yaxis.set_minor_locator(AutoMinorLocator())
+                #ax.tick_params(which='both', bottom=True, top=True, left=True, right=True)
                 #plt.plot(tbl['time'], tbl['ratio'], 'k.')
-                plt.plot(this_band['time'], this_band['ratio'], 'k.')
-                plt.ylabel(f'{band} off/on ratio')
-                plt.axhline(y=biweight_ratio, color='red')
-                plt.text(0.5, biweight_ratio + 0.1*mad_std_ratio, 
+                ax.plot(this_band['time'], this_band['ratio'], 'k.')
+                ax.set_ylabel(f'{band} off/on ratio')
+                ax.axhline(y=biweight_ratio, color='red')
+                ax.text(0.5, biweight_ratio + 1.1*mad_std_ratio, 
                          f'{biweight_ratio:.2f} +/- {mad_std_ratio:.2f}',
                          ha='center', transform=ax.get_yaxis_transform())
-                plt.axhline(y=biweight_ratio+mad_std_ratio,
+                ax.axhline(y=biweight_ratio+mad_std_ratio,
                             linestyle='--', color='k', linewidth=1)
-                plt.axhline(y=biweight_ratio-mad_std_ratio,
+                ax.axhline(y=biweight_ratio-mad_std_ratio,
                             linestyle='--', color='k', linewidth=1)
-                plt.ylim([biweight_ratio-3*mad_std_ratio,
+                ax.set_ylim([biweight_ratio-3*mad_std_ratio,
                           biweight_ratio+3*mad_std_ratio])
-                plt.gcf().autofmt_xdate()
-                outname = os.path.join(self._calibration_root,
-                                       'flat__ratio_vs_time.png')
-                savefig_overwrite(outname, transparent=True)
-                plt.close()
+                #ax.label_outer()
+                #ax.xaxis.set_minor_locator(mdates.MonthLocator())
+        fig.autofmt_xdate()
+        plt.tight_layout()
+        outname = os.path.join(self._calibration_root,
+                               'flat__ratio_vs_time.png')
+        savefig_overwrite(outname, transparent=True)
+        plt.close()
 
         self._flat_ratio_list = flat_ratio_list
         return self._flat_ratio_list
@@ -1934,7 +1939,8 @@ class CalArgparseHandler(CalArgparseMixin, CorArgparseHandler):
                         stop_date=args.calibration_stop,
                         fits_fixed_ignore=args.fits_fixed_ignore,
                         num_processes=args.num_processes,
-                        mem_frac=args.mem_frac)
+                        mem_frac=args.mem_frac,
+                        plot_flat_ratios=args.plot_flat_ratios)
         return c
             
 if __name__ == '__main__':
