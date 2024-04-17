@@ -16,7 +16,7 @@ from IoIO.torus import add_mask_col
 SPEEDUP = 24000
 FPS = 24
 
-def make_movie(t, outname, start=None, stop=None):
+def make_movie(t, outname, reduction_suffix=None, start=None, stop=None):
     t = t[~t['mask']]
     if start is not None:
         start = Time(start, format='fits')
@@ -26,14 +26,24 @@ def make_movie(t, outname, start=None, stop=None):
         stop = Time(stop, format='fits')
         mask = t['tavg'] <= stop
         t = t[mask]
-    sb_encoder = ColnameEncoder('annular_sb', formatter='.1f')
     print(len(t))
 
     t.sort('tavg')
-    png_names = [os.path.splitext(fname)[0] + '.png'
+    png_names = [os.path.splitext(fname)[0]
                  for fname in t['outname']]
+    if reduction_suffix:
+        # This is a little awkward, since I didn't keep with the pattern
+        png_names = [fname.replace('-back-sub', reduction_suffix) 
+                     for fname in png_names]
+    print('first png_names')
+    print(png_names[10])
+    png_names = [fname + '.png'
+                 for fname in png_names]
+    # Sometimes creation of PNG files fails
     png_names = [fname for fname in png_names
                  if os.path.exists(fname)]
+    print('second png_names')
+    print(png_names[10])
 
     durations = (t['tavg'][1:] - t['tavg'][0:-1]).sec
     med_duration = biweight_location(durations)
@@ -54,7 +64,7 @@ stop = None
 # start = '2018-05-11'
 # stop = '2018-05-20'
 
-## 2022-11-09
+# 2022-11-09
 #start = '2022-10-21'
 #stop = '2022-11-22'
 
@@ -64,10 +74,14 @@ stop = None
 
 #start = '2023-06-01'
 
-t = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
-make_movie(t, '/tmp/test_Na.mp4', start=start, stop=stop)
-#t = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
+#t = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
+#make_movie(t, '/tmp/test_Na.mp4', start=start, stop=stop)
+#make_movie(t, '/tmp/test_Na_apertures.mp4', reduction_suffix='_apertures',
+#           start=start, stop=stop)
 t = QTable.read('/data/IoIO/Torus/Torus.ecsv')
-#add_mask_col(t)
-make_movie(t, '/tmp/test_SII.mp4', start=start, stop=stop)
+#make_movie(t, '/tmp/test_SII.mp4', start=start, stop=stop)
+
+
+make_movie(t, '/tmp/test_SII_reduction.mp4', reduction_suffix='_reduction',
+           start=start, stop=stop)
 
