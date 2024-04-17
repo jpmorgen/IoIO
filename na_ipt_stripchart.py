@@ -89,7 +89,9 @@ t_na = t_na[~t_na['mask']]
 t_torus = t_torus[~t_torus['mask']]
 
 
-master_stripchart(t_na, t_torus)
+#master_stripchart(t_na, t_torus)
+master_stripchart(t_na, t_torus, nplots=2)
+#master_stripchart(t_na, t_torus, nplots=2, start='2017-04-01', stop='2018-07-10')
 #master_stripchart(t_na, t_torus, nplots=1, figsize=[12,8])
 
 # Morgenthaler et al. 2019 errata
