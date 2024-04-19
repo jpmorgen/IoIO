@@ -1283,6 +1283,12 @@ class Calibration():
         if reduce:
             self.reduce()
         if self.plot_flat_ratios:
+            # A little bit of a hack, but this is the current state of
+            # affairs in some of my software--to do the plot while I
+            # am calculating the quantities.  Note that reduce_flat
+            # sets self.plot_flat_ratios to True if it actually
+            # reduces some new data so the new points can be added to
+            # the running plot
             _ = self.flat_ratio_list
 
     @property
@@ -1512,6 +1518,8 @@ class Calibration():
                                   start=self._start_date,
                                   stop=self._stop_date)
         self._flat_dirs_dates_checked = all_dirs_dates
+        # Add the new points we have taken onto the running plot
+        self.plot_flat_ratios = True
         lock.clear()
 
     def reduce(self):
