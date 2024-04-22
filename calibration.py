@@ -1862,12 +1862,14 @@ class Calibration():
                           biweight_ratio+3*mad_std_ratio])
                 #ax.label_outer()
                 #ax.xaxis.set_minor_locator(mdates.MonthLocator())
-        fig.autofmt_xdate()
-        plt.tight_layout()
-        outname = os.path.join(self._calibration_root,
-                               'flat__ratio_vs_time.png')
-        savefig_overwrite(outname, transparent=True)
-        plt.close()
+
+        if self.plot_flat_ratios:
+            fig.autofmt_xdate()
+            plt.tight_layout()
+            outname = os.path.join(self._calibration_root,
+                                   'flat_ratio_vs_time.png')
+            savefig_overwrite(outname, transparent=True)
+            plt.close()
 
         self._flat_ratio_list = flat_ratio_list
         return self._flat_ratio_list
