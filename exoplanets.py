@@ -10,7 +10,9 @@ import numpy as np
 from astropy import log
 from astropy import units as u
 from astropy.time import Time
-from astroquery.simbad import Simbad
+
+from astroquery.utils import async_to_sync
+from astroquery.simbad import SimbadClass
 
 import ccdproc as ccdp
 
@@ -73,6 +75,26 @@ def barytime(ccd_in, bmp_meta=None, **kwargs):
                      'Obs. midpoint barycentric dynamic time (MJD)'),
                     after=True)
     return ccd
+
+@async_to_sync
+class ExoSimbadClass(SimbadClass):
+    """Make a special case handler for Simbad object queries so that
+    fluxes get found for exoplanet host stars
+
+    """
+    def query_object(self, object_name, *args, **kwargs):
+        # In order to get fluxes, the 'b' needs to be removed from the end
+        if object_name[-1] in ['b', 'c', 'd']:
+            object_name = object_name[0:-1]
+        result = super().query_object(object_name, *args, **kwargs)
+        if result is None:
+            object_name = object_name.replace('-', ' ')
+            log.info(f'Removed "-" from object_name and trying {object_name}')
+            result = super().query_object(object_name, *args, **kwargs)
+        if result and result.errors:
+            log.warning(f'Simbad errors for obj: {simbad_results.errors}')
+        return result
+ExoSimbad = ExoSimbadClass()
 
 class ExoMultiPipe(CorMultiPipeBase):
     def file_write(self, ccd, outname,
@@ -189,10 +211,10 @@ def exoplanet_directory(directory,
     for e in exoplanets:
         # Load our object into the cache so there are no collisions
         # during multiprocessing
-        s = Simbad()
+        s = ExoSimbad()
         simbad_results = s.query_object(e)
         flist = collection.files_filtered(object=e, include_path=True)
-        exoplanet_pipeline(flist, rd, **kwargs)
+        exoplanet_pipeline(flist, rd, simbad_results=simbad_results, **kwargs)
         # This could combine output ecsvs, do a Sloan catalog search on
         # distinct fields and merge in the results
 
@@ -253,7 +275,7 @@ def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
     if len(dirs) == 0:
         log.warning('No directories found')
         return []
-    sim = Simbad()
+    sim = ExoSimbad()
     sim.add_votable_fields('flux(U)', 'flux(B)', 'flux(V)', 'flux(R)',
                            'flux(I)')
     exoplanet_obs = []
@@ -338,7 +360,7 @@ class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
             print(estimate_exposure(args.expo_calc))
             return
         if args.list_exoplanets:
-            exoplanet_obs = list_exoplanets()
+            exoplanet_obs = list_exoplanets(start=args.start, stop=args.stop)
             exos_dates = list(zip(*exoplanet_obs))
             exos = list(exos_dates[0])
             counts = [(e, exos.count(e))
