@@ -509,8 +509,9 @@ def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):
                                   t['ansa_left_surf_bright_err'] > 10*u.R)
 
 # --> These should probably be in utils.py
+# --> Note that astropy.utils.masked.function_helpers doesn't have an analog
 def nan_median_filter(data, mask=False, **kwargs):
-    """Median filter data with masked values
+    """Median filter data with masked values and/or NANs
     
     Parameters
     ---------
@@ -520,6 +521,12 @@ def nan_median_filter(data, mask=False, **kwargs):
         default = ``False''
     **kwargs : dict
         passed on to scipy.ndimage median_filter
+
+    Returns
+    -------
+    ndata : ndarray-like
+        Median filtered unmasked & non-NAN values copied into
+        original-length data array with missing values marked as NANs
     """
     ndata = data.copy()
     mask = np.logical_or(mask, np.isnan(data))
@@ -529,6 +536,8 @@ def nan_median_filter(data, mask=False, **kwargs):
     ndata[~mask] = meds
     return ndata
     
+
+# --> A better way to do this might be piecewise.
 def add_medfilt(t, colname, mask_col='mask', medfilt_width=21, mode='mirror'):
     """TABLE MUST BE SORTED FIRST"""
     
@@ -549,6 +558,7 @@ def add_medfilt(t, colname, mask_col='mask', medfilt_width=21, mode='mirror'):
     #t[f'{colname}_medfilt'][~bad_mask] = meds
     t[f'{colname}_medfilt'] = meds
 
+# --> astropy.utils.masked.function_helpers.interp seems to do what I want
 def add_interpolated(t, colname, kernel):
     # --> This is a bug in the making, since I am not handling the masked values properly 
     if isinstance(t[colname], u.Quantity):

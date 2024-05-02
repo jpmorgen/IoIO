@@ -285,7 +285,7 @@ def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
             continue
         collection = ccdp.ImageFileCollection(
             filenames=all_files,
-            keywords=['date-obs', 'object', 'exptime'])
+            keywords=['date-obs', 'object', 'filter', 'exptime'])
         texos = collection.values('object', unique=True)
         for e in texos:
             simbad_results = sim.query_object(e)
@@ -302,8 +302,9 @@ def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
             # Standardize to no spaces
             e = e.replace(' ', '')
             date, _ = date_obss[0].split('T')
+            filt_name = tc.values('filter')[0]
             exptime = tc.values('exptime')[0]
-            exoplanet_obs.append((e, date, exptime, vband))
+            exoplanet_obs.append((e, date, filt_name, exptime, vband))
     return exoplanet_obs
 
 class ExoArgparseMixin:
@@ -365,9 +366,13 @@ class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
             exos = list(exos_dates[0])
             counts = [(e, exos.count(e))
                        for e in set(exos)]
+            print(f'Total number of attempted transit observations: {len(exoplanet_obs)}')
             print('Exoplanets observed on date:')
+            # The dates are sorted in order already
             for e in exoplanet_obs: print(e)
             print('\nExoplanet observation counts:')
+            # Sort the counts by name
+            counts.sort(key=lambda tup: tup[0])
             for c in counts: print(c)
             return
         c = CalArgparseHandler.cmd(self, args)

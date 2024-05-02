@@ -12,7 +12,10 @@ from matplotlib.ticker import MultipleLocator
 
 import pandas as pd
 
+from astropy.table import QTable
+
 from IoIO.juno import JunoTimes, PJAXFormatter
+from IoIO.torus import plot_epsilons
 
 MME = '/data/sun/Jupiter_MME/JupiterMME.csv'
 
@@ -58,6 +61,11 @@ def plot_mme(mme=MME,
              show=False,
              **kwargs):
 
+    if mme is None:
+        mme = MME
+    if isinstance(mme, str):
+        df = readMMESH_fromFile(mme)        
+
     if filt_width is None:
         filt_width = np.asarray((300, 100, 30, 7))
         filt_width = filt_width*np.timedelta64(1, 'D')
@@ -66,7 +74,6 @@ def plot_mme(mme=MME,
     if ax is None:
         ax = fig.add_subplot()
 
-    df = readMMESH_fromFile(mme)
     col_labels = {'B_mag': r'$|\vec B_{\mathrm{IMF}}|$ (nT)',
                   'n_tot': r'Solar wind $\rho$ (cm$^{-3}$)',
                   'p_dyn': r'Solar wind $P_{\mathrm{dynamic}}$ (nPa)',
@@ -116,6 +123,82 @@ def plot_mme(mme=MME,
 
     if show:
         plt.show()
+
+
+mme = MME
+
+df_mme = readMMESH_fromFile(mme)
+t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
+t_torus = t_torus[~t_torus['mask']]
+t_torus.sort('tavg')
+
+# Hack until I get epsilons properly calculated outside of plot routine
+t_torus = plot_epsilons(t_torus)
+plt.close()
+
+# I was thinking of getting fancy with interpolating torus instead of
+#MME, but from a data perspective, that is a bad idea 
+#from scipy.signal import medfilt
+## Calculate interpolated epsilons for a particular set of times
+## --> This eventually goes into torus.py
+## --> Hey, there are lots of great functions in there!
+#from astropy.utils.masked.function_helpers import interp
+#from astropy.convolution import Gaussian1DKernel, interpolate_replace_nans
+##from IoIO.torus import add_medfilt,add_interpolated#, plot_epsilons
+#medfilt_width=21
+#t = t_torus
+#
+#meds = nanmedian(t['ansa_right_r_peak'], medfilt_width=medfilt_width
+#
+#
+#add_medfilt(t, 'ansa_right_r_peak', medfilt_width=medfilt_width)
+#add_medfilt(t, 'ansa_left_r_peak', medfilt_width=medfilt_width)
+#r_peak = t['ansa_right_r_peak']
+#l_peak = t['ansa_left_r_peak']
+#av_peak = (np.abs(r_peak) + np.abs(l_peak)) / 2
+#epsilon = -(r_peak + l_peak) / av_peak
+#denom_var = t['ansa_left_r_peak_err']**2 + t['ansa_right_r_peak_err']**2
+#num_var = denom_var / 2
+#epsilon_err = epsilon * ((denom_var / (r_peak + l_peak)**2)
+#                         + (num_var / av_peak**2))**0.5
+#epsilon = epsilon.filled(np.NAN)
+#epsilon_err = np.abs(epsilon_err.filled(np.NAN))
+#epsilon_biweight = nan_biweight(epsilon)
+#epsilon_mad = nan_mad(epsilon)
+#bad_mask = np.isnan(epsilon)
+#good_epsilons = epsilon[~bad_mask]
+#assert len(good_epsilons) > 20
+#med_epsilon = medfilt(good_epsilons, 11)
+#kernel = Gaussian1DKernel(10)
+#
+#interp
+#
+#add_interpolated(t, 'ansa_right_r_peak_medfilt', kernel)
+#add_interpolated(t, 'ansa_left_r_peak_medfilt', kernel)
+#
+#r_med_peak = t['ansa_right_r_peak_medfilt_interp']
+#l_med_peak = t['ansa_left_r_peak_medfilt_interp']
+#av_med_peak = (np.abs(r_med_peak) + np.abs(l_med_peak)) / 2
+#t['medfilt_interp_epsilon'] = -(r_med_peak + l_med_peak) / av_med_peak  
+
+
+
+one_d_colnames = [cn for cn in t_torus.colnames if len(t_torus[cn].shape) <= 1]
+df_torus = t_torus[one_d_colnames].to_pandas()
+df_torus = df_torus.set_index(df_torus['tavg'])
+
+# I am getting all NANs in rolling_corr, so I think I need to
+# interpolate the MME points to match the IoIO points
+series1 = df_mme['ensemble', 'p_dyn']
+series2 = df_torus['medfilt_interp_epsilon']
+series1i = np.interp(series2.index, series1.index, series1)
+series1i = pd.DataFrame(series1i, index=series2.index,
+                        columns=['p_dyn'])
+rolling_corr = series1i.rolling('14D').corr(series2)
+
+rolling_corr.reset_index().plot(kind='scatter', x='tavg', y='p_dyn')
+# Or just extract the data and plot it with plt.scatter or plt.plot
+plt.show()
 
 #plot_mme(colname='B_mag', top_axis=True, show=True)
 #plot_mme(colname='n_tot', top_axis=True, show=True)
