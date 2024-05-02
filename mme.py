@@ -18,6 +18,7 @@ from IoIO.juno import JunoTimes, PJAXFormatter
 from IoIO.torus import plot_epsilons
 
 MME = '/data/sun/Jupiter_MME/JupiterMME.csv'
+TORUS = '/data/IoIO/Torus/Torus.ecsv'
 
 # From https://zenodo.org/records/10687651
 def readMMESH_fromFile(fullfilename):
@@ -124,17 +125,67 @@ def plot_mme(mme=MME,
     if show:
         plt.show()
 
+def calc_mme_epsilon_corr(df_mme=None,
+                          t_torus=None,
+                          window='30D'):
+    if df_mme is None:
+        df_mme = MME
+    if isinstance(df_mme, str):
+        df_mme = readMMESH_fromFile(df_mme)
+    if t_torus is None:
+        t_torus = TORUS
+    if isinstance(t_torus, str):
+        t_torus = QTable.read(t_torus)
+    t_torus = t_torus[~t_torus['mask']]
+    t_torus.sort('tavg')
 
-mme = MME
+    # Hack until I get epsilons properly calculated outside of plot routine
+    t_torus = plot_epsilons(t_torus)
+    plt.close()
 
-df_mme = readMMESH_fromFile(mme)
-t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
-t_torus = t_torus[~t_torus['mask']]
-t_torus.sort('tavg')
+    # Filter out multi-dimensional columns Pandas can't deal with
+    one_d_colnames = [cn for cn in t_torus.colnames
+                      if len(t_torus[cn].shape) <= 1]
+    df_torus = t_torus[one_d_colnames].to_pandas()
+    df_torus = df_torus.set_index(df_torus['tavg'])
 
-# Hack until I get epsilons properly calculated outside of plot routine
-t_torus = plot_epsilons(t_torus)
-plt.close()
+    # I am getting all NANs in rolling_corr, so I think I need to
+    # interpolate the MME points to match the IoIO points
+    series1 = df_mme['ensemble', 'p_dyn']
+    series2 = df_torus['medfilt_interp_epsilon']
+    series1i = np.interp(series2.index, series1.index, series1)
+    series1i = pd.DataFrame(series1i, index=series2.index,
+                            columns=['p_dyn'])
+    rolling_corr = series1i.rolling(window).corr(series2)
+    return rolling_corr
+
+def plot_mme_epsilon_corr(rolling_corr,
+                          fig=None,
+                          ax=None,
+                          x_axis='tavg',
+                          y_axis='p_dyn',
+                          top_axis=False,
+                          tlim = None,
+                          ylim = None,
+                          show=False,
+                          **kwargs):
+
+    if fig is None:
+        fig = plt.figure()
+    if ax is None:
+        ax = fig.add_subplot()
+
+    rolling_corr.reset_index().plot(kind='scatter',
+                                    x=x_axis,
+                                    y=y_axis,
+                                    ax=ax)
+    # Or just extract the data and plot it with plt.scatter or
+    # plt.plot
+    if show:
+        plt.show()
+
+rolling_corr = calc_mme_epsilon_corr()
+plot_mme_epsilon_corr(rolling_corr, show=True)
 
 # I was thinking of getting fancy with interpolating torus instead of
 #MME, but from a data perspective, that is a bad idea 
@@ -183,22 +234,6 @@ plt.close()
 
 
 
-one_d_colnames = [cn for cn in t_torus.colnames if len(t_torus[cn].shape) <= 1]
-df_torus = t_torus[one_d_colnames].to_pandas()
-df_torus = df_torus.set_index(df_torus['tavg'])
-
-# I am getting all NANs in rolling_corr, so I think I need to
-# interpolate the MME points to match the IoIO points
-series1 = df_mme['ensemble', 'p_dyn']
-series2 = df_torus['medfilt_interp_epsilon']
-series1i = np.interp(series2.index, series1.index, series1)
-series1i = pd.DataFrame(series1i, index=series2.index,
-                        columns=['p_dyn'])
-rolling_corr = series1i.rolling('14D').corr(series2)
-
-rolling_corr.reset_index().plot(kind='scatter', x='tavg', y='p_dyn')
-# Or just extract the data and plot it with plt.scatter or plt.plot
-plt.show()
 
 #plot_mme(colname='B_mag', top_axis=True, show=True)
 #plot_mme(colname='n_tot', top_axis=True, show=True)
