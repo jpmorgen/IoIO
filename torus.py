@@ -660,7 +660,7 @@ def plot_column_vals(t,
         # --> logic
         h = ax.errorbar(datetimes,
                         scale[ic] * t[colname].filled(np.NAN),
-                        scale[ic] * t[f'{colname}_err'].filled(np.NAN),
+                        abs(scale[ic]) * t[f'{colname}_err'].filled(np.NAN),
                         fmt=fmts[ic], alpha=alpha,
                         label=scale_str + labels[ic])
         handles.append(h)
@@ -705,6 +705,35 @@ def plot_ansa_brights(t, **kwargs):
                          **kwargs)
     return t
                      
+def add_epsilons(t, ansa_medfilt_width=21, epsilon_medfilt_width=11):
+    add_medfilt(t, 'ansa_right_r_peak', medfilt_width=ansa_medfilt_width)
+    add_medfilt(t, 'ansa_left_r_peak', medfilt_width=ansa_medfilt_width)
+
+    r_peak = t['ansa_right_r_peak']
+    l_peak = t['ansa_left_r_peak']
+    av_peak = (np.abs(r_peak) + np.abs(l_peak)) / 2
+    # Current values for epsilon are messed up because peaks are not
+    # coming in at the right places presumably due to the simple
+    # Gaussian modeling.  The offset should be to the left (east,
+    # dawn) such that Io dips inside the IPT on that side.  To prepare
+    # for a sensible answer, cast my r_peak in left-handed coordinate
+    # system so epsilon is positive if l_peak is larger
+    epsilon = -(r_peak + l_peak) / av_peak
+    denom_var = t['ansa_left_r_peak_err']**2 + t['ansa_right_r_peak_err']**2
+    num_var = denom_var / 2
+    epsilon_err = epsilon * ((denom_var / (r_peak + l_peak)**2)
+                             + (num_var / av_peak**2))**0.5
+    t['epsilon'] = epsilon
+    t['epsilon_err'] = epsilon_err
+    add_medfilt(t, 'epsilon', medfilt_width=epsilon_medfilt_width)
+    kernel = Gaussian1DKernel(10)
+    add_interpolated(t, 'ansa_right_r_peak_medfilt', kernel)
+    add_interpolated(t, 'ansa_left_r_peak_medfilt', kernel)
+    r_med_peak = t['ansa_right_r_peak_medfilt_interp']
+    l_med_peak = t['ansa_left_r_peak_medfilt_interp']
+    av_med_peak = (np.abs(r_med_peak) + np.abs(l_med_peak)) / 2
+    t['medfilt_interp_epsilon'] = -(r_med_peak + l_med_peak) / av_med_peak
+
 def plot_epsilons(t,
                   fig=None,
                   ax=None,
@@ -713,7 +742,7 @@ def plot_epsilons(t,
                   max_eps=0.06,
                   tlim=None,
                   legend=True,
-                  **kwargs): # These are passed to plot_[hv]lines
+                  **kwargs):
     if fig is None:
         fig = plt.figure()
     if ax is None:
@@ -815,7 +844,7 @@ def plot_ansa_pos(t,
                   show=False,
                   medfilt_width=21,
                   legend=True,
-                  **kwargs): # These are passed to plot_[hv]lines):
+                  **kwargs):
     if fig is None:
         fig = plt.figure()
     if ax is None:

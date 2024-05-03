@@ -6,6 +6,8 @@ from astropy.table import QTable
 
 import matplotlib.pyplot as plt
 
+from bigmultipipe import assure_list
+
 from IoIO.utils import savefig_overwrite
 from IoIO.torus import (add_mask_col, plot_ansa_brights, plot_epsilons,
                         plot_ansa_pos, plot_ansa_r_amplitudes,
@@ -14,22 +16,27 @@ from IoIO.torus import (add_mask_col, plot_ansa_brights, plot_epsilons,
                         plot_dawn_y_stddev, plot_dusk_y_stddev,
                         plot_dawn_cont, plot_dusk_cont,
                         plot_dawn_slope, plot_dusk_slope)
-from IoIO.mme import plot_mme
+from IoIO.mme import plot_mme, plot_mme_epsilon_corr
 
-def torus_epsilon(t_torus, nplots=2, start=None, stop=None,
-                   outname=None, figsize=None, **kwargs):
+def torus_epsilon(t_torus, plots=['ansa_brights', 'epsilons'],
+                  mme_colname='p_dyn',
+                  mme_windows=None,
+                  start=None, stop=None,
+                  outname=None, figsize=None, **kwargs):
 
+    plots = assure_list(plots)
+    mme_windows = assure_list(mme_windows)
     if start is None:
-        start = date.fromisoformat('2018-01-01')
+        start = date.fromisoformat('2017-01-01')
     if stop is None:
         stop = date.today()
-        #stop = date.fromisoformat('2022-12-07')
-
     if isinstance(start, str):
         start = date.fromisoformat(start)
     if isinstance(stop, str):
         stop = date.fromisoformat(stop)
-
+    nplots = len(plots) + len(mme_windows)
+    if 'mme_epsilon_corr' in plots and len(mme_windows) > 0:
+        nplots -= 1
     if figsize is None:
         if nplots == 2:
             figsize = [18, 11]
@@ -37,7 +44,6 @@ def torus_epsilon(t_torus, nplots=2, start=None, stop=None,
             #figsize = [15, 11.6]
             figsize = [21, 18]
         
-
     # Hints from https://matplotlib.org/stable/gallery/subplots_axes_and_figures/subplots_demo.html
     fig = plt.figure(figsize=figsize)
     gs = fig.add_gridspec(nplots, hspace=0)
@@ -64,33 +70,65 @@ def torus_epsilon(t_torus, nplots=2, start=None, stop=None,
               ('2022-10-29', 'orange'),
               ('2022-11-10', 'green')]
     vlines = None
-    plot_ansa_brights(t_torus,
-                      fig=fig, ax=axs[0],
-                      vlines=vlines,
-                      tlim=(start, stop),
-                      ylim=(0, 200),
-                      top_axis=True,
-                      **kwargs)
 
-    if nplots > 1:
-        plot_epsilons(t_torus, fig=fig, ax=axs[1],
-                      vlines=vlines,
-                      tlim=(start, stop),
-                      show=False,
-                      **kwargs)
+    iplot = 0
+    for plotname in plots:
+        if nplots == 1:
+            ax = axs
+        else:
+            ax = axs[iplot]
+        top_axis = iplot == 0
+        if plotname == 'ansa_brights':    
+            plot_ansa_brights(
+                t_torus,
+                fig=fig, ax=ax,
+                vlines=vlines,
+                tlim=(start, stop),
+                ylim=(0, 200),
+                top_axis=top_axis,
+                **kwargs)
+        elif plotname == 'epsilons':    
+            plot_epsilons(
+                t_torus, fig=fig, ax=ax,
+                vlines=vlines,
+                tlim=(start, stop),
+                show=False,
+                top_axis=top_axis,
+                **kwargs)
+        elif plotname == 'ansa_pos':
+            plot_ansa_pos(
+                t_torus, fig=fig, ax=ax,
+                vlines=vlines,
+                tlim=(start, stop),
+                show=False,
+                top_axis=top_axis,
+                **kwargs)            
+        elif plotname == 'mme':
+            plot_mme(
+                fig=fig, ax=ax,
+                tlim=(start, stop),
+                show=False,
+                colname=mme_colname,
+                top_axis=top_axis,
+                **kwargs)
+        elif plotname == 'mme_epsilon_corr':
+            if len(mme_windows) == 0:
+                mme_windows = ['30D']
+            for iwindow, window in enumerate(mme_windows):
+                ax = axs[iplot+iwindow]
+                plot_mme_epsilon_corr(
+                    window=window,
+                    fig=fig, ax=ax,
+                    tlim=(start, stop),
+                    y_axis=mme_colname,
+                    top_axis=top_axis,
+                    **kwargs)
+            iplot = iplot + len(mme_windows)-1
+        else:
+            # --> Write code for the rest as needed
+            log.error(f'Unknown plot name: {plotname}')
+        iplot += 1
 
-    if nplots > 2:
-        plot_mme(fig=fig, ax=axs[2],
-                 tlim=(start, stop),
-                 show=False,
-                 **kwargs)
-
-    if nplots > 3:
-        plot_ansa_pos(t_torus, fig=fig, ax=axs[3],
-                      vlines=vlines,
-                      tlim=(start, stop),
-                      show=False,
-                      **kwargs)
 
     # if nplots > 2:
     #     plot_ansa_r_amplitudes(t_torus, fig=fig, ax=axs[2],
@@ -109,25 +147,25 @@ def torus_epsilon(t_torus, nplots=2, start=None, stop=None,
     #                        tlim=(start, stop),
     #                        show=False)
 
-    if nplots > 4:
-        plot_dusk_cont(t_torus, fig=fig, ax=axs[4],
-                       tlim=(start, stop),
-                       show=False)
-    
-    if nplots > 5:
-        plot_dawn_cont(t_torus, fig=fig, ax=axs[5],
-                       tlim=(start, stop),
-                       show=False)
-    
-    if nplots > 6:
-        plot_dusk_slope(t_torus, fig=fig, ax=axs[6],
-                       tlim=(start, stop),
-                       show=False)
-    
-    if nplots > 7:
-        plot_dawn_slope(t_torus, fig=fig, ax=axs[7],
-                       tlim=(start, stop),
-                       show=False)
+    #if nplots > 4:
+    #    plot_dusk_cont(t_torus, fig=fig, ax=axs[4],
+    #                   tlim=(start, stop),
+    #                   show=False)
+    #
+    #if nplots > 5:
+    #    plot_dawn_cont(t_torus, fig=fig, ax=axs[5],
+    #                   tlim=(start, stop),
+    #                   show=False)
+    #
+    #if nplots > 6:
+    #    plot_dusk_slope(t_torus, fig=fig, ax=axs[6],
+    #                   tlim=(start, stop),
+    #                   show=False)
+    #
+    #if nplots > 7:
+    #    plot_dawn_slope(t_torus, fig=fig, ax=axs[7],
+    #                   tlim=(start, stop),
+    #                   show=False)
 
     # if nplots > 3:
     #     plot_dusk_r_stddev(t_torus, fig=fig, ax=axs[3],
@@ -161,8 +199,17 @@ def torus_epsilon(t_torus, nplots=2, start=None, stop=None,
 
 outdir = '/data/IoIO/analysis/'
 
-t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
+t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
 t_torus = t_torus[~t_torus['mask']]
+
+torus_epsilon(t_torus, plots=['ansa_brights',
+                              'epsilons',
+                              'mme_epsilon_corr',
+                              'mme'],
+              mme_windows=['2D', '7D', '14D', '30D'])
+              
+
+
 #torus_epsilon(t_torus, 2)
 
 #torus_epsilon(t_torus, 2, start='2018-02-15', stop='2020-08-01')
@@ -175,8 +222,8 @@ t_torus = t_torus[~t_torus['mask']]
 ## #              outname='/home/jpmorgen/Conferences/AGU/2023/IPT_epsilon_2018--2020.png')
 ##               outname='/home/jpmorgen/Conferences/DPS/2023_San_Antonio/IPT_epsilon_2018--2020.png')
 
-nplots = 2
-figsize=(12.5, 5.5)
+#nplots = 2
+#figsize=(12.5, 5.5)
 #if nplots <= 2:
 #    figsize=(5.5, 5.5)
 #else:
@@ -189,11 +236,12 @@ figsize=(12.5, 5.5)
 #torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3, colname='n_tot')
 #torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3,
 #              colname='p_dyn', alpha=0.01)#, hourly=False)
-filt_width = np.asarray((300, 100))
-filt_width = np.asarray((30, 2))
-filt_width = filt_width*np.timedelta64(1, 'D')
-torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3,
-              colname='p_dyn', filt_width=filt_width, alpha=0.01)#, hourly=False)
+
+#filt_width = np.asarray((300, 100))
+#filt_width = np.asarray((30, 2))
+#filt_width = filt_width*np.timedelta64(1, 'D')
+#torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=7,
+#              colname='p_dyn', filt_width=filt_width, alpha=0.01)#, hourly=False)
 
 #torus_epsilon(t_torus, figsize=(12.5, 12.5), nplots=3, colname='u_mag')
 

@@ -15,7 +15,7 @@ import pandas as pd
 from astropy.table import QTable
 
 from IoIO.juno import JunoTimes, PJAXFormatter
-from IoIO.torus import plot_epsilons
+from IoIO.torus import add_epsilons
 
 MME = '/data/sun/Jupiter_MME/JupiterMME.csv'
 TORUS = '/data/IoIO/Torus/Torus.ecsv'
@@ -88,7 +88,7 @@ def plot_mme(mme=MME,
     col_pos_unc = df[('ensemble', f'{colname}_pos_unc')]
 
     if hourly:
-        plt.errorbar(df.index, colval, (col_neg_unc, col_pos_unc), alpha=alpha)
+        ax.errorbar(df.index, colval, (col_neg_unc, col_pos_unc), alpha=alpha)
 
     # Plot running averages
     custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'])
@@ -100,9 +100,9 @@ def plot_mme(mme=MME,
         filt_points = fw/dt
         filt_points = filt_points.astype(int)
         colavg = uniform_filter1d(colval, size=filt_points)
-        plt.plot(df.index, colavg, linewidth=5, label=fw)
+        ax.plot(df.index, colavg, linewidth=5, label=fw)
 
-    plt.legend()
+    ax.legend()
 
     ax.set_xlabel('Date')
     ax.set_yscale(yscale)
@@ -127,7 +127,7 @@ def plot_mme(mme=MME,
 
 def calc_mme_epsilon_corr(df_mme=None,
                           t_torus=None,
-                          window='30D'):
+                          window=None):
     if df_mme is None:
         df_mme = MME
     if isinstance(df_mme, str):
@@ -139,9 +139,7 @@ def calc_mme_epsilon_corr(df_mme=None,
     t_torus = t_torus[~t_torus['mask']]
     t_torus.sort('tavg')
 
-    # Hack until I get epsilons properly calculated outside of plot routine
-    t_torus = plot_epsilons(t_torus)
-    plt.close()
+    add_epsilons(t_torus)
 
     # Filter out multi-dimensional columns Pandas can't deal with
     one_d_colnames = [cn for cn in t_torus.colnames
@@ -159,9 +157,10 @@ def calc_mme_epsilon_corr(df_mme=None,
     rolling_corr = series1i.rolling(window).corr(series2)
     return rolling_corr
 
-def plot_mme_epsilon_corr(rolling_corr,
+def plot_mme_epsilon_corr(rolling_corr=None,
                           fig=None,
                           ax=None,
+                          window='14D',
                           x_axis='tavg',
                           y_axis='p_dyn',
                           top_axis=False,
@@ -170,22 +169,41 @@ def plot_mme_epsilon_corr(rolling_corr,
                           show=False,
                           **kwargs):
 
+    if rolling_corr is None:
+        rolling_corr = calc_mme_epsilon_corr(window=window, **kwargs)
     if fig is None:
         fig = plt.figure()
     if ax is None:
         ax = fig.add_subplot()
 
-    rolling_corr.reset_index().plot(kind='scatter',
-                                    x=x_axis,
-                                    y=y_axis,
-                                    ax=ax)
-    # Or just extract the data and plot it with plt.scatter or
-    # plt.plot
+    rolling_corr.reset_index().plot(
+        kind='scatter',
+        x=x_axis,
+        y=y_axis,
+        ax=ax,
+        xlim=tlim,
+        ylim=ylim,
+        ylabel=f'{y_axis} {window}')
+    #ax.set_xlim(tlim)
+    #ax.set_ylim(ylim)
+    fig.autofmt_xdate()
+    ax.format_coord = PJAXFormatter(rolling_corr.index,
+                                    rolling_corr[y_axis])
+
+    if top_axis:
+        jts = JunoTimes()
+        secax = ax.secondary_xaxis('top',
+                                   functions=(jts.plt_date2pj,
+                                              jts.pj2plt_date))
+        secax.xaxis.set_minor_locator(MultipleLocator(1))
+        secax.set_xlabel('PJ')
+
     if show:
         plt.show()
 
-rolling_corr = calc_mme_epsilon_corr()
-plot_mme_epsilon_corr(rolling_corr, show=True)
+#plot_mme_epsilon_corr()
+#rolling_corr = calc_mme_epsilon_corr()
+#plot_mme_epsilon_corr(rolling_corr, show=True)
 
 # I was thinking of getting fancy with interpolating torus instead of
 #MME, but from a data perspective, that is a bad idea 

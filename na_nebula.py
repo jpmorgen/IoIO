@@ -599,7 +599,8 @@ def plot_nightly_medians(table_or_fname,
                          show=False,
                          fig_close=False,
                          medfilt_width=21,
-                         max_night_gap=15):
+                         max_night_gap=15,
+                         **kwargs):
     if isinstance(table_or_fname, str):
         t = QTable.read(table_or_fname)
     else:
