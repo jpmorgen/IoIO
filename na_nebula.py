@@ -33,7 +33,7 @@ from IoIO.utils import (ColnameEncoder, get_dirs_dates, reduced_dir,
                         nan_biweight, nan_mad,
                         valid_long_exposure, dict_to_ccd_meta,
                         multi_glob, sum_ccddata, csvname_creator,
-                        daily_biweight, daily_convolve,
+                        add_itime_col, add_daily_biweights, daily_convolve,
                         savefig_overwrite, finish_stripchart,
                         pixel_per_Rj, plot_planet_subim)
 from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
@@ -196,31 +196,6 @@ def subtract_col_from(t,
     for col in encoder.colbase_list(t.colnames):
         t[f'{subtracted_prefix}_{col}'] = t[col] - t[subtract_colname]
 
-def add_daily_biweights(summary_table,
-                        encoder=None):
-    """Add daily biweight locations to summary_table"""
-
-    # We want to have one biweight point per night's observations
-    # period.  Make that start at 00:00 UT, since that is pretty close
-    # to right for us.
-
-    # Julian day rolls over at 12:00 UT, not 00:00 UT, which is
-    # awkward since my observations sometimes straddle this boundary.
-    # Define integer UT day as the JD corresponding to 00:00UT.  So if
-    # we start from the JD scale to begin with, we need to add 0.5 to
-    # it
-    iut = summary_table['tavg'].jd + 0.5
-    summary_table['iut'] = iut.astype(int)
-    sb_colnames = encoder.colbase_list(summary_table.colnames)
-    for sb_col in sb_colnames:
-        av_ap = encoder.from_colname(sb_col)
-        daily_biweight(summary_table,
-                       day_col='iut',
-                       data_col=sb_col,
-                       biweight_col='biweight_' + sb_col,
-                       std_col='std_' + sb_col)
-        #print(av_ap)
-        
 def boxcar_medians(
         summary_table,
         include_col_encoder=None, # includes with colbase_middle_list [might just make list]
@@ -796,7 +771,10 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
 
     clean_t = summary_table[mask]
     #print('len(clean_t): ', len(clean_t))
-    add_daily_biweights(clean_t, encoder=largest_sub_encoder)
+    clean_t.sort('tavg')
+    add_itime_col(clean_t, time_col='tavg', itime_col='iut')
+    sb_colnames = largest_sub_encoder.colbase_list(clean_t.colnames)
+    add_daily_biweights(clean_t, day_col='iut', colnames=sb_colnames)
     clean_t.write(os.path.join(outdir_root, BASE + '_cleaned.ecsv'),
                   overwrite=True)
   

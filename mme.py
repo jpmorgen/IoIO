@@ -18,7 +18,21 @@ from IoIO.juno import JunoTimes, PJAXFormatter
 from IoIO.torus import add_epsilons
 
 MME = '/data/sun/Jupiter_MME/JupiterMME.csv'
+MODEL = 'ensemble'
+RUNNING = 'running_' # prepended to running average columns
 TORUS = '/data/IoIO/Torus/Torus.ecsv'
+
+# This could go in some util thing
+def qtable2df(t, index=None):
+    # If you need to filter or sort, do that first!
+    if isinstance(t, str):
+        t = QTable.read(t_torus)
+    one_d_colnames = [cn for cn in t.colnames
+                      if len(t[cn].shape) <= 1]
+    df = t[one_d_colnames].to_pandas()
+    if index is not None:
+        df = df.set_index(df[index])
+    return df
 
 # From https://zenodo.org/records/10687651
 def readMMESH_fromFile(fullfilename):
@@ -48,11 +62,65 @@ def readMMESH_fromFile(fullfilename):
     
     return mmesh_results
 
+def add_mme_running_av(df,
+                       colname,
+                       model=MODEL,
+                       filt_width=None):
+    if filt_width is None:
+        filt_width = np.asarray((300, 100, 30, 7))
+        filt_width = filt_width*np.timedelta64(1, 'D')
+    # median delta T beween model points
+    dt = np.median(df.index[1:] - df.index[0:-1])
+    if np.isscalar(filt_width):
+        filt_width = [filt_width]
+    for fw in filt_width:
+        filt_points = fw/dt
+        filt_points = filt_points.astype(int)
+        colavg = uniform_filter1d(df[model, colname],
+                                     size=filt_points)
+        filt_colname = fw.astype(str)
+        filt_colname = filt_colname.replace(' ', '_')
+        filt_colname = f'{RUNNING}{colname}_{filt_colname}'
+        df[model, filt_colname] = colavg
+
+def add_df_running_av(df,
+                      colname,
+                      filt_width=None):
+    if filt_width is None:
+        filt_width = np.asarray((300, 100, 30, 7))
+        filt_width = filt_width*np.timedelta64(1, 'D')
+    if isinstance(colname, tuple):
+        # Make manipulations easier
+        colname_list = list(colname)
+        multi_col = colname_list[0:-1]
+        filt_colname = colname_list[-1]
+    else:
+        filt_colname = colname
+    # median delta T beween model points
+    dt = np.median(df.index[1:] - df.index[0:-1])
+    if np.isscalar(filt_width):
+        filt_width = [filt_width]
+    for fw in filt_width:
+        filt_points = fw/dt
+        filt_points = filt_points.astype(int)
+        colavg = uniform_filter1d(df[colname],
+                                     size=filt_points)
+        fw_str = fw.astype(str)
+        fw_str = fw_str.replace(' ', '_')
+        tfilt_colname = f'{RUNNING}{filt_colname}_{fw_str}'
+        if isinstance(colname, tuple):
+            tmulti_col = multi_col.copy()
+            tmulti_col.extend([tfilt_colname])
+            tmulti_col = tuple(tmulti_col)
+            df[tmulti_col] = colavg
+        else:
+            df[tfilt_colname] = colavg
+
 def plot_mme(mme=MME,
              colname=None,
+             model=MODEL,
              hourly=True,
              alpha=0.1,
-             filt_width=None,
              fig=None,
              ax=None,
              top_axis=False,
@@ -60,16 +128,12 @@ def plot_mme(mme=MME,
              ylim = None,
              yscale='linear',
              show=False,
-             **kwargs):
+             **kwargs): # passed on to add_mme_running_av
 
     if mme is None:
         mme = MME
     if isinstance(mme, str):
         df = readMMESH_fromFile(mme)        
-
-    if filt_width is None:
-        filt_width = np.asarray((300, 100, 30, 7))
-        filt_width = filt_width*np.timedelta64(1, 'D')
     if fig is None:
         fig = plt.figure()
     if ax is None:
@@ -80,27 +144,25 @@ def plot_mme(mme=MME,
                   'p_dyn': r'Solar wind $P_{\mathrm{dynamic}}$ (nPa)',
                   'u_mag': r'Solar wind velocity (km s$^{-1}$)'}
 
-
-    goodidx = df[('ensemble', 'u_mag')] != 0
+    # Filter out times for which model is not yet calculated
+    goodidx = df[(model, 'u_mag')] != 0
     df = df[goodidx]
-    colval = df[('ensemble', colname)]
-    col_neg_unc = df[('ensemble', f'{colname}_neg_unc')]
-    col_pos_unc = df[('ensemble', f'{colname}_pos_unc')]
+    colval = df[(model, colname)]
+    col_neg_unc = df[(model, f'{colname}_neg_unc')]
+    col_pos_unc = df[(model, f'{colname}_pos_unc')]
 
     if hourly:
         ax.errorbar(df.index, colval, (col_neg_unc, col_pos_unc), alpha=alpha)
 
     # Plot running averages
     custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'])
-    # median delta T beween model points
-    dt = np.median(df.index[1:] - df.index[0:-1])
-    if np.isscalar(filt_width):
-        filt_width = [filt_width]
-    for fw in filt_width:
-        filt_points = fw/dt
-        filt_points = filt_points.astype(int)
-        colavg = uniform_filter1d(colval, size=filt_points)
-        ax.plot(df.index, colavg, linewidth=5, label=fw)
+    add_mme_running_av(df, colname, model=model, **kwargs)
+    
+    for col in df.columns:
+        if col[1][0:len(RUNNING)] != RUNNING:
+            continue
+        fw = col[1][len(RUNNING)+1:]
+        ax.plot(df.index, df[col], linewidth=5, label=fw)
 
     ax.legend()
 
@@ -125,7 +187,23 @@ def plot_mme(mme=MME,
     if show:
         plt.show()
 
+def calc_running_corr(df1, df2, colname1, colname2, window):
+    # Match time points of df1 (e.g. a model calculated on a regularly
+    # space axis) to df2 (e.g. irregularly space data).  Otherwise
+    # rolling.corr gives NANs everywhere
+    series1 = df1[colname1]
+    series2 = df2['medfilt_interp_epsilon']
+    series1i = np.interp(series2.index, series1.index, series1)
+    series1i = pd.DataFrame(series1i, index=series2.index,
+                            columns=[colname1])
+    rolling_corr = series1i.rolling(window).corr(series2)
+    return rolling_corr
+    
+
+# This might be better just calc_corr with two dfs as input
 def calc_mme_epsilon_corr(df_mme=None,
+                          colname='p_dyn',
+                          model=MODEL,
                           t_torus=None,
                           window=None):
     if df_mme is None:
@@ -149,15 +227,16 @@ def calc_mme_epsilon_corr(df_mme=None,
 
     # I am getting all NANs in rolling_corr, so I think I need to
     # interpolate the MME points to match the IoIO points
-    series1 = df_mme['ensemble', 'p_dyn']
+    series1 = df_mme[model, colname]
     series2 = df_torus['medfilt_interp_epsilon']
     series1i = np.interp(series2.index, series1.index, series1)
     series1i = pd.DataFrame(series1i, index=series2.index,
-                            columns=['p_dyn'])
+                            columns=[colname])
     rolling_corr = series1i.rolling(window).corr(series2)
     return rolling_corr
 
-def plot_mme_epsilon_corr(rolling_corr=None,
+def plot_mme_epsilon_corr(df_mme=None,
+                          rolling_corr=None,
                           fig=None,
                           ax=None,
                           window='14D',
@@ -170,7 +249,8 @@ def plot_mme_epsilon_corr(rolling_corr=None,
                           **kwargs):
 
     if rolling_corr is None:
-        rolling_corr = calc_mme_epsilon_corr(window=window, **kwargs)
+        rolling_corr = calc_mme_epsilon_corr(
+            df_mme, colname=y_axis, window=window, **kwargs)
     if fig is None:
         fig = plt.figure()
     if ax is None:
@@ -201,7 +281,21 @@ def plot_mme_epsilon_corr(rolling_corr=None,
     if show:
         plt.show()
 
-#plot_mme_epsilon_corr()
+t_torus = QTable.read(TORUS)
+t_torus = t_torus[~t_torus['mask']]
+t_torus.sort('tavg')
+add_epsilons(t_torus)
+df_torus = qtable2df(t_torus, index='tavg')
+add_df_running_av(df_torus, 'epsilon')
+
+#df_mme = readMMESH_fromFile(MME)
+#add_df_running_av(df_mme, ('ensemble', 'p_dyn'))
+#add_mme_running_av(df_mme, 'p_dyn')
+#plot_mme(colname='p_dyn', top_axis=True, show=True)
+
+#plot_mme_epsilon_corr(show=True)
+#add_mme_running_av(df_mme, 'p_dyn')
+#plot_mme_epsilon_corr(df_mme, y_axis='running_p_dyn_300_days', show=True)
 #rolling_corr = calc_mme_epsilon_corr()
 #plot_mme_epsilon_corr(rolling_corr, show=True)
 

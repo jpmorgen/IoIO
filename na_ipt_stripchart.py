@@ -130,14 +130,14 @@ t_na = t_na[~t_na['mask']]
 t_torus = t_torus[~t_torus['mask']]
 
 
-#master_stripchart(t_na, t_torus)
-master_stripchart(t_na, t_torus,
-                  plots=['Na_nighly_medians',
-                         'ansa_brights',
-                         'epsilons',
-                         'mme',
-                         'mme_epsilon_corr'],
-                  window='300D')
+master_stripchart(t_na, t_torus)
+#master_stripchart(t_na, t_torus,
+#                  plots=['Na_nighly_medians',
+#                         'ansa_brights',
+#                         'epsilons',
+#                         'mme',
+#                         'mme_epsilon_corr'],
+#                  window='300D')
 
 
 

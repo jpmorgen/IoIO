@@ -20,7 +20,7 @@ import matplotlib.transforms as transforms
 from astropy import log
 import astropy.units as u
 from astropy.table import QTable, vstack
-from astropy.convolution import Gaussian1DKernel, interpolate_replace_nans
+from astropy.convolution import Gaussian1DKernel
 from astropy.coordinates import Angle, SkyCoord
 from astropy.modeling import models, fitting
 from astropy.timeseries import TimeSeries, LombScargle
@@ -30,9 +30,11 @@ from bigmultipipe import cached_pout, outname_creator
 from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 
 from IoIO.utils import (dict_to_ccd_meta, nan_biweight, nan_mad,
-                        get_dirs_dates, reduced_dir, cached_csv,
-                        savefig_overwrite, finish_stripchart,
-                        multi_glob, pixel_per_Rj, plot_planet_subim)
+                        nan_median_filter, get_dirs_dates,
+                        reduced_dir, cached_csv, savefig_overwrite,
+                        finish_stripchart, multi_glob, pixel_per_Rj,
+                        plot_planet_subim,
+                        interpolate_replace_nans_columns)
 from IoIO.simple_show import simple_show
 from IoIO.cordata_base import SMALL_FILT_CROP
 from IoIO.cordata import CorData
@@ -508,35 +510,6 @@ def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):
         t['mask'] = np.logical_or(t['mask'],
                                   t['ansa_left_surf_bright_err'] > 10*u.R)
 
-# --> These should probably be in utils.py
-# --> Note that astropy.utils.masked.function_helpers doesn't have an analog
-def nan_median_filter(data, mask=False, **kwargs):
-    """Median filter data with masked values and/or NANs
-    
-    Parameters
-    ---------
-    data : ndarray-like
-        data to be median filtered
-    mask : bool
-        default = ``False''
-    **kwargs : dict
-        passed on to scipy.ndimage median_filter
-
-    Returns
-    -------
-    ndata : ndarray-like
-        Median filtered unmasked & non-NAN values copied into
-        original-length data array with missing values marked as NANs
-    """
-    ndata = data.copy()
-    mask = np.logical_or(mask, np.isnan(data))
-    meds = median_filter(data[~mask], **kwargs)
-    if isinstance(ndata, u.Quantity):
-        meds *= ndata.unit
-    ndata[~mask] = meds
-    return ndata
-    
-
 # --> A better way to do this might be piecewise.
 def add_medfilt(t, colname, mask_col='mask', medfilt_width=21, mode='mirror'):
     """TABLE MUST BE SORTED FIRST"""
@@ -557,26 +530,6 @@ def add_medfilt(t, colname, mask_col='mask', medfilt_width=21, mode='mirror'):
     #meds = median_filter(vals, size=medfilt_width, mode='reflect')
     #t[f'{colname}_medfilt'][~bad_mask] = meds
     t[f'{colname}_medfilt'] = meds
-
-# --> astropy.utils.masked.function_helpers.interp seems to do what I want
-def add_interpolated(t, colname, kernel):
-    # --> This is a bug in the making, since I am not handling the masked values properly 
-    if isinstance(t[colname], u.Quantity):
-        vals = t[colname].value
-        unit = t[colname].unit
-    else:
-        vals = t[colname]
-        unit = 1
-    if isinstance(vals, np.ma.MaskedArray):
-        # This makes masked entries into NANs, but not for astropy columns
-        # https://stackoverflow.com/questions/56213393/replace-masked-with-nan-in-numpy-masked-array        
-        vals = vals.filled(np.NAN)
-
-    # --> HACK ALERT! I need ot do this properly within the astropy ecosystem
-    vals = np.asarray(vals)
-    vals = interpolate_replace_nans(vals, kernel, boundary='extend')
-    t[f'{colname}_interp'] = vals*unit
-    #t[f'{colname}_interp'] = interpolate_replace_nans(t[colname], kernel, boundary='extend')
                   
 def plot_axhlines(ax, hlines=None, **kwargs):
     if hlines is None:
@@ -706,6 +659,7 @@ def plot_ansa_brights(t, **kwargs):
     return t
                      
 def add_epsilons(t, ansa_medfilt_width=21, epsilon_medfilt_width=11):
+    # Table must be sorted first
     add_medfilt(t, 'ansa_right_r_peak', medfilt_width=ansa_medfilt_width)
     add_medfilt(t, 'ansa_left_r_peak', medfilt_width=ansa_medfilt_width)
 
@@ -727,8 +681,9 @@ def add_epsilons(t, ansa_medfilt_width=21, epsilon_medfilt_width=11):
     t['epsilon_err'] = epsilon_err
     add_medfilt(t, 'epsilon', medfilt_width=epsilon_medfilt_width)
     kernel = Gaussian1DKernel(10)
-    add_interpolated(t, 'ansa_right_r_peak_medfilt', kernel)
-    add_interpolated(t, 'ansa_left_r_peak_medfilt', kernel)
+    interpolate_replace_nans_columns(t, ['ansa_right_r_peak_medfilt',
+                                         'ansa_left_r_peak_medfilt'],
+                                     kernel)
     r_med_peak = t['ansa_right_r_peak_medfilt_interp']
     l_med_peak = t['ansa_left_r_peak_medfilt_interp']
     av_med_peak = (np.abs(r_med_peak) + np.abs(l_med_peak)) / 2
@@ -776,6 +731,8 @@ def plot_epsilons(t,
 
     if len(good_epsilons) > 20:
         alpha = 0.2
+        # --> Medfilt is not the best option here, median_filter is,
+        # but I am changing this implementation
         med_epsilon = medfilt(good_epsilons, 11)
         p_med = ax.plot(t['tavg'][~bad_mask].datetime, med_epsilon,
                          'k*', markersize=6, label='Medfilt')
@@ -787,8 +744,9 @@ def plot_epsilons(t,
         #plt.plot(t['tavg'].datetime, medfilt_epsilon,
         #         'k*', markersize=6, label='Epsilon from medfilts')
         kernel = Gaussian1DKernel(10)
-        add_interpolated(t, 'ansa_right_r_peak_medfilt', kernel)
-        add_interpolated(t, 'ansa_left_r_peak_medfilt', kernel)
+        interpolate_replace_nans_columns(t, ['ansa_right_r_peak_medfilt',
+                                             'ansa_left_r_peak_medfilt'],
+                                         kernel)
         r_med_peak = t['ansa_right_r_peak_medfilt_interp']
         l_med_peak = t['ansa_left_r_peak_medfilt_interp']
         av_med_peak = (np.abs(r_med_peak) + np.abs(l_med_peak)) / 2
@@ -1190,6 +1148,7 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
         return summary_table
 
     summary_table['tavg'].location = loc
+    summary_table.sort('tavg')
     summary_table.write(os.path.join(outdir_root, 'Torus.ecsv'),
                                      overwrite=True)
     #torus_stripchart(summary_table, outdir_root, show=show)

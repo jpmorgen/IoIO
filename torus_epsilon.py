@@ -9,14 +9,14 @@ import matplotlib.pyplot as plt
 from bigmultipipe import assure_list
 
 from IoIO.utils import savefig_overwrite
-from IoIO.torus import (add_mask_col, plot_ansa_brights, plot_epsilons,
+from IoIO.torus import (add_epsilons, plot_ansa_brights, plot_epsilons,
                         plot_ansa_pos, plot_ansa_r_amplitudes,
                         plot_ansa_y_peaks, plot_ansa_r_stddevs,
                         plot_dawn_r_stddev, plot_dusk_r_stddev,
                         plot_dawn_y_stddev, plot_dusk_y_stddev,
                         plot_dawn_cont, plot_dusk_cont,
                         plot_dawn_slope, plot_dusk_slope)
-from IoIO.mme import plot_mme, plot_mme_epsilon_corr
+from IoIO.mme import qtable2df, plot_mme, plot_mme_epsilon_corr
 
 def torus_epsilon(t_torus, plots=['ansa_brights', 'epsilons'],
                   mme_colname='p_dyn',
@@ -200,7 +200,28 @@ def torus_epsilon(t_torus, plots=['ansa_brights', 'epsilons'],
 outdir = '/data/IoIO/analysis/'
 
 t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
+
+#import astropy.units as u
+#from utils import contiguous_sections
+#t_torus.sort('tavg')
+#
+#
+#time_col = 'tavg'
+#max_night_gap=15*u.day
+#t = t_torus
+#t = t_torus[0:15]
+#print(t)
+#ts = contiguous_sections(t, time_col, 15*u.day)
+#print(ts)
+
+
+
 t_torus = t_torus[~t_torus['mask']]
+t_torus.sort('tavg')
+add_epsilons(t_torus)
+
+
+
 
 torus_epsilon(t_torus, plots=['ansa_brights',
                               'epsilons',

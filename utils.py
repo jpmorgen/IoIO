@@ -15,7 +15,8 @@ import csv
 import numpy as np
 from numpy.polynomial import Polynomial
 
-from scipy.signal import medfilt
+from scipy.signal import medfilt # not as good as median_filter
+from scipy.ndimage import median_filter
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
@@ -26,7 +27,7 @@ import astropy.units as u
 from astropy.time import Time
 from astropy.stats import biweight_location, mad_std
 from astropy.table import QTable, vstack
-from astropy.convolution import convolve
+from astropy.convolution import convolve, interpolate_replace_nans
 from astropy.coordinates import SkyCoord
 from astropy.nddata import CCDData
 
@@ -170,7 +171,7 @@ def datetime_dir(directory,
     -------
     thisdate : datetime.datetime or False
 
-"""
+    """
     for idf in date_formats:
         try:
             # This is a total ugly hack dependent on the particular
@@ -579,7 +580,7 @@ def add_history(header, text='', caller=1):
     ------
         ValueError if header not astropy.io.fits.Header
 
-"""
+    """
 
     # if not isinstance(header, fits.Header):
     #     raise ValueError('Supply a valid FITS header object')
@@ -839,14 +840,144 @@ def stripchart(to_plot,
         plt.show()
     if fig_close:
         plt.close()
+
+def contiguous_sections(t,
+                        time_col,
+                        max_time_gap):
+    """Break a table up into sections with contiguous time coverage
+
+    Parameters
+    ----------
+    t : QTable
+        Table with time and possibly other columns.  Table must be
+        sorted in time
+
+    time_col : str
+        name of time-like column
+
+    max_time_gap : TimeDelta-like
+        maximum length of time between table elements before a new
+        segment will be formed.  Must be compatible with time_col
+
+    Returns
+    ------
+    contig_tables : list
+        list of QTables containing contiguous sections of time_col, as
+        defined by max_time_gap
+    """
+    deltas = t[time_col][1:] - t[time_col][0:-1]
+    last_contig_idx = np.flatnonzero(deltas > max_time_gap)
+    if len(last_contig_idx) == 0:
+        return [t]
+    # Turn these into proper slices
+    rights = last_contig_idx + 1
+    rights = list(rights)
+    # This is the only way to reference the slice to the end of an array/list
+    rights.append(None)
+    left = 0
+    contig_tables = []
+    for right in rights:
+        contig_tables.append(t[left:right])
+        left = right
+    return contig_tables
     
+def add_itime_col(summary_table,
+                  time_col='tavg',
+                  itime_col='iut',
+                  jd_offset=-0.5,
+                  itime_scale=1):
+    """Add an integer time column to a summary table
+
+    Parameters
+    ----------
+    summary_table : QTable
+        Table with time column to which integer time column will be added
+
+    time_col : str
+        Name of time column.  Time column must be astropy.time.Time or
+        otherwise have a jd property
+        Default is `tavg'
+
+    itime_col : str
+        Name of new column to contain potentially shifted integer JD.
+        See jd_offset
+        Default is `iut'
+
+    jd_offset : float
+        Offset to add to time column (expressed in JD) to make integer
+        time work out.  Julian day rolls over at 12:00 UT, not 00:00
+        UT, which is awkward since IoIO observations sometimes
+        straddle this boundary.  For IoIO it is handy to define
+        integer UT day as the JD corresponding to 00:00UT.  So if we
+        start from the JD scale to begin with, we need to subtract 0.5 to
+        it to get to our desired integer day starting point    
+        Default is `-0.5'
+
+    itime_scale : float
+        Scale factor to apply to time_col.  This converts from integer
+        JD timescale to some other (e.g., if you want two timesteps
+        per JD, set itime_scale=2
+        Default is `1'
+
+    """
+    iut = itime_scale * (summary_table[time_col].jd + jd_offset)
+    summary_table[itime_col] = iut.astype(int)
+
+
+def filled_columns(t, colnames, fill_value=np.NAN):
+    """Fill all masked values in desired table columns with fill_value
+
+    Parameters
+    ----------
+    t : Table or list of Table
+        Input Table(s) in which to fill values
+
+    colnames : list of str
+        column names on which to operate
+
+    fill_value : compatible with type of all colnames
+        desired fill value
+        Default is `np.NAN'
+
+    """
+    for colname in colnames:
+        vals = t[colname]
+        # This handles the case of numpy and astropy masked arrays,
+        # which are a bit different
+        # https://docs.astropy.org/en/stable/utils/masked/index.html
+        if getattr(vals, 'filled', False):
+            vals.filled(fill_value)
+            # A hack to get around issues with Masked arrays behaving
+            # inconsistently in astropy.  <class
+            # 'astropy.utils.masked.core.MaskedQuantity'> is not as
+            # smooth as a Mask somehow.
+            unit = getattr(vals, 'unit', 1)
+            vals = vals.data*unit
+        t[colname] = vals
+    
+def interpolate_replace_nans_columns(t, colnames, kernel, suffix='_interp'):
+    """Uses interpolate_replace_nans to fill any NAN or masked
+    values.  Adds new columns ending in _interp
+
+    Parameters
+    ----------
+    t : Table or list of Table
+        Input Table(s) to add interpolated columns to
+    """
+    filled_columns(t, colnames, fill_value=np.NAN)
+    for colname in colnames:
+        vals = t[colname]
+        vals = interpolate_replace_nans(vals, kernel, boundary='extend')
+        t[f'{colname}{suffix}'] = vals
+
 def daily_biweight(qtable,
                    day_col=None,
                    data_col=None,
                    biweight_col=None,
                    std_col=None,
                    ignore_nan=True):
-    """Compute biweight location and mad_std on a daily basis
+    """Compute biweight location and mad_std on a daily basis.  Used
+    by add_daily_biweight
 
     Parameters
     ----------
@@ -855,7 +986,8 @@ def daily_biweight(qtable,
 
     day_col : str
         column name containing days (or other quantity over which to
-        collect biweight groups)
+        collect biweight groups).  Column can't be a Time, so use, e.g.,
+        itime_col from add_time_col or other number-like column
 
     data_col : str
         column name of data
@@ -872,18 +1004,342 @@ def daily_biweight(qtable,
     if isinstance(qtable[data_col], u.Quantity):
         unit = qtable[data_col].unit
     else:
-        unit or 1                
-    for colname in [biweight_col, std_col]:
-        if colname not in qtable.colnames:
-            qtable[colname] = np.NAN*unit
-    for day in qtable[day_col]:
+        unit = 1
+    
+    vals = qtable[data_col]
+    if isinstance(vals, Time):
+        # Translate Time into JD so we can do complex math operations
+        # on it.  Generally better form to demand number-like columns
+        # are input to this routine and deal with special cases outside
+        vals = vals.jd
+    new_vals = vals.copy()
+    new_std = vals.copy()
+    unique_days = list(set(qtable[day_col]))
+    for day in unique_days:
         mask = qtable[day_col] == day
-        tvals = qtable[data_col][mask]
+        tvals = vals[mask]
         tbiweight = biweight_location(tvals, ignore_nan=ignore_nan)
         tstd = mad_std(tvals, ignore_nan=ignore_nan)
-        qtable[biweight_col][mask] = tbiweight
-        qtable[std_col][mask] = tstd
+        new_vals[mask] = tbiweight
+        new_std[mask] = tstd
+    qtable[biweight_col] = new_vals
+    qtable[std_col] = new_std
+    if isinstance(qtable[data_col], Time):
+        # This assumes that this time column is defined for all rows
+        # (e.g. is the original time column).  Translate biweight
+        # column back into the original Time format and put units on std
+        qtable[biweight_col] = Time(
+            qtable[biweight_col], format='jd',
+            location=qtable[data_col][0].location.copy())
+        qtable[biweight_col].format=qtable[data_col][0].format
+        qtable[std_col] = qtable[std_col]*u.day
 
+def add_daily_biweights(summary_table,
+                        day_col='iut',
+                        colnames=None,
+                        **kwargs):
+    """Add a set of daily biweight location and MAD std columns to
+    summary_table
+
+    Parameters
+    ----------
+    summary_table : QTable
+        Table with time and data columns
+
+    day_col : str
+        Name of column containing integer timesteps
+        Default is `iut'
+
+    colnames : list
+        List of column names for whcih daily biweight and MAD will be
+        calculated.  Added columns have the form 'biweight_*'
+
+    **kwargs passed to daily_biweight
+
+    Returns
+    -------
+    added_colnames : list
+        column names added to summary_table
+    """
+    added_colnames = []
+    for col in colnames:
+        biweight_col='biweight_' + col
+        std_col='std_' + col
+        daily_biweight(summary_table,
+                       day_col=day_col,
+                       data_col=col,
+                       biweight_col=biweight_col,
+                       std_col=std_col,
+                       **kwargs)
+        added_colnames.extend([biweight_col, std_col])
+    return added_colnames        
+        
+def mask_filled_table(t):
+    """Fills all values"""
+
+def interpolate_replace_nans_table(t, **kwargs):
+    """Interpolates
+    """
+    
+
+def interp_table(t, x, xp_col, **kwargs):
+    """Interpolates all rows in a Table to new axix x
+
+    Parameters
+    ----------
+    t : Table
+        Input table.  Must be sorted in xp_col
+
+    x : array_like
+        The x-coordinates at which to evaluate the interpolated values        
+
+    xp_col : str
+        Column name containing original x data points
+
+    **kwargs passed to astropy.utils.masked.function_helpers.interp
+
+    Returns
+    -------
+    itable : Table
+        New table with all columns interpolated
+    
+    """
+    if len(t) < 3:
+        return t.copy()
+    x_span = t[xp_col][-1] - t[xp_col][0]
+    itable = QTable()
+    for col in t.colnames:
+        # numpy interp is overridden when operating on an astropy
+        # masked array to handle the astropy difference.  See
+        # https://docs.astropy.org/en/stable/utils/masked/index.html
+        itable[col] = np.interp(x,
+                                t[xp_col], t[col],
+                                **kwargs)
+    return itable
+
+def linspace_table(t, x_col, xp_col=None, dx=1, b=0, algorithm=None, **kwargs):
+    """Returns a table sampled at regular intervals
+
+    Parameters
+    ----------
+    t : Table
+        Input table.  Must be sorted in x_col
+
+    x_col : str
+        Name of column containing x-axis to make regular
+
+    xp_col : str or None
+        Name of column containing x-axis measurement points.  This
+        covers the case where x_col is an integerized version of
+        xp_col, where the xp_col are the actual measurement points
+        which are grouped within dx.  If None, x_col is used
+        Default is `None'
+
+    dx : number-like
+        Desired sample spacing
+        Default is `1'
+
+    b : number-like
+        Starting point for spacing relative to first x_col point.
+        This allows the regular sample scale to be shifted to line up
+        with the optimal position determined from the xp_col.  See
+        linspace_day_table for application example
+        Default is `0'
+
+    algorithm : str
+        'interpolate_replace_nans' - use
+        astropy.convolution.interpolate_replace_nans to replace NANs
+        in the table.  This runs the algorithm='nan' case first and
+        results in the best performance
+
+        'nan' - do not interpolate, just put NANs in place of missing
+        value
+
+        'interp' - use np.interp (overmapped in astropy ecosystem to
+        deal with astropy Mask) to do the interpolation.  This
+        doesn't perform well when there are large gaps in the data
+
+    **kwargs passed to interpolate_replace_nans
+
+    Returns
+    -------
+    ltable : Table
+        Table sampled at regular intervals, interpolating to fill
+        missing value where necessary
+    """
+    if xp_col is None:
+        xp_col = x_col
+    x_span = t[x_col][-1] - t[x_col][0]    
+    nrows = x_span / dx
+    nrows = round(nrows)
+    # Extend before and after range just to make sure we get all the
+    # interpolates.  We'll mark anything outside of x_col's range with
+    # a NAN for removal
+    if algorithm == 'interpolate_replace_nans':
+        nt = linspace_table(t, x_col, xp_col=xp_col, dx=dx, b=b,
+                            algorithm='nan', **kwargs)
+        
+    elif algorithm == 'interp':
+        x = t[x_col][0] + np.arange(-1, nrows+2) * dx + b
+        ltable = interp_table(t, x, xp_col,
+                              left=np.NAN, right=np.NAN)
+        mask = np.isnan(ltable[x_col])
+        ltable = ltable[~mask]
+    elif algorithm == 'nan':
+        ltable = t.copy()
+        # Start with an X axis that matches.
+        x = t[x_col][0] + np.arange(-1, nrows+2) * dx
+        match_mask = False
+        for x_orig in t[x_col]:
+            x_orig_array = np.full_like(x, x_orig)
+            tmask = np.isclose(x, x_orig_array, rtol=0, atol=dx/2)
+            match_mask = np.logical_or(tmask, match_mask)
+        new_row_mask = ~match_mask
+        for i in np.arange(len(x)-len(t)):
+            ltable.add_row()
+        for col in t.colnames:
+            if col == x_col:
+                # Add our offset here
+                ltable[col] = x + b
+                continue
+            ltable[col][match_mask] = ltable[col][0:len(t)]
+            ltable[col][new_row_mask] = np.NAN
+    else:
+        raise ValueError(f'Unrecognized algorithm {algorithm}')
+    return ltable
+
+def linspace_day_table(day_table,
+                       day_col='iut',
+                       time_col='biweight_jd',
+                       dt=1,
+                       **kwargs):
+    """Linearly spaces a table on day increments, interpolating to add
+    rows if necessary.  Time increment is set by dt, but optimal
+    offset of time axis is calculated using the ensemble of points in
+    day_col
+
+    Parameters
+    ----------
+    day_table : Table or list of Table
+        Input Table with integer day column (day_col) and precise time of
+        measurement column (time_col).  If list, operates on each
+        Table in list
+
+    day_col : str
+        Name of column containing integer days corresponding to the
+        real times in the time_col.  day_col can be created by add_itime_col
+        Default is `iut'
+
+    time_col : str
+        Name of column containing precise measurement times of
+        datapoints stored in the rest of the columns in the Table
+        (e.g. added by add_daily_biweights)
+        Default is `biweight_jd'
+
+    dt : number-like
+        Desired increment in time (in days) between the rows of the
+        output table
+        Default is `1'
+
+    **kwargs passed to linspace_table
+
+    Returns
+    -------
+    Table or list of Tables that have had all of their column values
+    interpolated so as to be found on a regularly spaced grid in time
+    with no gaps
+
+    """
+    if isinstance(day_table, list):
+        ldts = []
+        for t in day_table:
+            lst = linspace_day_table(
+                t, day_col=day_col, time_col=time_col, dt=dt, **kwargs)
+            ldts.append(lst)
+        return ldts
+    if len(day_table) < 3:
+        log.warning('length of input table is too short for interpolation')
+        return day_table
+    # The time_col_offset is the offset between the original time and
+    # the integer time.  add_itime_col makes the integer times
+    # effectively the floor of the observation JD if jd_offset is set
+    # right
+    time_col_offsets = day_table[time_col] - day_table[day_col]
+    time_col_offset = biweight_location(time_col_offsets)
+    # I am not sure if I am shooting myself in the foot by doing this.
+    # The plus side is that interpolation is easiest and most accurate
+    # for all of the points, the minus side is that different segments
+    # of a list of tables will have different offsets and may be hard
+    # to compare with a continously sampled model across the icdts.
+    # OTOH, I interpoolate the model to the datapoints anyway
+    return linspace_table(day_table, day_col, time_col, dx=dt,
+                          b=time_col_offset, **kwargs)
+
+# --> Note that astropy.utils.masked.function_helpers doesn't have an analog
+def nan_median_filter(data, mask=False, **kwargs):
+    """Median filter data with masked values and/or NANs.  Note that
+    the quality of the median filtering is best if the data are
+    sampled on a regular interval and have no NAN gaps.  The mask
+    feature is made available for a quick-and-dirty look into data
+    
+    Parameters
+    ---------
+    data : ndarray-like
+        data to be median filtered.  Can be a astropy.units.Quantity
+    mask : bool
+        default = ``False''
+    **kwargs : dict
+        passed on to scipy.ndimage median_filter
+
+    Returns
+    -------
+    ndata : ndarray-like
+        Median filtered unmasked & non-NAN values copied into
+        original-length data array with missing values marked as NANs
+    """
+    ndata = data.copy()
+    mask = np.logical_or(mask, np.isnan(data))
+    meds = median_filter(data[~mask], **kwargs)
+    if isinstance(ndata, u.Quantity):
+        meds *= ndata.unit
+    ndata[~mask] = meds
+    return ndata
+
+def add_medfilt_columns(t, colnames, medfilt_width=None, **kwargs):
+    """Add columns produced by scipy. median_filter to table(s)
+
+    Parameters
+    ----------
+    t : Table or list of Table
+        Input Table(s) to add median filter columns to
+
+    colnames : list of str
+        list of column names on which to compute median filter.
+        Added columns will be of the form `colname_medfilt'
+
+    medfilt_width : int
+        Width of the filter in table rows
+
+    **kwargs : dict
+        kwargs passed to scipy. median_filter
+        
+    """
+    if isinstance(t, list):
+        ldts = []
+        for tt in t:
+            add_medfilt_columns(tt, colnames,
+                                medfilt_width=medfilt_width,
+                                **kwargs)
+            ldts.append(lst)
+        return lst
+    for colname in colnames:
+        meds = nan_median_filter(t[colname],
+                                 size=medfilt_width,
+                                 **kwargs)
+        t[f'{colname}_medfilt'] = meds
+        
+    
+# --> THIS IS OBSOLETE EXCEPT IN na_meso
 def daily_convolve(qtable,
                    day_col,
                    data_col,
@@ -913,7 +1369,7 @@ def daily_convolve(qtable,
 
     Returns
     -------
-    dt : QTable
+    qtable : QTable
         New QTable
 
     """
@@ -1214,6 +1670,7 @@ def plot_planet_subim(ccd_in,
 
     return ccd_in
 
+
 #c = ColnameEncoder('Na_ap', formatter='.0f')
 #print(c.to_colname(3*u.R_jup))
 #ap_sequence = np.asarray((1, 2, 4, 8, 16, 32, 64, 128)) * u.R_jup
@@ -1221,3 +1678,4 @@ def plot_planet_subim(ccd_in,
 #for ap in ap_sequence:
 #    na_aps[c.to_colname(ap)] = ap
 #print(na_aps)
+
