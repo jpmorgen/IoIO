@@ -569,6 +569,8 @@ def create_torus_day_table(
     biweight_cols = ['jd', 'obj_surf_bright',
                      'ansa_left_surf_bright', 'ansa_right_surf_bright',
                      'ansa_left_r_peak', 'ansa_right_r_peak']
+    if 'epsilon' in t_torus.colnames:
+        biweight_cols.extend(['epsilon', 'epsilon_err'])
     added_cols = add_daily_biweights(t_torus,
                                      day_col='ijdlt',
                                      colnames=biweight_cols)
@@ -790,8 +792,36 @@ def plot_torus_surf_bright(t_torus, torus_day_table,
     ax.legend(ncol=2, handles=handles)
     juno_pj_axis(ax)
 
-def add_epsilon_cols():
-    pass
+def add_epsilon_cols(t,
+                     outbase='',
+                     prefix='',
+                     postfix='',
+                     err_prefix='',
+                     err_postfix='',
+                     out_prefix=None,
+                     out_err_postfix=None):
+    """Add epsilon column
+
+    """
+    if out_prefix is None:
+        out_prefix = prefix
+    if out_err_postfix is None:
+        out_err_postfix = err_postfix
+    right_col = f'{prefix}ansa_right_r_peak{postfix}'
+    left_col = f'{prefix}ansa_left_r_peak{postfix}'
+    r_peak = t[right_col]
+    l_peak = t[left_col]
+    av_peak = (np.abs(r_peak) + np.abs(l_peak)) / 2
+    epsilon = -(r_peak + l_peak) / av_peak
+    t[f'{out_prefix}{outbase}{postfix}'] = epsilon
+    left_err = t[f'{err_prefix}ansa_left_r_peak{err_postfix}']
+    right_err = t[f'{err_prefix}ansa_right_r_peak{err_postfix}']
+    denom_var = left_err**2 + right_err**2
+    num_var = denom_var / 2
+    epsilon_err = epsilon * ((denom_var / (r_peak + l_peak)**2)
+                             + (num_var / av_peak**2))**0.5
+    epsilon_err = np.abs(epsilon_err)
+    t[f'{out_prefix}{outbase}{postfix}{out_err_postfix}'] = epsilon_err
 
 def add_epsilons(t, ansa_medfilt_width=21, epsilon_medfilt_width=11):
     # Table must be sorted first

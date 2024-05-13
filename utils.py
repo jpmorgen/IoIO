@@ -1585,7 +1585,6 @@ def plot_columns(t,
                  time_col='tavg',
                  max_time_gap=15*u.day,
                  colnames=None,
-                 err_colnames=None, 
                  fmts=None,
                  labels=None,
                  alphas=None,
@@ -1599,15 +1598,11 @@ def plot_columns(t,
     if ax is None:
         ax = fig.add_subplot()
 
-    if alphas is None:
-        alphas = 1
-    if np.isscalar(alphas):
-        alphas = np.full(len(colnames), alphas)
 
     handles = []
     for ic, colname in enumerate(colnames):
         datetimes = t[time_col].datetime
-        vals = t[colname]
+        vals = t[colname].copy()
         vals = filled(vals, unmask=True)
         if f'{colname}_err' in t.colnames:
             errs = t[f'{colname}_err']
