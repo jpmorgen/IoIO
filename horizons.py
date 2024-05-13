@@ -14,7 +14,7 @@ from astropy.table import MaskedColumn
 from astroquery.jplhorizons import HorizonsClass
 from astroquery.utils import async_to_sync
 
-from IoIO.cor_process import IOIO_1_LOCATION
+from IoIO.cordata_base import IOIO_1_LOCATION
 
 # Wait time to try HORIZONS query again when it is rate limiting.
 HORIZONS_WAIT_MIN = 10

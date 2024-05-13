@@ -21,13 +21,15 @@ from scipy.ndimage import median_filter
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 from matplotlib.colors import LogNorm
+import matplotlib.dates as mdates
 
 from astropy import log
 import astropy.units as u
 from astropy.time import Time
 from astropy.stats import biweight_location, mad_std
 from astropy.table import QTable, vstack
-from astropy.convolution import convolve, interpolate_replace_nans
+from astropy.convolution import (convolve, interpolate_replace_nans,
+                                 Gaussian1DKernel)
 from astropy.coordinates import SkyCoord
 from astropy.nddata import CCDData
 
@@ -36,6 +38,7 @@ from ccdproc import ImageFileCollection
 from bigmultipipe import assure_list, outname_creator
 
 from IoIO.photometry import rot_to
+from IoIO.juno import JunoTimes, PJAXFormatter, juno_pj_axis
 
 # MaxIM, ACP, FITS
 FITS_GLOB_LIST = ['*.fit', '*.fts', '*.fits']
@@ -809,6 +812,7 @@ def finish_stripchart(outdir, outbase, show=False):
         plt.show()
     plt.close()
 
+# --> This is probably obsolete
 def stripchart(to_plot,
                fig=None,
                ax=None,
@@ -840,6 +844,69 @@ def stripchart(to_plot,
         plt.show()
     if fig_close:
         plt.close()
+
+def filled(val, fill_value=np.NAN, unmask=False):
+    """Fill astropy Mask or numpy ma.masked value(s) with NAN.
+    Ignores if not one of these types
+
+    Parameters
+    ----------
+    fill_value : compatible with type of val
+        Desired fill value
+        Default is `np.NAN'
+
+    unmask : boolean
+        If column contains a masked datatype, run the unmask method to
+        return a non-masked version
+
+    """
+    if hasattr(val, 'filled'):
+        val = val.filled(fill_value)
+    if unmask:
+        # This handles astropy masks, which aren't quite bugged
+        # workede out:
+        # https://docs.astropy.org/en/stable/utils/masked/index.html
+        # TypeError: no implementation found for 'numpy.pad' on types
+        # that implement __array_function__: [<class
+        # 'astropy.utils.masked.core.MaskedNDArray'>]
+        val = getattr(val, 'unmasked', val)
+    return val    
+
+def filled_columns(t, colnames, **kwargs):
+    """Fill all masked values in desired table columns with fill_value
+
+    Parameters
+    ----------
+    t : Table or list of Table
+        Input Table(s) in which to fill values
+
+    colnames : list of str
+        Column names on which to operate
+
+    **kwargs to pass to filled
+
+    """
+    colnames = assure_list(colnames)
+    for colname in colnames:
+        t[colname] = filled(t[colname], **kwargs)
+    
+def interpolate_replace_nans_columns(t, colnames, kernel=None,
+                                     boundary='extend',
+                                     suffix='_interp'):
+    """Uses interpolate_replace_nans to fill any NAN or masked
+    values.  Adds new columns ending in "_interp"
+
+    Parameters
+    ----------
+    t : Table or list of Table
+        Input Table(s) to add interpolated columns to
+    """
+    filled_columns(t, colnames, fill_value=np.NAN, unmask=True)
+    for colname in colnames:
+        vals = t[colname]
+        vals = interpolate_replace_nans(vals, kernel,
+                                        boundary=boundary)
+        t[f'{colname}{suffix}'] = vals
 
 def contiguous_sections(t,
                         time_col,
@@ -882,10 +949,10 @@ def contiguous_sections(t,
     return contig_tables
     
 def add_itime_col(summary_table,
-                  time_col='tavg',
-                  itime_col='iut',
-                  jd_offset=-0.5,
-                  itime_scale=1):
+                  time_col=None,
+                  itime_col=None,
+                  ut_offset=None,
+                  dt=1):
     """Add an integer time column to a summary table
 
     Parameters
@@ -899,76 +966,25 @@ def add_itime_col(summary_table,
         Default is `tavg'
 
     itime_col : str
-        Name of new column to contain potentially shifted integer JD.
-        See jd_offset
-        Default is `iut'
+        Name of new column to contain potentially shifted and scaled JD
+        Default is `ijdlt'
 
-    jd_offset : float
-        Offset to add to time column (expressed in JD) to make integer
-        time work out.  Julian day rolls over at 12:00 UT, not 00:00
-        UT, which is awkward since IoIO observations sometimes
-        straddle this boundary.  For IoIO it is handy to define
-        integer UT day as the JD corresponding to 00:00UT.  So if we
-        start from the JD scale to begin with, we need to subtract 0.5 to
-        it to get to our desired integer day starting point    
-        Default is `-0.5'
+    ut_offset : TimeDelta
+        UT offset of observatory.  Used for calculating JD local time
+        (JDLT) to shift the JD scale
+        Default is `-7*u.hr'
 
-    itime_scale : float
-        Scale factor to apply to time_col.  This converts from integer
-        JD timescale to some other (e.g., if you want two timesteps
-        per JD, set itime_scale=2
+    dt : float
+        Desired timestep
         Default is `1'
-
     """
-    iut = itime_scale * (summary_table[time_col].jd + jd_offset)
-    summary_table[itime_col] = iut.astype(int)
-
-
-def filled_columns(t, colnames, fill_value=np.NAN):
-    """Fill all masked values in desired table columns with fill_value
-
-    Parameters
-    ----------
-    t : Table or list of Table
-        Input Table(s) in which to fill values
-
-    colnames : list of str
-        column names on which to operate
-
-    fill_value : compatible with type of all colnames
-        desired fill value
-        Default is `np.NAN'
-
-    """
-    for colname in colnames:
-        vals = t[colname]
-        # This handles the case of numpy and astropy masked arrays,
-        # which are a bit different
-        # https://docs.astropy.org/en/stable/utils/masked/index.html
-        if getattr(vals, 'filled', False):
-            vals.filled(fill_value)
-            # A hack to get around issues with Masked arrays behaving
-            # inconsistently in astropy.  <class
-            # 'astropy.utils.masked.core.MaskedQuantity'> is not as
-            # smooth as a Mask somehow.
-            unit = getattr(vals, 'unit', 1)
-            vals = vals.data*unit
-        t[colname] = vals
-    
-def interpolate_replace_nans_columns(t, colnames, kernel, suffix='_interp'):
-    """Uses interpolate_replace_nans to fill any NAN or masked
-    values.  Adds new columns ending in _interp
-
-    Parameters
-    ----------
-    t : Table or list of Table
-        Input Table(s) to add interpolated columns to
-    """
-    filled_columns(t, colnames, fill_value=np.NAN)
-    for colname in colnames:
-        vals = t[colname]
-        vals = interpolate_replace_nans(vals, kernel, boundary='extend')
-        t[f'{colname}{suffix}'] = vals
+    ut_offset = ut_offset.to(u.day)
+    jds = summary_table[time_col].jd
+    djds = jds - jds[0]
+    idjds = djds / dt
+    idjds = idjds.astype(int)
+    ijds = idjds*dt + jds[0] + ut_offset.value 
+    summary_table[itime_col] = ijds
 
 def daily_biweight(qtable,
                    day_col=None,
@@ -987,7 +1003,7 @@ def daily_biweight(qtable,
     day_col : str
         column name containing days (or other quantity over which to
         collect biweight groups).  Column can't be a Time, so use, e.g.,
-        itime_col from add_time_col or other number-like column
+        itime_col from add_itime_col or other number-like column
 
     data_col : str
         column name of data
@@ -1035,7 +1051,7 @@ def daily_biweight(qtable,
         qtable[std_col] = qtable[std_col]*u.day
 
 def add_daily_biweights(summary_table,
-                        day_col='iut',
+                        day_col='ijdlt',
                         colnames=None,
                         **kwargs):
     """Add a set of daily biweight location and MAD std columns to
@@ -1048,7 +1064,7 @@ def add_daily_biweights(summary_table,
 
     day_col : str
         Name of column containing integer timesteps
-        Default is `iut'
+        Default is `ijdlt'
 
     colnames : list
         List of column names for whcih daily biweight and MAD will be
@@ -1074,14 +1090,6 @@ def add_daily_biweights(summary_table,
         added_colnames.extend([biweight_col, std_col])
     return added_colnames        
         
-def mask_filled_table(t):
-    """Fills all values"""
-
-def interpolate_replace_nans_table(t, **kwargs):
-    """Interpolates
-    """
-    
-
 def interp_table(t, x, xp_col, **kwargs):
     """Interpolates all rows in a Table to new axix x
 
@@ -1159,7 +1167,7 @@ def linspace_table(t, x_col, xp_col=None, dx=1, b=0, algorithm=None, **kwargs):
         deal with astropy Mask) to do the interpolation.  This
         doesn't perform well when there are large gaps in the data
 
-    **kwargs passed to interpolate_replace_nans
+    **kwargs passed to interpolate_replace_nans_columns
 
     Returns
     -------
@@ -1169,16 +1177,17 @@ def linspace_table(t, x_col, xp_col=None, dx=1, b=0, algorithm=None, **kwargs):
     """
     if xp_col is None:
         xp_col = x_col
-    x_span = t[x_col][-1] - t[x_col][0]    
+    x_span = t[x_col][-1] - t[x_col][0]
     nrows = x_span / dx
     nrows = round(nrows)
     # Extend before and after range just to make sure we get all the
     # interpolates.  We'll mark anything outside of x_col's range with
     # a NAN for removal
     if algorithm == 'interpolate_replace_nans':
-        nt = linspace_table(t, x_col, xp_col=xp_col, dx=dx, b=b,
-                            algorithm='nan', **kwargs)
-        
+        ltable = linspace_table(t, x_col, xp_col=xp_col, dx=dx, b=b,
+                                algorithm='nan', **kwargs)
+        interpolate_replace_nans_columns(
+            ltable, ltable.colnames, suffix='', **kwargs)
     elif algorithm == 'interp':
         x = t[x_col][0] + np.arange(-1, nrows+2) * dx + b
         ltable = interp_table(t, x, xp_col,
@@ -1191,8 +1200,9 @@ def linspace_table(t, x_col, xp_col=None, dx=1, b=0, algorithm=None, **kwargs):
         x = t[x_col][0] + np.arange(-1, nrows+2) * dx
         match_mask = False
         for x_orig in t[x_col]:
-            x_orig_array = np.full_like(x, x_orig)
-            tmask = np.isclose(x, x_orig_array, rtol=0, atol=dx/2)
+            tmask = np.isclose(x,
+                               np.full_like(x, x_orig),
+                               rtol=0, atol=dx/2)
             match_mask = np.logical_or(tmask, match_mask)
         new_row_mask = ~match_mask
         for i in np.arange(len(x)-len(t)):
@@ -1202,16 +1212,22 @@ def linspace_table(t, x_col, xp_col=None, dx=1, b=0, algorithm=None, **kwargs):
                 # Add our offset here
                 ltable[col] = x + b
                 continue
-            ltable[col][match_mask] = ltable[col][0:len(t)]
+            if col == xp_col:
+                # Match our xp_col to x_col
+                ltable[col] = ltable[x_col]
+                continue
+            ltable[col][match_mask] = t[col]
             ltable[col][new_row_mask] = np.NAN
     else:
         raise ValueError(f'Unrecognized algorithm {algorithm}')
     return ltable
 
 def linspace_day_table(day_table,
-                       day_col='iut',
+                       day_col='ijdlt',
                        time_col='biweight_jd',
-                       dt=1,
+                       time_col_offset=None,
+                       dt=1*u.day,
+                       max_gap_fraction=None,
                        **kwargs):
     """Linearly spaces a table on day increments, interpolating to add
     rows if necessary.  Time increment is set by dt, but optimal
@@ -1228,7 +1244,7 @@ def linspace_day_table(day_table,
     day_col : str
         Name of column containing integer days corresponding to the
         real times in the time_col.  day_col can be created by add_itime_col
-        Default is `iut'
+        Default is `ijdlt'
 
     time_col : str
         Name of column containing precise measurement times of
@@ -1236,11 +1252,24 @@ def linspace_day_table(day_table,
         (e.g. added by add_daily_biweights)
         Default is `biweight_jd'
 
-    dt : number-like
-        Desired increment in time (in days) between the rows of the
-        output table
-        Default is `1'
+    time_col_offset : TimeDelta or None
+        Offset of time_col from UT.  If None, calculated based on the
+        biweight location of the difference between the time_col and
+        day_col values.
+        Default is `-7*u.hr'
 
+    dt : TimeDelta
+        Desired increment in time between the rows of the
+        output table. 
+        Default is `1*u.day'
+
+    max_gap_fraction : float or None
+        If not None, calculates the width of a Gaussian1DKernel based
+        on the maxium difference between adjacent points times
+        max_gap_fraction.  If None, **kwarg take care of passing
+        needed arguments 
+        Default is `None'
+    
     **kwargs passed to linspace_table
 
     Returns
@@ -1254,26 +1283,33 @@ def linspace_day_table(day_table,
         ldts = []
         for t in day_table:
             lst = linspace_day_table(
-                t, day_col=day_col, time_col=time_col, dt=dt, **kwargs)
+                t, day_col=day_col, time_col=time_col,
+                time_col_offset=time_col_offset,
+                dt=dt, max_gap_fraction=max_gap_fraction,
+                **kwargs)
             ldts.append(lst)
         return ldts
     if len(day_table) < 3:
         log.warning('length of input table is too short for interpolation')
         return day_table
-    # The time_col_offset is the offset between the original time and
-    # the integer time.  add_itime_col makes the integer times
-    # effectively the floor of the observation JD if jd_offset is set
-    # right
-    time_col_offsets = day_table[time_col] - day_table[day_col]
-    time_col_offset = biweight_location(time_col_offsets)
+    if time_col_offset is None:
+        time_col_offsets = day_table[time_col] - day_table[day_col]
+        time_col_offset = biweight_location(time_col_offsets)
+    if hasattr(time_col_offset, 'to'):
+        time_col_offset = time_col_offset.to(u.day).value        
     # I am not sure if I am shooting myself in the foot by doing this.
     # The plus side is that interpolation is easiest and most accurate
     # for all of the points, the minus side is that different segments
     # of a list of tables will have different offsets and may be hard
     # to compare with a continously sampled model across the icdts.
     # OTOH, I interpoolate the model to the datapoints anyway
-    return linspace_table(day_table, day_col, time_col, dx=dt,
-                          b=time_col_offset, **kwargs)
+    if max_gap_fraction:
+        deltas = day_table[time_col][1:] - day_table[time_col][0:-1]
+        sigma = max(deltas)*max_gap_fraction
+        kernel = Gaussian1DKernel(sigma)
+    ddt = dt.to(u.day).value
+    return linspace_table(day_table, day_col, time_col, dx=ddt,
+                          b=time_col_offset, kernel=kernel, **kwargs)
 
 # --> Note that astropy.utils.masked.function_helpers doesn't have an analog
 def nan_median_filter(data, mask=False, **kwargs):
@@ -1325,13 +1361,11 @@ def add_medfilt_columns(t, colnames, medfilt_width=None, **kwargs):
         
     """
     if isinstance(t, list):
-        ldts = []
         for tt in t:
             add_medfilt_columns(tt, colnames,
                                 medfilt_width=medfilt_width,
                                 **kwargs)
-            ldts.append(lst)
-        return lst
+        return
     for colname in colnames:
         meds = nan_median_filter(t[colname],
                                  size=medfilt_width,
@@ -1547,6 +1581,65 @@ def pixel_per_Rj(ccd):
     pixscale = pixscale.to(u.arcsec) / u.pixel
     return Rj_arcsec / pixscale / u.R_jup 
    
+def plot_columns(t,
+                 time_col='tavg',
+                 max_time_gap=15*u.day,
+                 colnames=None,
+                 err_colnames=None, 
+                 fmts=None,
+                 labels=None,
+                 alphas=None,
+                 fig=None,
+                 ax=None,
+                 tlim=None):
+
+    colnames = assure_list(colnames)
+    if fig is None:
+        fig = plt.figure()
+    if ax is None:
+        ax = fig.add_subplot()
+
+    if alphas is None:
+        alphas = 1
+    if np.isscalar(alphas):
+        alphas = np.full(len(colnames), alphas)
+
+    handles = []
+    for ic, colname in enumerate(colnames):
+        datetimes = t[time_col].datetime
+        vals = t[colname]
+        vals = filled(vals, unmask=True)
+        if f'{colname}_err' in t.colnames:
+            errs = t[f'{colname}_err']
+            errs = filled(errs, unmask=True)
+            h = ax.errorbar(datetimes, vals, errs,
+                            fmt=fmts[ic], alpha=alphas[ic],
+                            label=labels[ic])
+        else:
+            # When plotting lines, insert NANs into the values so that the
+            # plotting pen picks up
+            deltas = t[time_col][1:] - t[time_col][0:-1]
+            dt = np.median(deltas)
+            last_contig_idx = np.flatnonzero(deltas > max_time_gap)
+            datetimes = np.append(
+                datetimes, datetimes[last_contig_idx] + dt.datetime)
+            vals = np.append(vals, (np.NAN, ) * len(last_contig_idx))
+            sort_idx = np.argsort(datetimes)
+            h = ax.plot(datetimes[sort_idx], vals[sort_idx],
+                        fmts[ic], alpha=alphas[ic],
+                        label=labels[ic])
+            # plot returns an artist
+            h = h[0]
+        handles.append(h)
+
+    ax.set_xlabel('Date')
+    ax.set_xlim(tlim)
+    ax.xaxis.set_minor_locator(mdates.MonthLocator())
+    fig.autofmt_xdate()
+    ax.format_coord = PJAXFormatter(datetimes, t[time_col])
+
+    return(handles)
+
 def plot_planet_subim(ccd_in,
                       fig=None,
                       ax=None,

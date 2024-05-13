@@ -19,7 +19,8 @@ import matplotlib.transforms as transforms
 
 from astropy import log
 import astropy.units as u
-from astropy.table import QTable, vstack
+from astropy.time import Time
+from astropy.table import QTable, unique, vstack
 from astropy.convolution import Gaussian1DKernel
 from astropy.coordinates import Angle, SkyCoord
 from astropy.modeling import models, fitting
@@ -33,8 +34,11 @@ from IoIO.utils import (dict_to_ccd_meta, nan_biweight, nan_mad,
                         nan_median_filter, get_dirs_dates,
                         reduced_dir, cached_csv, savefig_overwrite,
                         finish_stripchart, multi_glob, pixel_per_Rj,
-                        plot_planet_subim,
-                        interpolate_replace_nans_columns)
+                        plot_planet_subim, plot_columns,
+                        interpolate_replace_nans_columns,
+                        add_itime_col, add_daily_biweights,
+                        contiguous_sections, linspace_day_table,
+                        add_medfilt_columns)
 from IoIO.simple_show import simple_show
 from IoIO.cordata_base import SMALL_FILT_CROP
 from IoIO.cordata import CorData
@@ -55,7 +59,7 @@ from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
 from IoIO.standard_star import (StandardStar, SSArgparseHandler,
                                 extinction_correct, rayleigh_convert)
 from IoIO.horizons import GALSATS, galsat_ephemeris
-from IoIO.juno import JunoTimes, PJAXFormatter
+from IoIO.juno import JunoTimes, PJAXFormatter, juno_pj_axis
 
 TORUS_ROOT = os.path.join(IoIO_ROOT, 'Torus')
 MAX_ROOT = os.path.join(IoIO_ROOT, 'for_Max')
@@ -510,6 +514,95 @@ def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):
         t['mask'] = np.logical_or(t['mask'],
                                   t['ansa_left_surf_bright_err'] > 10*u.R)
 
+def create_torus_day_table(
+        t_torus_in=None,
+        max_time_gap=15*u.day,
+        max_gap_fraction=0.3, # beware this may leave some NANs if dt = 1*u.day
+        jd_medfilt_width=10,
+        jd_medfilt_mode='mirror',
+        ut_offset=-7*u.hr, # For IoIO1 --> This should be a constant
+        dt=3*u.day):
+    """Returns a table of torus data sampled at regular intervals
+    within contiguous sets of data.  Adds median filtered columns in
+    each segment of continous data
+
+    Parameters
+    ----------
+    t_torus_in : Table
+        Input t_torus data table.  If none, read from disk
+
+    max_time_gap : TimeDelta
+        Gaps larger than maximum gap trigger the formation of another
+        segment of data
+
+    jd_medfilt_width : float
+        Median filter in JD to apply to data within each contiguous
+        segment
+        Default is `10'
+
+    jd_medfilt_mode : str
+        Median filtering mode
+
+    ut_offset : TimeDelta
+        UT offset of observatory
+
+    dt : TimeDelta
+        Desired timestep of output "day" table.  3*u.day gives good
+        performance for surface brightness
+
+    """
+
+    if t_torus_in is None:
+        t_torus_in = os.path.join(IoIO_ROOT, 'Torus', 'Torus.ecsv')
+    if isinstance(t_torus_in, str):
+        t_torus = QTable.read(t_torus_in)
+    else:
+        t_torus = t_torus_in.copy()
+
+    max_jd_gap = max_time_gap.to(u.day).value
+    jd_dt = dt.to(u.day).value
+
+    # Fill original table with values we need for day_table
+    add_itime_col(t_torus, time_col='tavg', itime_col='ijdlt',
+                  ut_offset=ut_offset, dt=jd_dt)
+    t_torus['jd'] = t_torus['tavg'].jd
+    biweight_cols = ['jd', 'obj_surf_bright',
+                     'ansa_left_surf_bright', 'ansa_right_surf_bright',
+                     'ansa_left_r_peak', 'ansa_right_r_peak']
+    added_cols = add_daily_biweights(t_torus,
+                                     day_col='ijdlt',
+                                     colnames=biweight_cols)
+    # Create day_table
+    day_table_cols = ['ijdlt'] + added_cols
+    day_table = unique(t_torus[day_table_cols], keys='ijdlt')
+    cdts = contiguous_sections(day_table, 'ijdlt', max_jd_gap)
+
+
+    icdts = linspace_day_table(cdts, algorithm='interpolate_replace_nans',
+                               max_gap_fraction=max_gap_fraction,
+                               time_col_offset=ut_offset,
+                               dt=dt)
+    add_medfilt_columns(icdts, colnames=added_cols,
+                        medfilt_width=jd_medfilt_width,
+                        mode=jd_medfilt_mode)
+
+    # --> I might want to do other operations in here and maybe even
+    # --> have a function I pass in to do that
+    
+    # Put it all back to together again 
+    torus_day_table = QTable()
+    for icdt in icdts:
+        torus_day_table = vstack([torus_day_table, icdt])
+
+    # Give us a time column back
+    jds = torus_day_table['biweight_jd']
+    loc = t_torus['tavg'][0].location.copy()
+    tavgs = Time(jds, format='jd', location=loc)
+    tavgs.format = 'fits'
+    torus_day_table['tavg'] = tavgs
+
+    return torus_day_table
+
 # --> A better way to do this might be piecewise.
 def add_medfilt(t, colname, mask_col='mask', medfilt_width=21, mode='mirror'):
     """TABLE MUST BE SORTED FIRST"""
@@ -658,6 +751,48 @@ def plot_ansa_brights(t, **kwargs):
                          **kwargs)
     return t
                      
+
+def plot_torus_surf_bright(t_torus, torus_day_table,
+                           fig=None,
+                           ax=None):
+
+    if fig is None:
+        fig = plt.figure()
+    if ax is None:
+        ax = fig.add_subplot()
+    plot_handles = plot_columns(
+        torus_day_table,
+        colnames=['biweight_ansa_left_surf_bright',
+                  'biweight_ansa_right_surf_bright',
+                  'biweight_ansa_left_surf_bright_medfilt',
+                  'biweight_ansa_right_surf_bright_medfilt'],
+        fmts=['b.', 'r.', 'b', 'r'],
+        labels=['Dawn daily interp',
+                'Dusk daily interp', 'Dawn medfilt', 'Dusk medfilt'],
+        fig=fig,
+        ax=ax)
+    errorbar_handles = plot_columns(
+        t_torus,
+        colnames=['ansa_left_surf_bright', 'ansa_right_surf_bright'],
+        fmts=['b.', 'r.'],
+        labels=['Dawn', 'Dusk'],
+        alphas=0.1,
+        fig=fig,
+        ax=ax)
+
+    # Get the legend to read in the order I prefer
+    handles = errorbar_handles
+    handles.extend(plot_handles)
+    ylabel=f'IPT Ribbon Surf. Bright '\
+        f'({torus_day_table["biweight_ansa_left_surf_bright"].unit})'
+    ax.set_ylabel(ylabel)
+    ax.set_ylim()
+    ax.legend(ncol=2, handles=handles)
+    juno_pj_axis(ax)
+
+def add_epsilon_cols():
+    pass
+
 def add_epsilons(t, ansa_medfilt_width=21, epsilon_medfilt_width=11):
     # Table must be sorted first
     add_medfilt(t, 'ansa_right_r_peak', medfilt_width=ansa_medfilt_width)
@@ -1502,7 +1637,7 @@ def phase_plot(start, stop, fold_period=SYSIII,
     
 class TorusArgparseHandler(SSArgparseHandler,
                            CorPhotometryArgparseMixin, CalArgparseHandler):
-    def add_all(self):
+    def add_utall(self):
         """Add options used in cmd"""
         self.add_reduced_root(default=TORUS_ROOT)
         self.add_start()

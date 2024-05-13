@@ -204,22 +204,22 @@ def boxcar_medians(
     # Create a new table, one row per day with biweight & mad_std
     # columns This assumes that it is OK if any other prepends come
     # along for the ride.  And yes, it does exclude the original
-    day_table = unique(summary_table, keys='iut')
+    day_table = unique(summary_table, keys='ijdlt')
     include_colnames = include_col_encoder.colbase_middle_list(
         day_table.colnames)
-    day_table_colnames = ['iut'] + list(include_colnames)
+    day_table_colnames = ['ijdlt'] + list(include_colnames)
     day_table = QTable(day_table[day_table_colnames])
     #print(day_table_colnames)
 
     # Boxcar median each biweight column
-    first_day = np.min(day_table['iut'])
-    last_day = np.max(day_table['iut'])
+    first_day = np.min(day_table['ijdlt'])
+    last_day = np.max(day_table['ijdlt'])
     all_days = np.arange(first_day, last_day+1)
     med_colnames = median_col_encoder.colbase_list(day_table.colnames)
     for med_col in med_colnames:
         #print(med_col)
         day_table = daily_convolve(day_table,
-                                   'iut',
+                                   'ijdlt',
                                    med_col,
                                    'boxfilt_' + med_col,
                                    Box1DKernel(BOX_NDAYS),
@@ -588,13 +588,14 @@ def plot_nightly_medians(table_or_fname,
     custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f'])
     plt.rc('axes', prop_cycle=custom_cycler)
         
-    day_table = unique(t, keys='iut')
-    day_table.sort('iut')
-    deltas = day_table['iut'][1:] - day_table['iut'][0:-1]
+    day_table = unique(t, keys='ijdlt')
+    day_table.sort('ijdlt')
+    deltas = day_table['ijdlt'][1:] - day_table['ijdlt'][0:-1]
     gap_idx = np.flatnonzero(deltas > max_night_gap)
     # Plot our points at 07:00 UT, which is midnight localtime
-    utm = day_table['iut'] + 7/24
-    # Convert back to Julian day
+    utm = day_table['ijdlt'] + 7/24
+    # Convert back to Julian day --> this may be wrong, but we are
+    # refactoring anyway
     jd = utm - 0.5
     day_table['itdatetime'] = Time(jd, format='jd').datetime
     biweight_encoder = ColnameEncoder('biweight', formatter='.1f')
@@ -772,9 +773,9 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
     clean_t = summary_table[mask]
     #print('len(clean_t): ', len(clean_t))
     clean_t.sort('tavg')
-    add_itime_col(clean_t, time_col='tavg', itime_col='iut')
+    add_itime_col(clean_t, time_col='tavg', itime_col='ijdlt')
     sb_colnames = largest_sub_encoder.colbase_list(clean_t.colnames)
-    add_daily_biweights(clean_t, day_col='iut', colnames=sb_colnames)
+    add_daily_biweights(clean_t, day_col='ijdlt', colnames=sb_colnames)
     clean_t.write(os.path.join(outdir_root, BASE + '_cleaned.ecsv'),
                   overwrite=True)
   

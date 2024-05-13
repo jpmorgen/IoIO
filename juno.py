@@ -3,6 +3,7 @@
 import numpy as np
 
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
 
 import astropy.units as u
 from astropy.time import Time
@@ -327,7 +328,6 @@ class JunoTimes():
                            /PRE_POST_JUNO_PJ)
         return pj
 
-
 class PJAXFormatter():
     """Provides second Y axis value interactive pyplot window with PJs"""
     def __init__(self, plt_date, y, body=399):
@@ -352,3 +352,11 @@ class PJAXFormatter():
             f'date: {dtime}   ' \
             f'PJ: {pj:0.2f} ' \
             f'y: {y*self.yunit:0.2f}'
+
+def juno_pj_axis(ax, position='top'):
+    jts = JunoTimes()
+    secax = ax.secondary_xaxis(position,
+                               functions=(jts.plt_date2pj, jts.pj2plt_date))
+    secax.xaxis.set_minor_locator(MultipleLocator(1))
+    secax.set_xlabel('PJ')
+
