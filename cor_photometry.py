@@ -35,14 +35,14 @@ from bigmultipipe import outname_creator
 
 from precisionguide import PGData
 
+from IoIO.ioio_globals import IoIO_ROOT, RAW_DATA_ROOT
 import IoIO.sx694 as sx694
 from IoIO.utils import (FITS_GLOB_LIST, sum_ccddata, multi_glob,
                         savefig_overwrite)
 from IoIO.cordata_base import CorDataBase
 from IoIO.photometry import (SOLVE_TIMEOUT, rot_wcs,
                              Photometry, PhotometryArgparseMixin)
-from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
-                               CorMultiPipeBinnedOK, nd_filter_mask)
+from IoIO.cormultipipe import CorMultiPipeBinnedOK, nd_filter_mask
 from IoIO.calibration import Calibration
 from IoIO.horizons import GALSATS
 

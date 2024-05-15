@@ -27,6 +27,7 @@ from bigmultipipe import no_outfile, cached_pout, prune_pout
 
 from precisionguide import pgproperty
 
+from IoIO.ioio_globals import IoIO_ROOT, RAW_DATA_ROOT
 from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates,
                         multi_glob, closest_in_coord,
                         valid_long_exposure, im_med_min_max,
@@ -36,8 +37,7 @@ from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates,
                         savefig_overwrite)
 from IoIO.simple_show import simple_show
 from IoIO.cordata_base import CorDataBase
-from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
-                               CorMultiPipeBase, angle_to_major_body,
+from IoIO.cormultipipe import (CorMultiPipeBase, angle_to_major_body,
                                nd_filter_mask, combine_masks,
                                mask_nonlin_sat, parallel_cached_csvs)
 from IoIO.calibration import Calibration, CalArgparseHandler

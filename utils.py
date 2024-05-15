@@ -25,9 +25,9 @@ import matplotlib.dates as mdates
 
 from astropy import log
 import astropy.units as u
-from astropy.time import Time
+from astropy.time import Time, TimeDelta
 from astropy.stats import biweight_location, mad_std
-from astropy.table import QTable, vstack
+from astropy.table import Table, QTable, vstack
 from astropy.convolution import (convolve, interpolate_replace_nans,
                                  Gaussian1DKernel)
 from astropy.coordinates import SkyCoord
@@ -45,6 +45,7 @@ FITS_GLOB_LIST = ['*.fit', '*.fts', '*.fits']
 
 # These are MaxIm and ACP day-level raw data directories, respectively
 DATE_FORMATS = ["%Y-%m-%d", "%Y%m%d"]
+
 
 class Lockfile():
     def __init__(self,
@@ -845,6 +846,7 @@ def stripchart(to_plot,
     if fig_close:
         plt.close()
 
+
 def filled(val, fill_value=np.NAN, unmask=False):
     """Fill astropy Mask or numpy ma.masked value(s) with NAN.
     Ignores if not one of these types
@@ -890,6 +892,19 @@ def filled_columns(t, colnames, **kwargs):
     for colname in colnames:
         t[colname] = filled(t[colname], **kwargs)
     
+def qtable2df(t, index=None):
+    # If you need to filter or sort, do that first!
+    if isinstance(t, str):
+        t = QTable.read(t)
+    filled_columns(t, t.colnames, unmask=True)
+    one_d_colnames = [cn for cn in t.colnames
+                      if len(t[cn].shape) <= 1]
+    df = t[one_d_colnames].to_pandas()
+    if index is not None:
+        df = df.set_index(df[index])
+    return df
+
+# DataFrames may be a better way to do this
 def interpolate_replace_nans_columns(t, colnames, kernel=None,
                                      boundary='extend',
                                      suffix='_interp'):
@@ -951,7 +966,7 @@ def contiguous_sections(t,
 def add_itime_col(summary_table,
                   time_col=None,
                   itime_col=None,
-                  ut_offset=None,
+                  utc_offset=0,
                   dt=1):
     """Add an integer time column to a summary table
 
@@ -969,7 +984,7 @@ def add_itime_col(summary_table,
         Name of new column to contain potentially shifted and scaled JD
         Default is `ijdlt'
 
-    ut_offset : TimeDelta
+    utc_offset : TimeDelta
         UT offset of observatory.  Used for calculating JD local time
         (JDLT) to shift the JD scale
         Default is `-7*u.hr'
@@ -978,12 +993,12 @@ def add_itime_col(summary_table,
         Desired timestep
         Default is `1'
     """
-    ut_offset = ut_offset.to(u.day)
+    utc_offset = utc_offset.to(u.day)
     jds = summary_table[time_col].jd
     djds = jds - jds[0]
     idjds = djds / dt
     idjds = idjds.astype(int)
-    ijds = idjds*dt + jds[0] + ut_offset.value 
+    ijds = idjds*dt + jds[0] + utc_offset.value 
     summary_table[itime_col] = ijds
 
 def daily_biweight(qtable,
@@ -1229,10 +1244,10 @@ def linspace_day_table(day_table,
                        dt=1*u.day,
                        max_gap_fraction=None,
                        **kwargs):
-    """Linearly spaces a table on day increments, interpolating to add
-    rows if necessary.  Time increment is set by dt, but optimal
-    offset of time axis is calculated using the ensemble of points in
-    day_col
+    """Linearly spaces a table on day increments, interpolating using
+    a specified kernel to add rows if necessary.  Time increment is
+    set by dt, but optimal offset of time axis is calculated using the
+    ensemble of points in day_col
 
     Parameters
     ----------
@@ -1264,7 +1279,11 @@ def linspace_day_table(day_table,
         Default is `1*u.day'
 
     max_gap_fraction : float or None
-        If not None, calculates the width of a Gaussian1DKernel based
+        If not None, calculates interpolation kernel using a
+        Gaussian1DKernel with a width of max_gap_fraction * maximum
+        gap in time_col
+
+    based
         on the maxium difference between adjacent points times
         max_gap_fraction.  If None, **kwarg take care of passing
         needed arguments 
@@ -1581,59 +1600,162 @@ def pixel_per_Rj(ccd):
     pixscale = pixscale.to(u.arcsec) / u.pixel
     return Rj_arcsec / pixscale / u.R_jup 
    
-def plot_columns(t,
-                 time_col='tavg',
-                 max_time_gap=15*u.day,
-                 colnames=None,
-                 fmts=None,
-                 labels=None,
-                 alphas=None,
-                 fig=None,
-                 ax=None,
-                 tlim=None):
+def plot_column(t,
+                time_col='tavg',
+                max_time_gap=15*u.day,
+                colname=None,
+                err_colname=None,
+                fmt='',
+                fig=None,
+                ax=None,
+                tlim=None,
+                **kwargs):
 
-    colnames = assure_list(colnames)
+    """Plot a column from a astropy.table.Table or pandas.DataFrame as
+    a function of time during the Juno mission.  Use juno_pj_axis(ax)
+    to plot the Juno perijove axis on the top axis
+
+    Parameters
+    ----------
+    t : astropy.table.Table or pandas.DataFrame
+        Input table or dataframe.  dataframe index must be a datetime
+
+    time_col : str
+        Name of time column
+        Default is `tavg'
+
+    colname : str
+        Data column name
+
+    err_colname : str
+        Data column name (optional).  If not None, ax.errorbar will be
+        used
+
+    max_time_gap : timdelta-like
+        For line plots, gaps in time larger than this will cause the
+        plotting pen to be lifted and started again for the next
+        segment    
+        Default is `15*u.day'
+    """
     if fig is None:
         fig = plt.figure()
     if ax is None:
         ax = fig.add_subplot()
 
-
-    handles = []
-    for ic, colname in enumerate(colnames):
-        datetimes = t[time_col].datetime
-        vals = t[colname].copy()
-        vals = filled(vals, unmask=True)
-        if f'{colname}_err' in t.colnames:
-            errs = t[f'{colname}_err']
-            errs = filled(errs, unmask=True)
-            h = ax.errorbar(datetimes, vals, errs,
-                            fmt=fmts[ic], alpha=alphas[ic],
-                            label=labels[ic])
-        else:
-            # When plotting lines, insert NANs into the values so that the
-            # plotting pen picks up
-            deltas = t[time_col][1:] - t[time_col][0:-1]
-            dt = np.median(deltas)
-            last_contig_idx = np.flatnonzero(deltas > max_time_gap)
-            datetimes = np.append(
-                datetimes, datetimes[last_contig_idx] + dt.datetime)
-            vals = np.append(vals, (np.NAN, ) * len(last_contig_idx))
-            sort_idx = np.argsort(datetimes)
-            h = ax.plot(datetimes[sort_idx], vals[sort_idx],
-                        fmts[ic], alpha=alphas[ic],
-                        label=labels[ic])
-            # plot returns an artist
-            h = h[0]
-        handles.append(h)
-
+    # Play a little fast-and-lose with [Q]Table and DataFrame possible
+    # inputs and prepare for fact that ax.errorbar does not like
+    # astropy Times
+    if isinstance(t, Table):
+        datetimes = t[time_col]
+        datetimes = datetimes.to_datetime()
+    else:
+        datetimes = t.index
+        
+    vals = t[colname]
+    vals = filled(vals, unmask=True)
+    # When plotting lines, insert NANs into the values so that the
+    # plotting pen picks up.  If not plotting lines, this doesn't
+    # hurt.  Note that we need to work in datetimes because of our
+    # conversion, above.
+    if isinstance(max_time_gap, u.Quantity):
+        max_time_gap = TimeDelta(max_time_gap).to_datetime()
+    deltas = datetimes[1:] - datetimes[0:-1]
+    med_dt = np.median(deltas)
+    last_contig_idx = np.flatnonzero(deltas > max_time_gap)
+    datetimes = np.append(
+        datetimes, datetimes[last_contig_idx] + med_dt)
+    sort_idx = np.argsort(datetimes)
+    vals = np.append(vals, (np.NAN, ) * len(last_contig_idx))
+    if err_colname is None:
+        # plot returns an artist
+        h = ax.plot(datetimes[sort_idx], vals[sort_idx],
+                     fmt, **kwargs)
+        h = h[0]
+    else:
+        errs = t[err_colname]
+        errs = filled(errs, unmask=True)
+        errs = np.append(errs, (np.NAN, ) * len(last_contig_idx))
+        h = ax.errorbar(datetimes[sort_idx],
+                        vals[sort_idx], errs[sort_idx],
+                        fmt=fmt, **kwargs)
+        
     ax.set_xlabel('Date')
     ax.set_xlim(tlim)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
     fig.autofmt_xdate()
-    ax.format_coord = PJAXFormatter(datetimes, t[time_col])
-
-    return(handles)
+    ax.format_coord = PJAXFormatter(datetimes, vals)
+    return h
+    
+#def plot_columns(t,
+#                 time_col='tavg',
+#                 max_time_gap=15*u.day,
+#                 colnames=None,
+#                 err_colnames=None,
+#                 fmts='',
+#                 labels='',
+#                 alphas=1,
+#                 fig=None,
+#                 ax=None,
+#                 tlim=None):
+#
+#    if fig is None:
+#        fig = plt.figure()
+#    if ax is None:
+#        ax = fig.add_subplot()
+#    if np.isscalar(alphas):
+#        alphas = np.full(len(colnames), alphas)
+#    if np.isscalar(fmts):
+#        fmts = np.full(len(colnames), fmts)
+#    if np.isscalar(labels):
+#        labels = np.full(len(colnames), labels)
+#
+#    if fig is None:
+#        fig = plt.figure()
+#    if ax is None:
+#        ax = fig.add_subplot()
+#
+#    handles = []
+#    if err_colnames is None:
+#        for ic, colname in enumerate(colnames):
+#            datetimes = t[time_col].datetime        
+#            vals = t[colname].copy()
+#            vals = filled(vals, unmask=True)
+#            # When plotting lines, insert NANs into the values so that the
+#            # plotting pen picks up.  If not plotting lines, this doesn't hurt
+#            deltas = t[time_col][1:] - t[time_col][0:-1]
+#            dt = np.median(deltas)
+#            last_contig_idx = np.flatnonzero(deltas > max_time_gap)
+#            datetimes = np.append(
+#                datetimes, datetimes[last_contig_idx] + dt.datetime)
+#            vals = np.append(vals, (np.NAN, ) * len(last_contig_idx))
+#            sort_idx = np.argsort(datetimes)
+#            h = ax.plot(datetimes[sort_idx], vals[sort_idx],
+#                        fmts[ic], alpha=alphas[ic],
+#                        label=labels[ic])
+#            # plot returns an artist
+#            handles.append(h[0])
+#    else:
+#        if len(colnames) != len(err_colnames):
+#            raise ValueError('colnames and err_colnames do not have the same length')
+#        for ic, (colname, err_colname) in enumerate(zip(colnames, err_colnames)):
+#            # Assume my stylistic approach of plotting points in errorbars
+#            datetimes = t[time_col].datetime
+#            vals = t[colname].copy()
+#            vals = filled(vals, unmask=True)
+#            errs = t[err_colname].copy()
+#            errs = filled(errs, unmask=True)
+#            h = ax.errorbar(datetimes, vals, errs,
+#                            fmt=fmts[ic], alpha=alphas[ic],
+#                            label=labels[ic])
+#            handles.append(h)
+#
+#    ax.set_xlabel('Date')
+#    ax.set_xlim(tlim)
+#    ax.xaxis.set_minor_locator(mdates.MonthLocator())
+#    fig.autofmt_xdate()
+#    ax.format_coord = PJAXFormatter(datetimes, t[time_col])
+#
+#    return(handles)
 
 def plot_planet_subim(ccd_in,
                       fig=None,

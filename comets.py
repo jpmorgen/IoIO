@@ -12,10 +12,10 @@ from ccdproc import ImageFileCollection
 
 from ccdmultipipe import as_single
 
+from IoIO.ioio_globals import IoIO_ROOT, RAW_DATA_ROOT
 from IoIO.utils import (reduced_dir, get_dirs_dates, multi_glob,
                         dict_to_ccd_meta)
-from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
-                               CorMultiPipeBase, mask_nonlin_sat,
+from IoIO.cormultipipe import (CorMultiPipeBase, mask_nonlin_sat,
                                nd_filter_mask,
                                objctradec_to_obj_center)
 from IoIO.calibration import Calibration

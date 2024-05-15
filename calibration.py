@@ -29,13 +29,13 @@ import ccdproc as ccdp
 from bigmultipipe import WorkerWithKwargs, NestablePool
 from bigmultipipe import assure_list, num_can_process, prune_pout
 
+from IoIO.ioio_globals import IoIO_ROOT, RAW_DATA_ROOT
 import IoIO.sx694 as sx694
 from IoIO.utils import (Lockfile, get_dirs_dates, add_history,
                         im_med_min_max, savefig_overwrite)
 from IoIO.cordata_base import CorDataBase, CorDataNDparams
 from IoIO.cor_process import standardize_filt_name
-from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
-                               MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
+from IoIO.cormultipipe import (MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
                                MAX_MEM_FRAC, COR_PROCESS_EXPAND_FACTOR,
                                ND_EDGE_EXPAND, CorMultiPipeBase,
                                CorArgparseHandler,

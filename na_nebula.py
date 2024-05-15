@@ -29,6 +29,8 @@ from bigmultipipe import cached_pout
 
 from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 
+from IoIO.ioio_globals import IoIO_ROOT, RAW_DATA_ROOT
+from IoIO.cordata_base import IOIO_1_UTC_OFFSET
 from IoIO.utils import (ColnameEncoder, get_dirs_dates, reduced_dir,
                         nan_biweight, nan_mad,
                         valid_long_exposure, dict_to_ccd_meta,
@@ -36,8 +38,7 @@ from IoIO.utils import (ColnameEncoder, get_dirs_dates, reduced_dir,
                         add_itime_col, add_daily_biweights, daily_convolve,
                         savefig_overwrite, finish_stripchart,
                         pixel_per_Rj, plot_planet_subim)
-from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
-                               MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
+from IoIO.cormultipipe import (MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
                                MAX_MEM_FRAC,
                                COR_PROCESS_EXPAND_FACTOR,
                                tavg_to_bmp_meta, calc_obj_to_ND, #crop_ccd,
@@ -759,9 +760,11 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
     ls_cols = largest_sub_encoder.colbase_list(summary_table.colnames)
 
     #print('len(summary_table): ', len(summary_table))
+
     # Mask bad measurements
     # This is pretty effective and may be useful for eventually making
     # a movie, as long as I capture the appropriate filenames in summary_table
+    # --> I might want to add this to the mask column or have a special one
     mask = None
     for ls_col in ls_cols:
         if mask is None:
@@ -769,11 +772,15 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
             continue
         mask = np.logical_and(mask, summary_table[ls_col] >= 0)
     mask = np.logical_and(mask, summary_table[ls_cols[-2]] < MAX_24_Rj_SB)
-
     clean_t = summary_table[mask]
+
+    # Mask rows marked bad for other reasons
+    clean_t = clean_t[~clean_t['mask']]
     #print('len(clean_t): ', len(clean_t))
+
     clean_t.sort('tavg')
-    add_itime_col(clean_t, time_col='tavg', itime_col='ijdlt')
+    add_itime_col(clean_t, time_col='tavg', itime_col='ijdlt',
+                  utc_offset=IOIO_1_UTC_OFFSET, dt=1*u.day)
     sb_colnames = largest_sub_encoder.colbase_list(clean_t.colnames)
     add_daily_biweights(clean_t, day_col='ijdlt', colnames=sb_colnames)
     clean_t.write(os.path.join(outdir_root, BASE + '_cleaned.ecsv'),

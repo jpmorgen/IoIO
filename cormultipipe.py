@@ -20,7 +20,7 @@ from bigmultipipe.argparse_handler import ArgparseHandler, BMPArgparseMixin
 
 from ccdmultipipe import CCDMultiPipe, CCDArgparseMixin
 
-from IoIO.ioio_directories import IoIO_ROOT, RAW_DATA_ROOT
+from IoIO.ioio_globals import IoIO_ROOT, RAW_DATA_ROOT
 import IoIO.sx694 as sx694
 from IoIO.utils import (add_history, im_med_min_max, sum_ccddata, cached_csv,
                         dict_to_ccd_meta, pixel_per_Rj)

@@ -14,13 +14,14 @@ import ccdproc as ccdp
 
 from bigmultipipe import assure_list, outname_creator, prune_pout
 
+from IoIO.ioio_globals import IoIO_ROOT, RAW_DATA_ROOT
 from IoIO.utils import (reduced_dir, multi_glob, closest_in_time,
                         valid_long_exposure, add_history)
 from IoIO.cor_process import standardize_filt_name
 from IoIO.calibration import Calibration
 from IoIO.cor_boltwood import CorBoltwood
 from IoIO.cordata import CorData
-from IoIO.cormultipipe import (IoIO_ROOT, COR_PROCESS_EXPAND_FACTOR,
+from IoIO.cormultipipe import (COR_PROCESS_EXPAND_FACTOR,
                                CorMultiPipeBase,
                                reject_center_quality_below,
                                mask_nonlin_sat, combine_masks,
@@ -111,6 +112,9 @@ def off_band_subtract(ccd_in,
     del off_nd0
 
     shift_off = on.obj_center - off.obj_center
+    # --> Although astropy lets me store 2-D data in a table, pandas
+    # --> doesn't like it.  Maybe stick with shift_off_[xy] throughout
+    # --> so I can roundtrip more easily to pandas
     d_on_off = np.linalg.norm(shift_off)
     if d_on_off > max_shift_off:
         log.warning(f'Giving up: d_on_off = {d_on_off} > {max_shift_off} = max_shift_off {in_name}')

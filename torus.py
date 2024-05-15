@@ -30,20 +30,20 @@ from bigmultipipe import cached_pout, outname_creator
 
 from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 
+from IoIO.ioio_globals import IoIO_ROOT, RAW_DATA_ROOT
 from IoIO.utils import (dict_to_ccd_meta, nan_biweight, nan_mad,
                         nan_median_filter, get_dirs_dates,
                         reduced_dir, cached_csv, savefig_overwrite,
                         finish_stripchart, multi_glob, pixel_per_Rj,
-                        plot_planet_subim, plot_columns,
+                        plot_planet_subim, plot_column,
                         interpolate_replace_nans_columns,
                         add_itime_col, add_daily_biweights,
                         contiguous_sections, linspace_day_table,
                         add_medfilt_columns)
 from IoIO.simple_show import simple_show
-from IoIO.cordata_base import SMALL_FILT_CROP
+from IoIO.cordata_base import SMALL_FILT_CROP, IOIO_1_UTC_OFFSET
 from IoIO.cordata import CorData
-from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
-                               tavg_to_bmp_meta, calc_obj_to_ND, crop_ccd,
+from IoIO.cormultipipe import (tavg_to_bmp_meta, calc_obj_to_ND, crop_ccd,
                                planet_to_object, mean_image,
                                objctradec_to_obj_center, obj_surface_bright)
 from IoIO.calibration import Calibration, CalArgparseHandler
@@ -59,9 +59,10 @@ from IoIO.on_off_pipeline import (TORUS_NA_NEB_GLOB_LIST,
 from IoIO.standard_star import (StandardStar, SSArgparseHandler,
                                 extinction_correct, rayleigh_convert)
 from IoIO.horizons import GALSATS, galsat_ephemeris
-from IoIO.juno import JunoTimes, PJAXFormatter, juno_pj_axis
+from IoIO.juno import JunoTimes, PJAXFormatter
 
-TORUS_ROOT = os.path.join(IoIO_ROOT, 'Torus')
+BASE = 'Torus'
+TORUS_ROOT = os.path.join(IoIO_ROOT, BASE)
 MAX_ROOT = os.path.join(IoIO_ROOT, 'for_Max')
 
 # --> from Barbosa & Kivelson (1983)
@@ -518,9 +519,9 @@ def create_torus_day_table(
         t_torus_in=None,
         max_time_gap=15*u.day,
         max_gap_fraction=0.3, # beware this may leave some NANs if dt = 1*u.day
-        jd_medfilt_width=10,
-        jd_medfilt_mode='mirror',
-        ut_offset=-7*u.hr, # For IoIO1 --> This should be a constant
+        medfilt_width=10*u.day,
+        medfilt_mode='mirror',
+        utc_offset=IOIO_1_UTC_OFFSET,
         dt=3*u.day):
     """Returns a table of torus data sampled at regular intervals
     within contiguous sets of data.  Adds median filtered columns in
@@ -535,15 +536,15 @@ def create_torus_day_table(
         Gaps larger than maximum gap trigger the formation of another
         segment of data
 
-    jd_medfilt_width : float
+    medfilt_width : float
         Median filter in JD to apply to data within each contiguous
         segment
-        Default is `10'
+        Default is `10*u.day'
 
-    jd_medfilt_mode : str
+    medfilt_mode : str
         Median filtering mode
 
-    ut_offset : TimeDelta
+    utc_offset : TimeDelta
         UT offset of observatory
 
     dt : TimeDelta
@@ -552,8 +553,11 @@ def create_torus_day_table(
 
     """
 
+    # --> See IoIO_reduction.notebk Tue May 14 08:42:05 2024 EDT  
+  
+
     if t_torus_in is None:
-        t_torus_in = os.path.join(IoIO_ROOT, 'Torus', 'Torus.ecsv')
+        t_torus_in = os.path.join(TORUS_ROOT, BASE+'.ecsv')
     if isinstance(t_torus_in, str):
         t_torus = QTable.read(t_torus_in)
     else:
@@ -564,7 +568,7 @@ def create_torus_day_table(
 
     # Fill original table with values we need for day_table
     add_itime_col(t_torus, time_col='tavg', itime_col='ijdlt',
-                  ut_offset=ut_offset, dt=jd_dt)
+                  utc_offset=utc_offset, dt=jd_dt)
     t_torus['jd'] = t_torus['tavg'].jd
     biweight_cols = ['jd', 'obj_surf_bright',
                      'ansa_left_surf_bright', 'ansa_right_surf_bright',
@@ -582,11 +586,14 @@ def create_torus_day_table(
 
     icdts = linspace_day_table(cdts, algorithm='interpolate_replace_nans',
                                max_gap_fraction=max_gap_fraction,
-                               time_col_offset=ut_offset,
+                               time_col_offset=utc_offset,
                                dt=dt)
+    width = medfilt_width/dt
+    width = width.decompose().value
+    width = np.round(width).astype(int)
     add_medfilt_columns(icdts, colnames=added_cols,
-                        medfilt_width=jd_medfilt_width,
-                        mode=jd_medfilt_mode)
+                        medfilt_width=width,
+                        mode=medfilt_mode)
 
     # --> I might want to do other operations in here and maybe even
     # --> have a function I pass in to do that
@@ -726,7 +733,7 @@ def plot_column_vals(t,
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
     ax.set_ylim(ylim)
     fig.autofmt_xdate()
-    ax.format_coord = PJAXFormatter(datetimes, t[colnames[0]])
+    ax.format_coord = PJAXFormatter(datetimes)
 
     plot_axhlines(ax, **kwargs)
     plot_axvlines(ax, **kwargs)
@@ -740,6 +747,76 @@ def plot_column_vals(t,
 
     return t
 
+def plot_ansa_surf_brights(t_torus, torus_day_table,
+                           fig=None, ax=None,
+                           tlim=None, ylim=(0, 200)):
+    fig = fig or plt.figure()
+    ax = ax or fig.add_subplot()
+    handles = []
+    h = plot_column(t_torus,
+                    colname='ansa_left_surf_bright',
+                    err_colname='ansa_left_surf_bright_err',
+                    fmt='b.', label='Dawn',
+                    alpha=0.1,
+                    fig=fig, ax=ax)
+    handles.append(h)
+    h = plot_column(t_torus,
+                    colname='ansa_right_surf_bright',
+                    err_colname='ansa_right_surf_bright_err',
+                    fmt='r.', label='Dusk',
+                    alpha=0.1,
+                    fig=fig, ax=ax)
+    handles.append(h)
+    # These are just a little fuzzier than the medfilts
+    #h = plot_column(torus_day_table,
+    #                colname='biweight_ansa_left_surf_bright',
+    #                err_colname='std_ansa_left_surf_bright',
+    #                fmt='c*', label='Dawn daily interp',
+    #                fig=fig, ax=ax)
+    #handles.append(h)
+    #h = plot_column(torus_day_table,
+    #                colname='biweight_ansa_right_surf_bright',
+    #                err_colname='std_ansa_right_surf_bright',
+    #                fmt='m*', 
+    #                label='Dusk daily interp',
+    #                fig=fig, ax=ax)
+    #handles.append(h)
+    h = plot_column(torus_day_table,
+                    colname='biweight_ansa_left_surf_bright_medfilt',
+                    err_colname='std_ansa_left_surf_bright_medfilt',
+                    fmt='b-', 
+                    label='Dawn medfilt',
+                    fig=fig, ax=ax)
+    handles.append(h)
+    h = plot_column(torus_day_table,
+                    colname='biweight_ansa_right_surf_bright_medfilt',
+                    err_colname='std_ansa_right_surf_bright_medfilt',
+                    fmt='r-', 
+                    label='Dusk medfilt',
+                    fig=fig, ax=ax)
+    handles.append(h)
+    #h = plot_column(torus_day_table,
+    #                colname='biweight_ansa_left_surf_bright_medfilt',
+    #                #err_colname='std_ansa_left_surf_bright_medfilt',
+    #                fmt='b-', linewidth=3,
+    #                label='Dawn medfilt',
+    #                fig=fig, ax=ax)
+    #handles.append(h)
+    #h = plot_column(torus_day_table,
+    #                colname='biweight_ansa_right_surf_bright_medfilt',
+    #                #err_colname='std_ansa_right_surf_bright_medfilt',
+    #                fmt='r-', linewidth=3, 
+    #                label='Dusk medfilt',
+    #                fig=fig, ax=ax)
+    #handles.append(h)
+    ax.set_xlim(tlim)
+    ylabel=f'IPT Ribbon Surf. Bright '\
+        f'({torus_day_table["biweight_ansa_left_surf_bright"].unit})'
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(ylim)
+    ax.legend(ncol=2, handles=handles)
+
+# --> BECOMING OBSOLETE
 def plot_ansa_brights(t, **kwargs):
 
     t = plot_column_vals(t, colnames=['ansa_left_surf_bright',
@@ -753,45 +830,6 @@ def plot_ansa_brights(t, **kwargs):
                          **kwargs)
     return t
                      
-
-def plot_torus_surf_bright(t_torus, torus_day_table,
-                           fig=None,
-                           ax=None):
-
-    if fig is None:
-        fig = plt.figure()
-    if ax is None:
-        ax = fig.add_subplot()
-    plot_handles = plot_columns(
-        torus_day_table,
-        colnames=['biweight_ansa_left_surf_bright',
-                  'biweight_ansa_right_surf_bright',
-                  'biweight_ansa_left_surf_bright_medfilt',
-                  'biweight_ansa_right_surf_bright_medfilt'],
-        fmts=['b.', 'r.', 'b', 'r'],
-        labels=['Dawn daily interp',
-                'Dusk daily interp', 'Dawn medfilt', 'Dusk medfilt'],
-        fig=fig,
-        ax=ax)
-    errorbar_handles = plot_columns(
-        t_torus,
-        colnames=['ansa_left_surf_bright', 'ansa_right_surf_bright'],
-        fmts=['b.', 'r.'],
-        labels=['Dawn', 'Dusk'],
-        alphas=0.1,
-        fig=fig,
-        ax=ax)
-
-    # Get the legend to read in the order I prefer
-    handles = errorbar_handles
-    handles.extend(plot_handles)
-    ylabel=f'IPT Ribbon Surf. Bright '\
-        f'({torus_day_table["biweight_ansa_left_surf_bright"].unit})'
-    ax.set_ylabel(ylabel)
-    ax.set_ylim()
-    ax.legend(ncol=2, handles=handles)
-    juno_pj_axis(ax)
-
 def add_epsilon_cols(t,
                      outbase='',
                      prefix='',
@@ -823,6 +861,7 @@ def add_epsilon_cols(t,
     epsilon_err = np.abs(epsilon_err)
     t[f'{out_prefix}{outbase}{postfix}{out_err_postfix}'] = epsilon_err
 
+# --> BECOMING OBSOLETE
 def add_epsilons(t, ansa_medfilt_width=21, epsilon_medfilt_width=11):
     # Table must be sorted first
     add_medfilt(t, 'ansa_right_r_peak', medfilt_width=ansa_medfilt_width)
@@ -854,6 +893,55 @@ def add_epsilons(t, ansa_medfilt_width=21, epsilon_medfilt_width=11):
     av_med_peak = (np.abs(r_med_peak) + np.abs(l_med_peak)) / 2
     t['medfilt_interp_epsilon'] = -(r_med_peak + l_med_peak) / av_med_peak
 
+def plot_torus_epsilons(t_torus, torus_day_table,
+                        fig=None, ax=None,
+                        tlim=None, ylim=(-0.05, 0.10)):
+
+    fig = fig or plt.figure()
+    ax = ax or fig.add_subplot()
+    handles = []
+    h = plot_column(
+        t_torus,
+        colname='epsilon',
+        err_colname='epsilon_err',
+        fmt='k.',
+        label='Measured epsilon',
+        alpha=0.4,
+        markersize=8,
+        fig=fig,
+        ax=ax)
+    handles.append(h)
+    h = plot_column(
+        torus_day_table,
+        colname='biweight_epsilon_medfilt',
+        err_colname='biweight_epsilon_err_medfilt',
+        fmt='k*',
+        label='medfilt epsilon',
+        alpha=0.2,
+        fig=fig,
+        ax=ax)
+    handles.append(h)
+    h = plot_column(
+        torus_day_table,
+        colname='epsilon_from_day_table_medfilt',
+        err_colname='epsilon_from_day_table_medfilt_err',
+        fmt='c-',
+        label='medfilt epsilon from medfilt anas pos.',
+        alpha=1,
+        linewidth=2,
+        elinewidth=1,
+        #markersize=4,
+        fig=fig,
+        ax=ax)
+    handles.append(h)
+    h = ax.axhline(0.025, color='y', label='Nominal 0.025')
+    handles.append(h)
+    ax.set_xlim(tlim)
+    ax.set_ylim(ylim)
+    ax.set_ylabel(r'Sky plane $|\vec\epsilon|$ (dawnward)')
+    ax.legend(ncol=2, handles=handles)
+
+# --> BECOMING OBSOLETE
 def plot_epsilons(t,
                   fig=None,
                   ax=None,
@@ -947,7 +1035,7 @@ def plot_epsilons(t,
     ax.set_ylim(min_eps, max_eps)
     ax.xaxis.set_minor_locator(mdates.MonthLocator())
     fig.autofmt_xdate()
-    ax.format_coord = PJAXFormatter(t['tavg'].datetime, epsilon)
+    ax.format_coord = PJAXFormatter(t['tavg'].datetime)
 
     plot_axhlines(ax, **kwargs)
     plot_axvlines(ax, **kwargs)
@@ -960,6 +1048,99 @@ def plot_epsilons(t,
 
     return t
 
+def east_from_io(t, left_colnames):
+    """Creates new left and right columns that read in eastward shift
+from Io's orbit.  Returns a new table so as to not mess up the original
+
+    """
+    t = t.copy()
+    for left_colname in left_colnames:
+        right_colname = left_colname.replace('left', 'right')
+        left = t[left_colname]
+        right = t[right_colname]
+        left = -(left - (-IO_ORBIT_R))
+        right = -(right - IO_ORBIT_R)
+        t[f'east_shift_{left_colname}'] = left
+        t[f'east_shift_{right_colname}'] = right
+    return t
+
+def plot_torus_ansa_pos(t_torus, torus_day_table,
+                        fig=None, ax=None,
+                        tlim=None, ylim=(-0.5, 0.5)):
+
+    fig = fig or plt.figure()
+    ax = ax or fig.add_subplot()
+
+    st_torus = east_from_io(t_torus, ['ansa_left_r_peak'])
+    storus_day_table = east_from_io(torus_day_table,
+                                    ['biweight_ansa_left_r_peak',
+                                     'biweight_ansa_left_r_peak_medfilt'])
+
+    handles = []
+    h = plot_column(st_torus,
+                    colname='east_shift_ansa_left_r_peak',
+                    err_colname='ansa_left_r_peak_err',
+                    fmt='b.',
+                    alpha=0.1,
+                    label='Dawn',
+                    fig=fig,
+                    ax=ax)
+    handles.append(h)
+    h = plot_column(st_torus,
+                    colname='east_shift_ansa_right_r_peak',
+                    err_colname='ansa_right_r_peak_err',
+                    fmt='r.',
+                    alpha=0.1,
+                    label='Dusk',
+                    fig=fig,
+                    ax=ax)
+    handles.append(h)
+    ## As with the surface brightnesses, these are just a little fuzzier
+    ## than the medfilts
+    #h = plot_column(storus_day_table,
+    #                colname='east_shift_biweight_ansa_left_r_peak',
+    #                err_colname='std_ansa_left_r_peak',
+    #                fmt='c*',
+    #                label='Dawn daily interp',
+    #                fig=fig,
+    #                ax=ax)
+    #handles.append(h)
+    #h = plot_column(storus_day_table,
+    #                colname='east_shift_biweight_ansa_right_r_peak',
+    #                err_colname='std_ansa_right_r_peak',
+    #                fmt='m*',
+    #                label='Dusk daily interp',
+    #                fig=fig,
+    #                ax=ax)
+    #handles.append(h)
+    h = plot_column(storus_day_table,
+                    colname='east_shift_biweight_ansa_left_r_peak_medfilt',
+                    err_colname='std_ansa_left_r_peak_medfilt',
+                    fmt='b-',
+                    linewidth=2,
+                    elinewidth=1,
+                    label='Dawn medfilt',
+                    fig=fig,
+                    ax=ax)
+    handles.append(h)
+    h = plot_column(storus_day_table,
+                    colname='east_shift_biweight_ansa_right_r_peak_medfilt',
+                    err_colname='std_ansa_right_r_peak_medfilt',
+                    fmt='r-',
+                    linewidth=2,
+                    elinewidth=1,
+                    label='Dusk medfilt',
+                    fig=fig,
+                    ax=ax)
+    handles.append(h)
+
+    ax.set_ylabel(r'Dawnward ribbon shift from Io orbit (R$_\mathrm{J}$)')
+    ax.set_ylim(ylim)
+    h = ax.axhline(0, color='y', label='Io orbit')
+    handles.append(h)
+    ax.legend(ncol=3, handles=handles)
+
+# --> BECOMING OBSOLETE
 def plot_ansa_pos(t,
                   fig=None,
                   ax=None,
@@ -1220,7 +1401,7 @@ def torus_directory(directory,
                     **kwargs):
     standard_star_obj = standard_star_obj or StandardStar(reduce=True)
     outdir = outdir or reduced_dir(directory, outdir_root, create=False)
-    poutname = os.path.join(outdir, 'Torus.pout')
+    poutname = os.path.join(outdir, BASE + '.pout')
     pout = cached_pout(on_off_pipeline,
                        poutname=poutname,
                        read_pout=read_pout,
@@ -1314,8 +1495,15 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
 
     summary_table['tavg'].location = loc
     summary_table.sort('tavg')
-    summary_table.write(os.path.join(outdir_root, 'Torus.ecsv'),
+    summary_table.write(os.path.join(outdir_root, BASE + '.ecsv'),
                                      overwrite=True)
+    clean_t = summary_table[~summary_table['mask']]
+    # Not sure if I should do this before or after.  It is a
+    # derivative product, which is why I currently do it after
+    add_epsilon_cols(clean_t, outbase='epsilon', err_postfix='_err')
+    clean_t.write(os.path.join(outdir_root, BASE + '_cleaned.ecsv'),
+                                     overwrite=True)
+
     #torus_stripchart(summary_table, outdir_root, show=show)
 
     return summary_table
@@ -1397,7 +1585,7 @@ def periodogram(start, stop,
                 max_period=11*u.hr,
                 plot_type='period',
                 side=None,
-                torus_table='/data/IoIO/Torus/Torus.ecsv',
+                torus_table=os.path.join(TORUS_ROOT, BASE+'_clean.ecsv'),
                 false_alarm_level=0.001,
                 nfreq=25000,
                 plotdir=None):
@@ -1592,10 +1780,9 @@ def periodogram(start, stop,
 
 def phase_plot(start, stop, fold_period=SYSIII,
                side=None,
-               plotdir=None):
-    torus_table='/data/IoIO/Torus/Torus.ecsv'
+               plotdir=None,
+               torus_table=os.path.join(TORUS_ROOT, BASE+'_clean.ecsv')):
     t = QTable.read(torus_table)
-    t.sort('tavg')
     if side == 'west':
         side = 'right'
     elif side == 'dusk':
@@ -1667,7 +1854,7 @@ def phase_plot(start, stop, fold_period=SYSIII,
     
 class TorusArgparseHandler(SSArgparseHandler,
                            CorPhotometryArgparseMixin, CalArgparseHandler):
-    def add_utall(self):
+    def add_all(self):
         """Add options used in cmd"""
         self.add_reduced_root(default=TORUS_ROOT)
         self.add_start()

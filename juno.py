@@ -330,9 +330,7 @@ class JunoTimes():
 
 class PJAXFormatter():
     """Provides second Y axis value interactive pyplot window with PJs"""
-    def __init__(self, plt_date, y, body=399):
-        #self.plt_date = plt_date
-        #self.y = y
+    def __init__(self, plt_date, y=None, body=399):
         if isinstance(y, u.Quantity):
             self.yunit = y.unit
         else:

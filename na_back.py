@@ -28,14 +28,14 @@ from bigmultipipe import no_outfile, cached_pout, prune_pout
 
 from precisionguide import pgproperty
 
+from IoIO.ioio_globals import IoIO_ROOT, RAW_DATA_ROOT
 from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates,
                         closest_in_time, valid_long_exposure, im_med_min_max,
                         add_history, cached_csv, iter_polyfit, 
                         savefig_overwrite)
 from IoIO.simple_show import simple_show
 from IoIO.cordata_base import CorDataBase
-from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
-                               CorMultiPipeBase, angle_to_major_body,
+from IoIO.cormultipipe import (CorMultiPipeBase, angle_to_major_body,
                                nd_filter_mask, combine_masks)
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.standard_star import (extinction_correct,

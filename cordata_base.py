@@ -29,6 +29,10 @@ from precisionguide.utils import hist_of_im, iter_linfit
 import IoIO.sx694 as sx694
 from IoIO.simple_show import CCDImageFormatter
 
+# --> This should go somewhere else, perhaps in a system of
+# --> observatory locations that are read in.  I could use the astropy
+# --> config for that, but that seems overkill
+
 # Got IoIO alt from a combination of Google Earth and USGS top
 # maps.  See IoIO.notebk Sun Apr 28 12:50:37 2019 EDT.  My
 # conclusion was that the altitude was compatible with WGS84,
@@ -40,6 +44,7 @@ IOIO_1_LOCATION = EarthLocation.from_geodetic(
 IOIO_1_LOCATION.info.name = 'IoIO_1'
 IOIO_1_LOCATION.info.meta = {
     'longname': 'Io Input/Output observatory Benson AZ USA'}
+IOIO_1_UTC_OFFSET = -7*u.hr
 
 # All global values are referenced to the unbinned, full-frame
 # CCD.  Calculations (should be) done such that binned & subframed

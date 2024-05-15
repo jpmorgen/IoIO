@@ -11,7 +11,7 @@ from IoIO.utils import savefig_overwrite
 from IoIO.na_nebula import plot_nightly_medians
 from IoIO.torus import (plot_ansa_brights, plot_epsilons, plot_ansa_pos,
                         plot_ansa_r_amplitudes)
-from IoIO.mme import plot_mme, plot_mme_epsilon_corr
+#from IoIO.mme import plot_mme, plot_mme_epsilon_corr
 
 def master_stripchart(t_na, t_torus,
                       plots=['Na_nighly_medians', 'ansa_brights'],
@@ -122,8 +122,8 @@ outdir = '/data/IoIO/analysis/'
 #                  outname='/home/jpmorgen/Papers/io/IoIO_2017--2023_Sublimation_JGR/Na_SII_time_sequence.png')
 
 t_na = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
-#t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
-t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
+t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
+#t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
 
 # Clean up masked values
 t_na = t_na[~t_na['mask']]

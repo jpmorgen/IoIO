@@ -40,13 +40,13 @@ from precisionguide import pgproperty
 
 from burnashev import Burnashev
 
+from IoIO.ioio_globals import IoIO_ROOT, RAW_DATA_ROOT
 import IoIO.sx694 as sx694
 from IoIO.utils import (Lockfile, reduced_dir, get_dirs_dates,
                         cached_csv, iter_polyfit, dict_to_ccd_meta,
                         savefig_overwrite)
 from IoIO.cordata_base import CorDataBase
-from IoIO.cormultipipe import (IoIO_ROOT, RAW_DATA_ROOT,
-                               CorMultiPipeBase,
+from IoIO.cormultipipe import (CorMultiPipeBase,
                                nd_filter_mask)
 from IoIO.calibration import Calibration, CalArgparseHandler
 from IoIO.photometry import Photometry, is_flux

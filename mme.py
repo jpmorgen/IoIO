@@ -1,5 +1,7 @@
 """Module to read and plot Multi-Model Ensemble System for the outer Heliosphere (MMESH) outputs"""
 
+import os
+
 from cycler import cycler
 
 import numpy as np
@@ -14,25 +16,15 @@ import pandas as pd
 
 from astropy.table import QTable
 
+from IoIO.utils import qtable2df, plot_column
 from IoIO.juno import JunoTimes, PJAXFormatter
 from IoIO.torus import add_epsilons
 
 MME = '/data/sun/Jupiter_MME/JupiterMME.csv'
 MODEL = 'ensemble'
 RUNNING = 'running_' # prepended to running average columns
-TORUS = '/data/IoIO/Torus/Torus.ecsv'
-
-# This could go in some util thing
-def qtable2df(t, index=None):
-    # If you need to filter or sort, do that first!
-    if isinstance(t, str):
-        t = QTable.read(t_torus)
-    one_d_colnames = [cn for cn in t.colnames
-                      if len(t[cn].shape) <= 1]
-    df = t[one_d_colnames].to_pandas()
-    if index is not None:
-        df = df.set_index(df[index])
-    return df
+TORUS = '/data/IoIO/Torus/Torus_cleaned.ecsv'
+TORUS_DAY_TABLE = '/data/IoIO/Torus/Torus_day_table.ecsv'
 
 # From https://zenodo.org/records/10687651
 def readMMESH_fromFile(fullfilename):
@@ -83,6 +75,7 @@ def add_mme_running_av(df,
         filt_colname = f'{RUNNING}{colname}_{filt_colname}'
         df[model, filt_colname] = colavg
 
+# This could be implemented with rolling stuff
 def add_df_running_av(df,
                       colname,
                       filt_width=None):
@@ -192,7 +185,7 @@ def calc_running_corr(df1, df2, colname1, colname2, window):
     # space axis) to df2 (e.g. irregularly space data).  Otherwise
     # rolling.corr gives NANs everywhere
     series1 = df1[colname1]
-    series2 = df2['medfilt_interp_epsilon']
+    series2 = df2[colname2]
     series1i = np.interp(series2.index, series1.index, series1)
     series1i = pd.DataFrame(series1i, index=series2.index,
                             columns=[colname1])
@@ -281,12 +274,167 @@ def plot_mme_epsilon_corr(df_mme=None,
     if show:
         plt.show()
 
-t_torus = QTable.read(TORUS)
-t_torus = t_torus[~t_torus['mask']]
-t_torus.sort('tavg')
-add_epsilons(t_torus)
-df_torus = qtable2df(t_torus, index='tavg')
-add_df_running_av(df_torus, 'epsilon')
+
+def add_rolling_funct_cols(df, colnames,
+                           window=None, # pandas.Timedelta
+                           function=None,
+                           min_periods=None,
+                           center=True):
+
+    added_colnames = []
+    for colname in colnames:
+        s = df[colname]
+        r = s.rolling(window,
+                      min_periods=min_periods,
+                      center=center)
+        mean_s = r.apply(function)
+        filt_colname = f'{window.days}D'
+        filt_colname = f'rolling_{function.__name__}_{colname}_{filt_colname}'
+        df[filt_colname] = mean_s
+        added_colnames.append(filt_colname)
+
+    return added_colnames
+
+def interp_to(target_df, source_df, source_colnames, suffix=''):
+    added_colnames = []
+    for colname in source_colnames:
+        target_colname = f'{colname}{suffix}'
+        s = np.interp(target_df.index, source_df.index, source_df[colname])
+        target_df[target_colname] = s
+        added_colnames.append(target_colname)
+
+    return added_colnames
+
+def add_rolling_corr(df, col1, window, col2, out_colname=None):
+    if out_colname is None:
+        out_colname = f'{col1}_{window.days}D_rolling_corr_{col2}'
+    rolling_corr = df[col1].rolling(window).corr(df[col2])
+    df[out_colname] = rolling_corr
+
+df_mme = readMMESH_fromFile(MME)
+df_mme = df_mme['ensemble']
+
+mme_outname = '/tmp/Jupiter_ensemble.csv'
+if not (os.path.exists(mme_outname)):
+    colnames=['B_mag', 'n_tot', 'p_dyn', 'u_mag']
+    rolling_colnames = []
+    cns = add_rolling_funct_cols(df_mme,
+                                 colnames=colnames,
+                                 window=pd.Timedelta(3, 'd'),
+                                 function=np.nanmean)
+    rolling_colnames.append(cns)
+    cns = add_rolling_funct_cols(df_mme,
+                                 colnames=colnames,
+                                 window=pd.Timedelta(10, 'd'),
+                                 function=np.nanmean)     
+    rolling_colnames.append(cns)
+    cns = add_rolling_funct_cols(df_mme,
+                                 colnames=colnames,
+                                 window=pd.Timedelta(30, 'd'),
+                                 function=np.nanmean)     
+    rolling_colnames.append(cns)
+
+    df_mme.to_csv(mme_outname)
+else:
+    df_mme = pd.read_csv(mme_outname, index_col=[0])
+    df_mme.index = pd.to_datetime(df_mme.index)
+    rolling_colnames = [rc for rc in df_mme.columns
+                        if 'rolling_' in rc]
+                      
+
+#plot_column(df_mme, colname='rolling_nanmean_p_dyn_30D')
+#plt.show()
+
+df_torus = qtable2df(TORUS_DAY_TABLE, index='tavg')
+interp_colnames = interp_to(df_torus, df_mme, rolling_colnames)
+
+c1 = 'epsilon_from_day_table_medfilt'
+c2 = 'rolling_nanmean_p_dyn_3D'
+
+window = pd.Timedelta(30, 'd')
+simple_c1 = c1.split('_')[0]
+simple_c2 = '_'
+simple_c2 = simple_c2.join(c2.split('_')[-3:])
+out_colname = f'{simple_c1}_{window.days}D_rolling_corr_{simple_c2}'
+
+add_rolling_corr(df_torus, c1, window, c2, out_colname=out_colname)
+
+#add_rolling_corr(df_torus, 'epsilon_from_day_table_medfilt',
+#                 pd.Timedelta(30, 'd'),
+#                 'rolling_nanmean_p_dyn_3D',
+#                 out_colname='epsilon_30D_rolling_p_dyn_3D')
+
+
+
+figsize=[12, 10]
+h = plot_column(df_torus, colname=out_colname,
+                label=out_colname)
+#legend(handles=handles)
+plt.show()
+
+
+#plot_column(df_torus, colname='rolling_nanmean_p_dyn_30D')
+#plt.show()
+
+
+# This is going to be add_rolling_corr
+
+
+
+
+# --> THIS IS GOOD STUFF IF I WANT TO RE-IMPLEMENT WITH THESE TOOLS
+#from astropy.stats import biweight_location, mad_std
+#
+#from IoIO.utils import filled_columns, plot_column
+#
+#def biweight_ignore_nan(x):
+#    return biweight_location(x, ignore_nan=True)
+#def mad_ignore_nan(x):
+#    return biweight_location(x, ignore_nan=True)
+#
+#
+#
+#
+#
+#
+#df_mme = readMMESH_fromFile(MME)
+#t_torus = QTable.read(TORUS)
+#filled_columns(t_torus, t_torus.colnames)
+#df_torus = qtable2df(t_torus, index='tavg')
+#
+#
+#df=df_torus
+#colname='ansa_left_r_peak'
+#biweight_filt_width=pd.Timedelta(20, 'd')
+##min_periods=None
+#min_periods=5
+#center=True
+#s = df[colname]
+#r = s.rolling(biweight_filt_width,
+#              min_periods=min_periods,
+#              center=center)
+#biweight_s = r.apply(biweight_ignore_nan, raw=True)
+#s = df[f'{colname}_err']
+#r = s.rolling(biweight_filt_width,
+#              min_periods=min_periods,
+#              center=center)
+#mad_s = r.apply(mad_ignore_nan, raw=True)
+#df[f'biweight_{colname}'] = biweight_s
+#df[f'std_{colname}'] = mad_s
+#plot_column(df, time_col='tavg',
+#            colname=f'biweight_{colname}',
+#            err_colname=f'std_{colname}')
+##plot_column(df, time_col='tavg',
+##            colname=f'std_{colname}')
+#plt.show()
+
+
+#t_torus = QTable.read(TORUS)
+#t_torus = t_torus[~t_torus['mask']]
+#t_torus.sort('tavg')
+#add_epsilons(t_torus)
+#df_torus = qtable2df(t_torus, index='tavg')
+#add_df_running_av(df_torus, 'epsilon')
 
 #df_mme = readMMESH_fromFile(MME)
 #add_df_running_av(df_mme, ('ensemble', 'p_dyn'))
