@@ -325,74 +325,6 @@ def add_rolling_corr(df, col1, window, col2, out_colname=None):
     rolling_corr = df[col1].rolling(window).corr(df[col2])
     df[out_colname] = rolling_corr
 
-# This is the __main__ part of our module
-
-if __name__ == '__main__':
-    mme_outname = os.path.join(TORUS_ROOT,
-                               f'Jupiter_mme_{MODEL}.csv')
-
-    # These are the time windows for making our rolling correlation.  I
-    # want to make sure I synchronize the rolling nanmean of each function
-    # to these in some way
-    windows = ['3D', '10D', '30D']
-    windows = [pd.Timedelta(w) for w in windows]
-    mme_colnames=['B_mag', 'n_tot', 'p_dyn', 'u_mag']
-    mme_neg_unc=[f'{c}_neg_unc' for c in mme_colnames]
-    mme_pos_unc=[f'{c}_pos_unc' for c in mme_colnames]
-
-    if os.path.exists(mme_outname):
-        df_mme = pd.read_csv(mme_outname, index_col=[0])
-        df_mme.index = pd.to_datetime(df_mme.index)
-        mme_rolling_colnames = [rc for rc in df_mme.columns
-                                if 'rolling_' in rc]
-    else:
-        df_mme = readMMESH_fromFile(MME)
-        df_mme = df_mme['ensemble']
-        # --> In an idea world, I propagate the uncertainties
-        rc = add_rolling_funct_cols(df_mme, colnames=colnames,
-                                    windows=windows, function=np.nanmean)
-        mme_rolling_colnames = rc
-        df_mme.to_csv(mme_outname)
-
-
-    #plot_column(df_mme, colname='rolling_nanmean_p_dyn_30D')
-    #plt.show()
-
-    df_torus = qtable2df(TORUS_DAY_TABLE, index='tavg')
-    torus_rolling_colnames = []
-    epsilon_colname='epsilon_from_day_table'
-    rc = add_rolling_funct_cols(df_torus, colnames=[epsilon_colname],
-                                windows=windows, function=np.nanmean,
-                                out_colbases=['epsilon'])
-    torus_rolling_colnames = rc
-    interp_colnames = (mme_colnames + mme_neg_unc + mme_pos_unc +
-                       mme_rolling_colnames)
-    interp_colnames = interp_to(df_torus, df_mme, interp_colnames)
-
-    # This is the meat of our code.  I have made it sort of general as
-    # if it could be add_multi_corr or something like, that if need be
-    c1s = [epsilon_colname] + torus_rolling_colnames
-    c2s = interp_colnames
-    remove1='rolling_nanmean_'
-    remove2='rolling_nanmean_'
-    windows=windows
-
-    # Fortunately, replace doesn't raise an error if the string to
-    # replacement is missing
-    for c1 in c1s:
-        out1 = c1.replace(remove1, '')
-        for c2 in c2s:
-            out2 = c2.replace(remove2, '')
-            for window in windows:
-                out_colname = f'{out1}-{window.days}D_rolling_corr-{out2}'
-                add_rolling_corr(df_torus, c1, window, c2,
-                                 out_colname=out_colname)
-                # Defragment, since it's a long loop
-                df_torus = df_torus.copy()
-
-    outname = os.path.join(TORUS_ROOT, f'{TORUS_BASE}_mme_{MODEL}.csv')
-    df_torus.to_csv(outname)
-
 def plot_mme(
         df_mme=None,
         torus_mme=None,
@@ -445,59 +377,13 @@ def plot_mme(
     ax.set_ylim(ylim)
     ax.legend(handles=handles)
 
-
-####
-import astropy.units as u
-from astropy.time import Time, TimeDelta
-from astropy.table import Table, QTable, vstack
-
-from IoIO.utils import filled_columns, fill_plot_col
-
-def qtable2df(t, index=None):
-    # If you need to filter or sort, do that first!
-    if isinstance(t, str):
-        t = QTable.read(t)
-    # This may be unnecessary
-    filled_columns(t, t.colnames, unmask=True)
-    one_d_colnames = [cn for cn in t.colnames
-                      if len(t[cn].shape) <= 1]
-    df = t[one_d_colnames].to_pandas()
-    if index is not None:
-        # This is 
-        df = df.set_index(df[index])
-    return df
-
-#df_torus = qtable2df(TORUS_DAY_TABLE, index='tavg')
-
-def df_from_csv(fname, datetime_index=True, **kwargs):
-    df = pd.read_csv(fname, **kwargs)
-    if datetime_index:
-        df.index = pd.to_datetime(df.index)
-    return df
-
-df_mme=None
-torus_mme=None
-
-if df_mme is None:
-    df_mme = os.path.join(TORUS_ROOT,
-                          f'Jupiter_mme_{MODEL}.csv')
-if isinstance(df_mme, str):
-        df_mme = pd.read_csv(df_mme, index_col=[0])
-        df_mme.index = pd.to_datetime(df_mme.index)
-if torus_mme is None:
-    torus_mme = os.path.join(TORUS_ROOT,
-                             f'{TORUS_BASE}_mme_{MODEL}.csv')
-if isinstance(torus_mme, str):
-    torus_mme = pd.read_csv(torus_mme, index_col='tavg')
-    torus_mme.index = pd.to_datetime(torus_mme.index)
-
 def plot_mme_corr(torus_mme,
                   # 'epsilon_from_day_table' or epsilon_nnD, where nnD
                   # probably should match mme_rolling
-                  epsilon_col='epsilon_3D', 
-                  mme_param='p_dyn',
-                  mme_rolling='3D', # '' to use raw interp
-                  rolling_corr='10D', # rolling corr window
+                  epsilon_cols=['epsilon_3D'],
+                  mme_params=['p_dyn'],
+                  mme_rollings=['3D'], # '' to use raw interp
+                  rolling_corrs=['10D'], # rolling corr window
                   fig=None,
                   ax=None,
                   tlim=None,
@@ -508,37 +394,210 @@ def plot_mme_corr(torus_mme,
     ax = ax or fig.add_subplot()
     handles = []
 
-    epsilon_out = epsilon_col.replace('_', ' ')
-    label = f'Torus {epsilon_out} corr w/ {mme_param} {mme_rolling}'
-    out1 = 'epsilon_from_day_table'
+    for mme_param in mme_params:
+        for epsilon_col in epsilon_cols:
+            for mme_rolling in mme_rollings:
+                for rolling_corr in rolling_corrs:
+                    epsilon_out = epsilon_col.replace('_', ' ')
+                    label = f'Torus {epsilon_out} w/ '\
+                        f'{mme_param} {mme_rolling} {rolling_corr} corr. window'
+                    out1 = epsilon_col
+                    if mme_rolling == '':
+                        out2 = mme_param
+                    else:
+                        out2 = f'{mme_param}_{mme_rolling}'
+                        colname = f'{out1}-{rolling_corr}_rolling_corr-{out2}'
 
-    out1 = epsilon_col
-    if mme_rolling == '':
-        out2 = mme_param
-    else:
-        out2 = f'{mme_param}_{mme_rolling}'
-    colname = f'{out1}-{rolling_corr}_rolling_corr-{out2}'
-
-    h = plot_column(torus_mme,
-                    colname=colname,
-                    label=label,
-                    fig=fig, ax=ax,
-                    tlim=tlim,
-                    **kwargs)
-    handles.append(h)
+                    h = plot_column(torus_mme,
+                                    colname=colname,
+                                    label=label,
+                                    fig=fig, ax=ax,
+                                    tlim=tlim,
+                                    **kwargs)
+                    handles.append(h)
 
 
-    ax.set_ylabel(f'{rolling_corr} rolling corr. coef.')
+
+    ax.set_ylabel(f'Rolling correlation coef.')
     ax.set_ylim(ylim)
     ax.legend(handles=handles)
 
-figsize=[12, 10]
-fig = plt.figure(figsize=figsize)
-plot_mme_corr(torus_mme)
-plot_mme_corr(torus_mme,
-              rolling_corr
+if __name__ == '__main__':
+    mme_outname = os.path.join(TORUS_ROOT,
+                               f'Jupiter_mme_{MODEL}.csv')
+
+    # These are the time windows for making our rolling correlation.  I
+    # want to make sure I synchronize the rolling nanmean of each function
+    # to these in some way
+    windows = ['3D', '10D', '30D', '100D', '200D']
+    windows = [pd.Timedelta(w) for w in windows]
+    mme_colnames=['B_mag', 'n_tot', 'p_dyn', 'u_mag']
+    mme_neg_unc=[f'{c}_neg_unc' for c in mme_colnames]
+    mme_pos_unc=[f'{c}_pos_unc' for c in mme_colnames]
+
+    if os.path.exists(mme_outname):
+        df_mme = pd.read_csv(mme_outname, index_col=[0])
+        df_mme.index = pd.to_datetime(df_mme.index)
+        mme_rolling_colnames = [rc for rc in df_mme.columns
+                                if 'rolling_' in rc]
+    else:
+        df_mme = readMMESH_fromFile(MME)
+        df_mme = df_mme['ensemble']
+        # --> In an idea world, I propagate the uncertainties
+        rc = add_rolling_funct_cols(df_mme, colnames=mme_colnames,
+                                    windows=windows, function=np.nanmean)
+        mme_rolling_colnames = rc
+        df_mme.to_csv(mme_outname)
 
 
+    #plot_column(df_mme, colname='rolling_nanmean_p_dyn_30D')
+    #plt.show()
+
+    df_torus = qtable2df(TORUS_DAY_TABLE, index='tavg')
+    torus_rolling_colnames = []
+    epsilon_colname='epsilon_from_day_table'
+    rc = add_rolling_funct_cols(df_torus, colnames=[epsilon_colname],
+                                windows=windows, function=np.nanmean,
+                                out_colbases=['epsilon'])
+    torus_rolling_colnames = rc
+    interp_colnames = (mme_colnames + mme_neg_unc + mme_pos_unc +
+                       mme_rolling_colnames)
+    interp_colnames = interp_to(df_torus, df_mme, interp_colnames)
+
+    # This is the meat of our code.  I have made it sort of general as
+    # if it could be add_multi_corr or something like, that if need be
+    c1s = [epsilon_colname] + torus_rolling_colnames
+    c2s = interp_colnames
+    remove1='rolling_nanmean_'
+    remove2='rolling_nanmean_'
+    windows=windows
+
+    # Fortunately, replace doesn't raise an error if the string to
+    # replacement is missing
+    for c1 in c1s:
+        out1 = c1.replace(remove1, '')
+        for c2 in c2s:
+            out2 = c2.replace(remove2, '')
+            for window in windows:
+                out_colname = f'{out1}-{window.days}D_rolling_corr-{out2}'
+                add_rolling_corr(df_torus, c1, window, c2,
+                                 out_colname=out_colname)
+                # Defragment, since it's a long loop
+                df_torus = df_torus.copy()
+
+    outname = os.path.join(TORUS_ROOT, f'{TORUS_BASE}_mme_{MODEL}.csv')
+    df_torus.to_csv(outname)
+
+#df_mme=None
+#torus_mme=None
+#
+#if df_mme is None:
+#    df_mme = os.path.join(TORUS_ROOT,
+#                          f'Jupiter_mme_{MODEL}.csv')
+#if isinstance(df_mme, str):
+#        df_mme = pd.read_csv(df_mme, index_col=[0])
+#        df_mme.index = pd.to_datetime(df_mme.index)
+#if torus_mme is None:
+#    torus_mme = os.path.join(TORUS_ROOT,
+#                             f'{TORUS_BASE}_mme_{MODEL}.csv')
+#if isinstance(torus_mme, str):
+#    torus_mme = pd.read_csv(torus_mme, index_col='tavg')
+#    torus_mme.index = pd.to_datetime(torus_mme.index)
+#
+#
+#figsize=[12, 10]
+#fig = plt.figure(figsize=figsize)
+##plot_mme_corr(torus_mme, fig=fig)
+##plot_mme_corr(torus_mme, fig=fig,
+##              rolling_corrs=['10D', '30D'])
+##plot_mme_corr(torus_mme, fig=fig,
+##              mme_params=['p_dyn'],                          
+##              epsilon_cols=['epsilon_10D'],
+##              mme_rollings=['10D'],
+##              rolling_corrs=['10D', '30D', '100D', '200D'])
+##plot_mme_corr(torus_mme, fig=fig,
+##              mme_params=['u_mag'],                          
+##              epsilon_cols=['epsilon_10D'],
+##              mme_rollings=['10D'],
+##              rolling_corrs=['10D', '30D', '100D', '200D'])
+##plot_mme_corr(torus_mme, fig=fig,
+##              mme_params=['p_dyn', 'u_mag'],                          
+##              epsilon_cols=['epsilon_10D'],
+##              mme_rollings=['10D'],
+##              rolling_corrs=['100D', '200D'])
+#
+#plot_mme_corr_kwargs_list = [
+#    {'mme_params' : ['p_dyn'],
+#     'epsilon_cols' : ['epsilon_10D'],
+#     'mme_rollings' : ['10D'],
+#     'rolling_corrs' :  ['10D', '30D', '100D', '200D']
+#     },
+#    {'mme_params' : ['u_mag'],
+#     'epsilon_cols' : ['epsilon_10D'],
+#     'mme_rollings' : ['10D'],
+#     'rolling_corrs' :  ['10D', '30D', '100D', '200D']
+#     },
+#    {'mme_params' : ['p_dyn', 'u_mag', 'B_mag', 'n_tot'],
+#     'mme_rollings' : ['10D'],
+#     'rolling_corrs' :  ['100D', '200D']
+#     }]
+#
+#corr_kwargs = plot_mme_corr_kwargs_list[-1]
+#plot_mme_corr(torus_mme, fig=fig, **corr_kwargs)
+#              
+##for corr_kwargs in plot_mme_corr_kwargs_list:
+##    plot_mme_corr(torus_mme, fig=fig
+#
+#
+#plt.show()
+#
+#
+#####
+#import astropy.units as u
+#from astropy.time import Time, TimeDelta
+#from astropy.table import Table, QTable, vstack
+#
+#from IoIO.utils import filled_columns, fill_plot_col
+#
+#def qtable2df(t, index=None):
+#    # If you need to filter or sort, do that first!
+#    if isinstance(t, str):
+#        t = QTable.read(t)
+#    # This may be unnecessary
+#    filled_columns(t, t.colnames, unmask=True)
+#    one_d_colnames = [cn for cn in t.colnames
+#                      if len(t[cn].shape) <= 1]
+#    df = t[one_d_colnames].to_pandas()
+#    if index is not None:
+#        # This is 
+#        df = df.set_index(df[index])
+#    return df
+#
+##df_torus = qtable2df(TORUS_DAY_TABLE, index='tavg')
+#
+#def df_from_csv(fname, datetime_index=True, **kwargs):
+#    df = pd.read_csv(fname, **kwargs)
+#    if datetime_index:
+#        df.index = pd.to_datetime(df.index)
+#    return df
+#
+#df_mme=None
+#torus_mme=None
+#
+#if df_mme is None:
+#    df_mme = os.path.join(TORUS_ROOT,
+#                          f'Jupiter_mme_{MODEL}.csv')
+#if isinstance(df_mme, str):
+#        df_mme = pd.read_csv(df_mme, index_col=[0])
+#        df_mme.index = pd.to_datetime(df_mme.index)
+#if torus_mme is None:
+#    torus_mme = os.path.join(TORUS_ROOT,
+#                             f'{TORUS_BASE}_mme_{MODEL}.csv')
+#if isinstance(torus_mme, str):
+#    torus_mme = pd.read_csv(torus_mme, index_col='tavg')
+#    torus_mme.index = pd.to_datetime(torus_mme.index)
+#
+#
 #epsilon_rolling = '3D'
 #if epsilon_rolling == '':
 #    epsilon_col = 'epsilon_from_day_table'

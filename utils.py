@@ -1827,12 +1827,3 @@ def plot_planet_subim(ccd_in,
 
     return ccd_in
 
-
-#c = ColnameEncoder('Na_ap', formatter='.0f')
-#print(c.to_colname(3*u.R_jup))
-#ap_sequence = np.asarray((1, 2, 4, 8, 16, 32, 64, 128)) * u.R_jup
-#na_aps = {}
-#for ap in ap_sequence:
-#    na_aps[c.to_colname(ap)] = ap
-#print(na_aps)
-
