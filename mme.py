@@ -1,4 +1,6 @@
-"""Module to read and plot Multi-Model Ensemble System for the outer Heliosphere (MMESH) outputs"""
+#!/usr/bin/python3
+
+"""Module to read and plot Multi-Model Ensemble System for the outer Heliosphere (MMESH) outputs and compare to IoIO epsilon data"""
 
 import os
 
@@ -18,13 +20,19 @@ from astropy.table import QTable
 
 from IoIO.utils import qtable2df, plot_column
 from IoIO.juno import JunoTimes, PJAXFormatter
-from IoIO.torus import add_epsilons
+from IoIO.torus import TORUS_ROOT, BASE as TORUS_BASE #add_epsilons
 
 MME = '/data/sun/Jupiter_MME/JupiterMME.csv'
 MODEL = 'ensemble'
+TORUS_DAY_TABLE = os.path.join(TORUS_ROOT, TORUS_BASE + '_day_table.ecsv')
+MME_COL_LABELS = {'B_mag': r'$|\vec B_{\mathrm{IMF}}|$ (nT)',
+                  'n_tot': r'Solar wind $\rho$ (cm$^{-3}$)',
+                  'p_dyn': r'Solar wind $P_{\mathrm{dynamic}}$ (nPa)',
+                  'u_mag': r'Solar wind velocity (km s$^{-1}$)'}
+
+# Obsolete
 RUNNING = 'running_' # prepended to running average columns
 TORUS = '/data/IoIO/Torus/Torus_cleaned.ecsv'
-TORUS_DAY_TABLE = '/data/IoIO/Torus/Torus_day_table.ecsv'
 
 # From https://zenodo.org/records/10687651
 def readMMESH_fromFile(fullfilename):
@@ -54,6 +62,7 @@ def readMMESH_fromFile(fullfilename):
     
     return mmesh_results
 
+# Obsolete
 def add_mme_running_av(df,
                        colname,
                        model=MODEL,
@@ -274,24 +283,29 @@ def plot_mme_epsilon_corr(df_mme=None,
     if show:
         plt.show()
 
-
+# --> This is where the new stuff begins
 def add_rolling_funct_cols(df, colnames,
-                           window=None, # pandas.Timedelta
+                           windows=None, # pandas.Timedelta
                            function=None,
                            min_periods=None,
-                           center=True):
-
+                           center=True,
+                           out_colbases=None):
     added_colnames = []
-    for colname in colnames:
+    if out_colbases is None:
+        out_colbases = (None,) * len(colnames)
+    for colname, out_colbase in zip(colnames, out_colbases):
         s = df[colname]
-        r = s.rolling(window,
-                      min_periods=min_periods,
-                      center=center)
-        mean_s = r.apply(function)
-        filt_colname = f'{window.days}D'
-        filt_colname = f'rolling_{function.__name__}_{colname}_{filt_colname}'
-        df[filt_colname] = mean_s
-        added_colnames.append(filt_colname)
+        for window in windows:
+            r = s.rolling(window,
+                          min_periods=min_periods,
+                          center=center)
+            mean_s = r.apply(function)
+            outbase = out_colbase or colname
+            filt_colname = f'{window.days}D'
+            filt_colname = \
+                f'rolling_{function.__name__}_{outbase}_{filt_colname}'
+            df[filt_colname] = mean_s
+            added_colnames.append(filt_colname)
 
     return added_colnames
 
@@ -311,53 +325,232 @@ def add_rolling_corr(df, col1, window, col2, out_colname=None):
     rolling_corr = df[col1].rolling(window).corr(df[col2])
     df[out_colname] = rolling_corr
 
-df_mme = readMMESH_fromFile(MME)
-df_mme = df_mme['ensemble']
+# This is the __main__ part of our module
 
-mme_outname = '/tmp/Jupiter_ensemble.csv'
-if not (os.path.exists(mme_outname)):
-    colnames=['B_mag', 'n_tot', 'p_dyn', 'u_mag']
-    rolling_colnames = []
-    cns = add_rolling_funct_cols(df_mme,
-                                 colnames=colnames,
-                                 window=pd.Timedelta(3, 'd'),
-                                 function=np.nanmean)
-    rolling_colnames.append(cns)
-    cns = add_rolling_funct_cols(df_mme,
-                                 colnames=colnames,
-                                 window=pd.Timedelta(10, 'd'),
-                                 function=np.nanmean)     
-    rolling_colnames.append(cns)
-    cns = add_rolling_funct_cols(df_mme,
-                                 colnames=colnames,
-                                 window=pd.Timedelta(30, 'd'),
-                                 function=np.nanmean)     
-    rolling_colnames.append(cns)
+if __name__ == '__main__':
+    mme_outname = os.path.join(TORUS_ROOT,
+                               f'Jupiter_mme_{MODEL}.csv')
 
-    df_mme.to_csv(mme_outname)
-else:
-    df_mme = pd.read_csv(mme_outname, index_col=[0])
-    df_mme.index = pd.to_datetime(df_mme.index)
-    rolling_colnames = [rc for rc in df_mme.columns
-                        if 'rolling_' in rc]
-                      
+    # These are the time windows for making our rolling correlation.  I
+    # want to make sure I synchronize the rolling nanmean of each function
+    # to these in some way
+    windows = ['3D', '10D', '30D']
+    windows = [pd.Timedelta(w) for w in windows]
+    mme_colnames=['B_mag', 'n_tot', 'p_dyn', 'u_mag']
+    mme_neg_unc=[f'{c}_neg_unc' for c in mme_colnames]
+    mme_pos_unc=[f'{c}_pos_unc' for c in mme_colnames]
 
-#plot_column(df_mme, colname='rolling_nanmean_p_dyn_30D')
-#plt.show()
+    if os.path.exists(mme_outname):
+        df_mme = pd.read_csv(mme_outname, index_col=[0])
+        df_mme.index = pd.to_datetime(df_mme.index)
+        mme_rolling_colnames = [rc for rc in df_mme.columns
+                                if 'rolling_' in rc]
+    else:
+        df_mme = readMMESH_fromFile(MME)
+        df_mme = df_mme['ensemble']
+        # --> In an idea world, I propagate the uncertainties
+        rc = add_rolling_funct_cols(df_mme, colnames=colnames,
+                                    windows=windows, function=np.nanmean)
+        mme_rolling_colnames = rc
+        df_mme.to_csv(mme_outname)
 
-df_torus = qtable2df(TORUS_DAY_TABLE, index='tavg')
-interp_colnames = interp_to(df_torus, df_mme, rolling_colnames)
 
-c1 = 'epsilon_from_day_table_medfilt'
-c2 = 'rolling_nanmean_p_dyn_3D'
+    #plot_column(df_mme, colname='rolling_nanmean_p_dyn_30D')
+    #plt.show()
 
-window = pd.Timedelta(30, 'd')
-simple_c1 = c1.split('_')[0]
-simple_c2 = '_'
-simple_c2 = simple_c2.join(c2.split('_')[-3:])
-out_colname = f'{simple_c1}_{window.days}D_rolling_corr_{simple_c2}'
+    df_torus = qtable2df(TORUS_DAY_TABLE, index='tavg')
+    torus_rolling_colnames = []
+    epsilon_colname='epsilon_from_day_table'
+    rc = add_rolling_funct_cols(df_torus, colnames=[epsilon_colname],
+                                windows=windows, function=np.nanmean,
+                                out_colbases=['epsilon'])
+    torus_rolling_colnames = rc
+    interp_colnames = (mme_colnames + mme_neg_unc + mme_pos_unc +
+                       mme_rolling_colnames)
+    interp_colnames = interp_to(df_torus, df_mme, interp_colnames)
 
-add_rolling_corr(df_torus, c1, window, c2, out_colname=out_colname)
+    # This is the meat of our code.  I have made it sort of general as
+    # if it could be add_multi_corr or something like, that if need be
+    c1s = [epsilon_colname] + torus_rolling_colnames
+    c2s = interp_colnames
+    remove1='rolling_nanmean_'
+    remove2='rolling_nanmean_'
+    windows=windows
+
+    # Fortunately, replace doesn't raise an error if the string to
+    # replacement is missing
+    for c1 in c1s:
+        out1 = c1.replace(remove1, '')
+        for c2 in c2s:
+            out2 = c2.replace(remove2, '')
+            for window in windows:
+                out_colname = f'{out1}-{window.days}D_rolling_corr-{out2}'
+                add_rolling_corr(df_torus, c1, window, c2,
+                                 out_colname=out_colname)
+                # Defragment, since it's a long loop
+                df_torus = df_torus.copy()
+
+    outname = os.path.join(TORUS_ROOT, f'{TORUS_BASE}_mme_{MODEL}.csv')
+    df_torus.to_csv(outname)
+
+
+import astropy.units as u
+from astropy.time import Time, TimeDelta
+from astropy.table import Table, QTable, vstack
+
+from IoIO.utils import fill_plot_col
+
+def plot_column(t,
+                time_col='tavg',
+                max_time_gap=15*u.day,
+                colname=None,
+                err_colname=None,
+                fmt='',
+                fig=None,
+                ax=None,
+                tlim=None,
+                **kwargs):
+
+    """Plot a column from a astropy.table.Table or pandas.DataFrame as
+    a function of time during the Juno mission.  Use juno_pj_axis(ax)
+    to plot the Juno perijove axis on the top axis
+
+    Parameters
+    ----------
+    t : astropy.table.Table or pandas.DataFrame
+        Input table or dataframe.  dataframe index must be a datetime
+
+    time_col : str
+        Name of time column
+        Default is `tavg'
+
+    colname : str
+        Data column name
+
+    err_colname : str
+        Data column name (optional).  If not None, ax.errorbar will be
+        used
+
+    max_time_gap : timdelta-like
+        For line plots, gaps in time larger than this will cause the
+        plotting pen to be lifted and started again for the next
+        segment    
+        Default is `15*u.day'
+    """
+    if fig is None:
+        fig = plt.figure()
+    if ax is None:
+        ax = fig.add_subplot()
+
+    # Play a little fast-and-lose with [Q]Table and DataFrame possible
+    # inputs and prepare for fact that ax.errorbar does not like
+    # astropy Times
+    if isinstance(t, Table):
+        datetimes = t[time_col]
+        datetimes = datetimes.to_datetime()
+    else:
+        if hasattr(t, 'index'):
+            datetimes = t.index.to_pydatetime()
+        else:
+            # Hope for the best
+            datetimes = t[time_col]
+    print(type(datetimes))
+    # When plotting lines, insert NANs into the values so that the
+    # plotting pen picks up.  If not plotting lines, this doesn't
+    # hurt.  Note that we need to work in datetimes because of our
+    # conversion, above.
+    if isinstance(max_time_gap, u.Quantity):
+        max_time_gap = TimeDelta(max_time_gap).to_datetime()
+    deltas = datetimes[1:] - datetimes[0:-1]
+    med_dt = np.median(deltas)
+    print(deltas)
+    print(f'max_time_gap = {max_time_gap}')
+    last_contig_idx = np.flatnonzero(deltas > max_time_gap)
+    datetimes = np.append(
+        datetimes, datetimes[last_contig_idx] + med_dt)
+    sort_idx = np.argsort(datetimes)
+    vals = t[colname]
+    ngaps = len(last_contig_idx)
+    npts = len(vals) + ngaps
+    vals = fill_plot_col(vals, ngaps)
+    datetimes = datetimes[sort_idx]
+    vals = vals[sort_idx]
+    if err_colname is None:
+        # plot returns an artist
+        h = ax.plot(datetimes, vals,
+                     fmt, **kwargs)
+        h = h[0]
+    else:
+        if isinstance(err_colname, tuple):
+            errs = np.empty((2, npts))
+            for ic, ec in enumerate(err_colname):
+                err = fill_plot_col(t[ec], ngaps)
+                err = err[sort_idx]
+                errs[ic] = err
+        else:
+            errs = fill_plot_col(t[err_colname], ngaps)
+            errs = errs[sort_idx]
+        h = ax.errorbar(datetimes, vals, errs, fmt=fmt, **kwargs)
+        
+    ax.set_xlabel('Date')
+    ax.set_xlim(tlim)
+    ax.xaxis.set_minor_locator(mdates.MonthLocator())
+    fig.autofmt_xdate()
+    ax.format_coord = PJAXFormatter(datetimes, vals)
+    return h
+
+# This is going to be plot_mme_stuff
+
+df_mme=None
+torus_mme=None
+mme_param='p_dyn'
+epsilon_rolling=None
+mme_rolling=3
+epsilon_mme_rolling_corr=10
+err_colname=(f'{mme_param}_neg_unc',
+             f'{mme_param}_pos_unc')
+fig=None
+ax=None
+tlim=None
+ylim=(0, 200)
+
+if df_mme is None:
+    df_mme = MME
+if isinstance(df_mme, str):
+        df_mme = readMMESH_fromFile(df_mme)
+        df_mme = df_mme['ensemble']
+if torus_mme is None:
+    torus_mme = os.path.join(TORUS_ROOT,
+                             f'{TORUS_BASE}_mme_{MODEL}.csv')
+if isinstance(torus_mme, str):
+    torus_mme = pd.read_csv(torus_mme, index_col='tavg')
+
+
+fig = fig or plt.figure()
+ax = ax or fig.add_subplot()
+handles = []
+h = plot_column(df_mme,
+                time_col='datetime',
+                colname=mme_param,
+                err_colname=err_colname,
+                fmt='b.', label=mme_param,
+                fig=fig, ax=ax,
+                tlim=tlim)
+handles.append(h)
+h = plot_column(torus_mme,
+                colname=mme_param,
+                err_colname=err_colname,
+                fmt='k.', label=mme_param,
+                alpha=0.2,
+                fig=fig, ax=ax,
+                tlim=tlim)
+handles.append(h)
+
+ax.set_ylabel(MME_COL_LABELS[mme_param])
+ax.legend(handles=handles)
+
+plt.show()
+
 
 #add_rolling_corr(df_torus, 'epsilon_from_day_table_medfilt',
 #                 pd.Timedelta(30, 'd'),
@@ -366,11 +559,11 @@ add_rolling_corr(df_torus, c1, window, c2, out_colname=out_colname)
 
 
 
-figsize=[12, 10]
-h = plot_column(df_torus, colname=out_colname,
-                label=out_colname)
-#legend(handles=handles)
-plt.show()
+#figsize=[12, 10]
+#h = plot_column(df_torus, colname=out_colname,
+#                label=out_colname)
+##legend(handles=handles)
+#plt.show()
 
 
 #plot_column(df_torus, colname='rolling_nanmean_p_dyn_30D')

@@ -1389,7 +1389,7 @@ def add_medfilt_columns(t, colnames, medfilt_width=None, **kwargs):
         meds = nan_median_filter(t[colname],
                                  size=medfilt_width,
                                  **kwargs)
-        t[f'{colname}_medfilt'] = meds
+        t[f'medfilt_{colname}'] = meds
         
     
 # --> THIS IS OBSOLETE EXCEPT IN na_meso
@@ -1599,7 +1599,12 @@ def pixel_per_Rj(ccd):
     pixscale = np.mean(lcdelt) * cdelt[0].unit
     pixscale = pixscale.to(u.arcsec) / u.pixel
     return Rj_arcsec / pixscale / u.R_jup 
-   
+
+def fill_plot_col(vals, ngaps):
+    vals = filled(vals, unmask=True)
+    vals = np.append(vals, (np.NAN, ) * ngaps)
+    return vals
+
 def plot_column(t,
                 time_col='tavg',
                 max_time_gap=15*u.day,
@@ -1649,10 +1654,8 @@ def plot_column(t,
         datetimes = t[time_col]
         datetimes = datetimes.to_datetime()
     else:
-        datetimes = t.index
-        
-    vals = t[colname]
-    vals = filled(vals, unmask=True)
+        nt = t.reset_index()
+        datetimes = nt[time_col].to_numpy(np.datetime64)
     # When plotting lines, insert NANs into the values so that the
     # plotting pen picks up.  If not plotting lines, this doesn't
     # hurt.  Note that we need to work in datetimes because of our
@@ -1665,19 +1668,28 @@ def plot_column(t,
     datetimes = np.append(
         datetimes, datetimes[last_contig_idx] + med_dt)
     sort_idx = np.argsort(datetimes)
-    vals = np.append(vals, (np.NAN, ) * len(last_contig_idx))
+    vals = t[colname]
+    ngaps = len(last_contig_idx)
+    npts = len(vals) + ngaps
+    vals = fill_plot_col(vals, ngaps)
+    datetimes = datetimes[sort_idx]
+    vals = vals[sort_idx]
     if err_colname is None:
         # plot returns an artist
-        h = ax.plot(datetimes[sort_idx], vals[sort_idx],
+        h = ax.plot(datetimes, vals,
                      fmt, **kwargs)
         h = h[0]
     else:
-        errs = t[err_colname]
-        errs = filled(errs, unmask=True)
-        errs = np.append(errs, (np.NAN, ) * len(last_contig_idx))
-        h = ax.errorbar(datetimes[sort_idx],
-                        vals[sort_idx], errs[sort_idx],
-                        fmt=fmt, **kwargs)
+        if isinstance(err_colname, tuple):
+            errs = np.empty((2, npts))
+            for ic, ec in enumerate(err_colname):
+                err = fill_plot_col(t[ec], ngaps)
+                err = err[sort_idx]
+                errs[ic] = err
+        else:
+            errs = fill_plot_col(t[err_colname], ngaps)
+            errs = errs[sort_idx]
+        h = ax.errorbar(datetimes, vals, errs, fmt=fmt, **kwargs)
         
     ax.set_xlabel('Date')
     ax.set_xlim(tlim)

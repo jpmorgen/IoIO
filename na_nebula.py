@@ -20,7 +20,7 @@ from matplotlib.ticker import MultipleLocator
 from astropy import log
 import astropy.units as u
 from astropy.time import Time
-from astropy.table import QTable, unique
+from astropy.table import QTable, unique, vstack
 from astropy.convolution import Box1DKernel
 
 from ccdproc import ImageFileCollection
@@ -32,12 +32,14 @@ from ccdmultipipe import ccd_meta_to_bmp_meta, as_single
 from IoIO.ioio_globals import IoIO_ROOT, RAW_DATA_ROOT
 from IoIO.cordata_base import IOIO_1_UTC_OFFSET
 from IoIO.utils import (ColnameEncoder, get_dirs_dates, reduced_dir,
-                        nan_biweight, nan_mad,
-                        valid_long_exposure, dict_to_ccd_meta,
-                        multi_glob, sum_ccddata, csvname_creator,
-                        add_itime_col, add_daily_biweights, daily_convolve,
-                        savefig_overwrite, finish_stripchart,
-                        pixel_per_Rj, plot_planet_subim)
+                        nan_biweight, nan_mad, valid_long_exposure,
+                        dict_to_ccd_meta, multi_glob, sum_ccddata,
+                        csvname_creator, add_itime_col,
+                        add_daily_biweights, contiguous_sections,
+                        linspace_day_table, add_medfilt_columns,
+                        daily_convolve, savefig_overwrite,
+                        finish_stripchart, pixel_per_Rj,
+                        plot_planet_subim, plot_column)
 from IoIO.cormultipipe import (MAX_NUM_PROCESSES, MAX_CCDDATA_BITPIX,
                                MAX_MEM_FRAC,
                                COR_PROCESS_EXPAND_FACTOR,
@@ -65,7 +67,7 @@ from IoIO.torus import closest_galsat_to_jupiter, add_mask_col, add_medfilt
 from IoIO.juno import JunoTimes, PJAXFormatter
 
 BASE = 'Na_nebula'
-OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
+NA_NEBULA_ROOT = os.path.join(IoIO_ROOT, BASE)
 BOX_NDAYS = 20 # GOING OBSOLETE
 MEDFILT_WIDTH = 81 # GOING OBSOLETE
 # Filter applied to 24 Rj aperture --> To be robust, this/code below
@@ -474,6 +476,70 @@ def na_nebula_plot(t, outdir,
 
     finish_stripchart(outdir, outbase, show=show)
 
+def create_na_nebula_day_table(
+        t_na_nebula_in=None,
+        max_time_gap=15*u.day,
+        max_gap_fraction=0.3, # beware this may leave some NANs if dt = 1*u.day
+        medfilt_width=10*u.day,
+        medfilt_mode='mirror',
+        utc_offset=IOIO_1_UTC_OFFSET,
+        dt=3*u.day):
+
+    if t_na_nebula_in is None:
+        t_na_nebula_in = os.path.join(NA_NEBULA_ROOT, BASE+'_cleaned.ecsv')
+    if isinstance(t_na_nebula_in, str):
+        t_na_nebula = QTable.read(t_na_nebula_in)
+    else:
+        t_na_nebula = t_na_nebula_in.copy()
+
+    max_jd_gap = max_time_gap.to(u.day).value
+    jd_dt = dt.to(u.day).value
+
+    # Fill original table with values we need for day_table
+    add_itime_col(t_na_nebula, time_col='tavg', itime_col='ijdlt',
+                  utc_offset=utc_offset, dt=jd_dt)
+    t_na_nebula['jd'] = t_na_nebula['tavg'].jd
+
+    largest_sub_encoder = ColnameEncoder('largest_sub', formatter='.1f')
+    sb_colnames = largest_sub_encoder.colbase_list(t_na_nebula.colnames)
+    biweight_cols = ['jd'] + sb_colnames
+    added_cols =add_daily_biweights(t_na_nebula, day_col='ijdlt',
+                                    colnames=biweight_cols)
+
+    # Create day_table
+    day_table_cols = ['ijdlt'] + added_cols
+    day_table = unique(t_na_nebula[day_table_cols], keys='ijdlt')
+    cdts = contiguous_sections(day_table, 'ijdlt', max_jd_gap)
+
+
+    icdts = linspace_day_table(cdts, algorithm='interpolate_replace_nans',
+                               max_gap_fraction=max_gap_fraction,
+                               time_col_offset=utc_offset,
+                               dt=dt)
+    width = medfilt_width/dt
+    width = width.decompose().value
+    width = np.round(width).astype(int)
+    add_medfilt_columns(icdts, colnames=added_cols,
+                        medfilt_width=width,
+                        mode=medfilt_mode)
+
+    # --> I might want to do other operations in here and maybe even
+    # --> have a function I pass in to do that
+
+    # Put it all back to together again 
+    na_nebula_day_table = QTable()
+    for icdt in icdts:
+        na_nebula_day_table = vstack([na_nebula_day_table, icdt])
+
+    # Give us a time column back
+    jds = na_nebula_day_table['biweight_jd']
+    loc = t_na_nebula['tavg'][0].location.copy()
+    tavgs = Time(jds, format='jd', location=loc)
+    tavgs.format = 'fits'
+    na_nebula_day_table['tavg'] = tavgs
+
+    return na_nebula_day_table
+
 def na_nebula_collection(directory,
                          glob_include=TORUS_NA_NEB_GLOB_LIST,
                          glob_exclude_list=TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
@@ -503,7 +569,7 @@ def na_nebula_directory(directory_or_collection,
                         glob_include=TORUS_NA_NEB_GLOB_LIST,
                         glob_exclude_list=TORUS_NA_NEB_GLOB_EXCLUDE_LIST,
                         outdir=None,
-                        outdir_root=OUTDIR_ROOT,
+                        outdir_root=NA_NEBULA_ROOT,
                         standard_star_obj=None,
                         na_meso_obj=None,
                         read_pout=True,
@@ -564,6 +630,66 @@ def na_nebula_directory(directory_or_collection,
     #na_nebula_plot(t, outdir)
     return t
 
+
+def plot_na_nebula_surf_brights(
+        t_na_nebula=None,
+        na_nebula_day_table=None,
+        min_av_ap_dist=6*u.R_jup, # selects SB boxes
+        max_av_ap_dist=25*u.R_jup,
+        fig=None,
+        ax=None,
+        tlim=None):
+
+    fig = fig or plt.figure()
+    ax = ax or fig.add_subplot()
+
+    if t_na_nebula is None:
+        t_na_nebula = os.path.join(NA_NEBULA_ROOT, BASE+'_cleaned.ecsv')
+    if isinstance(t_na_nebula, str):
+        t_na_nebula = QTable.read(t_na_nebula)
+    if na_nebula_day_table is None:
+        na_nebula_day_table = os.path.join(NA_NEBULA_ROOT,
+                                           BASE+'_day_table.ecsv')
+    if isinstance(na_nebula_day_table, str):
+        na_nebula_day_table = QTable.read(na_nebula_day_table)
+
+    custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f'])
+    plt.rc('axes', prop_cycle=custom_cycler)
+
+    err_handles = []
+    line_handles = []
+
+    # Day table
+    biweight_encoder = ColnameEncoder('biweight', formatter='.1f')
+    biweight_cols = biweight_encoder.colbase_list(na_nebula_day_table.colnames)
+    std_encoder = ColnameEncoder('std', formatter='.1f')
+    std_cols = std_encoder.colbase_list(na_nebula_day_table.colnames)
+    for bwt_col, std_col in zip(biweight_cols, std_cols):
+        if '_jd' in bwt_col:
+            continue
+        av_ap = biweight_encoder.from_colname(bwt_col)
+        if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
+            continue
+        medfilt_colname = f'medfilt_{bwt_col}'
+        h = plot_column(na_nebula_day_table,
+                        colname=bwt_col,
+                        err_colname=std_col,
+                        fmt='.',
+                        label=f'{av_ap.value} R$_\mathrm{{J}}$ ',
+                        alpha=0.25,
+                        fig=fig, ax=ax)
+        err_handles.append(h)
+        h = plot_column(na_nebula_day_table,
+                        colname=medfilt_colname,
+                        label=f'{av_ap.value} R$_\mathrm{{J}}$ medfilt',
+                        linewidth=2,
+                        fig=fig, ax=ax)
+        line_handles.append(h)
+
+    ax.set_ylabel(f'Na Neb. Surf. Bright ({na_nebula_day_table[bwt_col].unit})')
+    ax.legend(ncol=2, handles=err_handles+line_handles)
+
+ # --> This is becoming obsolete
 def plot_nightly_medians(table_or_fname,
                          fig=None,
                          ax=None,
@@ -693,8 +819,6 @@ def plot_obj_surf_bright(table_or_fname,
     if fig_close:
         plt.close()
 
-
-
 def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
                    start=None,
                    stop=None,
@@ -709,7 +833,7 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
                    write_csvs=True,
                    show=False,
                    create_outdir=True,                       
-                   outdir_root=OUTDIR_ROOT,
+                   outdir_root=NA_NEBULA_ROOT,
                    **kwargs):
 
     dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
@@ -779,12 +903,15 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
     #print('len(clean_t): ', len(clean_t))
 
     clean_t.sort('tavg')
-    add_itime_col(clean_t, time_col='tavg', itime_col='ijdlt',
-                  utc_offset=IOIO_1_UTC_OFFSET, dt=1*u.day)
-    sb_colnames = largest_sub_encoder.colbase_list(clean_t.colnames)
-    add_daily_biweights(clean_t, day_col='ijdlt', colnames=sb_colnames)
+    #add_itime_col(clean_t, time_col='tavg', itime_col='ijdlt',
+    #              utc_offset=IOIO_1_UTC_OFFSET, dt=1*u.day)
+    #sb_colnames = largest_sub_encoder.colbase_list(clean_t.colnames)
+    #add_daily_biweights(clean_t, day_col='ijdlt', colnames=sb_colnames)
     clean_t.write(os.path.join(outdir_root, BASE + '_cleaned.ecsv'),
                   overwrite=True)
+    torus_day_table = create_na_nebula_day_table(clean_t)
+    torus_day_table.write(os.path.join(outdir_root, BASE + '_day_table.ecsv'),
+                          overwrite=True)
   
     return summary_table
 
@@ -792,7 +919,7 @@ class NaNebulaArgparseHandler(NaMesoArgparseHandler, SSArgparseHandler,
                               CorPhotometryArgparseMixin, CalArgparseHandler):
     def add_all(self):
         """Add options used in cmd"""
-        self.add_reduced_root(default=OUTDIR_ROOT)
+        self.add_reduced_root(default=NA_NEBULA_ROOT)
         self.add_start()
         self.add_stop()
         #self.add_show()
@@ -865,7 +992,7 @@ if __name__ == '__main__':
 #solve_timeout=SOLVE_TIMEOUT
 #join_tolerance=JOIN_TOLERANCE*JOIN_TOLERANCE_UNIT
 #
-#outdir_root=OUTDIR_ROOT
+#outdir_root=NA_NEBULA_ROOT
 #fits_fixed_ignore=True
 #photometry = (
 #    photometry

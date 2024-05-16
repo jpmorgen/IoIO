@@ -603,6 +603,19 @@ def create_torus_day_table(
     for icdt in icdts:
         torus_day_table = vstack([torus_day_table, icdt])
 
+    # Put in our epsilon columns
+    add_epsilon_cols(torus_day_table,
+                     outbase='epsilon_from_day_table',
+                     prefix='biweight_',
+                     err_prefix='std_',
+                     out_prefix='',
+                     out_err_postfix='_err')
+    add_epsilon_cols(torus_day_table,
+                     outbase='epsilon_from_day_table',
+                     prefix='medfilt_biweight_',
+                     err_prefix='medfilt_std_',
+                     out_prefix='medfilt_',
+                     out_err_postfix='_err')
     # Give us a time column back
     jds = torus_day_table['biweight_jd']
     loc = t_torus['tavg'][0].location.copy()
@@ -650,6 +663,7 @@ def plot_axvlines(ax, vlines=None, **kwargs):
         vline = date.fromisoformat(vline)
         ax.axvline(vline, color=color)
 
+# --> This is becoming obsolete
 def plot_column_vals(t,
                      colnames,
                      scale=None,
@@ -782,29 +796,29 @@ def plot_ansa_surf_brights(t_torus, torus_day_table,
     #                fig=fig, ax=ax)
     #handles.append(h)
     h = plot_column(torus_day_table,
-                    colname='biweight_ansa_left_surf_bright_medfilt',
-                    err_colname='std_ansa_left_surf_bright_medfilt',
+                    colname='medfilt_biweight_ansa_left_surf_bright',
+                    err_colname='medfilt_std_ansa_left_surf_bright',
                     fmt='b-', 
                     label='Dawn medfilt',
                     fig=fig, ax=ax)
     handles.append(h)
     h = plot_column(torus_day_table,
-                    colname='biweight_ansa_right_surf_bright_medfilt',
-                    err_colname='std_ansa_right_surf_bright_medfilt',
+                    colname='medfilt_biweight_ansa_right_surf_bright',
+                    err_colname='medfilt_std_ansa_right_surf_bright',
                     fmt='r-', 
                     label='Dusk medfilt',
                     fig=fig, ax=ax)
     handles.append(h)
     #h = plot_column(torus_day_table,
-    #                colname='biweight_ansa_left_surf_bright_medfilt',
-    #                #err_colname='std_ansa_left_surf_bright_medfilt',
+    #                colname='medfilt_biweight_ansa_left_surf_bright',
+    #                #err_colname='medfilt_std_ansa_left_surf_bright',
     #                fmt='b-', linewidth=3,
     #                label='Dawn medfilt',
     #                fig=fig, ax=ax)
     #handles.append(h)
     #h = plot_column(torus_day_table,
-    #                colname='biweight_ansa_right_surf_bright_medfilt',
-    #                #err_colname='std_ansa_right_surf_bright_medfilt',
+    #                colname='medfilt_biweight_ansa_right_surf_bright',
+    #                #err_colname='medfilt_std_ansa_right_surf_bright',
     #                fmt='r-', linewidth=3, 
     #                label='Dusk medfilt',
     #                fig=fig, ax=ax)
@@ -913,8 +927,8 @@ def plot_torus_epsilons(t_torus, torus_day_table,
     handles.append(h)
     h = plot_column(
         torus_day_table,
-        colname='biweight_epsilon_medfilt',
-        err_colname='biweight_epsilon_err_medfilt',
+        colname='medfilt_biweight_epsilon',
+        err_colname='medfilt_biweight_epsilon_err',
         fmt='k*',
         label='medfilt epsilon',
         alpha=0.2,
@@ -923,8 +937,8 @@ def plot_torus_epsilons(t_torus, torus_day_table,
     handles.append(h)
     h = plot_column(
         torus_day_table,
-        colname='epsilon_from_day_table_medfilt',
-        err_colname='epsilon_from_day_table_medfilt_err',
+        colname='medfilt_epsilon_from_day_table',
+        err_colname='medfilt_epsilon_from_day_table_err',
         fmt='c-',
         label='medfilt epsilon from medfilt anas pos.',
         alpha=1,
@@ -1074,7 +1088,7 @@ def plot_torus_ansa_pos(t_torus, torus_day_table,
     st_torus = east_from_io(t_torus, ['ansa_left_r_peak'])
     storus_day_table = east_from_io(torus_day_table,
                                     ['biweight_ansa_left_r_peak',
-                                     'biweight_ansa_left_r_peak_medfilt'])
+                                     'medfilt_biweight_ansa_left_r_peak'])
 
     handles = []
     h = plot_column(st_torus,
@@ -1114,8 +1128,8 @@ def plot_torus_ansa_pos(t_torus, torus_day_table,
     #                ax=ax)
     #handles.append(h)
     h = plot_column(storus_day_table,
-                    colname='east_shift_biweight_ansa_left_r_peak_medfilt',
-                    err_colname='std_ansa_left_r_peak_medfilt',
+                    colname='east_shift_medfilt_biweight_ansa_left_r_peak',
+                    err_colname='medfilt_std_ansa_left_r_peak',
                     fmt='b-',
                     linewidth=2,
                     elinewidth=1,
@@ -1124,8 +1138,8 @@ def plot_torus_ansa_pos(t_torus, torus_day_table,
                     ax=ax)
     handles.append(h)
     h = plot_column(storus_day_table,
-                    colname='east_shift_biweight_ansa_right_r_peak_medfilt',
-                    err_colname='std_ansa_right_r_peak_medfilt',
+                    colname='east_shift_medfilt_biweight_ansa_right_r_peak',
+                    err_colname='medfilt_std_ansa_right_r_peak',
                     fmt='r-',
                     linewidth=2,
                     elinewidth=1,
@@ -1502,7 +1516,10 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
     # derivative product, which is why I currently do it after
     add_epsilon_cols(clean_t, outbase='epsilon', err_postfix='_err')
     clean_t.write(os.path.join(outdir_root, BASE + '_cleaned.ecsv'),
-                                     overwrite=True)
+                  overwrite=True)
+    torus_day_table = create_torus_day_table(clean_t)
+    torus_day_table.write(os.path.join(outdir_root, BASE + '_day_table.ecsv'),
+                          overwrite=True)
 
     #torus_stripchart(summary_table, outdir_root, show=show)
 
