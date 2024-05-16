@@ -1605,6 +1605,7 @@ def fill_plot_col(vals, ngaps):
     vals = np.append(vals, (np.NAN, ) * ngaps)
     return vals
 
+
 def plot_column(t,
                 time_col='tavg',
                 max_time_gap=15*u.day,
@@ -1654,8 +1655,13 @@ def plot_column(t,
         datetimes = t[time_col]
         datetimes = datetimes.to_datetime()
     else:
-        nt = t.reset_index()
-        datetimes = nt[time_col].to_numpy(np.datetime64)
+        # pandas.DataFrames handle time as the index property.
+        # Hopefully that has been set up properly with
+        if hasattr(t, 'index'):
+            datetimes = t.index.to_pydatetime()
+        else:
+            # Hope for the best
+            datetimes = t[time_col]
     # When plotting lines, insert NANs into the values so that the
     # plotting pen picks up.  If not plotting lines, this doesn't
     # hurt.  Note that we need to work in datetimes because of our
@@ -1697,77 +1703,6 @@ def plot_column(t,
     fig.autofmt_xdate()
     ax.format_coord = PJAXFormatter(datetimes, vals)
     return h
-    
-#def plot_columns(t,
-#                 time_col='tavg',
-#                 max_time_gap=15*u.day,
-#                 colnames=None,
-#                 err_colnames=None,
-#                 fmts='',
-#                 labels='',
-#                 alphas=1,
-#                 fig=None,
-#                 ax=None,
-#                 tlim=None):
-#
-#    if fig is None:
-#        fig = plt.figure()
-#    if ax is None:
-#        ax = fig.add_subplot()
-#    if np.isscalar(alphas):
-#        alphas = np.full(len(colnames), alphas)
-#    if np.isscalar(fmts):
-#        fmts = np.full(len(colnames), fmts)
-#    if np.isscalar(labels):
-#        labels = np.full(len(colnames), labels)
-#
-#    if fig is None:
-#        fig = plt.figure()
-#    if ax is None:
-#        ax = fig.add_subplot()
-#
-#    handles = []
-#    if err_colnames is None:
-#        for ic, colname in enumerate(colnames):
-#            datetimes = t[time_col].datetime        
-#            vals = t[colname].copy()
-#            vals = filled(vals, unmask=True)
-#            # When plotting lines, insert NANs into the values so that the
-#            # plotting pen picks up.  If not plotting lines, this doesn't hurt
-#            deltas = t[time_col][1:] - t[time_col][0:-1]
-#            dt = np.median(deltas)
-#            last_contig_idx = np.flatnonzero(deltas > max_time_gap)
-#            datetimes = np.append(
-#                datetimes, datetimes[last_contig_idx] + dt.datetime)
-#            vals = np.append(vals, (np.NAN, ) * len(last_contig_idx))
-#            sort_idx = np.argsort(datetimes)
-#            h = ax.plot(datetimes[sort_idx], vals[sort_idx],
-#                        fmts[ic], alpha=alphas[ic],
-#                        label=labels[ic])
-#            # plot returns an artist
-#            handles.append(h[0])
-#    else:
-#        if len(colnames) != len(err_colnames):
-#            raise ValueError('colnames and err_colnames do not have the same length')
-#        for ic, (colname, err_colname) in enumerate(zip(colnames, err_colnames)):
-#            # Assume my stylistic approach of plotting points in errorbars
-#            datetimes = t[time_col].datetime
-#            vals = t[colname].copy()
-#            vals = filled(vals, unmask=True)
-#            errs = t[err_colname].copy()
-#            errs = filled(errs, unmask=True)
-#            h = ax.errorbar(datetimes, vals, errs,
-#                            fmt=fmts[ic], alpha=alphas[ic],
-#                            label=labels[ic])
-#            handles.append(h)
-#
-#    ax.set_xlabel('Date')
-#    ax.set_xlim(tlim)
-#    ax.xaxis.set_minor_locator(mdates.MonthLocator())
-#    fig.autofmt_xdate()
-#    ax.format_coord = PJAXFormatter(datetimes, t[time_col])
-#
-#    return(handles)
 
 def plot_planet_subim(ccd_in,
                       fig=None,
