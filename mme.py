@@ -388,6 +388,7 @@ def plot_mme_corr(torus_mme,
                   ax=None,
                   tlim=None,
                   ylim=None,
+                  legend_ncol=1,
                   **kwargs):
 
     fig = fig or plt.figure()
@@ -420,7 +421,7 @@ def plot_mme_corr(torus_mme,
 
     ax.set_ylabel(f'Rolling correlation coef.')
     ax.set_ylim(ylim)
-    ax.legend(handles=handles)
+    ax.legend(handles=handles, ncol=legend_ncol)
 
 if __name__ == '__main__':
     mme_outname = os.path.join(TORUS_ROOT,

@@ -763,7 +763,8 @@ def plot_column_vals(t,
 
 def plot_ansa_surf_brights(t_torus, torus_day_table,
                            fig=None, ax=None,
-                           tlim=None, ylim=(0, 200)):
+                           tlim=None, ylim=(0, 200),
+                           **kwargs):
     fig = fig or plt.figure()
     ax = ax or fig.add_subplot()
     handles = []
@@ -913,7 +914,8 @@ def add_epsilons(t, ansa_medfilt_width=21, epsilon_medfilt_width=11):
 
 def plot_torus_epsilons(t_torus, torus_day_table,
                         fig=None, ax=None,
-                        tlim=None, ylim=(-0.05, 0.10)):
+                        tlim=None, ylim=(-0.02, 0.08),
+                        show_legend=True):
 
     fig = fig or plt.figure()
     ax = ax or fig.add_subplot()
@@ -957,7 +959,8 @@ def plot_torus_epsilons(t_torus, torus_day_table,
     ax.set_xlim(tlim)
     ax.set_ylim(ylim)
     ax.set_ylabel(r'Sky plane $|\vec\epsilon|$ (dawnward)')
-    ax.legend(ncol=2, handles=handles)
+    if show_legend:
+        ax.legend(ncol=2, handles=handles)
 
 # --> BECOMING OBSOLETE
 def plot_epsilons(t,

@@ -11203,3 +11203,17 @@ Getting some appreciation of what I would use __init__.py for.  I
 would use it to define the IoIO namespace, so I would have to-level
 things to import defined there(?)  In particular master_stripchart
 would be a good one.  Or maybe that's wrong...
+
+Fri May 17 21:46:52 2024 EDT  jpmorgen@snipe
+
+So when I am in ~/py/astropy_git/astropy/time/core.py and try a C-c
+C-c I get:
+
+ImportError: attempted relative import with no known parent package
+
+This means the import system isn't initialized to a top-level
+package.  That is why I did everything as absolute imports.  If I am
+to have a package, the long-term solution is to do things not in
+script mode, but actually run a program with C-c C-l.  Or I do the
+test.py thing to develop code and if I change the larger source tree,
+just C-c C-l test or maybe I'd have to cycle the Python.
