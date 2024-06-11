@@ -686,6 +686,7 @@ def plot_na_nebula_surf_brights(
                         fig=fig, ax=ax)
         line_handles.append(h)
 
+    ax.set_xlim(tlim)
     ax.set_ylabel(f'Na Neb. Surf. Bright ({na_nebula_day_table[bwt_col].unit})')
     ax.legend(ncol=2, handles=err_handles+line_handles)
 

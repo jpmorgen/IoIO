@@ -78,7 +78,7 @@ stop = None
 #make_movie(t, '/tmp/test_Na.mp4', start=start, stop=stop)
 #make_movie(t, '/tmp/test_Na_apertures.mp4', reduction_suffix='_apertures',
 #           start=start, stop=stop)
-t = QTable.read('/data/IoIO/Torus/Torus.ecsv')
+t = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
 #make_movie(t, '/tmp/test_SII.mp4', start=start, stop=stop)
 
 

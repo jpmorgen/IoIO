@@ -12,3 +12,7 @@ RAW_DATA_ROOT = os.path.join(IoIO_ROOT, 'raw')
 # --> Should have all of the directories for all of the components?
 # --> Probably so that those modules don't need to be imported when
 # --> getting the file info 
+
+# They could be functions somewhere, that take IoIO_ROOT as the
+# argument, or something
+

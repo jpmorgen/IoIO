@@ -16,9 +16,11 @@ from matplotlib.ticker import MultipleLocator
 
 import pandas as pd
 
+import astropy.units as u
 from astropy.table import QTable
 
-from IoIO.utils import qtable2df, plot_column
+from IoIO.utils import (qtable2df, plot_column, contiguous_sections,
+                        nan_biweight, nan_mad)
 from IoIO.juno import JunoTimes, PJAXFormatter
 from IoIO.torus import TORUS_ROOT, BASE as TORUS_BASE #add_epsilons
 
@@ -488,6 +490,59 @@ if __name__ == '__main__':
 
     outname = os.path.join(TORUS_ROOT, f'{TORUS_BASE}_mme_{MODEL}.csv')
     df_torus.to_csv(outname)
+
+
+    # Print opposition correlations long term
+    # --> This is not necessarily the best place to put this, but it
+    # works for now.
+    time_col = 'tavg'
+    mme_param = 'p_dyn'
+    #mme_param = 'u_mag'
+    #mme_param = 'B_mag'
+    #mme_param = 'n_tot'
+    conjunction_time = 3*30*u.day
+    t_torus = os.path.join(TORUS_ROOT, 'Torus_cleaned.ecsv')
+    t_torus = QTable.read(t_torus)
+
+    df_mme = readMMESH_fromFile(MME)
+    df_mme = df_mme[MODEL]
+    mme_datetimes = df_mme.index.to_pydatetime()
+
+    torus_opp_list = contiguous_sections(t_torus, 'tavg', 3*30*u.day)
+    n_oppositions =  len(torus_opp_list)
+
+    midtimes = []
+    to_corr = np.empty((2, n_oppositions))
+
+    print('Long-term MME correlation with epsilon')
+    print(f'Date range, av {mme_param}, epsilon biweight, mean')
+    for it, t in enumerate(torus_opp_list):
+        start = t['tavg'][0]
+        stop = t['tavg'][-1]
+        mid = start + (stop - start) / 2
+        mask = np.logical_and(start.datetime < mme_datetimes,
+                              mme_datetimes < stop.datetime)
+        df = df_mme[mask]
+        midtimes.append(mid)
+        to_corr [0, it] = np.nanmean(t['epsilon']).value
+        to_corr[1,it] = np.nanmean(df[mme_param])
+        start.format = 'fits'
+        stop.format = 'fits'
+        starts, _ = str(start).split('T')
+        stops, _ = str(stop).split('T')
+        mme_mean = np.nanmean(df[mme_param])
+        eps_biweight = nan_biweight(t['epsilon'])
+        eps_mean = np.nanmean(t['epsilon'])
+        eps_mad = nan_mad(t['epsilon'])
+        print(f'{starts}, {stops}, {mme_mean:6.4f}, {eps_biweight:6.4f}+/-{eps_mad:6.4f}, {eps_mean:6.4f}+/-{eps_mad:6.4f}')
+        #print(f'{np.nanmean(df[mme_param]):4.2f}')
+        #print(start, stop, nan_biweight(t['epsilon']), nan_mad(t['epsilon']))
+        #print(start, stop, np.nanmean(t['epsilon']), nan_mad(t['epsilon']))
+
+    midtimes = np.asarray(midtimes)
+
+    cov = np.corrcoef(to_corr)
+    print(f'{mme_param} correlation with epsilon = {cov[0,1]:4.2f}')
 
 #df_mme=None
 #torus_mme=None
