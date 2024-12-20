@@ -74,14 +74,14 @@ stop = None
 
 #start = '2023-06-01'
 
-#t = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
-#make_movie(t, '/tmp/test_Na.mp4', start=start, stop=stop)
+t = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
+make_movie(t, '/tmp/test_Na.mp4', start=start, stop=stop)
 #make_movie(t, '/tmp/test_Na_apertures.mp4', reduction_suffix='_apertures',
 #           start=start, stop=stop)
 t = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
-#make_movie(t, '/tmp/test_SII.mp4', start=start, stop=stop)
+make_movie(t, '/tmp/test_SII.mp4', start=start, stop=stop)
 
 
-make_movie(t, '/tmp/test_SII_reduction.mp4', reduction_suffix='_reduction',
-           start=start, stop=stop)
+#make_movie(t, '/tmp/test_SII_reduction.mp4', reduction_suffix='_reduction',
+#           start=start, stop=stop)
 

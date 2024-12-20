@@ -43,7 +43,7 @@ def comets_in_dir(directory,
         bname = os.path.basename(f)
         sb = bname.split('-')
         comet_list.append(sb[0])
-    return list(set(comet_list))
+    return (list(set(comet_list)), len(comet_list))
 
 def comet_obs(raw_data_root=RAW_DATA_ROOT,
               include_PSIScope=True,
@@ -56,10 +56,12 @@ def comet_obs(raw_data_root=RAW_DATA_ROOT,
         log.warning('No directories found')
         return []
     flist = []
+    n_total_obs = 0
     n_nights = 0
     comet_date_list = []
     for d, date in dirs_dates:
-        cfl = comets_in_dir(d, **kwargs)
+        (cfl, n_obs) = comets_in_dir(d, **kwargs)
+        n_total_obs += n_obs
         if len(cfl) > 0:
             n_nights += 1
             flist.extend(cfl)
@@ -86,7 +88,7 @@ def comet_obs(raw_data_root=RAW_DATA_ROOT,
     #    cl.append(sb[0])
     #return list(set(cl)), n_nights
 
-    return comet_date_list
+    return (comet_date_list, n_total_obs)
 
 
 class CometMultiPipe(CorMultiPipeBase):
@@ -213,7 +215,7 @@ log.setLevel('DEBUG')
 #c = comet_obsion('/data/IoIO/raw/20211028')
 #c = comet_obsion('/data/IoIO/raw/20220112/')
 
-raw_comets_dates = comet_obs(include_PSIScope=False)
+(raw_comets_dates, n_obs) = comet_obs(include_PSIScope=False)
 comets, dates = zip(*raw_comets_dates)
 uniq_comets = sorted(set(comets))
 uniq_nights = list(set(dates))
@@ -221,7 +223,8 @@ n_comets = len(uniq_comets)
 n_nights = len(uniq_nights)
 
 print(f'{n_comets} unique comets recorded on {n_nights} nights')
-print(f'{len(dates)} total observations')
+#print(f'{len(dates)} total observations?')
+print(f'{n_obs} total observations')
 
 print(uniq_comets)
 

@@ -636,6 +636,7 @@ def plot_na_nebula_surf_brights(
         na_nebula_day_table=None,
         min_av_ap_dist=6*u.R_jup, # selects SB boxes
         max_av_ap_dist=25*u.R_jup,
+        na_sb_lim=None,
         fig=None,
         ax=None,
         tlim=None):
@@ -687,6 +688,7 @@ def plot_na_nebula_surf_brights(
         line_handles.append(h)
 
     ax.set_xlim(tlim)
+    ax.set_ylim(na_sb_lim)
     ax.set_ylabel(f'Na Neb. Surf. Bright ({na_nebula_day_table[bwt_col].unit})')
     ax.legend(ncol=2, handles=err_handles+line_handles)
 

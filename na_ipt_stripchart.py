@@ -138,14 +138,23 @@ outdir = '/data/IoIO/analysis/'
 
 
 #master_stripchart(plots=['na_nebula',
+#                         'ansa_brights'],
+#                  **table_dict)
+
+master_stripchart(plots=['na_nebula',
+                         'ansa_brights',
+                         'ansa_pos'],
+                  **table_dict)
+
+#master_stripchart(plots=['na_nebula',
 #                         'ansa_brights',
 #                         'epsilons'],
 #                  **table_dict)
 
-master_stripchart(plots=['ansa_brights',
-                         'ansa_pos',
-                         'epsilons'],
-                  **table_dict)
+#master_stripchart(plots=['ansa_brights',
+#                         'ansa_pos',
+#                         'epsilons'],
+#                  **table_dict)
 
 #master_stripchart(t_na, t_torus,
 #                  plots=['Na_nighly_medians',

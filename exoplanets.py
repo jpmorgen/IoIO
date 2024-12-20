@@ -33,7 +33,7 @@ EXOPLANET_ROOT = '/data/Exoplanets'
 GLOB_INCLUDE = ['TOI*', 'WASP*', 'KPS*', 'HAT*', 'K2*', 'TrES*',
                 'Qatar*', 'GJ*', 'KELT*', 'KOI*', 'CoRoT*', 'Kepler*',
                 'MASCARA*', 'GPX*', 'NGTS*', 'OGLE*', 'LTT*', 'HIP*',
-                'WTS*']
+                'WTS*', 'XO*']
 
 MIN_TRANSIT_OBS_TIME = 1*u.hour
 
