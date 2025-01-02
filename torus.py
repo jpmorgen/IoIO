@@ -20,7 +20,7 @@ import matplotlib.transforms as transforms
 from astropy import log
 import astropy.units as u
 from astropy.time import Time
-from astropy.table import QTable, unique, vstack
+from astropy.table import QTable, Column, unique, vstack, hstack
 from astropy.convolution import Gaussian1DKernel
 from astropy.coordinates import Angle, SkyCoord
 from astropy.modeling import models, fitting
@@ -554,7 +554,9 @@ def create_torus_day_table(
     """
 
     # --> See IoIO_reduction.notebk Tue May 14 08:42:05 2024 EDT  
-  
+    # --> This might go faster using grouped operations
+    # https://docs.astropy.org/en/stable/table/operations.html#id2
+    # with the biweight_jd as the group_by keys
 
     if t_torus_in is None:
         t_torus_in = os.path.join(TORUS_ROOT, BASE+'.ecsv')
@@ -623,7 +625,28 @@ def create_torus_day_table(
     tavgs.format = 'fits'
     torus_day_table['tavg'] = tavgs
 
-    return torus_day_table
+    # Put the medfilt_* columns from torus_day_table into t_torus so
+    # we can do detrending
+    medfilt_colnames = [colname for colname in torus_day_table.colnames
+                        if 'medfilt_' in colname]
+    medfilt_columns = torus_day_table[medfilt_colnames]
+    for i in np.arange(len(t_torus) - len(torus_day_table)):
+        medfilt_columns.add_row()
+
+    wide_torus = hstack([t_torus, medfilt_columns])
+
+    for wide_torus_row in wide_torus:
+        idx = np.argmin(abs(torus_day_table['biweight_jd']
+                            - wide_torus_row['biweight_jd']))
+        for col in medfilt_colnames:
+            wide_torus_row[col] = torus_day_table[col][idx]
+
+    wide_torus = east_from_io(wide_torus,
+                              ['ansa_left_r_peak',
+                               'biweight_ansa_left_r_peak',
+                               'medfilt_biweight_ansa_left_r_peak'])
+
+    return torus_day_table, wide_torus
 
 # --> A better way to do this might be piecewise.
 def add_medfilt(t, colname, mask_col='mask', medfilt_width=21, mode='mirror'):
@@ -1071,9 +1094,13 @@ def plot_epsilons(t,
 
 def east_from_io(t, left_colnames):
     """Creates new left and right columns that read in eastward shift
-from Io's orbit.  Returns a new table so as to not mess up the original
+from Io's orbit.  Returns a new table so as to not mess up the original unless the original already has the eastward shift columns
 
     """
+    already_done = ['east_shift_{left_colname}' in t.colnames
+                    for left_colname in left_colnames]
+    if set(already_done) == {True}:
+        return t
     t = t.copy()
     for left_colname in left_colnames:
         right_colname = left_colname.replace('left', 'right')
@@ -1154,6 +1181,41 @@ def plot_torus_ansa_pos(t_torus, torus_day_table,
                     fig=fig,
                     ax=ax)
     handles.append(h)
+
+    ax.set_ylabel(r'Dawnward ribbon shift from Io orbit (R$_\mathrm{J}$)')
+    ax.set_ylim(ylim)
+    h = ax.axhline(0, color='y', label='Io orbit')
+    handles.append(h)
+    ax.legend(ncol=3, handles=handles)
+
+def ansa_sysIII(t_torus, #torus_day_table,
+                fig=None, ax=None,
+                tlim=None, ylim=(-0.5, 0.5)):
+
+    fig = fig or plt.figure()
+    ax = ax or fig.add_subplot()
+
+    st_torus = east_from_io(t_torus, ['ansa_left_r_peak'])
+    #storus_day_table = east_from_io(torus_day_table,
+    #                                ['biweight_ansa_left_r_peak',
+    #                                 'medfilt_biweight_ansa_left_r_peak'])
+
+    handles = []
+    dawn_sysIII = Angle(t_torus['Jupiter_PDObsLon'] + 90*u.deg)
+    dusk_sysIII = Angle(t_torus['Jupiter_PDObsLon'] - 90*u.deg)
+    dawn_sysIII = dawn_sysIII.wrap_at(360*u.deg)
+    dusk_sysIII = dusk_sysIII.wrap_at(360*u.deg)
+
+    dawn_east_shift = st_torus['east_shift_ansa_left_r_peak']
+    dusk_east_shift = st_torus['east_shift_ansa_right_r_peak']
+    
+    h = ax.plot(dawn_sysIII, dawn_east_shift.filled(np.NAN),
+             'b.', label='Dawn')
+    handles.append(h[0])
+    h = ax.plot(dusk_sysIII, dusk_east_shift.filled(np.NAN),
+             'r.', label='Dusk')
+    handles.append(h[0])
+    sysIII = np.arange(0, 360)
 
     ax.set_ylabel(r'Dawnward ribbon shift from Io orbit (R$_\mathrm{J}$)')
     ax.set_ylim(ylim)
@@ -1277,6 +1339,7 @@ def plot_dawn_r_stddev(t, **kwargs):
                      f'({t["ansa_left_r_stddev"].unit})',
                      medfilt_colname='ansa_left_r_stddev',
                      medfilt_collabel='Dawn medfilt',
+                     ylim=(0.1, 0.5),
                      **kwargs)
 def plot_dusk_r_stddev(t, **kwargs):
     plot_column_vals(t, colnames=['ansa_right_r_stddev'],
@@ -1286,6 +1349,7 @@ def plot_dusk_r_stddev(t, **kwargs):
                      f'({t["ansa_right_r_stddev"].unit})',
                      medfilt_colname='ansa_right_r_stddev',
                      medfilt_collabel='Dusk medfilt',
+                     ylim=(0.1, 0.5),
                      **kwargs)
 
 def plot_ansa_y_peaks(t, **kwargs):
@@ -1524,9 +1588,12 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
     add_epsilon_cols(clean_t, outbase='epsilon', err_postfix='_err')
     clean_t.write(os.path.join(outdir_root, BASE + '_cleaned.ecsv'),
                   overwrite=True)
-    torus_day_table = create_torus_day_table(clean_t)
+    torus_day_table, t_torus_day_cols = create_torus_day_table(clean_t)
     torus_day_table.write(os.path.join(outdir_root, BASE + '_day_table.ecsv'),
                           overwrite=True)
+    t_torus_day_cols.write(os.path.join(outdir_root,
+                                        BASE + '_cleaned_add_day_cols.ecsv'),
+                           overwrite=True)
 
     #torus_stripchart(summary_table, outdir_root, show=show)
 

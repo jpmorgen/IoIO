@@ -141,10 +141,25 @@ outdir = '/data/IoIO/analysis/'
 #                         'ansa_brights'],
 #                  **table_dict)
 
-master_stripchart(plots=['na_nebula',
-                         'ansa_brights',
-                         'ansa_pos'],
+master_stripchart(plots=['ansa_brights',
+                         'ansa_pos',
+                         'ansa_dusk_r_stddev',
+                         'ansa_dawn_r_stddev'],
                   **table_dict)
+
+
+## Testing to see if bad radial profile fits, yielding bad widths, are
+## the problem with 2020 torus shrink.  Doesn't seem to make much
+## difference in the 
+#mask = table_dict['t_torus']['ansa_left_r_stddev'] > 0.165*u.Rjup
+#table_dict['t_torus'] = table_dict['t_torus'][mask]
+#mask = table_dict['t_torus']['ansa_left_r_stddev'] < 0.45*u.Rjup
+#table_dict['t_torus'] = table_dict['t_torus'][mask]
+#
+#master_stripchart(plots=['na_nebula',
+#                         'ansa_brights',
+#                         'ansa_pos'],
+#                  **table_dict)
 
 #master_stripchart(plots=['na_nebula',
 #                         'ansa_brights',
