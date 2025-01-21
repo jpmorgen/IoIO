@@ -1485,7 +1485,7 @@ def cmd_center(args):
                     # As per https://stackoverflow.com/questions/18136870/win32com-memoryerror-creatingsafearray-attempting-to-insert-data-into-excel
                     # Numpy numbers cause COM objects problems, so
                     # convert to easier type
-                    P.MC.acquire_im(pg.uniq_fname(fname, r"c:\Users\PLANETARY SCIENCE\Documents\MaxIm DL 6\Temporary"),
+                    P.MC.acquire_im(pg.uniq_fname(fname, r"c:\Users\IoIO\Documents\MaxIm DL 6\Temporary"),
                                     exptime=10,
                                     filt=str(ifilt))
             log.info("Centering telescope to see how far off we got")

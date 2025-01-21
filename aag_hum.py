@@ -2,10 +2,10 @@ import time as t
 
 hum_limit = 80 # Humidity limit
 time_limit = 120 # time is s weather station can be offline before unsafe
-input_file = r"C:\Users\PLANETARY SCIENCE\Desktop\IoIO\AAG\AAG_SLD.dat"
-output_file = r"C:\Users\PLANETARY SCIENCE\Dropbox\AAG\AAG_SLD_HUM.dat"
+input_file = r"C:\Users\IoIO\Desktop\IoIO\AAG\AAG_SLD.dat"
+output_file = r"C:\Users\IoIO\Dropbox\AAG\AAG_SLD_HUM.dat"
 output_file2 = r"C:\inetpub\wwwroot\AAG_SLD_HUM.dat"
-running_log = r"C:\Users\PLANETARY SCIENCE\Desktop\IoIO\data\AAG\AAG_SLD.log"
+running_log = r"C:\Users\IoIO\Desktop\IoIO\data\AAG\AAG_SLD.log"
 
 ooutput_txt = ""
 while True:

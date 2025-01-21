@@ -104,6 +104,10 @@ elif socket.gethostname() == "IoIO1U1":
     raw_data_root = r'C:\Users\PLANETARY SCIENCE\Desktop\IoIO\data'
     # --> Eventually, it would be nice to have this in a chooser
     default_telescope = 'AstroPhysicsV2.Telescope'
+elif socket.gethostname() == "IoIO1U2":
+    raw_data_root = r'C:\Users\IoIO\Desktop\IoIO\data'
+    # --> Eventually, it would be nice to have this in a chooser
+    default_telescope = 'AstroPhysicsV2.Telescope'
 # For weather synchronization with ACP
 ACPUtil = 'ACP.Util'
 default_guide_box_command_file = os.path.join(raw_data_root, 'GuideBoxCommand.txt')
@@ -742,9 +746,14 @@ class MaxImControl():
         self.Application.FocuserConnected = self.focuser_previously_connected
         self.CCDCamera.GuiderAutoPierFlip = self.original_GuiderAutoPierFlip
         # --> Not sure if I need to do these or if they mess it up worse
+        # Mon Jan 20 12:19:37 2025 EST  jpmorgen@snipe
+        # Set to None ALL Dispatched COM objects, including ACPUtil in
+        # hopes that solves Windows 11 random crashes
         self.Application = None
         self.CCDCamera = None
         self.Telescope = None
+        self.weather_server = None
+        self.ACPUtil = None
 
     def connect(self):
         """Link to weather safety monitor, telescope, CCD camera(s), filter wheels, etc."""
