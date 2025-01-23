@@ -65,15 +65,14 @@ example_readnoise_comment = '2018-07-10 readnoise (electron)'
 readnoise_tolerance = 0.5 # Units of electrons
 
 # Measurement in /data/io/IoIO/observing/Exposure_Time_Calcs.xlsx of
-# when camera becomes non-linear (in adu).  Stored in NONLIN keyword.
-# Raw value of 42k was recorded with a typical overscan value.  Helps
-# to remember ~40k is absolute max raw adu to shoot for.  This is
-# suspiciously close to the full-well depth in electrons of 17,000
-# (web) - 18,000 (user's manual) provided by the manufacturer -->
-# could do a better job of measuring the precise high end of this,
-# since it could be as high as 50k.  Include bias, since that is how
-# we will be working with it.
-nonlin = 42000 #- 1811
+# when camera becomes non-linear (in adu) AFTER bias is subtracted.  
+# This works out to 15,000 electrons, which is a little modest
+# compared to the quoted full-well of 17,000 (web) - 18,000 (user's
+# manual) provided by the manufacturer
+# Thu Jan 23 17:26:49 2025 EST  jpmorgen@snipe
+# Changed from 
+#nonlin = 42000 #- 1811
+nonlin = 50000
 nonlin_comment = 'Measured nonlinearity point in BUNIT'
 
 # The SX694 and similar interline transfer CCDs have such low dark
