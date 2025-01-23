@@ -1472,8 +1472,9 @@ def cmd_center(args):
             # Sun Apr 25 04:48:45 2021 EDT  jpmorgen@snipe
             # MaxIm 6.26 seems to need this?
             #P.MC.move_with_guider_slews(np.asarray([5,1])/3600)
-            P.MC.move_with_guider_slews(np.asarray([6,3])/3600)
+            #P.MC.move_with_guider_slews(np.asarray([6,3])/3600)
             #P.MC.move_with_guider_slews(np.asarray([10,3])/3600)
+            P.MC.move_with_guider_slews(np.asarray([10,7])/3600)
             #P.MC.move_with_guider_slews(np.asarray([20,5])/3600)
             P.MC.guider_start(filter=guider_nd_Filter_number)
             P.center_loop(dead_zone=(25, 100),

@@ -132,7 +132,8 @@ class ExoMultiPipe(CorMultiPipeBase):
 
 def estimate_exposure(vmag_in, target_nonlin=BEST_NONLIN):
     # TOI-2109 g_sdss as ref
-    expo_correct = 2.71*u.s
+    #expo_correct = 2.71*u.s
+    expo_correct = 0*u.s
     ref_mag = 10.271*u.mag(u.electron)
     ref_expo = 7.71*u.s
     ref_frac_nonlin = .90
