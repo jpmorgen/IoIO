@@ -330,6 +330,9 @@ def fix_obj_and_coord(ccd_in, **kwargs):
         # Fix typo (also in outname_create)
         ccd.meta['OBJECT'] = 'WASP-163b'
 
+    if obj == 'NEOWISE':
+        ccd.meta['OBJECT'] = 'CK20F030'
+
     return ccd
 
 

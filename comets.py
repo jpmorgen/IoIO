@@ -1,3 +1,5 @@
+#!/usr/bin/python3
+
 import os
 
 import numpy as np
@@ -8,86 +10,102 @@ from astropy import log
 from astropy import units as u
 from astropy.table import QTable
 
+from photutils.aperture import CircularAperture
+
 from ccdproc import ImageFileCollection
+
+from bigmultipipe import cached_pout
 
 from ccdmultipipe import as_single
 
 from IoIO.ioio_globals import IoIO_ROOT, RAW_DATA_ROOT
 from IoIO.utils import (reduced_dir, get_dirs_dates, multi_glob,
-                        dict_to_ccd_meta)
+                        dict_to_ccd_meta, cached_csv)
 from IoIO.cormultipipe import (CorMultiPipeBase, mask_nonlin_sat,
                                nd_filter_mask,
-                               objctradec_to_obj_center)
+                               objctradec_to_obj_center,
+                               detflux)
 from IoIO.calibration import Calibration
 from IoIO.cor_photometry import (CorPhotometry, add_astrometry,
                                  write_photometry)
+from IoIO.standard_star import (StandardStar, SSArgparseHandler,
+                                extinction_correct, rayleigh_convert)
 from IoIO.horizons import comet_ephemeris
 
 BASE = 'Comets'
 PSISCOPE_ROOT = '/data/PSIScope'
 OUTDIR_ROOT = os.path.join(IoIO_ROOT, BASE)
 COMET_ROOT = os.path.join(IoIO_ROOT, 'Comets')
-COMET_GLOB_LIST = ['CK*', '[0-9][0-9][0-9][0-9]P-*']
-COMET_PHOT_BOX = 5
+# https://www.minorplanetcenter.net/iau/info/PackedDes.html
+MPC_GLOB_LIST = ['[CPDX][A-Z][0-9][0-9][A-X][0-9|A-Z][0-9][[0|a-z]*',
+                 '[0-9][0-9][0-9][0-9]P-*']
+ODD_NAME_ASSOC_LIST = [('CK20F030', 'NEOWISE')]
+
+NEOWISE_GLOB_LIST = ['CK20F030*', 'NEOWISE*']
+RAW_COMET_GLOB_LIST = MPC_GLOB_LIST + NEOWISE_GLOB_LIST
+
 SHAPE_MODEL_COMETS = ['0081P', '0103P', '0009P', '0067P']
+#COMET_PHOT_BOX = 5
+MIN_SEEING = 2.5 # Radius in pixels
+# https://photutils.readthedocs.io/en/latest/api/photutils.aperture.CircularAperture.html#photutils.aperture.CircularAperture.do_photometry
+SUBPIXELS = 5 # aperture photometry subpixels in subpixel msthod
 
 def comets_in_dir(directory,
-                  glob_include=COMET_GLOB_LIST,
+                  #glob_include=MPC_GLOB_LIST,
+                  glob_include=RAW_COMET_GLOB_LIST,
+                  odd_name_assoc_list=ODD_NAME_ASSOC_LIST,
                   glob_exclude_list=None,
                   **kwargs):
+    """Returns tuple of:
+    . Comet raw name(s) from filenames
+    . MPC designations only, doing translations for odd comet observations
+    . Total number of observations)
+    """
     fnames = multi_glob(directory, glob_include, glob_exclude_list)
-    comet_list = []
+    comet_raw_list = []
+    comet_mpc_list = []
     for f in fnames:
-        # Example filename:
+        # Example raw filenames:
         # /data/IoIO/raw/20190616/0029P-S001-R001-C001-Na_off_dupe-4.fts
+        # /data/IoIO/raw/2020-07-15/NEOWISE-0001_Na-on.fit
         bname = os.path.basename(f)
         sb = bname.split('-')
-        comet_list.append(sb[0])
-    return (list(set(comet_list)), len(comet_list))
+        comet_raw = sb[0]
+        comet_raw_list.append(comet_raw)
+        for mpc_name, odd_name in odd_name_assoc_list:
+            if comet_raw == odd_name:
+                comet_mpc_list.append(mpc_name)
+            else:
+                comet_mpc_list.append(comet_raw)
+    ucomet_raw = list(set(comet_raw_list))
+    ucomet_mpc = list(set(comet_mpc_list))
+    return (ucomet_raw, ucomet_mpc, len(comet_raw_list))
 
 def comet_obs(raw_data_root=RAW_DATA_ROOT,
-              include_PSIScope=True,
+              include_PSIScope=False,
               start=None,
               stop=None,
               **kwargs):
     dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
+    if include_PSIScope:
+        psiscope_dirs_dates = get_dirs_dates(os.path.join(PSISCOPE_ROOT, 'raw'))
+        dirs_dates.extend(psiscope_dirs_dates)
     dirs, dates = zip(*dirs_dates)
     if len(dirs) == 0:
         log.warning('No directories found')
         return []
-    flist = []
+    mpc_list = []
     n_total_obs = 0
     n_nights = 0
     comet_date_list = []
     for d, date in dirs_dates:
-        (cfl, n_obs) = comets_in_dir(d, **kwargs)
+        (rawnames, mpcs, n_obs) = comets_in_dir(d, **kwargs)
         n_total_obs += n_obs
-        if len(cfl) > 0:
+        if len(mpcs) > 0:
             n_nights += 1
-            flist.extend(cfl)
-        for comet in cfl:
+            mpc_list.extend(mpcs)
+        for comet in mpcs:
             comet_date_list.append((comet, date))
-    if include_PSIScope:
-        dirs_dates = get_dirs_dates(os.path.join(PSISCOPE_ROOT, 'raw'))
-        dirs, _ = zip(*dirs_dates)
-        if len(dirs) == 0:
-            log.warning('No PSIScope directories found')
-        else:
-            for d, date in dirs_dates:
-                cfl = comet_flist(d, **kwargs)
-                if len(cfl) > 0:
-                    n_nights += 1
-                    flist.extend(comet_flist(d, **kwargs))
-            for comet in cfl:
-                comet_date_list.append((comet, date))
-                
-    #cl = []
-    #for f in flist:
-    #    bname = os.path.basename(f)
-    #    sb = bname.split('-')
-    #    cl.append(sb[0])
-    #return list(set(cl)), n_nights
-
     return (comet_date_list, n_total_obs)
 
 
@@ -97,107 +115,126 @@ class CometMultiPipe(CorMultiPipeBase):
                    **kwargs):
         written_name = super().file_write(
             ccd, outname, photometry=photometry, **kwargs)
+        # --> This needs to have the proper comet photometry in it
         write_photometry(in_name=in_name, outname=outname,
                          photometry=photometry,
                          write_wide_source_table=True,
                          **kwargs)
         outroot, _ = os.path.splitext(outname)
+        try:
+            photometry.plot_object(outname=outroot + '.png')
+        except Exception as e:
+            log.warning(f'Not able to plot object for {outname}: {e}')
         return written_name
 
 def comet_phot(ccd,
                bmp_meta=None,
-               comet_phot_box=COMET_PHOT_BOX,
+               #comet_phot_box=COMET_PHOT_BOX,
+               comet_phot_rad=MIN_SEEING,
+               comet_phot_subpixels=SUBPIXELS,
                **kwargs):
     """cormulipipe post-processing routine to add up counts at obj_center"""
-    ll = ccd.obj_center - comet_phot_box/2
-    ur = ccd.obj_center + comet_phot_box/2
-    ll = np.round(ll).astype(int)
-    ur = np.round(ur).astype(int)
-    patch = ccd[ll[0]:ur[0], ll[1]:ur[1]]
-    sb = np.sum(patch) / np.prod(ur - ll)
-    comet_dict = {'comet_phot': sb*ccd.unit,
-                  'comet_phot_box': comet_phot_box*u.pixel}
+    # The right place to do this is in [cor_]photometry and with a
+    # variety of apertures and the Photometry.background for EACH file
+    log.debug(f'comet_phot obj_center: {ccd.obj_center}')
+    aper = CircularAperture(ccd.obj_center, comet_phot_rad)
+    phots = []
+    comet_dict = {}
+    comet_dict['OBJ_CR0'] = ccd.obj_center[1]
+    comet_dict['OBJ_CR1'] = ccd.obj_center[0]
+    # This is OK for one aperture, but if I want many, I'll need to
+    # put more columns, like I do in utils.ColnameEncoder
+    for method in ['exact', 'center', 'subpixel']:
+        apsum, apsum_err= aper.do_photometry(
+            ccd.data, ccd.uncertainty.array, ccd.mask,
+            method, subpixels=comet_phot_subpixels)
+        comet_dict.update({f'comet_phot_{method}': apsum[0],
+                           f'comet_phot_{method}_err': apsum_err[0]})
+    #ll = ccd.obj_center - comet_phot_box/2
+    #ur = ccd.obj_center + comet_phot_box/2
+    #ll = np.round(ll).astype(int)
+    #ur = np.round(ur).astype(int)
+    #patch = ccd[ll[0]:ur[0], ll[1]:ur[1]]
+    #sb = np.sum(patch) / np.prod(ur - ll)
+    #comet_dict = {'comet_phot': sb*ccd.unit,
+    #              'comet_phot_box': comet_phot_box*u.pixel}
     ccd_out = dict_to_ccd_meta(ccd, comet_dict)
     bmp_meta.update(comet_dict)
     return ccd_out
 
-def comet_obsion(directory,
-                     glob_include=COMET_GLOB_LIST,
+def comet_collection(directory,
+                     glob_include=MPC_GLOB_LIST,
                      glob_exclude_list=None,
                      **kwargs):
-    flist = comet_flist(directory, **kwargs)
+    flist = multi_glob(directory,
+                       glob_list=glob_include,
+                       glob_exclude_list=glob_exclude_list)
     if len(flist) == 0:
         return ImageFileCollection(directory, glob_exclude='*')
     return ImageFileCollection(directory, filenames=flist)
     
-def comet_pipeline(directory_or_collection=None,
+def comet_pipeline(collection=None,
                    calibration=None,
                    photometry=None,
+                   standard_star_obj=None,
                    num_processes=None,
                    outdir=None,
-                   outdir_root=COMET_ROOT,
                    create_outdir=True,
+                   fits_fixed_ignore=True,
                    **kwargs):
-
-    if isinstance(directory_or_collection, ImageFileCollection):
-        # We are passed a collection when running multiple directories
-        # in parallel
-        directory = directory_or_collection.location
-        collection = directory_or_collection
-    else:
-        directory = directory_or_collection
-        collection = comet_obsion(directory, **kwargs)
 
     if len(collection.files) == 0:
         return
-    if calibration is None:
-        calibration = Calibration(reduce=True)
-    if photometry is None:
-        photometry = CorPhotometry(precalc=True, **kwargs)
-    outdir = outdir or reduced_dir(directory, outdir_root, create=False)
+    calibration = calibration or Calibration(reduce=True)
+    photometry = photometry or CorPhotometry(precalc=True, **kwargs)
+    standard_star_obj = standard_star_obj or StandardStar(reduce=True)
 
     cmp = CometMultiPipe(
         auto=True,
         calibration=calibration,
         photometry=photometry,
+        standard_star_obj=standard_star_obj,
         create_outdir=create_outdir,
+        fail_if_no_wcs=False, # This hasn't been fully implemented
         post_process_list=[mask_nonlin_sat,
                            nd_filter_mask,
                            add_astrometry,
                            comet_ephemeris,
                            objctradec_to_obj_center,
+                           detflux,
+                           extinction_correct,
+                           rayleigh_convert,
                            comet_phot,
                            as_single],
+        fits_fixed_ignore=fits_fixed_ignore, 
+        num_processes=num_processes,
         **kwargs)
-    pout = cmp.pipeline([collection.files[0]], outdir=outdir, overwrite=True)
+    #pout = cmp.pipeline([collection.files[0]], outdir=outdir, overwrite=True)
+    pout = cmp.pipeline(collection.files, outdir=outdir, overwrite=True)
     return pout
 
-def comet_directory(directory_or_collection,
+# This is intended to reduce one comet in one directory and put the
+# result in outdir, which is of the format OUTDIR_ROOT/<MPC designation>/<date>
+def comet_directory(collection,
+                    outdir=None,
+                    outdir_root=OUTDIR_ROOT,
+                    standard_star_obj=None,
                     read_pout=True,
                     write_pout=True,
                     write_plot=True,
-                    outdir=None,
-                    outdir_root=OUTDIR_ROOT,
                     create_outdir=True,
                     show=False,
                     **kwargs):
 
-    if isinstance(directory_or_collection, ImageFileCollection):
-        # We are passed a collection when running multiple directories
-        # in parallel
-        directory = directory_or_collection.location
-        collection = directory_or_collection
-    else:
-        directory = directory_or_collection
-        collection = cometcollection(directory, **kwargs)
+    if len(collection.files) == 0:
+        return QTable()
 
-    outdir = outdir or reduced_dir(directory, outdir_root, create=False)
     poutname = os.path.join(outdir, BASE + '.pout')
     pout = cached_pout(comet_pipeline,
                        poutname=poutname,
                        read_pout=read_pout,
                        write_pout=write_pout,
-                       directory_or_collection=collection,
+                       collection=collection,
                        outdir=outdir,
                        create_outdir=create_outdir,
                        **kwargs)
@@ -208,70 +245,168 @@ def comet_directory(directory_or_collection,
     t = QTable(rows=pipe_meta)
     return t
 
+def plot_comet_obsdates(include_PSIScope=False):
+    (raw_comets_dates, n_obs) = comet_obs(include_PSIScope=include_PSIScope)
+    comets, dates = zip(*raw_comets_dates)
+    uniq_comets = sorted(set(comets))
+    uniq_nights = list(set(dates))
+    n_comets = len(uniq_comets)
+    n_nights = len(uniq_nights)
+
+    print(f'{n_comets} unique comets recorded on {n_nights} nights')
+    #print(f'{len(dates)} total observations?')
+    print(f'{n_obs} total observations')
+
+    print(uniq_comets)
+
+    #ucomet_idx_list = []
+    #for comet in comets:
+    #    for ucomet_idx, ucomet in enumerate(uniq_comets):
+    #        if comet == ucomet:
+    #            ucomet_idx_list.append(ucomet_idx)
+    #            break
+    #fig = plt.figure(figsize=[8.5, 11/2])
+    #plt.plot(dates, ucomet_idx_list, 'k*')
+    #fig.autofmt_xdate()
+    #plt.show()
+    #
+    pcomet_idx_list = []
+    pcomet_dates_list = []
+    lpcomet_idx_list = []
+    lpcomet_dates_list = []
+    for comet_idx, comet in enumerate(comets):
+        for ucomet_idx, ucomet in enumerate(uniq_comets):
+            if comet == ucomet:
+                if 'CK' in comet:
+                    lpcomet_idx_list.append(ucomet_idx)
+                    lpcomet_dates_list.append(dates[comet_idx])
+                    break
+                else:
+                    pcomet_idx_list.append(ucomet_idx)
+                    pcomet_dates_list.append(dates[comet_idx])
+                    break
+
+
+    #fig = plt.figure(figsize=[8.5, 11/2])
+    #fig = plt.figure(figsize=[8.5, 10], tight_layout=True)
+    fig = plt.figure(figsize=[8.5, 4], tight_layout=True)
+    plt.plot(pcomet_dates_list, pcomet_idx_list, 'r*', label='Periodic Comets')
+    plt.plot(lpcomet_dates_list, lpcomet_idx_list, 'k*', label='Long-Period Comets')
+    #plt.yticks([])
+    #plt.yticks(range(n_comets), uniq_comets)
+    uniq_comets_shape_model = [c if c in SHAPE_MODEL_COMETS
+                               else ''
+                               for c in uniq_comets]
+    plt.yticks(range(n_comets), uniq_comets_shape_model)
+    #plt.ylabel('Comet (MPC designation)')
+    plt.xlabel('Date')
+    plt.legend()
+    fig.autofmt_xdate()
+    plt.show()
+
+
 log.setLevel('DEBUG')
+
+# This is shaping up to be comet_tree
+def comet_tree(raw_data_root=RAW_DATA_ROOT,
+               outdir_root=OUTDIR_ROOT,
+               start=None,
+               stop=None,
+               mpc_list=['CK20F030'],
+               odd_name_assoc_list=ODD_NAME_ASSOC_LIST,
+               calibration=None,
+               photometry=None,
+               read_csvs=True,
+               write_csvs=True,
+               create_outdir=True,
+               **kwargs):
+
+    dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
+    dirs, _ = zip(*dirs_dates)
+    if len(dirs) == 0:
+        log.warning('No directories found')
+    #    return
+
+    # I don't have a pipeline for PSIScope yet.
+    (raw_comets_dates, n_obs) = comet_obs(include_PSIScope=False)
+    comets, dates = zip(*raw_comets_dates)
+    uniq_comets = sorted(set(comets))
+    ps = os.path.sep
+    if mpc_list is None:
+        mpc_list = uniq_comets
+    for comet in mpc_list:
+        odd_name = [assoc[1] for assoc in odd_name_assoc_list
+                    if assoc[0] == comet]
+        rawglob = [comet]
+        rawglob.extend(odd_name)
+        rawglob = [f'{c}*' for c in rawglob]
+        for directory in dirs:
+            (rawname, mpc, _) = comets_in_dir(
+                directory, glob_include=rawglob, **kwargs)
+            if len(rawname) == 0:
+                continue
+            print(rawname, mpc)
+            rd = reduced_dir(directory,
+                             outdir_root + ps + comet,
+                             create=False)
+            c = comet_collection(directory, glob_include=rawglob)
+            comet_csv = os.path.join(rd, 'Comet.ecsv')
+            t = cached_csv(c,
+                           code=comet_directory,
+                           csvnames=comet_csv,
+                           read_csvs=read_csvs,
+                           write_csvs=write_csvs,
+                           outdir=rd,
+                           create_outdir=create_outdir,
+                           calibration=calibration,
+                           photometry=photometry,
+                           **kwargs)
+         # --> Need to concatenate t
+    return t
+
+# comet_collection('/data/IoIO/raw/20200806/',
+#                      glob_include=NEOWISE_GLOB_LIST)
+# t = comet_directory(c, outdir='/tmp/NEOWISE')
+
+
+plot_comet_obsdates(include_PSIScope=False)
+#print(comets_in_dir('/data/IoIO/raw/20200806/'))
+#print(comets_in_dir('/data/IoIO/raw/2020-07-28'))
+
+#from cordata import CorData
+#from cor_process import cor_process
+
+#ccd = CorData.read('/data/IoIO/raw/2020-07-28/NEOWISE-0003_Na_off.fit')
+#calibration = Calibration(reduce=True)
+
+
+#ccd_out = cor_process(ccd, calibration=calibration,
+#                      oscan=True,
+#                      gain=True,
+#                      error=True,
+#                      min_value=True)
+## That works
+
+#ccd_out = cor_process(ccd, calibration=calibration, auto=True)
+## That works
+
+#c = comet_collection('/data/IoIO/raw/2020-07-28/',
+#c = comet_collection('/data/IoIO/raw/20200806/',
+#                     glob_include=NEOWISE_GLOB_LIST)
+
+# /data/IoIO/raw/20200819/ seems to be last one
+
+#comet_pipeline(c)
+
+
+#comet_pipeline('/data/IoIO/raw/2020-07-28/')
+
 #comet_pipeline('/data/IoIO/raw/20211017')
 #comet_pipeline('/data/IoIO/raw/20211028')
 
-#c = comet_obsion('/data/IoIO/raw/20211028')
-#c = comet_obsion('/data/IoIO/raw/20220112/')
+#c = comet_collection('/data/IoIO/raw/20211028')
+#c = comet_collection('/data/IoIO/raw/20220112/')
 
-(raw_comets_dates, n_obs) = comet_obs(include_PSIScope=False)
-comets, dates = zip(*raw_comets_dates)
-uniq_comets = sorted(set(comets))
-uniq_nights = list(set(dates))
-n_comets = len(uniq_comets)
-n_nights = len(uniq_nights)
-
-print(f'{n_comets} unique comets recorded on {n_nights} nights')
-#print(f'{len(dates)} total observations?')
-print(f'{n_obs} total observations')
-
-print(uniq_comets)
-
-#ucomet_idx_list = []
-#for comet in comets:
-#    for ucomet_idx, ucomet in enumerate(uniq_comets):
-#        if comet == ucomet:
-#            ucomet_idx_list.append(ucomet_idx)
-#            break
-#fig = plt.figure(figsize=[8.5, 11/2])
-#plt.plot(dates, ucomet_idx_list, 'k*')
-#fig.autofmt_xdate()
-#plt.show()
-#
-pcomet_idx_list = []
-pcomet_dates_list = []
-lpcomet_idx_list = []
-lpcomet_dates_list = []
-for comet_idx, comet in enumerate(comets):
-    for ucomet_idx, ucomet in enumerate(uniq_comets):
-        if comet == ucomet:
-            if 'CK' in comet:
-                lpcomet_idx_list.append(ucomet_idx)
-                lpcomet_dates_list.append(dates[comet_idx])
-                break
-            else:
-                pcomet_idx_list.append(ucomet_idx)
-                pcomet_dates_list.append(dates[comet_idx])
-                break
-            
-
-#fig = plt.figure(figsize=[8.5, 11/2])
-#fig = plt.figure(figsize=[8.5, 10], tight_layout=True)
-fig = plt.figure(figsize=[8.5, 4], tight_layout=True)
-plt.plot(pcomet_dates_list, pcomet_idx_list, 'r*', label='Periodic Comets')
-plt.plot(lpcomet_dates_list, lpcomet_idx_list, 'k*', label='Long-Period Comets')
-#plt.yticks([])
-#plt.yticks(range(n_comets), uniq_comets)
-uniq_comets_shape_model = [c if c in SHAPE_MODEL_COMETS
-                           else ''
-                           for c in uniq_comets]
-plt.yticks(range(n_comets), uniq_comets_shape_model)
-#plt.ylabel('Comet (MPC designation)')
-plt.xlabel('Date')
-plt.legend()
-fig.autofmt_xdate()
-plt.show()
 
 ##raw_comet_dates
 #

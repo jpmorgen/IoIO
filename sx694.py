@@ -93,7 +93,11 @@ max_accurate_exposure = 0.7 # s
 # Old version of Photometry gave different answers probably because of
 # low threshold
 #latency_change_dates = ['2020-06-01', '2020-11-01']
-latency_change_dates = ['2020-11-01']
+#latency_change_dates = ['2020-11-01']
+# Thu Jan 23 18:59:21 2025 EST  jpmorgen@snipe
+# ASCOM driver has no discontinuity, but does have latency
+latency_change_dates = ['2020-11-01', '2025-01-12']
+
 
 # Amplitude of typical wander of Meinburg loopstats thought the day.
 # Primarily due to lack of temperature control of crystal oscillator
@@ -179,13 +183,19 @@ def exp_correct_value(date_obs):
     if date_obs < latency_change_dates[0]:
         exposure_correct = 2.19 # s
         exposure_correct_uncertainty = 0.31 # s 
-    else:
-        # Mon Mar 25 09:02:36 2024 EDT  jpmorgen@snipe
-        # Latest numbers
+    if date_obs < latency_change_dates[1]:
+        # Thu Jan 23 18:42:41 2025 EST  jpmorgen@snipe
+        # Latest numbers  --> Update these to best final numbers when
+        # get local JPL calculations
         exposure_correct = 2.59 # s
         exposure_correct_uncertainty = 0.31 # s
         #exposure_correct = 2.71 # s
         #exposure_correct_uncertainty = 0.47 # s
+    else:
+        # Thu Jan 23 18:40:41 2025 EST  jpmorgen@snipe
+        # As of 
+        exposure_correct = 0 # s
+        exposure_correct_uncertainty = 0 # s
     #Sat May 15 22:42:42 2021 EDT  jpmorgen@snipe
     # Old photometry code
     #if date_obs < latency_change_dates[0]:
