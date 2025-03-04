@@ -304,10 +304,10 @@ class JunoTimes():
         lowidx = np.flatnonzero(pj < 0)
         highidx = np.flatnonzero(pj > self.pj_list[-1])
         mjd = np.interp(pj, self.pj_list, self.pj_ts.mjd,
-                        left=np.NAN, right=np.NAN)
+                        left=np.nan, right=np.nan)
         if not np.isscalar(mjd):
             # The axis likes to be monotonic, but single values for
-            # the AXFormatter can be NAN
+            # the AXFormatter can be nan
             mjd[lowidx] = pj[lowidx]*PRE_POST_JUNO_PJ + self.pj_ts[0].mjd
             mjd[highidx] = ((pj[highidx] - self.pj_list[-1])*PRE_POST_JUNO_PJ
                             + self.pj_ts[-1].mjd)
@@ -319,7 +319,7 @@ class JunoTimes():
         lowidx = np.flatnonzero(mjd < self.pj_ts[0].mjd)
         highidx = np.flatnonzero(mjd > self.pj_ts[-1].mjd)
         pj = np.interp(mjd, self.pj_ts.mjd, self.pj_list,
-                       left=np.NAN, right=np.NAN)
+                       left=np.nan, right=np.nan)
         if not np.isscalar(mjd):
             pj[lowidx] = -(self.pj_ts[0].mjd - mjd[lowidx])/PRE_POST_JUNO_PJ
             pj[highidx] = (self.pj_list[-1]

@@ -748,7 +748,7 @@ def plot_nightly_medians(table_or_fname,
         times = day_table['itdatetime']
         vals = day_table[bwt_col+'_medfilt']
         times = np.append(times, times[gap_idx] + datetime.timedelta(days=1))
-        vals = np.append(vals, (np.NAN, ) * len(gap_idx))
+        vals = np.append(vals, (np.nan, ) * len(gap_idx))
         sort_idx = np.argsort(times)
         h = ax.plot(times[sort_idx], vals[sort_idx], '-',
                      label=f'{av_ap.value} R$_\mathrm{{J}}$ medfilt',

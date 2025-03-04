@@ -74,6 +74,9 @@ stop = None
 
 #start = '2023-06-01'
 
+# Search for outburst during Juno
+start = '2024-08-01'
+
 t = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
 make_movie(t, '/tmp/test_Na.mp4', start=start, stop=stop)
 #make_movie(t, '/tmp/test_Na_apertures.mp4', reduction_suffix='_apertures',

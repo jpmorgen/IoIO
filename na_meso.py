@@ -672,8 +672,8 @@ class NaMeso:
     #    t['doy'] = np.arange(365)
     #    #t['doy'] = np.unique(self.phased_idoy)
     #
-    #    t['shadow_corrected'] = np.NAN*unit
-    #    t['shadow_corrected_std'] = np.NAN*unit
+    #    t['shadow_corrected'] = np.nan*unit
+    #    t['shadow_corrected_std'] = np.nan*unit
     #    for i, phased_idoy in enumerate(t['doy']):
     #        mask = self.phased_idoy == phased_idoy
     #        t_shadow_corrected = self.model_vcol_shadow_corrected[mask]
@@ -744,8 +744,8 @@ class NaMeso:
         shadow_corrected_err = ijdt['daily_shadow_corrected_std']
         if (len(shadow_corrected.value) == 0
             or not np.all(np.isfinite(shadow_corrected))):
-            meso = np.NAN*model.unit
-            meso_err = np.NAN*model.unit
+            meso = np.nan*model.unit
+            meso_err = np.nan*model.unit
             meso_or_model = model
             meso_or_model_err = model_err
         else:

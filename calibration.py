@@ -1561,7 +1561,7 @@ class Calibration():
             date = Time(sfname[0], format='fits')
             bad = 'bad' in bfname
             if bad:
-                ccdt = np.NAN
+                ccdt = np.nan
             else:
                 ccdt = float(sfname[2])
             dates.append(date)
@@ -1607,8 +1607,8 @@ class Calibration():
             date = Time(sfname[0], format='fits')
             bad = 'bad' in bfname
             if bad:
-                ccdt = np.NAN
-                exptime = np.NAN
+                ccdt = np.nan
+                exptime = np.nan
             else:
                 ccdt = float(sfname[2])
                 exptime = sfname[4]

@@ -40,8 +40,8 @@ pout = back_pipe.pipeline(flist, post_process_list=[calc_obj_to_ND,
 flist, pout = prune_pout(flist, pout)
 _ , pipe_meta = zip(*pout)
 
-t['mean_image'] = np.NAN * u.R
-t['obj_to_ND'] = np.NAN * u.R
+t['mean_image'] = np.nan * u.R
+t['obj_to_ND'] = np.nan * u.R
 
 t.add_index('outname')
 for outname, meta in zip(flist, pipe_meta):

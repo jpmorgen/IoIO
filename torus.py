@@ -120,8 +120,8 @@ CALLISTO_ORBIT = CALLISTO_ORBIT.to(u.hr)
 def bad_ansa(side):
     # numpy.ma don't work with astropy units, 
     # astropy.utils.masked.Masked doesn't work with pickle
-    #masked = Masked(np.NAN, mask=True)
-    masked = np.NAN
+    #masked = Masked(np.nan, mask=True)
+    masked = np.nan
     return {f'ansa_{side}_r_peak': masked*u.R_jup,
             f'ansa_{side}_r_peak_err': masked*u.R_jup,
             f'ansa_{side}_r_stddev': masked*u.R_jup,
@@ -202,7 +202,7 @@ def ansa_parameters(ccd,
     # sure to poke holes in the r_Rj axis
     r_pix = np.arange(ansa.shape[1]) * u.pixel
     r_Rj = (r_pix + left*u.pixel - center[1]) / pix_per_Rj
-    r_prof = np.sum(ansa, 0) * ansa.unit
+    r_prof = np.sum(ansa.data, 0) * ansa.unit
     r_prof /= ansa.shape[1]
     if not np.all(np.isfinite(r_prof)):
         # This may be a stop-gap measure that apparently didn't work
@@ -310,10 +310,10 @@ def ansa_parameters(ccd,
     #simple_show(narrow_ansa)
 
     # Calculate profile perpendicular to centripetal equator, keeping
-    # it in units of rayleighs
+    # it in units of rayleighs --> again, masks aren't handled properly!
     y_pix = np.arange(narrow_ansa.shape[0]) * u.pixel
     y_Rj = (y_pix + bottom*u.pixel - center[0]) / pix_per_Rj
-    y_prof = np.sum(narrow_ansa, 1) * ansa.unit
+    y_prof = np.sum(narrow_ansa.data, 1) * ansa.unit
     y_prof /= narrow_ansa.shape[0]
     if ccd.uncertainty.uncertainty_type == 'std':
         y_dev = np.sum(ansa.uncertainty.array**2, 1)
@@ -336,20 +336,20 @@ def ansa_parameters(ccd,
         return bad_ansa(side)
 
     y_pos = y_fit.mean_0.quantity
-    y_pos_std = y_fit.mean_0.std or np.NAN
+    y_pos_std = y_fit.mean_0.std or np.nan
     dy_pos = y_fit.stddev_0.quantity
-    dy_pos_std = y_fit.stddev_0.std or np.NAN
+    dy_pos_std = y_fit.stddev_0.std or np.nan
     y_amplitude = y_fit.amplitude_0.quantity
-    y_amplitude_std = y_fit.amplitude_0.std or np.NAN
+    y_amplitude_std = y_fit.amplitude_0.std or np.nan
     # r_ansa et al. are defined above
-    r_ansa_std = r_fit.mean_0.std or np.NAN
-    dRj_std = r_fit.stddev_0.std or np.NAN
+    r_ansa_std = r_fit.mean_0.std or np.nan
+    dRj_std = r_fit.stddev_0.std or np.nan
     r_amp = r_fit.amplitude_0.quantity
-    r_amp_std = r_fit.amplitude_0.std or np.NAN
+    r_amp_std = r_fit.amplitude_0.std or np.nan
     cont = r_fit.c0_1.quantity
-    cont_std = r_fit.c0_1.std or np.NAN
+    cont_std = r_fit.c0_1.std or np.nan
     slope = r_fit.c1_1.quantity
-    slope_std = r_fit.c1_1.std or np.NAN
+    slope_std = r_fit.c1_1.std or np.nan
 
 
     # Units of amplitude are already in rayleigh.  When we do the
@@ -518,7 +518,7 @@ def add_mask_col(t, d_on_off_max=5, obj_to_ND_max=30):
 def create_torus_day_table(
         t_torus_in=None,
         max_time_gap=15*u.day,
-        max_gap_fraction=0.3, # beware this may leave some NANs if dt = 1*u.day
+        max_gap_fraction=0.3, # beware this may leave some nans if dt = 1*u.day
         medfilt_width=10*u.day,
         medfilt_mode='mirror',
         utc_offset=IOIO_1_UTC_OFFSET,
@@ -751,8 +751,8 @@ def plot_column_vals(t,
         # --> and create val and val_err with the appropriate typing
         # --> logic
         h = ax.errorbar(datetimes,
-                        scale[ic] * t[colname].filled(np.NAN),
-                        abs(scale[ic]) * t[f'{colname}_err'].filled(np.NAN),
+                        scale[ic] * t[colname].filled(np.nan),
+                        abs(scale[ic]) * t[f'{colname}_err'].filled(np.nan),
                         fmt=fmts[ic], alpha=alpha,
                         label=scale_str + labels[ic])
         handles.append(h)
@@ -1018,8 +1018,8 @@ def plot_epsilons(t,
     num_var = denom_var / 2
     epsilon_err = epsilon * ((denom_var / (r_peak + l_peak)**2)
                              + (num_var / av_peak**2))**0.5
-    epsilon = epsilon.filled(np.NAN)
-    epsilon_err = np.abs(epsilon_err.filled(np.NAN))
+    epsilon = epsilon.filled(np.nan)
+    epsilon_err = np.abs(epsilon_err.filled(np.nan))
     epsilon_biweight = nan_biweight(epsilon)
     epsilon_mad = nan_mad(epsilon)
 
@@ -1209,10 +1209,10 @@ def ansa_sysIII(t_torus, #torus_day_table,
     dawn_east_shift = st_torus['east_shift_ansa_left_r_peak']
     dusk_east_shift = st_torus['east_shift_ansa_right_r_peak']
     
-    h = ax.plot(dawn_sysIII, dawn_east_shift.filled(np.NAN),
+    h = ax.plot(dawn_sysIII, dawn_east_shift.filled(np.nan),
              'b.', label='Dawn')
     handles.append(h[0])
-    h = ax.plot(dusk_sysIII, dusk_east_shift.filled(np.NAN),
+    h = ax.plot(dusk_sysIII, dusk_east_shift.filled(np.nan),
              'r.', label='Dusk')
     handles.append(h[0])
     sysIII = np.arange(0, 360)
@@ -1243,10 +1243,10 @@ def plot_ansa_pos(t,
     # Make it clear we are plotting the perturbation from Io's orbital
     # position on the right and left sides of Jupiter.  We will make t
     # eastward (negative of these), when plotting
-    rights = t['ansa_right_r_peak'].filled(np.NAN) - IO_ORBIT_R
-    lefts = t['ansa_left_r_peak'].filled(np.NAN) - (-IO_ORBIT_R)
-    rights_err = t['ansa_right_r_peak_err'].filled(np.NAN)
-    lefts_err = t['ansa_left_r_peak_err'].filled(np.NAN)
+    rights = t['ansa_right_r_peak'].filled(np.nan) - IO_ORBIT_R
+    lefts = t['ansa_left_r_peak'].filled(np.nan) - (-IO_ORBIT_R)
+    rights_err = t['ansa_right_r_peak_err'].filled(np.nan)
+    lefts_err = t['ansa_left_r_peak_err'].filled(np.nan)
     right_bad_mask = np.logical_or(np.isnan(rights), np.isnan(rights_err))
     left_bad_mask = np.logical_or(np.isnan(lefts), np.isnan(lefts_err))
     rights = rights[~right_bad_mask]
@@ -1458,13 +1458,13 @@ def torus_stripchart(t, outdir,
         dawn_sysIII = dawn_sysIII.wrap_at(360*u.deg)
         dusk_sysIII = dusk_sysIII.wrap_at(360*u.deg)
 
-        axs[5].errorbar(dawn_sysIII.filled(np.NAN),
-                     t['ansa_left_surf_bright'].filled(np.NAN),
-                     t['ansa_left_surf_bright_err'].filled(np.NAN), fmt='b.',
+        axs[5].errorbar(dawn_sysIII.filled(np.nan),
+                     t['ansa_left_surf_bright'].filled(np.nan),
+                     t['ansa_left_surf_bright_err'].filled(np.nan), fmt='b.',
                      label='Dawn')
-        axs[5].errorbar(dusk_sysIII.filled(np.NAN),
-                     t['ansa_right_surf_bright'].filled(np.NAN),
-                     t['ansa_right_surf_bright_err'].filled(np.NAN), fmt='r.',
+        axs[5].errorbar(dusk_sysIII.filled(np.nan),
+                     t['ansa_right_surf_bright'].filled(np.nan),
+                     t['ansa_right_surf_bright_err'].filled(np.nan), fmt='r.',
                      label='Dusk')
         axs[5].set_ylabel(f'Surf. Bright ({t["ansa_left_surf_bright"].unit})')
         axs[5].set_xlabel(r'Ansa $\lambda{\mathrm{III}}$')
@@ -1569,9 +1569,9 @@ def torus_tree(raw_data_root=RAW_DATA_ROOT,
                        outdir=rd,
                        create_outdir=create_outdir,
                        **kwargs)
-        # Hack to get around astropy vstack bug with location
         if len(t) == 0:
             continue
+        # Hack to get around astropy vstack bug with location
         loc = t['tavg'][0].location.copy()
         t['tavg'].location = None
         summary_table = vstack([summary_table, t])

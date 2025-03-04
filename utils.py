@@ -85,7 +85,7 @@ def dict_to_ccd_meta(ccd_in, d):
         else:
             kname = k
         if np.isnan(d[k]):
-            ccd.meta[kname] = 'NAN'
+            ccd.meta[kname] = 'nan'
         elif np.isinf(d[k]):
             ccd.meta[kname] = 'INF'
         elif isinstance(d[k], u.Quantity):
@@ -107,7 +107,7 @@ def sum_ccddata(ccd):
             np.sum(~ccd.mask * u.pixel**2))
 
 def nan_biweight(a):
-    """Fix special case of `~astropy.stats.biweight_location` where NAN
+    """Fix special case of `~astropy.stats.biweight_location` where nan
     return value ignores units
 
     """
@@ -117,7 +117,7 @@ def nan_biweight(a):
     return b
 
 def nan_mad(a):
-    """Fix special case of `~astropy.stats.mad_std` where NAN return value
+    """Fix special case of `~astropy.stats.mad_std` where nan return value
     ignores units
 
     """
@@ -847,15 +847,15 @@ def stripchart(to_plot,
         plt.close()
 
 
-def filled(val, fill_value=np.NAN, unmask=False):
-    """Fill astropy Mask or numpy ma.masked value(s) with NAN.
+def filled(val, fill_value=np.nan, unmask=False):
+    """Fill astropy Mask or numpy ma.masked value(s) with nan.
     Ignores if not one of these types
 
     Parameters
     ----------
     fill_value : compatible with type of val
         Desired fill value
-        Default is `np.NAN'
+        Default is `np.nan'
 
     unmask : boolean
         If column contains a masked datatype, run the unmask method to
@@ -908,7 +908,7 @@ def qtable2df(t, index=None):
 def interpolate_replace_nans_columns(t, colnames, kernel=None,
                                      boundary='extend',
                                      suffix='_interp'):
-    """Uses interpolate_replace_nans to fill any NAN or masked
+    """Uses interpolate_replace_nans to fill any nan or masked
     values.  Adds new columns ending in "_interp"
 
     Parameters
@@ -916,7 +916,7 @@ def interpolate_replace_nans_columns(t, colnames, kernel=None,
     t : Table or list of Table
         Input Table(s) to add interpolated columns to
     """
-    filled_columns(t, colnames, fill_value=np.NAN, unmask=True)
+    filled_columns(t, colnames, fill_value=np.nan, unmask=True)
     for colname in colnames:
         vals = t[colname]
         vals = interpolate_replace_nans(vals, kernel,
@@ -1028,7 +1028,7 @@ def daily_biweight(qtable,
         They will be created, if necessary
 
     ignore_nan : bool
-        Ignore np.NAN in data
+        Ignore np.nan in data
         default = ``True''
 
     """
@@ -1171,11 +1171,11 @@ def linspace_table(t, x_col, xp_col=None, dx=1, b=0, algorithm=None, **kwargs):
 
     algorithm : str
         'interpolate_replace_nans' - use
-        astropy.convolution.interpolate_replace_nans to replace NANs
+        astropy.convolution.interpolate_replace_nans to replace nans
         in the table.  This runs the algorithm='nan' case first and
         results in the best performance
 
-        'nan' - do not interpolate, just put NANs in place of missing
+        'nan' - do not interpolate, just put nans in place of missing
         value
 
         'interp' - use np.interp (overmapped in astropy ecosystem to
@@ -1197,7 +1197,7 @@ def linspace_table(t, x_col, xp_col=None, dx=1, b=0, algorithm=None, **kwargs):
     nrows = round(nrows)
     # Extend before and after range just to make sure we get all the
     # interpolates.  We'll mark anything outside of x_col's range with
-    # a NAN for removal
+    # a nan for removal
     if algorithm == 'interpolate_replace_nans':
         ltable = linspace_table(t, x_col, xp_col=xp_col, dx=dx, b=b,
                                 algorithm='nan', **kwargs)
@@ -1206,7 +1206,7 @@ def linspace_table(t, x_col, xp_col=None, dx=1, b=0, algorithm=None, **kwargs):
     elif algorithm == 'interp':
         x = t[x_col][0] + np.arange(-1, nrows+2) * dx + b
         ltable = interp_table(t, x, xp_col,
-                              left=np.NAN, right=np.NAN)
+                              left=np.nan, right=np.nan)
         mask = np.isnan(ltable[x_col])
         ltable = ltable[~mask]
     elif algorithm == 'nan':
@@ -1232,7 +1232,7 @@ def linspace_table(t, x_col, xp_col=None, dx=1, b=0, algorithm=None, **kwargs):
                 ltable[col] = ltable[x_col]
                 continue
             ltable[col][match_mask] = t[col]
-            ltable[col][new_row_mask] = np.NAN
+            ltable[col][new_row_mask] = np.nan
     else:
         raise ValueError(f'Unrecognized algorithm {algorithm}')
     return ltable
@@ -1332,9 +1332,9 @@ def linspace_day_table(day_table,
 
 # --> Note that astropy.utils.masked.function_helpers doesn't have an analog
 def nan_median_filter(data, mask=False, **kwargs):
-    """Median filter data with masked values and/or NANs.  Note that
+    """Median filter data with masked values and/or nans.  Note that
     the quality of the median filtering is best if the data are
-    sampled on a regular interval and have no NAN gaps.  The mask
+    sampled on a regular interval and have no nan gaps.  The mask
     feature is made available for a quick-and-dirty look into data
     
     Parameters
@@ -1349,8 +1349,8 @@ def nan_median_filter(data, mask=False, **kwargs):
     Returns
     -------
     ndata : ndarray-like
-        Median filtered unmasked & non-NAN values copied into
-        original-length data array with missing values marked as NANs
+        Median filtered unmasked & non-nan values copied into
+        original-length data array with missing values marked as nans
     """
     ndata = data.copy()
     mask = np.logical_or(mask, np.isnan(data))
@@ -1401,7 +1401,7 @@ def daily_convolve(qtable,
                    all_days=None):
     """Returns a new QTable with a convolution column added to it.  This
     assumes data are sampled evenly in time.  The all_days input,
-    together with an astropy convolution kernel that handles NANs, is
+    together with an astropy convolution kernel that handles nans, is
     used to properly handle missing time steps
 
     Parameters
@@ -1428,7 +1428,7 @@ def daily_convolve(qtable,
     """
     if all_days is not None:
         # Prepare to create a table of missing days that is filled
-        # with NANs.  Don't assume we have just 3 input columns
+        # with nans.  Don't assume we have just 3 input columns
         missing_days = [day for day in all_days
                         if day not in qtable[day_col]]
         if convolve_col in qtable.colnames:
@@ -1436,7 +1436,7 @@ def daily_convolve(qtable,
         else:
             names = qtable.colnames + [convolve_col]
         n_nancols = len(qtable.colnames)
-        nan_col = np.full(len(missing_days), np.NAN)
+        nan_col = np.full(len(missing_days), np.nan)
         if isinstance(qtable[data_col], u.Quantity):
             unit = qtable[data_col].unit
         else:
@@ -1602,7 +1602,7 @@ def pixel_per_Rj(ccd):
 
 def fill_plot_col(vals, ngaps):
     vals = filled(vals, unmask=True)
-    vals = np.append(vals, (np.NAN, ) * ngaps)
+    vals = np.append(vals, (np.nan, ) * ngaps)
     return vals
 
 
@@ -1662,7 +1662,7 @@ def plot_column(t,
         else:
             # Hope for the best
             datetimes = t[time_col]
-    # When plotting lines, insert NANs into the values so that the
+    # When plotting lines, insert nans into the values so that the
     # plotting pen picks up.  If not plotting lines, this doesn't
     # hurt.  Note that we need to work in datetimes because of our
     # conversion, above.

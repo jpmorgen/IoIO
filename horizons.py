@@ -2,7 +2,7 @@
 
 from random import randint
 from time import sleep
-from requests.exceptions import ConnectTimeout
+from requests.exceptions import ConnectTimeout, HTTPError
 
 import numpy as np
 
@@ -92,7 +92,7 @@ class RateLimitedHorizonsClass(HorizonsClass):
             log.warning(f'JPL throttling connection')
             sleep(randint(HORIZONS_WAIT_MIN, HORIZONS_WAIT_MAX))
             return self.rate_limited_ephemerides(*args, **kwargs)
-        except (ConnectionError, ConnectTimeout) as e:
+        except (ConnectionError, ConnectTimeout, HTTPError) as e:
             log.warning(f'JPL not responding.  Waiting a few minutes')
             sleep(randint(120, 800))
             return self.rate_limited_ephemerides(*args, **kwargs)
@@ -272,8 +272,8 @@ def galsat_ephemeris(ccd_in,
     phis = gs_eph['PDSunLon'].quantity - sysIIIs + 180*u.deg
     phis = MaskedColumn(phis)
     # Prepare to add columns to obs_eph.  Jupiter row is masked
-    sysIIIs = gs_eph['PDObsLon'].insert(0, np.NAN)
-    phis = phis.insert(0, np.NAN)
+    sysIIIs = gs_eph['PDObsLon'].insert(0, np.nan)
+    phis = phis.insert(0, np.nan)
     sysIIIs.mask[0] = True
     phis.mask[0] = True
 
@@ -410,14 +410,15 @@ def comet_ephemeris(ccd_in,
 #from IoIO.cor_process import cor_process
 #from IoIO.calibration import Calibration
 #
+#fname = '/data/IoIO/raw/20250206/SII_on-band_018.fits'
 ##fname = '/data/IoIO/raw/20221004/Na_on-band_001.fits'
-###fname = '/data/IoIO/raw/2021-10-28/Mercury-0001_Na_on.fit'
-##fname = '/data/IoIO/raw/20220112/CK19L030-S002-R001-C003-U.fts'
-#fname = '/data/IoIO/raw/20220606/0019P-S001-R001-C001-Na_off_dupe-1.fts'
+####fname = '/data/IoIO/raw/2021-10-28/Mercury-0001_Na_on.fit'
+###fname = '/data/IoIO/raw/20220112/CK19L030-S002-R001-C003-U.fts'
+##fname = '/data/IoIO/raw/20220606/0019P-S001-R001-C001-Na_off_dupe-1.fts'
 #rccd = CorData.read(fname)
 #c = Calibration(reduce=True)
 #ccd = cor_process(rccd, calibration=c, auto=True)
-
+#
 #ccd = galsat_ephemeris(ccd)
 
 #ccd = obj_ephemeris(ccd,

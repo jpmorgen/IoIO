@@ -793,8 +793,8 @@ def standard_star_directory(directory,
 
                     if detflux_std > stability_factor*mdetflux_err:
                         log.warning(f"Unstable atmosphere detflux_std = {detflux_std} > {stability_factor} * {mdetflux_err} for filter {filt} object {obj} in {directory} from {tdf['date_obs'].iloc[0]} to {tdf['date_obs'].iloc[-1]}")
-                        mdetflux = np.NAN
-                        count = np.NAN
+                        mdetflux = np.nan
+                        count = np.nan
 
                     valid_uoes.append(uoe) 
                     detfluxes.append(mdetflux)
@@ -937,8 +937,8 @@ def standard_star_directory(directory,
                 star_flux_mag = u.Magnitude(star_flux)
                 star_mag = star_flux_mag - (vega_flux_mag - vega_mag0)
             else:
-                star_mag = np.NAN*u.mag(filt_flux.unit)
-                star_flux = np.NAN*filt_flux.unit
+                star_mag = np.nan*u.mag(filt_flux.unit)
+                star_flux = np.nan*filt_flux.unit
 
             # http://sirius.bu.edu/planetary/obstools/starflux/starcalib/starcalib.htm
             # noting that the 4 pi should be tucked inside the

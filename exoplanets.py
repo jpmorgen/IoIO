@@ -292,7 +292,7 @@ def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
             simbad_results = sim.query_object(e)
             if simbad_results is None:
                 log.warning(f'Simbad did not resolve: {e}')
-                vband = np.NAN
+                vband = np.nan
             else:
                 vband = simbad_results['FLUX_V'][0]    
             tc = collection.filter(object=e)

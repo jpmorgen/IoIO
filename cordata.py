@@ -131,7 +131,7 @@ class CorData(CorDataNDparams, NoCenterPGD):
         # additional scattered light).  A star off the ND filter
         # /data/IoIO/raw/2017-05-28/Sky_Flat-0001_SII_on-band.fit
         # gives 124 num_sat
-        log.debug(f'back_level = {back_level}, nonlin: {ccd.nonlin}, max im: {np.max(ccd)}')
+        log.debug(f'back_level = {back_level}, nonlin: {ccd.nonlin}, max im: {np.max(ccd.data)}')
         num_sat = (ccd.data >= ccd.nonlin).sum()
 
         # Make a 1D profile along the ND filter to search for a source there

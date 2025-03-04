@@ -777,8 +777,8 @@ if __name__ == '__main__':
 #num_var = denom_var / 2
 #epsilon_err = epsilon * ((denom_var / (r_peak + l_peak)**2)
 #                         + (num_var / av_peak**2))**0.5
-#epsilon = epsilon.filled(np.NAN)
-#epsilon_err = np.abs(epsilon_err.filled(np.NAN))
+#epsilon = epsilon.filled(np.nan)
+#epsilon_err = np.abs(epsilon_err.filled(np.nan))
 #epsilon_biweight = nan_biweight(epsilon)
 #epsilon_mad = nan_mad(epsilon)
 #bad_mask = np.isnan(epsilon)

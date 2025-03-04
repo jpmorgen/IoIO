@@ -15,6 +15,7 @@ photutils = "*"
 astroquery = "*"
 pandas = "*"
 specutils = "*"
+cupy-cuda11x = "*"
 
 [dev-packages]
 

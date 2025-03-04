@@ -325,7 +325,7 @@ def comet_tree(raw_data_root=RAW_DATA_ROOT,
     dirs, _ = zip(*dirs_dates)
     if len(dirs) == 0:
         log.warning('No directories found')
-    #    return
+        return
 
     # I don't have a pipeline for PSIScope yet.
     (raw_comets_dates, n_obs) = comet_obs(include_PSIScope=False)
@@ -364,12 +364,16 @@ def comet_tree(raw_data_root=RAW_DATA_ROOT,
          # --> Need to concatenate t
     return t
 
+t = comet_tree(mpc_list=['CK20F030'])
+
 # comet_collection('/data/IoIO/raw/20200806/',
 #                      glob_include=NEOWISE_GLOB_LIST)
 # t = comet_directory(c, outdir='/tmp/NEOWISE')
 
 
-plot_comet_obsdates(include_PSIScope=False)
+
+
+#plot_comet_obsdates(include_PSIScope=False)
 #print(comets_in_dir('/data/IoIO/raw/20200806/'))
 #print(comets_in_dir('/data/IoIO/raw/2020-07-28'))
 

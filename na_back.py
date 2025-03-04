@@ -796,11 +796,11 @@ class NaBack():
     def meso_vol_corrected_table(self):
         self.df['iplot_date'] = to_numpy(self.df['plot_date']).astype(int)
         uidays = list(set(self.df['iplot_date']))
-        iday_plot_dates = np.full(len(uidays), np.NAN)
-        vol_corrected_biweight = np.full(len(uidays), np.NAN)*self.back_unit
+        iday_plot_dates = np.full(len(uidays), np.nan)
+        vol_corrected_biweight = np.full(len(uidays), np.nan)*self.back_unit
         vol_corrected_mad_std = vol_corrected_biweight.copy()
-        #self.df['vol_corrected_biweight'] = np.NAN
-        #self.df['vol_corrected_mad_std'] = np.NAN
+        #self.df['vol_corrected_biweight'] = np.nan
+        #self.df['vol_corrected_mad_std'] = np.nan
         for i, iday in enumerate(uidays):
             idx = np.flatnonzero(self.df['iplot_date'] == iday)
             tcorrected_vol = self.all_meso_vol_sun_stim_chemilum_corrected[idx]
@@ -1136,11 +1136,11 @@ def na_meso_sub(ccd_in, bmp_meta=None, na_meso_obj=None, **kwargs):
 #### #######
 #### nab.df['iplot_date'] = to_numpy(nab.df['plot_date']).astype(int)
 #### uidays = list(set(nab.df['iplot_date']))
-#### iday_plot_dates = np.full(len(uidays), np.NAN)
-#### vol_corrected_biweight = np.full(len(uidays), np.NAN)*nab.back_unit
+#### iday_plot_dates = np.full(len(uidays), np.nan)
+#### vol_corrected_biweight = np.full(len(uidays), np.nan)*nab.back_unit
 #### vol_corrected_mad_std = vol_corrected_biweight.copy()
-#### #nab.df['vol_corrected_biweight'] = np.NAN
-#### #nab.df['vol_corrected_mad_std'] = np.NAN
+#### #nab.df['vol_corrected_biweight'] = np.nan
+#### #nab.df['vol_corrected_mad_std'] = np.nan
 #### for i, iday in enumerate(uidays):
 ####     idx = np.flatnonzero(nab.df['iplot_date'] == iday)
 ####     tcorrected_vol = nab.all_meso_vol_sun_stim_chemilum_corrected[idx]

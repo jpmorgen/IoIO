@@ -476,7 +476,7 @@ class CorDataBase(FitsKeyArithmeticMixin, ACPPGD):
         """
         rld = run_level_default_ND_params(self.meta)
         # Get flat ND params from FITS header, if available
-        FND_params = np.full_like(rld, np.NAN)
+        FND_params = np.full_like(rld, np.nan)
         for i in range(2):
             for j in range(2):
                 fndpar = self.meta.get(f'fndpar{i}{j}')
