@@ -294,7 +294,7 @@ def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
                 log.warning(f'Simbad did not resolve: {e}')
                 vband = np.nan
             else:
-                vband = simbad_results['FLUX_V'][0]    
+                vband = simbad_results['V'][0]    
             tc = collection.filter(object=e)
             date_obss = tc.values('date-obs')
             tts = Time(date_obss, format='fits')

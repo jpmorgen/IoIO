@@ -489,13 +489,13 @@ def exposure_correct_plot(exposure_correct_data,
     plot_dates = [ecd['plot_date'] for ecd in exposure_correct_data]
     exposure_corrects = [ecd['exposure_correct']
                          for ecd in exposure_correct_data]
-    plot_dates = np.asarray(plot_dates)
+    #plot_dates = np.asarray(plot_dates)
     exposure_corrects = np.asarray(exposure_corrects)
 
     # Plot our exposure correction data
     f = plt.figure()
     ax = plt.subplot()
-    plt.plot_date(plot_dates, exposure_corrects, 'k.')
+    plt.plot(plot_dates, exposure_corrects, 'k.')
 
     # Fit a constant offset to each segment in which we have a
     # constant latency
@@ -511,15 +511,15 @@ def exposure_correct_plot(exposure_correct_data,
                                                       ignore_nan=True)
         mad_std_exposure_correct = mad_std(exposure_corrects[sidx],
                                            ignore_nan=True)
-        plt.plot_date([mindate, maxdate],
-                      [biweight_exposure_correct]*2, 'r-')
+        plt.plot([mindate, maxdate],
+                 [biweight_exposure_correct]*2, 'r-')
 
-        plt.plot_date([mindate, maxdate],
-                      [biweight_exposure_correct-mad_std_exposure_correct]*2,
-                      'k--')
-        plt.plot_date([mindate, maxdate],
-                      [biweight_exposure_correct+mad_std_exposure_correct]*2,
-                      'k--')
+        plt.plot([mindate, maxdate],
+                 [biweight_exposure_correct-mad_std_exposure_correct]*2,
+                 'k--')
+        plt.plot([mindate, maxdate],
+                 [biweight_exposure_correct+mad_std_exposure_correct]*2,
+                 'k--')
 
         plt.text((mindate + maxdate)/2,
                  0.5*biweight_exposure_correct, 
@@ -605,34 +605,41 @@ def standard_star_directory(directory,
     # Add Vega onto our objects.  Will take it off, below
     objects = list(set(df['object']))
     objects.append('Vega')
+    # This is the list of IoIO filters, U, V, B, R, RC, R125, u_sdss,
+    # g_sdss, r_sdss, i_sdss, z_sdss
     filters = list(set(df['filter']))
 
     s = Simbad()
     burnashev = CorBurnashev()
-    s.add_votable_fields('flux(U)', 'flux(B)', 'flux(V)', 'flux(R)',
-                         'flux(I)')
+    # This is how SIMBAD/astroquery is listing them as of end of 2024
+    # or so
+    s.add_votable_fields('U', 'B', 'V', 'R',
+                         'I', 'u', 'g', 'r', 'i', 'z', 'G')
     simbad_results = s.query_objects(objects)
     vega_entry = simbad_results[-1]
     simbad_results = simbad_results[0:-2]
-    vega_coords = SkyCoord(vega_entry['RA'],
-                           vega_entry['DEC'],
-                           unit=(u.hour, u.deg))
+    # Note change to lowercase and degrees for both RA and DEC
+    vega_coords = SkyCoord(vega_entry['ra'],
+                           vega_entry['dec'],
+                           unit=u.deg)
     bname, bsep, _ = burnashev.closest_name_to(vega_coords)
-    assert bsep < POINTING_TOLERANCE, 'Vega must be found in Burnashevc catalog!'
+    assert bsep < POINTING_TOLERANCE, 'Vega must be found in Burnashev catalog!'
     vega_spec = burnashev.get_spec(bname)
     vega_standard_list = []
     for filt_name in filters:
+        # This is our filter name (e.g. r_sdss)
         filt = burnashev.get_filt(filt_name)
         filt_flux = burnashev.flux_in_filt(vega_spec, filt,
                                            plot=False,
                                            title=f'Vega {filt_name}')
-        flux_col = 'FLUX_' + filt_name
+        # SIMBAD returns u g r i z instead of u_sdss, etc
+        filt_col = filt_name.replace('_sdss', '')
         if flux_col in vega_entry.colnames:
             filt_mag = vega_entry[flux_col]
         else:
             # All our narrow-band filters are currently in R-band, so make
             # that the logarithmic reference
-            filt_mag = vega_entry['FLUX_R']
+            filt_mag = vega_entry['R']
         vega_standard_list.append({'filt_name': filt_name,
                                    'filt_flux': filt_flux.value,
                                    'filt_mag': filt_mag})
@@ -669,8 +676,8 @@ def standard_star_directory(directory,
             # Assume RA reads in hours
             obj_coords = SkyCoord(ra, dec, unit=(u.hour, u.degree))
 
-        simbad_coords = SkyCoord(simbad_entry['RA'],
-                                 simbad_entry['DEC'],
+        simbad_coords = SkyCoord(simbad_entry['ra'],
+                                 simbad_entry['dec'],
                                  unit=(u.hour, u.deg))
         pix_solid_angle = objdf['pix_solid_angle'][row1]
         pix_solid_angle *= u.arcsec**2
@@ -908,7 +915,8 @@ def standard_star_directory(directory,
             plt.plot(xfit, yfit)
 
             instr_mag_am0 = poly(0)*instr_mag_unit
-            flux_col = 'FLUX_'+filt
+            # SIMBAD returns u g r i z instead of u_sdss, etc
+            filt_col = filt.replace('_sdss', '')
 
             # Get our Vega flux in photons and mag reference
             vega_flux = pd_vega.loc[filt:filt,'filt_flux']
@@ -1077,10 +1085,10 @@ def filter_stripchart(df=None,
         ax = plt.subplot(nfilt, 1, ifilt+1)
         ax.tick_params(which='both', direction='inout',
                        bottom=True, top=True, left=True, right=True)
-        plt.plot_date(filtdf['min_plot_date'], filtdf[column], 'k.')
-        plt.plot_date(plot_date_range, [biweight_loc + mads]*2, 'k--')
-        plt.plot_date(plot_date_range, [biweight_loc]*2, 'r-')
-        plt.plot_date(plot_date_range, [biweight_loc - mads]*2, 'k--')
+        plt.plot(filtdf['min_plot_date'], filtdf[column], 'k.')
+        plt.plot(plot_date_range, [biweight_loc + mads]*2, 'k--')
+        plt.plot(plot_date_range, [biweight_loc]*2, 'r-')
+        plt.plot(plot_date_range, [biweight_loc - mads]*2, 'k--')
         
         ax.set_xlim(plot_date_range)
         ax.set_ylim([biweight_loc - 5*mads,
@@ -2031,14 +2039,14 @@ if __name__ == '__main__':
 ##
 ##star_list.append('Vega')
 ##s = Simbad()
-##s.add_votable_fields('flux(U)', 'flux(B)', 'flux(V)', 'flux(R)',
-##                     'flux(I)')
+##s.add_votable_fields('U', 'B', 'V', 'R',
+##                     'I', 'u', 'g', 'r', 'i', 'z', 'G')
 ##simbad_results = s.query_objects(star_list)
 ##vega_entry = simbad_results[-1]
 ##simbad_results = simbad_results[0:-2]
-##vega_coords = SkyCoord(vega_entry['RA'],
-##                       vega_entry['DEC'],
-##                       unit=(u.hour, u.deg))
+##vega_coords = SkyCoord(vega_entry['ra'],
+##                       vega_entry['dec'],
+##                       unit=u.deg)
 ##bname, bsep, _ = burnashev.closest_name_to(vega_coords)
 ##assert bsep < POINTING_TOLERANCE, 'Vega must be found in Burnashev catalog!'
 ##vega_spec = burnashev.get_spec(bname)
@@ -2136,10 +2144,10 @@ if __name__ == '__main__':
 ###     ax = plt.subplot(nfilt, 1, ifilt+1)
 ###     ax.tick_params(which='both', direction='inout',
 ###                    bottom=True, top=True, left=True, right=True)
-###     plt.plot_date(filtdf['min_plot_date'], filtdf['zero_point'], 'k.')
-###     plt.plot_date(plot_date_range, [zp_biweight_loc + zp_mad_std]*2, 'k--')
-###     plt.plot_date(plot_date_range, [zp_biweight_loc]*2, 'r-')
-###     plt.plot_date(plot_date_range, [zp_biweight_loc - zp_mad_std]*2, 'k--')
+###     plt.plot(filtdf['min_plot_date'], filtdf['zero_point'], 'k.')
+###     plt.plot(plot_date_range, [zp_biweight_loc + zp_mad_std]*2, 'k--')
+###     plt.plot(plot_date_range, [zp_biweight_loc]*2, 'r-')
+###     plt.plot(plot_date_range, [zp_biweight_loc - zp_mad_std]*2, 'k--')
 ###     
 ###     ax.set_xlim(plot_date_range)
 ###     ax.set_ylim([zp_biweight_loc - 5*zp_mad_std,
@@ -2161,10 +2169,10 @@ if __name__ == '__main__':
 ###     ax = plt.subplot(nfilt, 1, ifilt+1)
 ###     ax.tick_params(which='both', direction='inout',
 ###                    bottom=True, top=True, left=True, right=True)
-###     plt.plot_date(filtdf['min_plot_date'], filtdf['rayleigh_conversion'], 'k.')
-###     plt.plot_date(plot_date_range, [zp_biweight_loc + zp_mad_std]*2, 'k--')
-###     plt.plot_date(plot_date_range, [zp_biweight_loc]*2, 'r-')
-###     plt.plot_date(plot_date_range, [zp_biweight_loc - zp_mad_std]*2, 'k--')
+###     plt.plot(filtdf['min_plot_date'], filtdf['rayleigh_conversion'], 'k.')
+###     plt.plot(plot_date_range, [zp_biweight_loc + zp_mad_std]*2, 'k--')
+###     plt.plot(plot_date_range, [zp_biweight_loc]*2, 'r-')
+###     plt.plot(plot_date_range, [zp_biweight_loc - zp_mad_std]*2, 'k--')
 ###     
 ###     ax.set_xlim(plot_date_range)
 ###     ax.set_ylim([zp_biweight_loc - 5*zp_mad_std,

@@ -3,7 +3,7 @@ import os
 
 import matplotlib.pyplot as plt
 
-import moviepy.editor as mpy
+from moviepy import ImageClip, concatenate_videoclips
 
 import astropy.units as u
 from astropy.time import Time
@@ -51,10 +51,10 @@ def make_movie(t, outname, reduction_suffix=None, start=None, stop=None):
     durations[durations > 40000] = med_duration
 
     # https://stackoverflow.com/questions/44732602/convert-image-sequence-to-video-using-moviepy
-    clips = [mpy.ImageClip(m).set_duration(d/SPEEDUP)
+    clips = [ImageClip(m).with_duration(d/SPEEDUP)
              for m, d in zip(png_names, durations)]
 
-    movie = mpy.concatenate_videoclips(clips, method="compose")
+    movie = concatenate_videoclips(clips, method="compose")
     movie.write_videofile(outname, fps=FPS)
 
 start = None
@@ -75,7 +75,7 @@ stop = None
 #start = '2023-06-01'
 
 # Search for outburst during Juno
-start = '2024-08-01'
+#start = '2024-08-01'
 
 t = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
 make_movie(t, '/tmp/test_Na.mp4', start=start, stop=stop)
