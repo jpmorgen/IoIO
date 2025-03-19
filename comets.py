@@ -137,9 +137,10 @@ def comet_phot(ccd,
     # The right place to do this is in [cor_]photometry and with a
     # variety of apertures and the Photometry.background for EACH file
     log.debug(f'comet_phot obj_center: {ccd.obj_center}')
-    aper = CircularAperture(ccd.obj_center, comet_phot_rad)
+    aper = CircularAperture(ccd.obj_center[::-1], comet_phot_rad)
     phots = []
     comet_dict = {}
+    comet_dict['filter'] = ccd.meta['filter']
     comet_dict['OBJ_CR0'] = ccd.obj_center[1]
     comet_dict['OBJ_CR1'] = ccd.obj_center[0]
     # This is OK for one aperture, but if I want many, I'll need to
@@ -189,6 +190,7 @@ def comet_pipeline(collection=None,
     photometry = photometry or CorPhotometry(precalc=True, **kwargs)
     standard_star_obj = standard_star_obj or StandardStar(reduce=True)
 
+    # --> I am going to need to add the filter name!
     cmp = CometMultiPipe(
         auto=True,
         calibration=calibration,
@@ -364,7 +366,11 @@ def comet_tree(raw_data_root=RAW_DATA_ROOT,
          # --> Need to concatenate t
     return t
 
-t = comet_tree(mpc_list=['CK20F030'])
+#t = comet_tree(mpc_list=['CK20F030'])
+# --> Need to pick apart ValueError of Ambiguous target name
+#t = comet_tree(mpc_list=['0029P'], start='2025-02-01')
+
+t = comet_tree(mpc_list=['CK23A030'])
 
 # comet_collection('/data/IoIO/raw/20200806/',
 #                      glob_include=NEOWISE_GLOB_LIST)

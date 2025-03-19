@@ -91,8 +91,9 @@ class ExoSimbadClass(SimbadClass):
             object_name = object_name.replace('-', ' ')
             log.info(f'Removed "-" from object_name and trying {object_name}')
             result = super().query_object(object_name, *args, **kwargs)
-        if result and result.errors:
-            log.warning(f'Simbad errors for obj: {simbad_results.errors}')
+        # New astroquery doesn't seem to have result.error.  result is a Table
+        #if result and result.errors:
+        #    log.warning(f'Simbad errors for obj: {simbad_results.errors}')
         return result
 ExoSimbad = ExoSimbadClass()
 

@@ -40,7 +40,7 @@ OBJ_COL_TO_META = ['RA', 'DEC', 'RA_rate', 'DEC_rate', 'V',
                    'delta', 'delta_rate', 'lighttime', 'vel_sun',
                    'vel_obs', 'elong', 'elongFlag', 'alpha',
                    'sunTargetPA', 'velocityPA']
-COMET_COL_TO_META = ['M1', 'k1', 'flags', 'RA', 'DEC', 'RA_rate',
+COMET_COL_TO_META = ['M1', 'k1', 'RA', 'DEC', 'RA_rate',
                       'DEC_rate', 'Tmag', 'Nmag', 'illumination',
                       'ang_width', 'PDObsLon', 'PDObsLat', 'PDSunLon',
                       'PDSunLat', 'SubSol_ang', 'SubSol_dist',
@@ -89,7 +89,12 @@ class RateLimitedHorizonsClass(HorizonsClass):
         except ValueError as e:
             if not 'There was an unexpected problem with server. Please wait a minute or so and try again.' in str(e):
                 raise e
-            log.warning(f'JPL throttling connection')
+            log.warning(f'JPL throttling connection with ValueError')
+            # This may be obsolete with the latest astroquery
+            sleep(randint(HORIZONS_WAIT_MIN, HORIZONS_WAIT_MAX))
+            return self.rate_limited_ephemerides(*args, **kwargs)
+        except (ConnectionError, HTTPError) as e:
+            log.warning(f'JPL throttling with HTTPError')
             sleep(randint(HORIZONS_WAIT_MIN, HORIZONS_WAIT_MAX))
             return self.rate_limited_ephemerides(*args, **kwargs)
         except (ConnectionError, ConnectTimeout, HTTPError) as e:

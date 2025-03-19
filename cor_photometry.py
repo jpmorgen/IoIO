@@ -935,10 +935,19 @@ def object_to_objctradec(ccd_in, simbad_results=None, **kwargs):
                   f'OBJCTRA = {ccd.meta["OBJCTRA"]} '
                   f'OBJCTDEC = {ccd.meta["OBJCTDEC"]}')
         return ccd
-    obj_entry = simbad_results[0]
-    ra = Angle(obj_entry['RA'], unit=u.hour)
-    dec = Angle(obj_entry['DEC'], unit=u.deg)
-    ccd.meta['OBJCTRA'] = (ra.to_string(),
+    # Fri Mar 07 18:23:06 2025 EST  jpmorgen@snipe
+    # Latest astroquery returns table with units and descriptions, but
+    # I am having trouble actually using the units to initialize
+    # angle
+    ra_col = simbad_results['ra']
+    dec_col = simbad_results['dec']
+    assert ra_col.unit == u.deg and dec_col.unit == u.deg
+    ra = Angle(ra_col[0], unit=u.deg)
+    # --> Change to hour angle to make consistent with telescope units
+    # and all the previous hard-coded hour-angle assumptions elsewhere
+    ra_ha = f'{ra.hms.h:.0f}h{ra.hms.m:.0f}m{ra.hms.s:0.7f}s'
+    dec = Angle(dec_col[0], unit=u.deg)
+    ccd.meta['OBJCTRA'] = (ra_ha,
                       '[hms J2000] Target right assention')
     ccd.meta['OBJCTDEC'] = (dec.to_string(),
                        '[dms J2000] Target declination')
@@ -1027,7 +1036,8 @@ def add_astrometry(ccd_in, bmp_meta=None,
                    create_outdir=None,
                    solve_timeout=None,
                    keep_intermediate=False,
-                   fail_if_no_wcs=True,
+                   fail_if_no_solve=False, # fail if no astrometry.net solution
+                   fail_if_no_wcs=True, # fail if also no proxy_wcs
                    write_to_central_photometry=True,
                    write_local_photometry=False,
                    **kwargs):
@@ -1117,6 +1127,12 @@ def add_astrometry(ccd_in, bmp_meta=None,
     except Exception as e:
         log.error(f'Problem with {in_name}')
         raise
+    if fail_if_no_solve and not photometry.solved:
+        # We wanted to make sure we had a full astrometry.net
+        # solution.  In some cases, like Jupiter, a proxy solution is
+        # acceptable
+        bmp_meta.clear()
+        return None
     if photometry.wcs is None and fail_if_no_wcs:
         # Pathological case: no wcs solution and no proxy solution
         bmp_meta.clear()

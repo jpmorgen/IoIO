@@ -5,10 +5,9 @@ name = "pypi"
 
 [packages]
 boltwood-parser = "*"
-moviepy = "*"
-matplotlib = "*"
-astropy = "*"
-scipy = "*"
+moviepy = "==1.0.3"
+matplotlib = "==3.6.3"
+scipy = "==1.10"
 ccdproc = "*"
 bigmultipipe = "*"
 photutils = "*"
@@ -16,6 +15,8 @@ astroquery = "*"
 pandas = "*"
 specutils = "*"
 cupy-cuda11x = "*"
+astropy = "==5.2.1"
+numpy = "==1.24.2"
 
 [dev-packages]
 

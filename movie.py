@@ -3,7 +3,7 @@ import os
 
 import matplotlib.pyplot as plt
 
-from moviepy import ImageClip, concatenate_videoclips
+import moviepy.editor as mpy
 
 import astropy.units as u
 from astropy.time import Time
@@ -51,10 +51,10 @@ def make_movie(t, outname, reduction_suffix=None, start=None, stop=None):
     durations[durations > 40000] = med_duration
 
     # https://stackoverflow.com/questions/44732602/convert-image-sequence-to-video-using-moviepy
-    clips = [ImageClip(m).with_duration(d/SPEEDUP)
+    clips = [mpy.ImageClip(m).set_duration(d/SPEEDUP)
              for m, d in zip(png_names, durations)]
 
-    movie = concatenate_videoclips(clips, method="compose")
+    movie = mpy.concatenate_videoclips(clips, method="compose")
     movie.write_videofile(outname, fps=FPS)
 
 start = None
@@ -78,13 +78,13 @@ stop = None
 #start = '2024-08-01'
 
 t = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
-make_movie(t, '/tmp/test_Na.mp4', start=start, stop=stop)
-#make_movie(t, '/tmp/test_Na_apertures.mp4', reduction_suffix='_apertures',
-#           start=start, stop=stop)
+#make_movie(t, '/tmp/test_Na.mp4', start=start, stop=stop)
+make_movie(t, '/tmp/test_Na_apertures.mp4', reduction_suffix='_apertures',
+           start=start, stop=stop)
 t = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
-make_movie(t, '/tmp/test_SII.mp4', start=start, stop=stop)
+#make_movie(t, '/tmp/test_SII.mp4', start=start, stop=stop)
 
 
-#make_movie(t, '/tmp/test_SII_reduction.mp4', reduction_suffix='_reduction',
-#           start=start, stop=stop)
+make_movie(t, '/tmp/test_SII_reduction.mp4', reduction_suffix='_reduction',
+           start=start, stop=stop)
 

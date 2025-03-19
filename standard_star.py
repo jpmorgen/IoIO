@@ -489,7 +489,7 @@ def exposure_correct_plot(exposure_correct_data,
     plot_dates = [ecd['plot_date'] for ecd in exposure_correct_data]
     exposure_corrects = [ecd['exposure_correct']
                          for ecd in exposure_correct_data]
-    #plot_dates = np.asarray(plot_dates)
+    plot_dates = np.asarray(plot_dates)
     exposure_corrects = np.asarray(exposure_corrects)
 
     # Plot our exposure correction data
@@ -633,7 +633,7 @@ def standard_star_directory(directory,
                                            plot=False,
                                            title=f'Vega {filt_name}')
         # SIMBAD returns u g r i z instead of u_sdss, etc
-        filt_col = filt_name.replace('_sdss', '')
+        flux_col = filt_name.replace('_sdss', '')
         if flux_col in vega_entry.colnames:
             filt_mag = vega_entry[flux_col]
         else:
