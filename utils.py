@@ -31,6 +31,7 @@ from astropy.table import Table, QTable, vstack
 from astropy.convolution import (convolve, interpolate_replace_nans,
                                  Gaussian1DKernel)
 from astropy.coordinates import SkyCoord
+from astropy.wcs.utils import pixel_to_skycoord
 from astropy.nddata import CCDData
 
 from ccdproc import ImageFileCollection
@@ -455,6 +456,31 @@ def closest_in_coord(collection, value_pair,
                              for i in (i_on, i_off)]
         pair_list.append(pair)
     return pair_list
+
+def ra_to_hms(ra):
+    """Outputs ra (an astropy.coord.Angle) as a string in NNhNNmNN.NNNs format"""
+    return f'{ra.hms.h:.0f}h{ra.hms.m:.0f}m{ra.hms.s:0.7f}s'
+
+def ccd_center_fov_to_meta(ccd_in, bmp_meta=None, **kwargs):
+    if bmp_meta is None:
+        bmp_meta = {}
+    if ccd_in.wcs is None:
+        return ccd_in
+    ccd = ccd_in.copy()
+    ccd_shape = np.asarray(ccd.shape)
+    ccd_center = np.round(ccd_shape/2)
+    ccd_fov_rad = np.average(ccd_center)
+    coord = pixel_to_skycoord(ccd_center[0], ccd_center[1], ccd.wcs)
+    rad_coord = pixel_to_skycoord(ccd_center[0]+ccd_fov_rad,
+                                  ccd_center[1]+ccd_fov_rad,
+                                  ccd.wcs)
+    fov_rad_angle = rad_coord.separation(coord)
+    ccd.meta['CENTRA'] = (ra_to_hms(coord.ra), 'FOV center RA [hms J2000]')
+    ccd.meta['CENTDEC'] = (coord.dec.to_string(), 'FOV center DEC [dms J2000]')
+    ccd.meta['FOVRAD'] = (fov_rad_angle.value, 'FOV radius (deg)')
+    bmp_meta['center_coord'] = coord
+    bmp_meta['fov_rad'] = fov_rad_angle
+    return ccd    
 
 def valid_long_exposure(r):
     """Inspects FITS header or ImageFileCollection row for condition"""
@@ -1605,7 +1631,7 @@ def fill_plot_col(vals, ngaps):
     vals = np.append(vals, (np.nan, ) * ngaps)
     return vals
 
-
+# --> this should be in a separate util, possibly utils.plotting
 def plot_column(t,
                 time_col='tavg',
                 max_time_gap=15*u.day,
@@ -1704,6 +1730,9 @@ def plot_column(t,
     ax.format_coord = PJAXFormatter(datetimes, vals)
     return h
 
+# --> This should be in a separate util, since it depends on
+# --> IoIO.photometry.rot_to
+# --> this should be in a separate util, possibly utils.plotting
 def plot_planet_subim(ccd_in,
                       fig=None,
                       ax=None,

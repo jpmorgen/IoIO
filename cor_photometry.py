@@ -38,7 +38,7 @@ from precisionguide import PGData
 from IoIO.ioio_globals import IoIO_ROOT, RAW_DATA_ROOT
 import IoIO.sx694 as sx694
 from IoIO.utils import (FITS_GLOB_LIST, sum_ccddata, multi_glob,
-                        savefig_overwrite)
+                        savefig_overwrite, ra_to_hms)
 from IoIO.cordata_base import CorDataBase
 from IoIO.photometry import (SOLVE_TIMEOUT, rot_wcs,
                              Photometry, PhotometryArgparseMixin)
@@ -300,6 +300,11 @@ class CorPhotometry(Photometry):
 
         keys_to_source_table : list
             FITS header keys to add as columns to wide_source_table
+
+    --> If Locations in Times ever get fixed for vstacking, it mighht
+        be better to put ccd.tavg into the table.  This can be done
+        with an object that fills the source table columns instead of
+        KEYS_TO_SOURCE_TABLE (see Photometry note)
 
     """
     def __init__(self,
@@ -943,11 +948,10 @@ def object_to_objctradec(ccd_in, simbad_results=None, **kwargs):
     dec_col = simbad_results['dec']
     assert ra_col.unit == u.deg and dec_col.unit == u.deg
     ra = Angle(ra_col[0], unit=u.deg)
+    dec = Angle(dec_col[0], unit=u.deg)
     # --> Change to hour angle to make consistent with telescope units
     # and all the previous hard-coded hour-angle assumptions elsewhere
-    ra_ha = f'{ra.hms.h:.0f}h{ra.hms.m:.0f}m{ra.hms.s:0.7f}s'
-    dec = Angle(dec_col[0], unit=u.deg)
-    ccd.meta['OBJCTRA'] = (ra_ha,
+    ccd.meta['OBJCTRA'] = (ra_to_hms(ra),
                       '[hms J2000] Target right assention')
     ccd.meta['OBJCTDEC'] = (dec.to_string(),
                        '[dms J2000] Target declination')

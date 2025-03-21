@@ -418,6 +418,10 @@ def is_flux(unit):
         return False
     return True
 
+# --> keys_to_source_table is a poor-man's way of stacking information
+# --> into the photometry QTables.  I should really implement an
+# --> object that takes the ccd as input and greps things out of that
+# --> like plate scale (see gps_satellites)
 class Photometry:
     def __init__(self,
                  ccd=None, # Passed by reference since nothing operates ON it

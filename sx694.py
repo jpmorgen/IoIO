@@ -193,7 +193,9 @@ def exp_correct_value(date_obs):
         #exposure_correct_uncertainty = 0.47 # s
     else:
         # Thu Jan 23 18:40:41 2025 EST  jpmorgen@snipe
-        # As of 
+        # As of '2025-01-12', I am using the ASCOM driver for the
+        # sx694, which does not have the gap at 0.7s like the 32-bit
+        # MaxIm driver does
         exposure_correct = 0 # s
         exposure_correct_uncertainty = 0 # s
     #Sat May 15 22:42:42 2021 EDT  jpmorgen@snipe
@@ -217,8 +219,7 @@ def exp_correct_value(date_obs):
 
 def exp_correct(hdr_in,
                 *args, **kwargs):
-    """Correct exposure time problems for Starlight Xpress drivers in
-    MaxIm.  
+    """Correct exposure time problem for Starlight Xpress MaxIm 32-bit driver  
 
     """
     if hdr_in.get('OEXPTIME') is not None:
@@ -251,6 +252,7 @@ def exp_correct(hdr_in,
     return hdr
 
 def date_obs(hdr_in,
+             
              *args, **kargs):
     """Correct DATE-OBS keyword in FITS header for shutter latency
     See discussion in IoIO.notebk 

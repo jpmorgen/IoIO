@@ -710,6 +710,22 @@ def cor_process(ccd,
     if date_obs_correct:
         # DATE-OBS as best estimate shutter open time, add DATE-AVG
         nccd.meta = sx694.date_obs(nccd.meta, *args, **kwargs)
+    else:
+        # Put these in to make cor_photometry happy when processing
+        # gps_satellites
+        date_avg_uncertainty = sx694.ntp_accuracy
+        nccd.meta.insert('DATE-OBS',
+                         ('HIERARCH NTP-ACCURACY', sx694.ntp_accuracy,
+                          'RMS typical (s)'),
+                   after=True)
+        nccd.meta.insert('DATE-OBS',
+                         ('HIERARCH DATE-AVG-UNCERTAINTY', date_avg_uncertainty,
+                          '(s)'),
+               after=True)
+        nccd.meta.insert('DATE-OBS',
+                         ('DATE-AVG', nccd.tavg.fits,
+                          'Best estimate midpoint of exposure (UTC)'),
+                         after=True)
 
     if remove_raw_jd:
         if nccd.meta.get('JD*'):
