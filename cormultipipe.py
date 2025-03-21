@@ -363,7 +363,10 @@ def tavg_to_bmp_meta(ccd_in, bmp_meta=None, **kwargs):
     bmp_meta['tavg'] = ccd_in.tavg
     bmp_meta['tavg_uncertainty'] = ccd_in.meta['DATE-AVG-UNCERTAINTY'] * u.s
     bmp_meta['exptime'] = ccd_in.meta['EXPTIME'] * u.s
-    bmp_meta['exptime-uncertainty'] = ccd_in.meta['EXPTIME-UNCERTAINTY'] * u.s
+    exptime_uncertainty = ccd_in.meta.get('EXPTIME-UNCERTAINTY')
+    if exptime_uncertainty is None:
+        exptime_uncertainty = 0
+    bmp_meta['exptime-uncertainty'] = exptime_uncertainty*u.s
     return ccd_in
 
 def detflux(ccd_in, exptime_unit=None, **kwargs):

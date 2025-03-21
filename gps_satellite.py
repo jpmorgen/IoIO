@@ -265,7 +265,7 @@ log.setLevel('DEBUG')
 # This will eventually become gps_tree.  And some of the above may
 # become moving_target
 # --> put this back in
-#t_trans, astrometric_accuracy = gps_directory()
+t_trans, astrometric_accuracy = gps_directory()
 
 
 lon = IOIO_1_LOCATION.lon.wrap_at(360*u.deg)
@@ -276,13 +276,13 @@ else:
     ns = 'N'
 
 alat = abs(lat)
-latstr = f'{alat.dms[0]:.0f} {alat.dms[1]:.0f} {alat.dms[2]:.0f}'
+latstr = f'{alat.dms[0]:.0f} {alat.dms[1]:.0f} {alat.dms[2]:.2f}'
 latstr = f'{latstr} {ns}'
 
 alt = IOIO_1_LOCATION.height
 altstr = f'{alt.value:.0f}{alt.unit}'
 
-loc = f'Long. {lon.dms[0]:.0f} {lon.dms[1]:.0f} {lon.dms[2]:.0f} E, Lat. {latstr}, Alt. {altstr}, Google Earth'
+loc = f'Long. {lon.dms[0]:.0f} {lon.dms[1]:.0f} {lon.dms[2]:.2f} E, Lat. {latstr}, Alt. {altstr}, Google Earth'
 
 ades_hdr = f'''COD XXX
 COM {loc}

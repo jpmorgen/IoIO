@@ -715,11 +715,12 @@ def cor_process(ccd,
         # gps_satellites
         date_avg_uncertainty = sx694.ntp_accuracy
         nccd.meta.insert('DATE-OBS',
-                         ('HIERARCH NTP-ACCURACY', sx694.ntp_accuracy,
+                         ('HIERARCH NTP-ACCURACY', sx694.ntp_accuracy.value,
                           'RMS typical (s)'),
                    after=True)
         nccd.meta.insert('DATE-OBS',
-                         ('HIERARCH DATE-AVG-UNCERTAINTY', date_avg_uncertainty,
+                         ('HIERARCH DATE-AVG-UNCERTAINTY',
+                          date_avg_uncertainty.value,
                           '(s)'),
                after=True)
         nccd.meta.insert('DATE-OBS',

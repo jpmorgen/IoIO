@@ -95,7 +95,9 @@ max_accurate_exposure = 0.7 # s
 #latency_change_dates = ['2020-06-01', '2020-11-01']
 #latency_change_dates = ['2020-11-01']
 # Thu Jan 23 18:59:21 2025 EST  jpmorgen@snipe
-# ASCOM driver has no discontinuity, but does have latency
+# ASCOM driver has no discontinuity, but does have latency.  This
+# means the latency_change_dates are used in TWO functions,
+# exp_correct_value and shutter_latency_value
 latency_change_dates = ['2020-11-01', '2025-01-12']
 
 
@@ -104,7 +106,7 @@ latency_change_dates = ['2020-11-01', '2025-01-12']
 # on PC motherboard used for time keeping.  Convert to RMS, since that
 # better reflects the true distribution of values asssume a standard
 # deviation-like distribution
-ntp_accuracy = 0.005 / np.sqrt(2) # s
+ntp_accuracy = 0.005 / np.sqrt(2) *u.s
 
 def metadata(hdr_in,
              camera_description=camera_description,
@@ -172,12 +174,16 @@ def approx_pix_solid_angle(ccd):
     pix_solid_angle = pix_solid_angle.to(u.arcsec**2)
     return pix_solid_angle
 
+
+# --> This could be more efficient if it were a method in property,
+# suggesting cameras should be objects
 def exp_correct_value(date_obs):
     """Provides the measured extra exposure correction time for
     exposures > max_accurate_exposure.  See detailed discussion in
     IoIO_reduction.notebk on 
     Fri Jun 03 11:56:20 2022 EDT  jpmorgen@snipe
-    KEEP THE TABLE IN THIS CODE UP TO DATE
+    NOTE: for data recorded after 2025-01-12, this returns zero and
+    the shutter_latency_value function is where new values need to be entered
 """
 
     if date_obs < latency_change_dates[0]:
@@ -229,13 +235,16 @@ def exp_correct(hdr_in,
     if exptime <= max_accurate_exposure:
         # Exposure time should be accurate
         return hdr_in
+    exposure_correct, exposure_correct_uncertainty = \
+        exp_correct_value(hdr_in['DATE-OBS'])
+    if exposure_correct == 0:
+        # ASCOM driver has no discontinuous EXPTIME
+        return hdr_in
     hdr = hdr_in.copy()
     hdr.insert('EXPTIME', 
                ('OEXPTIME', exptime,
                 'commanded exposure time (s)'),
                after=True)
-    exposure_correct, exposure_correct_uncertainty = \
-        exp_correct_value(hdr['DATE-OBS'])
     exptime += exposure_correct
     hdr['EXPTIME'] = (exptime,
                       'corrected exposure time (s)')
@@ -251,23 +260,56 @@ def exp_correct(hdr_in,
     #            'Corrected exposure time for SX694 MaxIm driver bug')
     return hdr
 
+def shutter_latency_value(hdr):
+    """Calculate shutter latency based on indirect exposure time gap
+    measurements with the 32-bit MaxIm driver or direct GPS satellite
+    measurements
+
+    """
+    exposure_correct, exposure_correct_uncertainty = \
+        exp_correct_value(hdr['DATE-OBS'])
+    if exposure_correct == 0:
+        # Use GPS satellite measurement of ~/IoIO_reduction.notebk.
+        # Fri Mar 21 10:06:32 2025 EDT  jpmorgen@snipe
+        # Add ntp_accuracy in quadrature, since that is a
+        # systematic random error on the on the quoted delay times by
+        # the https://www.projectpluto.com/ tools
+        shutter_latency = 0.9024512*u.s
+        gps_uncertainty = 0.0259504*u.s
+        shutter_latency_uncertainty = np.sqrt(
+            ntp_accuracy**2 + gps_uncertainty**2)
+    else:
+        # See discussion in IoIO.notebk 
+        # Mon May 17 13:30:45 2021 EDT  jpmorgen@snipe
+        # and IoIO_reduction.notebk 
+        # Sun Mar 27 21:43:17 2022 EDT  jpmorgen@snipe
+
+        # I never successfully measured the shutter latency directly
+        # with 32-bit driver.  Rather, I estimated it was 1/2 the
+        # round-trip inferred from exposure correction value.  I could
+        # potentially measure the 32-bit driver latency directly with
+        # GPSs but for 2024-12, it ends up being 1.295 +/- 0.1s, which
+        # is pretty close to the satellite-measured value a few months
+        # later.  Given the differences in the driver, call this good
+        # enough, particularly since there were other changes along
+        # the way that I can't go back and reproduce.
+        shutter_latency = exposure_correct/2*u.s
+        # --> this is awkward because I really should have property in
+        # a method
+        shutter_latency_uncertainty = exposure_correct_uncertainty/2
+    return (shutter_latency, shutter_latency_uncertainty,
+            exposure_correct, exposure_correct_uncertainty)
+
 def date_obs(hdr_in,
              
              *args, **kargs):
     """Correct DATE-OBS keyword in FITS header for shutter latency
-    See discussion in IoIO.notebk 
-    Mon May 17 13:30:45 2021 EDT  jpmorgen@snipe
-    and IoIO_reduction.notebk 
-    Sun Mar 27 21:43:17 2022 EDT  jpmorgen@snipe"""
+    """
     hdr = hdr_in.copy()
     date_obs_str = hdr['DATE-OBS']
     date_obs = Time(date_obs_str, format='fits')
-    exposure_correct, exposure_correct_uncertainty = \
-        exp_correct_value(date_obs_str)
-    # Best estimate of shutter latency is 1/2 the round-trip inferred
-    # from exposure correction value
-    shutter_latency = exposure_correct / 2 * u.s
-    shutter_latency_uncertainty = exposure_correct_uncertainty / 2
+    shutter_latency, shutter_latency_uncertainty, exposure_correct, exposure_correct_uncertainty = shutter_latency_value(hdr)
+
     date_beg = date_obs + shutter_latency
     # Calculate date-obs precision based on how the string is written.
     # Technically, we should not record subsequent values to higher
@@ -293,6 +335,7 @@ def date_obs(hdr_in,
         precision = 10**-places/2
     else:
         precision = 0.5
+    precision = precision*u.s
     date_beg_uncertainty = np.sqrt(precision**2
                                    + shutter_latency_uncertainty**2
                                    + ntp_accuracy**2)
@@ -300,16 +343,19 @@ def date_obs(hdr_in,
     # DATE-AVG we need to have EXPTIME
     oexptime = hdr.get('OEXPTIME')
     exptime = hdr['EXPTIME']
-    if exptime > max_accurate_exposure and oexptime is None:
-        log.warning('EXPTIME not corrected for SX MaxIm driver issue.  This should normally have been done before this point')
+    if exposure_correct > 0 and oexptime is None:
+        log.warning('EXPTIME not corrected for SX MaxIm driver issue.  This should normally have been done before this point.  Fixing EXPTIME before calculating DATE_AVG')
         exptime += exposure_correct
     # A fancy CCD system can possibly have the shutter close and
     # reopen or even have multiple aperture settings at some f/stop so
     # that average in the time dimension is something other than the
     # simple midpoint.  Here all we have is open and close, so the
     # midpoint is the right thing.
-    date_avg = date_beg + (exptime / 2) * u.s
+    date_avg = date_beg + (exptime/2)*u.s
 
+    # Since exposure_correct_uncertainty = 0 with the ASCOM driver, we
+    # can leave this code in here unchanged even though
+    # max_accurate_exposure doesn't matter anymore
     if exptime > max_accurate_exposure:
         # Note that this has shutter_latency_uncertainty show up twice
         # and then is combined in date_avg_uncertainty as if it is a
@@ -336,24 +382,28 @@ def date_obs(hdr_in,
                        'Best estimate shutter open time (UTC)')
     # These end up appearing in reverse order to this
     hdr.insert('DATE-OBS',
-               ('HIERARCH NTP-ACCURACY', ntp_accuracy,
+               ('HIERARCH NTP-ACCURACY', ntp_accuracy.value,
                 'RMS typical (s)'),
                after=True)
     hdr.insert('DATE-OBS',
                ('HIERARCH SHUTTER-LATENCY-UNCERTAINTY',
-                shutter_latency_uncertainty,
+                shutter_latency_uncertainty.value,
                 '(s)'),
                after=True)
+    if date_obs_str > latency_change_dates[1]:
+        latency_comment = 'Measured from GPS satellites (s)'
+    else:
+        latency_comment = 'Measured indirectly (s)'
     hdr.insert('DATE-OBS',
                ('HIERARCH SHUTTER-LATENCY', shutter_latency.value,
-                'Measured indirectly (s)'),
+                latency_comment),
                after=True)
     hdr.insert('DATE-OBS',
-               ('HIERARCH DATE-AVG-UNCERTAINTY', date_avg_uncertainty,
+               ('HIERARCH DATE-AVG-UNCERTAINTY', date_avg_uncertainty.value,
                 '(s)'),
                after=True)
     hdr.insert('DATE-OBS',
-               ('HIERARCH DATE-OBS-UNCERTAINTY', date_beg_uncertainty,
+               ('HIERARCH DATE-OBS-UNCERTAINTY', date_beg_uncertainty.value,
                 '(s)'),
                after=True)
     # Avoid annoying WCS warnings
