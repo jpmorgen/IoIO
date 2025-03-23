@@ -758,6 +758,7 @@ class CorPhotometry(Photometry):
             outroot, _ = os.path.splitext(outname)
             xyls_file = outroot + '.xyls'
             astrometry_command += xyls_file
+            # --> Figure out out to ignore messages from this
             xyls_table.write(xyls_file, format='fits', overwrite=True)
             p = subprocess.run(astrometry_command, shell=True,
                                capture_output=True)
@@ -886,7 +887,9 @@ class CorPhotometry(Photometry):
                 == self.ccd.meta['OBJECT'])
         label = self.wide_source_table[mask]['label']
         bbts = bbox_table[bbox_table['label'] == label]
-        # This assume that the source is not on the edge of the ccd
+        # --> Might be nice to have logic that tweaks expand_bbox to
+        # the N-sigma contour 
+        # This assumes that the source is not on the edge of the ccd
         xmin = bbts['bbox_xmin'][0] - expand_bbox
         xmax = bbts['bbox_xmax'][0] + expand_bbox
         ymin = bbts['bbox_ymin'][0] - expand_bbox
@@ -905,7 +908,7 @@ class CorPhotometry(Photometry):
         cax2 = cax1.secondary_yaxis('right',
                                     functions=(nc.val2nonlin, nc.nonlin2val))
         cax1.yaxis.tick_left()
-        cax1.set_ylabel(source_ccd.unit)
+        cax1.set_ylabel(source_ccd.unit.to_string())
         cax1.yaxis.set_label_position('left')
         cax1.tick_params(labelrotation=90)
         cax2.set_ylabel('% nonlin')
@@ -964,7 +967,7 @@ def object_to_objctradec(ccd_in, simbad_results=None, **kwargs):
     ccd.sky_coord = None
     return ccd
 
-def write_astrometry(ccd_in, in_name=None, outname=None,
+def write_astrometry(ccd_in, in_name=None,
                      write_to_central_astrometry=True,
                      **kwargs):
     # Save WCS into centralized directory before we do any subsequent
@@ -977,22 +980,22 @@ def write_astrometry(ccd_in, in_name=None, outname=None,
         return ccd_in
     ccd = ccd_in.copy()
     date, _ = ccd.meta['DATE-OBS'].split('T')
-    aoutname = astrometry_outname(in_name, date)
+    outname = astrometry_outname(in_name, date)
     ccd.mask = None
     ccd.uncertainty = None
     # ccd.to_hdu needs at least some data to work
     hdul = ccd.to_hdu()
     hdul[0].data = None
     try:
-        d = os.path.dirname(aoutname)
+        d = os.path.dirname(outname)
         os.makedirs(d, exist_ok=True)
-        hdul.writeto(aoutname, overwrite=True)
+        hdul.writeto(outname, overwrite=True)
     except Exception as e:
         log.debug(f'Problem writing file: {e}')
         # This might be a race condition when multi-processing
         # directories when two processes are calling makedirs at the
         # same time
-        write_astrometry(ccd_in, in_name=in_name, outname=outname,
+        write_astrometry(ccd_in, in_name=in_name,
                      write_to_central_astrometry=write_to_central_astrometry,
                      **kwargs)
     return
@@ -1003,6 +1006,8 @@ def write_photometry(in_name=None, outname=None, photometry=None,
                      write_wide_source_table=False,
                      write_source_gaia_join=False,
                      **kwargs):
+    # in_name in this context is the source FITS image
+
     # CorPhotometry.wide_source_table requires we have coordinates
     # (which we need) and a valid OBJECT and other columns, which
     # we don't technically need at this point.  But there are not
@@ -1017,7 +1022,6 @@ def write_photometry(in_name=None, outname=None, photometry=None,
         return
 
     photometry.wide_source_table['in_name'] = in_name
-    photometry.wide_source_table['outname'] = outname
     if create_outdir:
         os.makedirs(os.path.dirname(outname), exist_ok=True)
     oroot, _ = os.path.splitext(outname)
@@ -1124,8 +1128,6 @@ def add_astrometry(ccd_in, bmp_meta=None,
                 outname = in_name
     else:
         outname = None
-    photometry.outname = outname or photometry.outname
-
     try:
         ccd.wcs = photometry.wcs
     except Exception as e:

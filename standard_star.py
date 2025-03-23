@@ -366,6 +366,9 @@ def standard_star_process(ccd,
         odetflux = None
         odetflux_err = None
     else:
+        # --> This all gets easier when working with Quantities and
+        # --> QTables rather than pandas dataframes
+        
         # Exptime might actually be close to right, so convert our
         # detflux, which is in proper flux units calculated above,
         # back into incorrect odetflux.  The error is unchanged
@@ -373,8 +376,8 @@ def standard_star_process(ccd,
         # our ccd.meta.  Prepare here for dataframe by working as
         # scalars, not Quantities, since odetflux may be None and
         # can't be converted spontaneously like other Quantities
-        odetflux = detflux.value * exptime.value / oexptime
-        odetflux_err = detflux_err * exptime.value / oexptime
+        odetflux = detflux.value * exptime.value / oexptime.value
+        odetflux_err = detflux_err * exptime.value / oexptime.value
     
     # --> These will get better when Card units are implemented
     ccd.meta['DETFLUX'] = (detflux.value, f'({detflux.unit})')
@@ -816,8 +819,8 @@ def standard_star_directory(directory,
                 # can do a reasonable job, but bookkeep it separately
                 # as best_flux, since we use true_flux to check the
                 # exposure_correction
-                true_flux_idx = np.flatnonzero(valid_uoes
-                                               <= sx694.max_accurate_exposure)
+                true_flux_idx = np.flatnonzero(
+                    valid_uoes <= sx694.max_accurate_exposure.value)
                 if len(true_flux_idx) > 0:
                     best_flux_idx = true_flux_idx
                     true_flux = np.nanmean(detfluxes[true_flux_idx])
@@ -846,14 +849,14 @@ def standard_star_directory(directory,
 
                 if (true_flux is not None
                     and len(valid_uoes) > 1
-                    and np.min(valid_uoes) <= sx694.max_accurate_exposure
-                    and np.max(valid_uoes) > sx694.max_accurate_exposure):
+                    and np.min(valid_uoes) <= sx694.max_accurate_exposure.value
+                    and np.max(valid_uoes) > sx694.max_accurate_exposure.value):
                     # We have some exposures in this time interval
                     # straddling the max_accurate_exposure time, so we can
                     # calculate exposure_correct.  We may have more than
                     # one, so calculate for each individually
-                    ec_idx = np.flatnonzero(valid_uoes
-                                            > sx694.max_accurate_exposure)
+                    ec_idx = np.flatnonzero(
+                        valid_uoes > sx694.max_accurate_exposure.value)
                     # This assumes that there is a negligable
                     # difference between the exposure times on either
                     # side of sx694.max_accurate_exposure such that
@@ -1051,6 +1054,7 @@ def standard_star_directory(directory,
 # --> This is not necessarily the best name
 def filter_stripchart(df=None,
                       title=None,
+                      subtitle=None,
                       column=None,
                       plotname=None,
                       show=False):
@@ -1060,7 +1064,9 @@ def filter_stripchart(df=None,
     nfilt = len(filters)
     if plotname or show:
         f = plt.figure(figsize=[8.5, 11])
-        plt.suptitle(f"{title}")
+        plt.suptitle(f'{title}')
+        if subtitle is not None:
+            plt.title(f'{subtitle}')
         plot_date_range = [np.min(df['min_plot_date']),
                            np.max(df['max_plot_date'])]
     summary_list = []
@@ -1254,9 +1260,9 @@ def rayleigh_convert(ccd_in, bmp_meta=None,
                      standard_star_obj=None, inverse=False, **kwargs):
     """cormultipipe post-processing routine to convert to rayleighs"""
     if isinstance(ccd_in, list):
-        return [to_rayleigh(ccd, inverse=inverse,
-                            standard_star_obj=None,
-                            **kwargs)
+        return [rayleigh_convert(ccd, inverse=inverse,
+                                 standard_star_obj=None,
+                                 **kwargs)
                 for ccd in ccd_in]
     ext_corr_val = ccd_in.meta.get('extinction_correction_value')
     if not inverse and (ext_corr_val is None
@@ -1276,10 +1282,24 @@ def rayleigh_convert(ccd_in, bmp_meta=None,
                'rayleigh_conversion_err': rc_err}
     bmp_meta.update(rc_dict)
     ccd = dict_to_ccd_meta(ccd, rc_dict)
-    #ccd.meta['HIERARCH RAYLEIGH_CONVERSION'] = (
-    #    rc.value, f'[{rc.unit}]')
-    #ccd.meta['HIERARCH RAYLEIGH_CONVERSION_ERR'] = (
-    #    rc_err.value, f'[{rc_err.unit}]')
+    return ccd
+    
+def add_zeropoint(ccd_in, bmp_meta=None,
+                  standard_star_obj=None, **kwargs):
+    """cormultipipe post-processing to add zeropoint keyword to ccd.meta"""
+    if isinstance(ccd_in, list):
+        return [mag_convert(ccd, inverse=inverse,
+                            standard_star_obj=None,
+                            **kwargs)
+                for ccd in ccd_in]
+    ccd = ccd_in.copy()
+    if bmp_meta is None:
+        bmp_meta = {}
+    zp, zp_err = standard_star_obj.zero_point(ccd.meta['FILTER'])
+    meta_dict = {'zero_point': zp,
+                 'zero_point_err': zp_err}
+    bmp_meta.update(meta_dict)
+    ccd = dict_to_ccd_meta(ccd, meta_dict)
     return ccd
     
 def standard_star_tree(raw_data_root=RAW_DATA_ROOT,
@@ -1474,16 +1494,18 @@ class StandardStar():
             plotname = outbase+'.png'
         else:
             plotname = None
-        self._zero_points = cached_csv(code=filter_stripchart,
-                                       csvnames=outbase+'.csv',
-                                       read_csvs=False,
-                                       write_csvs=True,
-                                       show=self.show,
-                                       df=self.extinction_data_frame,
-                                       title=(f'Vega zero point magnitiudes '
-                                              f'{zero_point_unit}'),
-                                       column='zero_point',
-                                       plotname=plotname)
+        self._zero_points = cached_csv(
+            code=filter_stripchart,
+            csvnames=outbase+'.csv',
+            read_csvs=False,
+            write_csvs=True,
+            show=self.show,
+            df=self.extinction_data_frame,
+            title=(f'Vega zero point magnitiudes '
+                   f'{zero_point_unit}'),
+            subtitle='(Mag to produce 1 "count" per second in CCD)',
+            column='zero_point',
+            plotname=plotname)
         return self._zero_points
 
     @property

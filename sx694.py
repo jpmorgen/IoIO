@@ -38,6 +38,10 @@ from astropy.stats import biweight_location
 
 camera_description = 'Starlight Xpress Trius SX694 mono, 2017 model version'
 
+ # This is a FITS standard
+exptime_unit = u.s
+
+# Full frame
 # naxis1 = fastest changing axis in FITS primary image = X in
 # Cartesian thought
 # naxis1 = next to fastest changing axis in FITS primary image = Y in
@@ -87,7 +91,7 @@ dark_mask_threshold = 3
 # See exp_correct_value.  According to email from Terry Platt Tue, 7
 # Nov 2017 14:04:24 -0700
 # This is unique to the SX Universal CCD drivers in MaxIm 
-max_accurate_exposure = 0.7 # s
+max_accurate_exposure = 0.7*u.s
 
 # Fri Jun 03 11:58:12 2022 EDT  jpmorgen@snipe
 # Old version of Photometry gave different answers probably because of
@@ -106,7 +110,8 @@ latency_change_dates = ['2020-11-01', '2025-01-12']
 # on PC motherboard used for time keeping.  Convert to RMS, since that
 # better reflects the true distribution of values asssume a standard
 # deviation-like distribution
-ntp_accuracy = 0.005 / np.sqrt(2) *u.s
+ntp_accuracy = 0.005 / np.sqrt(2)
+ntp_accuracy = ntp_accuracy*u.s
 
 def metadata(hdr_in,
              camera_description=camera_description,
@@ -127,7 +132,7 @@ def metadata(hdr_in,
     # Clean up double exposure time reference to avoid confusion
     if hdr.get('exposure') is not None:
         del hdr['EXPOSURE']
-    hdr.comments['exptime'] = 'Exposure time (second)'
+    hdr.comments['exptime'] = f'Exposure time ({exptime_unit.to_string()})'
     if hdr.get('instrume'):
         hdr.insert('INSTRUME',
                    ('CAMERA', camera_description),
@@ -177,44 +182,34 @@ def approx_pix_solid_angle(ccd):
 
 # --> This could be more efficient if it were a method in property,
 # suggesting cameras should be objects
-def exp_correct_value(date_obs):
-    """Provides the measured extra exposure correction time for
-    exposures > max_accurate_exposure.  See detailed discussion in
-    IoIO_reduction.notebk on 
+def exp_correct_value(date_obs, exptime):
+    """Provides exposure correction values, which changed over time.
+    See detailed discussion in IoIO_reduction.notebk on 
     Fri Jun 03 11:56:20 2022 EDT  jpmorgen@snipe
     NOTE: for data recorded after 2025-01-12, this returns zero and
     the shutter_latency_value function is where new values need to be entered
 """
-
+    if exptime <= max_accurate_exposure:
+        # Exposure time should be accurate
+        return (0*u.s, 0*u.s)
     if date_obs < latency_change_dates[0]:
-        exposure_correct = 2.19 # s
-        exposure_correct_uncertainty = 0.31 # s 
+        exposure_correct = 2.19*u.s
+        exposure_correct_uncertainty = 0.31*u.s 
     if date_obs < latency_change_dates[1]:
         # Thu Jan 23 18:42:41 2025 EST  jpmorgen@snipe
         # Latest numbers  --> Update these to best final numbers when
         # get local JPL calculations
-        exposure_correct = 2.59 # s
-        exposure_correct_uncertainty = 0.31 # s
-        #exposure_correct = 2.71 # s
-        #exposure_correct_uncertainty = 0.47 # s
+        exposure_correct = 2.59*u.s
+        exposure_correct_uncertainty = 0.31*u.s
+        #exposure_correct = 2.71*u.s
+        #exposure_correct_uncertainty = 0.47*u.s
     else:
         # Thu Jan 23 18:40:41 2025 EST  jpmorgen@snipe
         # As of '2025-01-12', I am using the ASCOM driver for the
         # sx694, which does not have the gap at 0.7s like the 32-bit
         # MaxIm driver does
-        exposure_correct = 0 # s
-        exposure_correct_uncertainty = 0 # s
-    #Sat May 15 22:42:42 2021 EDT  jpmorgen@snipe
-    # Old photometry code
-    #if date_obs < latency_change_dates[0]:
-    #    exposure_correct = 2.10 # s
-    #    exposure_correct_uncertainty = 0.33 # s 
-    #elif date_obs < latency_change_dates[1]:
-    #    exposure_correct = 1.87 # s
-    #    exposure_correct_uncertainty = 0.18 # s 
-    #else:
-    #    exposure_correct = 2.40 # s
-    #    exposure_correct_uncertainty = 0.18 # s
+        exposure_correct = 0*u.s
+        exposure_correct_uncertainty = 0*u.s
 
     # Soften exposure_correct_uncertainty a bit, since the MAD ended
     # up giving the true minimum latency value because of all the
@@ -231,30 +226,28 @@ def exp_correct(hdr_in,
     if hdr_in.get('OEXPTIME') is not None:
         # We have been here before, so exit quietly
         return hdr_in
-    exptime = hdr_in['EXPTIME']
-    if exptime <= max_accurate_exposure:
-        # Exposure time should be accurate
-        return hdr_in
+    exptime = hdr_in['EXPTIME']*exptime_unit
     exposure_correct, exposure_correct_uncertainty = \
-        exp_correct_value(hdr_in['DATE-OBS'])
+        exp_correct_value(hdr_in['DATE-OBS'], exptime)
     if exposure_correct == 0:
-        # ASCOM driver has no discontinuous EXPTIME
         return hdr_in
     hdr = hdr_in.copy()
+    expustr = f'{exptime_unit.to_string()}'
     hdr.insert('EXPTIME', 
-               ('OEXPTIME', exptime,
-                'commanded exposure time (s)'),
+               ('OEXPTIME', exptime.value,
+                f'commanded exposure time ({expustr})'),
                after=True)
     exptime += exposure_correct
-    hdr['EXPTIME'] = (exptime,
-                      'corrected exposure time (s)')
+    hdr['EXPTIME'] = (exptime.value,
+                      f'corrected exposure time ({expustr})')
     hdr.insert('OEXPTIME', 
                ('HIERARCH EXPTIME-UNCERTAINTY',
-                exposure_correct_uncertainty, 'Measured RMS (s)'),
+                exposure_correct_uncertainty.value,
+                f'Measured RMS ({expustr})'),
                after=True)
     hdr.insert('OEXPTIME', 
                ('HIERARCH EXPTIME-CORRECTION',
-                exposure_correct, 'Measured (s)'),
+                exposure_correct.value, f'Measured ({expustr})'),
                after=True)
     #add_history(hdr,
     #            'Corrected exposure time for SX694 MaxIm driver bug')
@@ -266,19 +259,11 @@ def shutter_latency_value(hdr):
     measurements
 
     """
+    date_obs = hdr['DATE-OBS']
+    exptime = hdr['EXPTIME']*exptime_unit
     exposure_correct, exposure_correct_uncertainty = \
-        exp_correct_value(hdr['DATE-OBS'])
-    if exposure_correct == 0:
-        # Use GPS satellite measurement of ~/IoIO_reduction.notebk.
-        # Fri Mar 21 10:06:32 2025 EDT  jpmorgen@snipe
-        # Add ntp_accuracy in quadrature, since that is a
-        # systematic random error on the on the quoted delay times by
-        # the https://www.projectpluto.com/ tools
-        shutter_latency = 0.9024512*u.s
-        gps_uncertainty = 0.0259504*u.s
-        shutter_latency_uncertainty = np.sqrt(
-            ntp_accuracy**2 + gps_uncertainty**2)
-    else:
+        exp_correct_value(date_obs, exptime)
+    if date_obs < latency_change_dates[1]:
         # See discussion in IoIO.notebk 
         # Mon May 17 13:30:45 2021 EDT  jpmorgen@snipe
         # and IoIO_reduction.notebk 
@@ -293,10 +278,18 @@ def shutter_latency_value(hdr):
         # later.  Given the differences in the driver, call this good
         # enough, particularly since there were other changes along
         # the way that I can't go back and reproduce.
-        shutter_latency = exposure_correct/2*u.s
-        # --> this is awkward because I really should have property in
-        # a method
+        shutter_latency = exposure_correct/2
         shutter_latency_uncertainty = exposure_correct_uncertainty/2
+    else:
+        # Use GPS satellite measurement of ~/IoIO_reduction.notebk.
+        # Fri Mar 21 10:06:32 2025 EDT  jpmorgen@snipe
+        # Add ntp_accuracy in quadrature, since that is a
+        # systematic random error on the on the quoted delay times by
+        # the https://www.projectpluto.com/ tools
+        shutter_latency = 0.9024512*u.s
+        gps_uncertainty = 0.0259504*u.s
+        shutter_latency_uncertainty = np.sqrt(
+            ntp_accuracy**2 + gps_uncertainty**2)
     return (shutter_latency, shutter_latency_uncertainty,
             exposure_correct, exposure_correct_uncertainty)
 
@@ -342,7 +335,7 @@ def date_obs(hdr_in,
 
     # DATE-AVG we need to have EXPTIME
     oexptime = hdr.get('OEXPTIME')
-    exptime = hdr['EXPTIME']
+    exptime = hdr['EXPTIME']*exptime_unit
     if exposure_correct > 0 and oexptime is None:
         log.warning('EXPTIME not corrected for SX MaxIm driver issue.  This should normally have been done before this point.  Fixing EXPTIME before calculating DATE_AVG')
         exptime += exposure_correct
@@ -351,7 +344,7 @@ def date_obs(hdr_in,
     # that average in the time dimension is something other than the
     # simple midpoint.  Here all we have is open and close, so the
     # midpoint is the right thing.
-    date_avg = date_beg + (exptime/2)*u.s
+    date_avg = date_beg + (exptime/2)
 
     # Since exposure_correct_uncertainty = 0 with the ASCOM driver, we
     # can leave this code in here unchanged even though
@@ -370,6 +363,7 @@ def date_obs(hdr_in,
         exptime_uncertainty = 0
     date_avg_uncertainty = np.sqrt(date_beg_uncertainty**2
                                    + (exptime_uncertainty/2)**2)
+    date_avg_uncertainty = date_avg_uncertainty.to(u.s)
     date_obs_str = hdr['DATE-OBS']
     hdr.insert('DATE-OBS',
                ('ODAT-OBS', date_obs_str,
