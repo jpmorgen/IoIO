@@ -203,7 +203,9 @@ def comet_pipeline(collection=None,
     photometry = photometry or CorPhotometry(precalc=True, **kwargs)
     standard_star_obj = standard_star_obj or StandardStar(reduce=True)
 
-    # --> I am going to need to add the filter name!
+    # --> Change the order of the pipeline to do add_astrometry later
+    # --> so that I can have DOBJ in keys_to_source_table (which will
+    # --> need to be put in CorPhotometry at instantiation time)
     cmp = CometMultiPipe(
         auto=True,
         calibration=calibration,
@@ -402,7 +404,7 @@ log.setLevel('DEBUG')
 # --> Need to pick apart ValueError of Ambiguous target name
 #t = comet_tree(mpc_list=['0029P'], start='2025-02-01')
 
-t = comet_tree(mpc_list=['CK23A030'])
+#t = comet_tree(mpc_list=['CK23A030'])
 #t = comet_tree(mpc_list=['CK23A030'], start='2024-04-30', stop='2024-04-30')
 #t = comet_tree(mpc_list=['CK23A030'], start='2024-04-28', stop='2024-05-01')
 #t = comet_tree(mpc_list=['CK23A030'], start='2024-01-11', stop='2024-01-11')
@@ -414,7 +416,7 @@ t = comet_tree(mpc_list=['CK23A030'])
 
 
 
-#plot_comet_obsdates(include_PSIScope=False)
+plot_comet_obsdates(include_PSIScope=False)
 #print(comets_in_dir('/data/IoIO/raw/20200806/'))
 #print(comets_in_dir('/data/IoIO/raw/2020-07-28'))
 

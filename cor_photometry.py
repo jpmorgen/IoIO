@@ -816,6 +816,9 @@ class CorPhotometry(Photometry):
         obj_coord = SkyCoord(objctra, objctdec, unit=(u.hour, u.deg))
         dobj = obj_coord.separation(self.source_table['coord'])
         dobj = dobj.to(u.arcsec)
+        # --> Hmm.  This is where I need to have some sort of
+        # --> tolerance set so that if the object doesn't have
+        # --> photometry, this fails or other wise branches for plot_object
         idx = np.argmin(dobj)
         # String column ends up being of fixed width
         objs = np.full(len(self.source_table),
@@ -890,6 +893,11 @@ class CorPhotometry(Photometry):
         # --> Might be nice to have logic that tweaks expand_bbox to
         # the N-sigma contour 
         # This assumes that the source is not on the edge of the ccd
+        # --> This, in combination with self.source_table_has_object
+        # has the bug that if the desired source is not found, the
+        # nearest source is chosen instead (which might be really far
+        # away!).  It might be nice to have the option to plot the
+        # actual position of the source
         xmin = bbts['bbox_xmin'][0] - expand_bbox
         xmax = bbts['bbox_xmax'][0] + expand_bbox
         ymin = bbts['bbox_ymin'][0] - expand_bbox
@@ -937,7 +945,7 @@ def object_to_objctradec(ccd_in, simbad_results=None, **kwargs):
     if simbad_results is None:
         s = Simbad()
         simbad_results = s.query_object(obj)
-    if simbad_results is None:
+    if simbad_results is None or len(simbad_results) == 0:
         # Don't fail, since OBJT* may be within pointing errors
         log.error(f'Simbad did not resolve: {obj}, relying on '
                   f'OBJCTRA = {ccd.meta["OBJCTRA"]} '

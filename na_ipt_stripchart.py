@@ -136,10 +136,19 @@ outdir = '/data/IoIO/analysis/'
 #t_na = t_na[~t_na['mask']]
 #t_torus = t_torus[~t_torus['mask']]
 
-
+figsize = None
+figsize = (7.5,5.5)
 master_stripchart(plots=['na_nebula',
                          'ansa_brights'],
+                  figsize=figsize,
                   **table_dict)
+
+#figsize = (6, 3)
+#master_stripchart(plots=['ansa_brights'],
+#                  figsize=figsize,
+#                  start='2018-01-01',
+#                  stop='2018-07-15',
+#                  **table_dict)
 
 #master_stripchart(plots=['ansa_brights',
 #                         'ansa_pos',

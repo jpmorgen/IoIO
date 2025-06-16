@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Reduce files for Elisabeth Adams XRP project"""
 
+import re
 import os
 import glob
 import argparse
@@ -33,15 +34,19 @@ EXOPLANET_ROOT = '/data/Exoplanets'
 GLOB_INCLUDE = ['TOI*', 'WASP*', 'KPS*', 'HAT*', 'K2*', 'TrES*',
                 'Qatar*', 'GJ*', 'KELT*', 'KOI*', 'CoRoT*', 'Kepler*',
                 'MASCARA*', 'GPX*', 'NGTS*', 'OGLE*', 'LTT*', 'HIP*',
-                'WTS*', 'XO*']
+                'WTS*', 'XO*', 'HD*b-*']
 
 MIN_TRANSIT_OBS_TIME = 1*u.hour
 
 # I am not sure the barytime calculations would be valid for solar
 # system objects because they are too close.  So we don't put this
 # into cor_photometry
-KEYS_TO_SOURCE_TABLE = KEYS_TO_SOURCE_TABLE + [('MJDBARY', u.day)]
+# --> If KEYS_TO_SOURCE_TABLE gets more object oriented, it should
+# grab NONLIN in the BUNIT
+KEYS_TO_SOURCE_TABLE = KEYS_TO_SOURCE_TABLE + [('MJDBARY', u.day),
+                                               ('NONLIN', u.electron)]
 KEEP_FITS = 100000
+# For exposure time estimation
 BEST_NONLIN = 0.5
 MAX_NONLIN = 0.75
 # General FITS WCS reference:
@@ -76,6 +81,23 @@ def barytime(ccd_in, bmp_meta=None, **kwargs):
                     after=True)
     return ccd
 
+
+# --> Consider putting Qatars in here to resolve to real stars 
+def ensure_star_name(object_name):
+    """Removes exoplanet designation so Simbad can resolve star"""
+    if object_name == 'Iota-2 Cyg':
+        # Total hack to avoid special case
+        return object_name
+    if object_name == 'GJ9827b':
+        log.info('Using BD-02 5958b to query for GJ9827b')
+        object_name == 'BD-02 5958b'
+    lower_case = re.compile('[a-z]')
+    if lower_case.match(object_name[-1]):
+        object_name = object_name[0:-1]
+    return object_name
+    
+    
+
 @async_to_sync
 class ExoSimbadClass(SimbadClass):
     """Make a special case handler for Simbad object queries so that
@@ -83,14 +105,14 @@ class ExoSimbadClass(SimbadClass):
 
     """
     def query_object(self, object_name, *args, **kwargs):
-        # In order to get fluxes, the 'b' needs to be removed from the end
-        if object_name[-1] in ['b', 'c', 'd']:
-            object_name = object_name[0:-1]
+        object_name = ensure_star_name(object_name)
         result = super().query_object(object_name, *args, **kwargs)
-        if result is None:
+        if result is None or len(result) == 0:
             object_name = object_name.replace('-', ' ')
             log.info(f'Removed "-" from object_name and trying {object_name}')
             result = super().query_object(object_name, *args, **kwargs)
+            if len(result) > 0:
+                log.info('Success!')
         # New astroquery doesn't seem to have result.error.  result is a Table
         #if result and result.errors:
         #    log.warning(f'Simbad errors for obj: {simbad_results.errors}')
@@ -134,6 +156,7 @@ class ExoMultiPipe(CorMultiPipeBase):
 def estimate_exposure(vmag_in, target_nonlin=BEST_NONLIN):
     # TOI-2109 g_sdss as ref
     #expo_correct = 2.71*u.s
+    # This is now valid for the ASCOM driver install in 2025-01-12
     expo_correct = 0*u.s
     ref_mag = 10.271*u.mag(u.electron)
     ref_expo = 7.71*u.s
@@ -278,8 +301,12 @@ def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
         log.warning('No directories found')
         return []
     sim = ExoSimbad()
-    sim.add_votable_fields('flux(U)', 'flux(B)', 'flux(V)', 'flux(R)',
-                           'flux(I)')
+    # This is how SIMBAD/astroquery is listing them as of end of 2024
+    # or so
+    # --> Broken at the moment Wed May 21 22:06:34 2025 EDT  jpmorgen@snipe
+    #sim.add_votable_fields('U', 'B', 'V', 'R',
+    #                        'I', 'u', 'g', 'r', 'i', 'z', 'G')
+    #sim.add_votable_fields('V')
     exoplanet_obs = []
     for directory in dirs:
         all_files = multi_glob(directory, glob_list=glob_include)
@@ -289,25 +316,46 @@ def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
             filenames=all_files,
             keywords=['date-obs', 'object', 'filter', 'exptime'])
         texos = collection.values('object', unique=True)
-        for e in texos:
-            simbad_results = sim.query_object(e)
-            if simbad_results is None:
-                log.warning(f'Simbad did not resolve: {e}')
+        for exo in texos:
+            star = ensure_star_name(exo)
+            simbad_results = sim.query_object(star)
+            if simbad_results is None or len(simbad_results) == 0:
+                log.warning(f'Simbad did not resolve: {exo} host {star}')
                 vband = np.nan
             else:
-                vband = simbad_results['V'][0]    
-            tc = collection.filter(object=e)
+                try:
+                    vband = simbad_results['V'][0]
+                except Exception as e:
+                    vband = np.nan
+                
+            tc = collection.filter(object=exo)
             date_obss = tc.values('date-obs')
             tts = Time(date_obss, format='fits')
             if (np.max(tts) - np.min(tts) < MIN_TRANSIT_OBS_TIME):
                 continue
             # Standardize to no spaces
-            e = e.replace(' ', '')
+            exo = exo.replace(' ', '')
             date, _ = date_obss[0].split('T')
             filt_name = tc.values('filter')[0]
             exptime = tc.values('exptime')[0]
-            exoplanet_obs.append((e, date, filt_name, exptime, vband))
+            exoplanet_obs.append((exo, date, filt_name, exptime, vband))
     return exoplanet_obs
+
+def print_list_exoplanets(**kwargs):
+            exoplanet_obs = list_exoplanets(**kwargs)
+            exos_dates = list(zip(*exoplanet_obs))
+            exos = list(exos_dates[0])
+            counts = [(e, exos.count(e))
+                       for e in set(exos)]
+            print(f'Total number of attempted transit observations: {len(exoplanet_obs)}')
+            print('Exoplanets observed on date:')
+            # The dates are sorted in order already
+            for e in exoplanet_obs: print(e)
+            print('\nExoplanet observation counts:')
+            # Sort the counts by name
+            counts.sort(key=lambda tup: tup[0])
+            for c in counts: print(c)
+            print(f'Number of planets observed: {len(counts)}')
 
 class ExoArgparseMixin:
     def add_expo_calc(self, 
@@ -363,19 +411,8 @@ class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
             print(estimate_exposure(args.expo_calc))
             return
         if args.list_exoplanets:
-            exoplanet_obs = list_exoplanets(start=args.start, stop=args.stop)
-            exos_dates = list(zip(*exoplanet_obs))
-            exos = list(exos_dates[0])
-            counts = [(e, exos.count(e))
-                       for e in set(exos)]
-            print(f'Total number of attempted transit observations: {len(exoplanet_obs)}')
-            print('Exoplanets observed on date:')
-            # The dates are sorted in order already
-            for e in exoplanet_obs: print(e)
-            print('\nExoplanet observation counts:')
-            # Sort the counts by name
-            counts.sort(key=lambda tup: tup[0])
-            for c in counts: print(c)
+            print_list_exoplanets(raw_data_root=args.raw_data_root,
+                                  start=args.start, stop=args.stop)
             return
         c = CalArgparseHandler.cmd(self, args)
         join_tolerance = args.join_tolerance*u.Unit(args.join_tolerance_unit)
@@ -401,6 +438,8 @@ if __name__ == '__main__':
     aph.cmd(args)
                  
 #log.setLevel('DEBUG')
+#print_list_exoplanets(start='2025-01-01')
+#print(ensure_star_name('WASP-3b'))
 #directory = '/data/IoIO/raw/20230504'
 #exoplanet_directory(directory)
 
