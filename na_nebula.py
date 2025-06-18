@@ -68,8 +68,6 @@ from IoIO.juno import JunoTimes, PJAXFormatter
 
 BASE = 'Na_nebula'
 NA_NEBULA_ROOT = os.path.join(IoIO_ROOT, BASE)
-BOX_NDAYS = 20 # GOING OBSOLETE
-MEDFILT_WIDTH = 81 # GOING OBSOLETE
 # Filter applied to 24 Rj aperture --> To be robust, this/code below
 # should be generalized
 # Fri Mar 01 12:24:18 2024 EST  jpmorgen@snipe
@@ -199,56 +197,6 @@ def subtract_col_from(t,
     for col in encoder.colbase_list(t.colnames):
         t[f'{subtracted_prefix}_{col}'] = t[col] - t[subtract_colname]
 
-def boxcar_medians(
-        summary_table,
-        include_col_encoder=None, # includes with colbase_middle_list [might just make list]
-        median_col_encoder=None):
-
-    # Create a new table, one row per day with biweight & mad_std
-    # columns This assumes that it is OK if any other prepends come
-    # along for the ride.  And yes, it does exclude the original
-    day_table = unique(summary_table, keys='ijdlt')
-    include_colnames = include_col_encoder.colbase_middle_list(
-        day_table.colnames)
-    day_table_colnames = ['ijdlt'] + list(include_colnames)
-    day_table = QTable(day_table[day_table_colnames])
-    #print(day_table_colnames)
-
-    # Boxcar median each biweight column
-    first_day = np.min(day_table['ijdlt'])
-    last_day = np.max(day_table['ijdlt'])
-    all_days = np.arange(first_day, last_day+1)
-    med_colnames = median_col_encoder.colbase_list(day_table.colnames)
-    for med_col in med_colnames:
-        #print(med_col)
-        day_table = daily_convolve(day_table,
-                                   'ijdlt',
-                                   med_col,
-                                   'boxfilt_' + med_col,
-                                   Box1DKernel(BOX_NDAYS),
-                                   all_days=all_days)
-
-    #day_table['itdatetime'] = Time(day_table['ijd'], format='jd').datetime
-
-    #box_colbase_regexp = re.compile('boxfilt_biweight_' + encoder.colbase + '_.*')
-    #box_colnames = list(filter(box_colbase_regexp.match, day_table.colnames))
-    #f = plt.figure()
-    #ax = plt.subplot()
-    #for box_col in box_colnames:
-    #    print(box_col)
-    #    av_ap = encoder.from_colname(box_col)
-    #    plt.plot(day_table['itdatetime'], day_table[box_col],
-    #             label=f'{av_ap}')
-    #plt.xlabel('date')
-    #plt.ylabel(f'Surf. bright {day_table[box_col].unit}')
-    #plt.legend()
-    #f.autofmt_xdate()
-    #if show:
-    #    plt.show()
-    #plt.close()
-
-    return day_table
-
 def add_sb_diffs(summary_table_in,
                  show=True):
     summary_table = summary_table_in.copy()
@@ -295,192 +243,12 @@ def add_sb_diffs(summary_table_in,
 
     return summary_table
 
-# --> This is becoming obsolete
-def na_nebula_plot(t, outdir,
-                   tmin=None,
-                   min_sb=-200,
-                   max_sb=1000, # 400,
-                   max_good_sb=np.inf,
-                   min_av_ap_dist=0,
-                   max_av_ap_dist=np.inf,
-                   n_plots=4,
-                   tlim=None,
-                   show=False):
-    t.sort('tavg')
-    tlim = (t['tavg'][0].datetime, t['tavg'][-1].datetime)
-    outbase = 'Na_nebula_apertures.png'
-    add_annular_apertures(t)
-    sb_encoder = ColnameEncoder('annular_sb', formatter='.1f')
-    largest_ap = sb_encoder.largest_colbase(t.colnames)
-    subtract_col_from(t, sb_encoder, largest_ap, 'largest_sub')
-    largest_sub_encoder = ColnameEncoder('largest_sub', formatter='.1f')
-
-    ap_list = sb_encoder.colbase_list(t.colnames)
-    
-    if n_plots == 1:
-        f = plt.figure(figsize=[8.5, 11/2])
-    else:
-        f = plt.figure(figsize=[8.5, 11])
-
-    #custom_cycler = (cycler(color=['b', 'g', 'r', 'c', 'm', 'y', 'k']))
-    custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'])
-    plt.rc('axes', prop_cycle=custom_cycler)
-                     
-    date, _ = t['tavg'][0].fits.split('T')
-    plt.suptitle('Na nebula rectangular aperture surface brightesses above & below torus centrifugal plane')
-
-    ax = plt.subplot(n_plots,1,1)
-    plt.title(f'{sb_encoder.from_colname(largest_ap):.0f} aperture subtracted')
-    for ap in ap_list:
-        # Skip the most distant ap
-        if ap == largest_ap:
-            continue        
-        bsub_sb = t[ap] - t[largest_ap]
-        mask = bsub_sb < max_good_sb
-        plt.plot(t['tavg'][mask].datetime, bsub_sb[mask], '.',
-                 label=f'+/- {ap:.0f} Rj')
-        med_sb = medfilt(bsub_sb[mask], MEDFILT_WIDTH)
-        plt.plot(t['tavg'][mask].datetime, med_sb, '-',
-                 label=f'+/- {ap:.0f} Rj medfilt')
-        
-    ax.set_xlim(tlim)
-    ax.set_ylim(0, max_sb/2)
-    plt.ylabel(f'Na Surf. Bright ({sb.unit})')
-    #plt.legend()
-
-    f.autofmt_xdate()
-    if n_plots == 1:
-        finish_stripchart(outdir, outbase, show=show)
-        return
-    
-    ax = plt.subplot(n_plots,1,2)
-    plt.title('Best Guess Telluric Na subtracted')
-    for sb, av_ap in zip(sb_list, ap_list):
-        bsub_sb = sb-t['meso_or_model']
-        plt.plot(t['tavg'].datetime, bsub_sb,
-                 '.', label=f'+/- {av_ap:.0f} Rj')
-        mask = bsub_sb < max_good_sb
-        med_sb = medfilt(bsub_sb[mask], MEDFILT_WIDTH)
-        plt.plot(t['tavg'][mask].datetime, med_sb, '-',
-                 label=f'+/- {av_ap:.0f} Rj medfilt')
-    meso = t['meso_or_model']
-    meso_err = t['meso_or_model_err']
-    plt.errorbar(t['tavg'].datetime, meso.value, meso_err.value,
-                 fmt='.', color=mcolors.to_rgb('grey'), alpha=0.2,
-                 label='Best guess Telluric Na')
-    ax.set_xlim(tlim)
-    ax.set_ylim(min_sb, max_sb)
-    #plt.yscale('log')
-    plt.ylabel(f'Surf. Bright ({sb.unit})')
-    plt.legend()
-
-    f.autofmt_xdate()
-    if n_plots == 2:
-        finish_stripchart(outdir, outbase, show=show)
-        return
-
-    ax = plt.subplot(n_plots,1,3)
-    plt.title('Telluric Na empirical model subtracted')
-    for sb, av_ap in zip(sb_list, ap_list):
-        bsub_sb = sb - t['model_meso']
-        plt.plot(t['tavg'].datetime, bsub_sb,
-                 '.', label=f'+/- {av_ap:.0f} Rj')
-        mask = bsub_sb < max_good_sb
-        med_sb = medfilt(bsub_sb[mask], MEDFILT_WIDTH)
-        plt.plot(t['tavg'][mask].datetime, med_sb, '-',
-                 label=f'+/- {av_ap:.0f} Rj medfilt')
-    meso = t['model_meso']
-    meso_err = t['model_meso_err']
-    plt.errorbar(t['tavg'].datetime, meso.value, meso_err.value,
-                 fmt='.', color=mcolors.to_rgb('grey'), alpha=0.2,
-                 label='Telluric Na model')
-    ax.set_xlim(tlim)
-    ax.set_ylim(min_sb, max_sb)
-    #plt.yscale('log')
-    plt.ylabel(f'Surf. Bright ({sb.unit})')
-    #plt.legend()
-
-    f.autofmt_xdate()
-    if n_plots == 3:
-        finish_stripchart(outdir, outbase, show=show)
-        return
-
-    ax = plt.subplot(n_plots,1,4)
-    plt.title('Measured Telluric Na subtracted')
-    for sb, av_ap in zip(sb_list, ap_list):
-        bsub_sb = sb-t['measured_meso']
-        plt.plot(t['tavg'].datetime, bsub_sb,
-                 '.', label=f'+/- {av_ap:.0f} Rj')
-        mask = bsub_sb < max_good_sb
-        med_sb = medfilt(bsub_sb[mask], MEDFILT_WIDTH)
-        plt.plot(t['tavg'][mask].datetime, med_sb, '-',
-                 label=f'+/- {av_ap:.0f} Rj medfilt')
-    meso = t['measured_meso']
-    meso_err = t['measured_meso_err']
-    plt.errorbar(t['tavg'].datetime, meso.value, meso_err.value,
-                 fmt='.', color=mcolors.to_rgb('grey'), alpha=0.2,
-                 label='Measured Telluric Na')
-    ax.set_xlim(tlim)
-    ax.set_ylim(min_sb, max_sb)
-    #plt.yscale('log')
-    plt.ylabel(f'Surf. Bright ({sb.unit})')
-    #plt.legend()
-
-    f.autofmt_xdate()
-    if n_plots == 4:
-        finish_stripchart(outdir, outbase, show=show)
-        return
-
-    obj_sb = t['obj_surf_bright']
-    obj_sb_err = t['obj_surf_bright_err']
-    ax = plt.subplot(n_plots,1,5)
-    plt.title('Jupiter attenuated surface brightness')
-    plt.errorbar(t['tavg'].datetime, obj_sb.value, obj_sb_err.value,
-                 fmt='k.')#, label='Telluric Na odel')
-    ax.set_xlim(tlim)
-    ax.set_ylim(0, 200000)
-    plt.ylabel(f'Atten. Surf. Bright ({obj_sb.unit})')
-    
-    f.autofmt_xdate()
-    if n_plots == 5:
-        finish_stripchart(outdir, outbase, show=show)
-        return
-
-    ax = plt.subplot(n_plots,1,6)
-    plt.plot(t['tavg'].datetime, t['extinction_correction_value'], '.')
-    plt.title('Extinction correction factor')
-    ax.set_ylim(1, 5)
-    plt.ylabel(f'Extinction correction')
-
-    f.autofmt_xdate()
-    if n_plots == 6:
-        finish_stripchart(outdir, outbase, show=show)
-        return
-
-    ax = plt.subplot(n_plots,1,7)
-    plt.plot(t['tavg'].datetime, sb_list[-1]/meso, '.',
-             label=f'{ap_list[-1]:.0f} Rj')
-    plt.axhline(1)
-    plt.yscale('log')
-    ax.set_xlim(tlim)
-    ax.set_ylim(0.03, 30)
-    plt.ylabel(f'{av_ap:.0f} Rj / telluric')
-    plt.legend()
-
-    f.autofmt_xdate()
-    if n_plots == 7:
-        finish_stripchart(outdir, outbase, show=show)
-        return
-
-    plt.xlabel(f'UT')# {date}')
-
-    finish_stripchart(outdir, outbase, show=show)
-
 def create_na_nebula_day_table(
         t_na_nebula_in=None,
         max_time_gap=15*u.day,
         max_gap_fraction=0.3, # beware this may leave some NANs if dt = 1*u.day
-        medfilt_width=10*u.day,
+        #medfilt_width=10*u.day,
+        medfilt_width=20*u.day,
         medfilt_mode='mirror',
         utc_offset=IOIO_1_UTC_OFFSET,
         dt=3*u.day):
@@ -692,102 +460,6 @@ def plot_na_nebula_surf_brights(
     ax.set_ylabel(f'Na Neb. Surf. Bright ({na_nebula_day_table[bwt_col].unit})')
     ax.legend(ncol=2, handles=err_handles+line_handles)
 
- # --> This is becoming obsolete
-def plot_nightly_medians(table_or_fname,
-                         fig=None,
-                         ax=None,
-                         tlim=None,
-                         min_sb=0, # For plot ylim
-                         max_sb=300,
-                         min_av_ap_dist=6*u.R_jup, # selects SB boxes
-                         max_av_ap_dist=25*u.R_jup,
-                         show=False,
-                         fig_close=False,
-                         medfilt_width=21,
-                         max_night_gap=15,
-                         **kwargs):
-    if isinstance(table_or_fname, str):
-        t = QTable.read(table_or_fname)
-    else:
-        t = table_or_fname
-    if fig is None:
-        fig = plt.figure()
-    if ax is None:
-        ax = fig.add_subplot()
-
-    custom_cycler = cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#17becf', '#8c564b', '#e377c2', '#7f7f7f'])
-    plt.rc('axes', prop_cycle=custom_cycler)
-        
-    day_table = unique(t, keys='ijdlt')
-    day_table.sort('ijdlt')
-    deltas = day_table['ijdlt'][1:] - day_table['ijdlt'][0:-1]
-    gap_idx = np.flatnonzero(deltas > max_night_gap)
-    # Plot our points at 07:00 UT, which is midnight localtime
-    utm = day_table['ijdlt'] + 7/24
-    # Convert back to Julian day --> this may be wrong, but we are
-    # refactoring anyway
-    jd = utm - 0.5
-    day_table['itdatetime'] = Time(jd, format='jd').datetime
-    biweight_encoder = ColnameEncoder('biweight', formatter='.1f')
-    biweight_cols = biweight_encoder.colbase_list(day_table.colnames)
-    std_encoder = ColnameEncoder('std', formatter='.1f')
-    std_cols = std_encoder.colbase_list(day_table.colnames)
-    point_handles = []
-    medfilt_handles = []
-    for bwt_col, std_col in zip(biweight_cols, std_cols):
-        av_ap = biweight_encoder.from_colname(bwt_col)
-        if av_ap < min_av_ap_dist or av_ap > max_av_ap_dist:
-            continue
-        h = ax.errorbar(day_table['itdatetime'], day_table[bwt_col], 
-                         day_table[std_col], fmt='.', 
-                         label=f'{av_ap.value} R$_\mathrm{{J}}$', alpha=0.25)
-        point_handles.append(h)        
-        add_medfilt(day_table, bwt_col, medfilt_width=medfilt_width)
-        # Quick-and-dirty gap work.  Could do this in the day_table,
-        # but I would need to muck with all of the columns
-        times = day_table['itdatetime']
-        vals = day_table[bwt_col+'_medfilt']
-        times = np.append(times, times[gap_idx] + datetime.timedelta(days=1))
-        vals = np.append(vals, (np.nan, ) * len(gap_idx))
-        sort_idx = np.argsort(times)
-        h = ax.plot(times[sort_idx], vals[sort_idx], '-',
-                     label=f'{av_ap.value} R$_\mathrm{{J}}$ medfilt',
-                     linewidth=2)
-        medfilt_handles.append(h[0])
-        bwt = nan_biweight(day_table[bwt_col])
-        mad = nan_mad(day_table[bwt_col])
-        log.info(f'{bwt_col} Biweight +/- MAD = {bwt} +/- {mad}')
-    handles = point_handles
-    handles.extend(medfilt_handles)
-
-    ax.set_xlabel('Date')
-    ax.set_ylabel(f'Na Neb. Surf. Bright ({t[bwt_col].unit})')
-    #plt.title('Na nebula -- nightly medians')
-    if tlim is None:
-        tlim = ax.get_xlim()
-    ax.set_xlim(tlim)
-    ax.set_ylim(min_sb, max_sb)
-    ax.xaxis.set_minor_locator(mdates.MonthLocator())
-    ax.legend(ncol=2, handles=handles)
-    fig.autofmt_xdate()
-
-    jts = JunoTimes()
-    secax = ax.secondary_xaxis('top',
-                                functions=(jts.plt_date2pj, jts.pj2plt_date))
-    secax.xaxis.set_minor_locator(MultipleLocator(1))
-    secax.set_xlabel('PJ')    
-    ax.format_coord = PJAXFormatter(times[sort_idx], vals[sort_idx])
-    
-    if show:
-        plt.show()
-    if fig_close:
-        plt.close()
-
-    # --> day_table might also be useful to return, but it has a
-    # non-serializable datetime object in it.  I think astropy times
-    # plot properly these days, so this could be ammended
-    return t
-
 def plot_obj_surf_bright(table_or_fname,
                          fig=None,
                          ax=None,
@@ -912,9 +584,10 @@ def na_nebula_tree(raw_data_root=RAW_DATA_ROOT,
     #add_daily_biweights(clean_t, day_col='ijdlt', colnames=sb_colnames)
     clean_t.write(os.path.join(outdir_root, BASE + '_cleaned.ecsv'),
                   overwrite=True)
-    torus_day_table = create_na_nebula_day_table(clean_t)
-    torus_day_table.write(os.path.join(outdir_root, BASE + '_day_table.ecsv'),
-                          overwrite=True)
+    na_nebula_day_table = create_na_nebula_day_table(clean_t)
+    na_nebula_day_table.write(os.path.join(outdir_root,
+                                           BASE + '_day_table.ecsv'),
+                              overwrite=True)
   
     return summary_table
 

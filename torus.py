@@ -519,7 +519,8 @@ def create_torus_day_table(
         t_torus_in=None,
         max_time_gap=15*u.day,
         max_gap_fraction=0.3, # beware this may leave some nans if dt = 1*u.day
-        medfilt_width=10*u.day,
+        #medfilt_width=10*u.day,
+        medfilt_width=20*u.day,
         medfilt_mode='mirror',
         utc_offset=IOIO_1_UTC_OFFSET,
         dt=3*u.day):
@@ -686,104 +687,6 @@ def plot_axvlines(ax, vlines=None, **kwargs):
         vline = date.fromisoformat(vline)
         ax.axvline(vline, color=color)
 
-# --> This is becoming obsolete
-def plot_column_vals(t,
-                     colnames,
-                     scale=None,
-                     fmts=None,
-                     labels=None,
-                     ylabel=None,
-                     medfilt_width=21,
-                     medfilt_colname=None, # medfilt col to plot
-                     medfilt_collabel=None,
-                     fig=None,
-                     ax=None,
-                     top_axis=False,
-                     ylim=None,
-                     tlim=None,
-                     legend=True,
-                     show=False,
-                     max_night_gap=20,
-                     **kwargs): # These are passed to plot_[hv]lines
-
-    if fig is None:
-        fig = plt.figure()
-    if ax is None:
-        ax = fig.add_subplot()
-    if scale is None:
-        scale = np.full(len(colnames), 1)
-
-    t = t.copy()
-    t.sort('tavg')
-
-    biweights = []
-    mads = []
-    for ic, colname in enumerate(colnames):
-        add_medfilt(t, colname, medfilt_width=medfilt_width)
-        biweights.append(nan_biweight(scale[ic] * t[colname]))
-        mads.append(nan_mad(t[colname]))
-        log.info(f'{colname} * {scale[ic]} Biweight +/- MAD = {biweights[-1]} +/- {mads[-1]}')
-
-    datetimes = t['tavg'].datetime
-    if len(t) > 40 and medfilt_colname:
-        # Plot the median filter of the largest signal
-        ic = colnames.index(medfilt_colname)
-        if scale[ic] == 1:
-            scale_str = ''
-        else:
-            scale_str = f'{scale[ic]} * '
-        alpha = 0.1
-        p_med = ax.plot(datetimes,
-                        scale[ic] * t[f'{medfilt_colname}_medfilt'],
-                        'k*', markersize=6,
-                        label=scale_str + medfilt_collabel)
-    else:
-        alpha = 0.5
-        p_med = None
-
-    handles = []
-    for ic, colname in enumerate(colnames):
-        if scale[ic] == 1:
-            scale_str = ''
-        else:
-            scale_str = f'{scale[ic]} * '
-        # --> This only works for masked array.  I should slow down
-        # --> and create val and val_err with the appropriate typing
-        # --> logic
-        h = ax.errorbar(datetimes,
-                        scale[ic] * t[colname].filled(np.nan),
-                        abs(scale[ic]) * t[f'{colname}_err'].filled(np.nan),
-                        fmt=fmts[ic], alpha=alpha,
-                        label=scale_str + labels[ic])
-        handles.append(h)
-    if p_med:
-        # This gets the legend in the correct order
-        handles.extend(p_med)
-    if tlim is None:
-        tlim = ax.get_xlim()
-    ax.set_xlabel('Date')
-    ax.set_ylabel(ylabel)
-    if legend:
-        ax.legend(handles=handles)
-
-    ax.set_xlim(tlim)
-    ax.xaxis.set_minor_locator(mdates.MonthLocator())
-    ax.set_ylim(ylim)
-    fig.autofmt_xdate()
-    ax.format_coord = PJAXFormatter(datetimes)
-
-    plot_axhlines(ax, **kwargs)
-    plot_axvlines(ax, **kwargs)
-
-    if top_axis:
-        jts = JunoTimes()
-        secax = ax.secondary_xaxis('top',
-                                   functions=(jts.plt_date2pj, jts.pj2plt_date))
-        secax.xaxis.set_minor_locator(MultipleLocator(1))
-        secax.set_xlabel('PJ')
-
-    return t
-
 def plot_ansa_surf_brights(t_torus, torus_day_table,
                            fig=None, ax=None,
                            tlim=None, ylim=(0, 200),
@@ -858,20 +761,6 @@ def plot_ansa_surf_brights(t_torus, torus_day_table,
     ax.set_ylim(ylim)
     ax.legend(ncol=2, handles=handles)
 
-# --> BECOMING OBSOLETE
-def plot_ansa_brights(t, **kwargs):
-
-    t = plot_column_vals(t, colnames=['ansa_left_surf_bright',
-                                      'ansa_right_surf_bright'],
-                         fmts=['b.', 'r.'],
-                         labels=['Dawn', 'Dusk'],
-                         ylabel=f'IPT Ribbon Surf. Bright '\
-                         f'({t["ansa_left_surf_bright"].unit})',
-                         medfilt_colname='ansa_right_surf_bright',
-                         medfilt_collabel='Dusk medfilt',
-                         **kwargs)
-    return t
-                     
 def add_epsilon_cols(t,
                      outbase='',
                      prefix='',
@@ -902,38 +791,6 @@ def add_epsilon_cols(t,
                              + (num_var / av_peak**2))**0.5
     epsilon_err = np.abs(epsilon_err)
     t[f'{out_prefix}{outbase}{postfix}{out_err_postfix}'] = epsilon_err
-
-# --> BECOMING OBSOLETE
-def add_epsilons(t, ansa_medfilt_width=21, epsilon_medfilt_width=11):
-    # Table must be sorted first
-    add_medfilt(t, 'ansa_right_r_peak', medfilt_width=ansa_medfilt_width)
-    add_medfilt(t, 'ansa_left_r_peak', medfilt_width=ansa_medfilt_width)
-
-    r_peak = t['ansa_right_r_peak']
-    l_peak = t['ansa_left_r_peak']
-    av_peak = (np.abs(r_peak) + np.abs(l_peak)) / 2
-    # Current values for epsilon are messed up because peaks are not
-    # coming in at the right places presumably due to the simple
-    # Gaussian modeling.  The offset should be to the left (east,
-    # dawn) such that Io dips inside the IPT on that side.  To prepare
-    # for a sensible answer, cast my r_peak in left-handed coordinate
-    # system so epsilon is positive if l_peak is larger
-    epsilon = -(r_peak + l_peak) / av_peak
-    denom_var = t['ansa_left_r_peak_err']**2 + t['ansa_right_r_peak_err']**2
-    num_var = denom_var / 2
-    epsilon_err = epsilon * ((denom_var / (r_peak + l_peak)**2)
-                             + (num_var / av_peak**2))**0.5
-    t['epsilon'] = epsilon
-    t['epsilon_err'] = epsilon_err
-    add_medfilt(t, 'epsilon', medfilt_width=epsilon_medfilt_width)
-    kernel = Gaussian1DKernel(10)
-    interpolate_replace_nans_columns(t, ['ansa_right_r_peak_medfilt',
-                                         'ansa_left_r_peak_medfilt'],
-                                     kernel)
-    r_med_peak = t['ansa_right_r_peak_medfilt_interp']
-    l_med_peak = t['ansa_left_r_peak_medfilt_interp']
-    av_med_peak = (np.abs(r_med_peak) + np.abs(l_med_peak)) / 2
-    t['medfilt_interp_epsilon'] = -(r_med_peak + l_med_peak) / av_med_peak
 
 def plot_torus_epsilons(t_torus, torus_day_table,
                         fig=None, ax=None,
@@ -984,113 +841,6 @@ def plot_torus_epsilons(t_torus, torus_day_table,
     ax.set_ylabel(r'Sky plane $|\vec\epsilon|$ (dawnward)')
     if show_legend:
         ax.legend(ncol=2, handles=handles)
-
-# --> BECOMING OBSOLETE
-def plot_epsilons(t,
-                  fig=None,
-                  ax=None,
-                  medfilt_width=21,
-                  min_eps=-0.015,
-                  max_eps=0.06,
-                  tlim=None,
-                  legend=True,
-                  **kwargs):
-    if fig is None:
-        fig = plt.figure()
-    if ax is None:
-        ax = plt.subplot()
-
-    t = t.copy()
-    add_medfilt(t, 'ansa_right_r_peak', medfilt_width=medfilt_width)
-    add_medfilt(t, 'ansa_left_r_peak', medfilt_width=medfilt_width)
-
-    r_peak = t['ansa_right_r_peak']
-    l_peak = t['ansa_left_r_peak']
-    av_peak = (np.abs(r_peak) + np.abs(l_peak)) / 2
-    # Current values for epsilon are messed up because peaks are not
-    # coming in at the right places presumably due to the simple
-    # Gaussian modeling.  The offset should be to the left (east,
-    # dawn) such that Io dips inside the IPT on that side.  To prepare
-    # for a sensible answer, cast my r_peak in left-handed coordinate
-    # system so epsilon is positive if l_peak is larger
-    epsilon = -(r_peak + l_peak) / av_peak
-    denom_var = t['ansa_left_r_peak_err']**2 + t['ansa_right_r_peak_err']**2
-    num_var = denom_var / 2
-    epsilon_err = epsilon * ((denom_var / (r_peak + l_peak)**2)
-                             + (num_var / av_peak**2))**0.5
-    epsilon = epsilon.filled(np.nan)
-    epsilon_err = np.abs(epsilon_err.filled(np.nan))
-    epsilon_biweight = nan_biweight(epsilon)
-    epsilon_mad = nan_mad(epsilon)
-
-    bad_mask = np.isnan(epsilon)
-    good_epsilons = epsilon[~bad_mask]
-
-    if len(good_epsilons) > 20:
-        alpha = 0.2
-        # --> Medfilt is not the best option here, median_filter is,
-        # but I am changing this implementation
-        med_epsilon = medfilt(good_epsilons, 11)
-        p_med = ax.plot(t['tavg'][~bad_mask].datetime, med_epsilon,
-                         'k*', markersize=6, label='Medfilt')
-        # These don't overlap anywhere 
-        #r_med_peak = t['ansa_right_r_peak_medfilt']
-        #l_med_peak = -t['ansa_left_r_peak_medfilt']
-        #av_med_peak = (np.abs(r_med_peak) + np.abs(l_med_peak)) / 2
-        #medfilt_epsilon = -(r_med_peak + l_med_peak) / av_med_peak
-        #plt.plot(t['tavg'].datetime, medfilt_epsilon,
-        #         'k*', markersize=6, label='Epsilon from medfilts')
-        kernel = Gaussian1DKernel(10)
-        interpolate_replace_nans_columns(t, ['ansa_right_r_peak_medfilt',
-                                             'ansa_left_r_peak_medfilt'],
-                                         kernel)
-        r_med_peak = t['ansa_right_r_peak_medfilt_interp']
-        l_med_peak = t['ansa_left_r_peak_medfilt_interp']
-        av_med_peak = (np.abs(r_med_peak) + np.abs(l_med_peak)) / 2
-        t['medfilt_interp_epsilon'] = -(r_med_peak + l_med_peak) / av_med_peak  
-        p_interps = ax.plot(t['tavg'].datetime, t['medfilt_interp_epsilon'],
-                             'c*', markersize=3, label='From interpolations')
-    else:
-        alpha = 0.5
-        p_med = None
-       
-    p_eps = ax.errorbar(t['tavg'].datetime,
-                        epsilon,
-                        epsilon_err, fmt='k.', alpha=alpha,
-                        label='Epsilon')
-
-    handles = [p_eps]
-    if p_med:
-        handles.extend([p_med[0], p_interps[0]])
-    ax.set_ylabel(r'Sky plane $|\vec\epsilon|$ (dawnward)')
-    if tlim is None:
-        tlim = (None, None)
-    ax.hlines(np.asarray((epsilon_biweight,
-                          epsilon_biweight - epsilon_mad,
-                          epsilon_biweight + epsilon_mad)),
-              *tlim,
-              linestyles=('-', '--', '--'),
-              label=f'{epsilon_biweight:.3f} +/- {epsilon_mad:.3f}')
-    ax.axhline(0.025, color='y', label='Nominal 0.025')
-    if legend:
-        ax.legend(handles=handles)
-    #plt.title('Epsilon')
-    ax.set_xlim(tlim)
-    ax.set_ylim(min_eps, max_eps)
-    ax.xaxis.set_minor_locator(mdates.MonthLocator())
-    fig.autofmt_xdate()
-    ax.format_coord = PJAXFormatter(t['tavg'].datetime)
-
-    plot_axhlines(ax, **kwargs)
-    plot_axvlines(ax, **kwargs)
-
-    #jts = JunoTimes()
-    #secax = ax.secondary_xaxis('top',
-    #                            functions=(jts.plt_date2pj, jts.pj2plt_date))
-    #secax.xaxis.set_minor_locator(MultipleLocator(1))
-    #secax.set_xlabel('PJ')
-
-    return t
 
 def east_from_io(t, left_colnames):
     """Creates new left and right columns that read in eastward shift
@@ -1223,87 +973,6 @@ def ansa_sysIII(t_torus, #torus_day_table,
     handles.append(h)
     ax.legend(ncol=3, handles=handles)
 
-# --> BECOMING OBSOLETE
-def plot_ansa_pos(t,
-                  fig=None,
-                  ax=None,
-                  tlim=None,
-                  show=False,
-                  medfilt_width=21,
-                  legend=True,
-                  **kwargs):
-    if fig is None:
-        fig = plt.figure()
-    if ax is None:
-        ax = plt.subplot()
-
-    t = t.copy()
-    add_medfilt(t, 'ansa_right_r_peak', medfilt_width=medfilt_width)
-    add_medfilt(t, 'ansa_left_r_peak', medfilt_width=medfilt_width)
-    # Make it clear we are plotting the perturbation from Io's orbital
-    # position on the right and left sides of Jupiter.  We will make t
-    # eastward (negative of these), when plotting
-    rights = t['ansa_right_r_peak'].filled(np.nan) - IO_ORBIT_R
-    lefts = t['ansa_left_r_peak'].filled(np.nan) - (-IO_ORBIT_R)
-    rights_err = t['ansa_right_r_peak_err'].filled(np.nan)
-    lefts_err = t['ansa_left_r_peak_err'].filled(np.nan)
-    right_bad_mask = np.logical_or(np.isnan(rights), np.isnan(rights_err))
-    left_bad_mask = np.logical_or(np.isnan(lefts), np.isnan(lefts_err))
-    rights = rights[~right_bad_mask]
-    rights_err = rights_err[~right_bad_mask]
-    lefts = lefts[~left_bad_mask]
-    lefts_err = lefts_err[~left_bad_mask]
-
-    medfilt_handles = []
-    if len(rights) and len(lefts) > 40:
-        alpha = 0.2
-        h = ax.plot(t['tavg'].datetime,
-                     -(t['ansa_left_r_peak_medfilt'] - (-IO_ORBIT_R)),
-                     'k*', markersize=12, label='Dawn medfilt')
-        medfilt_handles.append(h[0])
-        h = ax.plot(t['tavg'].datetime,
-                     -(t['ansa_right_r_peak_medfilt'] - IO_ORBIT_R),
-                     'k+', markersize=12, label='Dusk medfilt')
-        medfilt_handles.append(h[0])
-    else:
-        alpha = 0.5
-    point_handles = []
-    h = ax.errorbar(t['tavg'][~left_bad_mask].datetime,
-                     -lefts, lefts_err, fmt='b.',
-                     label='Dawn', alpha=alpha)
-    point_handles.append(h)
-    h = ax.errorbar(t['tavg'][~right_bad_mask].datetime,
-                     -rights, rights_err, fmt='r.',
-                     label='Dusk', alpha=alpha)
-    point_handles.append(h)
-    handles = point_handles
-    handles.extend(medfilt_handles)
-
-    #plt.plot(t['tavg'].datetime,
-    #         np.abs(t['ansa_right_r_peak']) + t['ansa_right_r_stddev'],
-    #         'g^')
-    ax.set_ylabel(r'Dawnward ribbon shift from Io orbit (R$_\mathrm{J}$)')
-    ax.axhline(0, color='y', label='Io orbit')
-    if legend:
-        ax.legend(handles=handles, ncol=2)
-    ax.set_xlim(tlim)
-    ax.set_ylim(-0.3, 0.4)
-    ax.xaxis.set_minor_locator(mdates.MonthLocator())
-    fig.autofmt_xdate()
-    ax.format_coord = PJAXFormatter(t['tavg'].datetime,
-                                    -(t['ansa_left_r_peak_medfilt'] +
-                                      IO_ORBIT_R))
-    plot_axhlines(ax, **kwargs)
-    plot_axvlines(ax, **kwargs)
-
-    #jts = JunoTimes()
-    #secax = ax.secondary_xaxis('top',
-    #                            functions=(jts.plt_date2pj, jts.pj2plt_date))
-    #secax.xaxis.set_minor_locator(MultipleLocator(1))
-    #secax.set_xlabel('PJ')    
-
-    return t
-
 def plot_ansa_r_amplitudes(t, **kwargs):
     plot_column_vals(t, colnames=['ansa_left_r_amplitude',
                                   'ansa_right_r_amplitude'],
@@ -1420,61 +1089,6 @@ def plot_dusk_slope(t, **kwargs):
                      medfilt_colname='ansa_right_slope',
                      medfilt_collabel='Dusk medfilt',
                      **kwargs)
-
-#--> This is obsolete
-def torus_stripchart(t, outdir,
-                     figsize=None,
-                     nplots=6,
-                     tlim=None,
-                     show=False):
-    """Intended for nightly plots"""
-    if nplots == 2:
-            figsize = [11, 11]
-    else:
-        figsize = [21, 18]
-    outbase = 'Characterize_Ansas.png'
-
-    # Hints from https://matplotlib.org/stable/gallery/subplots_axes_and_figures/subplots_demo.html
-    fig = plt.figure(figsize=figsize)
-    gs = fig.add_gridspec(nplots, hspace=0)
-    axs = gs.subplots(sharex=True)
-    plot_ansa_brights(t,
-                      fig=fig, ax=axs[1],
-                      tlim=tlim)
-    if nplots > 1:
-        plot_epsilons(t, fig=fig, ax=axs[2],
-                      tlim=tlim)
-    if nplots > 2:
-        plot_ansa_pos(t, fig=fig, ax=axs[3],
-                      tlim=tlim)
-    if nplots > 3:
-        axs[4].plot(t['tavg'].datetime, t['closest_galsat'], 'k.')
-        axs[4].set_xlim(tlim)
-        axs[4].set_ylabel(r'Closest galsat (R$_\mathrm{J}$)')
-        axs[4].set_xlabel(f'UT {date}')
-    if nplots > 4:
-        dawn_sysIII = Angle(t['Jupiter_PDObsLon'] + 90*u.deg)
-        dusk_sysIII = Angle(t['Jupiter_PDObsLon'] - 90*u.deg)
-        dawn_sysIII = dawn_sysIII.wrap_at(360*u.deg)
-        dusk_sysIII = dusk_sysIII.wrap_at(360*u.deg)
-
-        axs[5].errorbar(dawn_sysIII.filled(np.nan),
-                     t['ansa_left_surf_bright'].filled(np.nan),
-                     t['ansa_left_surf_bright_err'].filled(np.nan), fmt='b.',
-                     label='Dawn')
-        axs[5].errorbar(dusk_sysIII.filled(np.nan),
-                     t['ansa_right_surf_bright'].filled(np.nan),
-                     t['ansa_right_surf_bright_err'].filled(np.nan), fmt='r.',
-                     label='Dusk')
-        axs[5].set_ylabel(f'Surf. Bright ({t["ansa_left_surf_bright"].unit})')
-        axs[5].set_xlabel(r'Ansa $\lambda{\mathrm{III}}$')
-        axs[5].set_xticks(np.arange(0,360,45))
-        axs[5].minorticks_on()
-        axs[5].set_xlim(0, 360)
-        axs[5].legend()
-
-    finish_stripchart(outdir, outbase, show=show)
-    
 
 def torus_directory(directory,
                     outdir=None,
