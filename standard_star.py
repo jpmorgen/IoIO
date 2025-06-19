@@ -1283,7 +1283,8 @@ def rayleigh_convert(ccd_in, bmp_meta=None,
     bmp_meta.update(rc_dict)
     ccd = dict_to_ccd_meta(ccd, rc_dict)
     return ccd
-    
+
+# --> This is apparently incomplete, needing mag_convert
 def add_zeropoint(ccd_in, bmp_meta=None,
                   standard_star_obj=None, **kwargs):
     """cormultipipe post-processing to add zeropoint keyword to ccd.meta"""

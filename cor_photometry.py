@@ -24,6 +24,7 @@ from astropy.io.fits import getheader
 from astropy.table import Table, join, join_skycoord
 from astropy.time import Time
 from astropy.wcs import WCS, FITSFixedWarning
+from astropy.wcs.utils import pixel_to_pixel
 
 from astroquery.simbad import Simbad
 
@@ -40,8 +41,8 @@ import IoIO.sx694 as sx694
 from IoIO.utils import (FITS_GLOB_LIST, sum_ccddata, multi_glob,
                         savefig_overwrite, ra_to_hms)
 from IoIO.cordata_base import CorDataBase
-from IoIO.photometry import (SOLVE_TIMEOUT, rot_wcs,
-                             Photometry, PhotometryArgparseMixin)
+from IoIO.photometry import (SOLVE_TIMEOUT, Photometry,
+                             PhotometryArgparseMixin, rot_wcs, rot_to)
 from IoIO.cormultipipe import CorMultiPipeBinnedOK, nd_filter_mask
 from IoIO.calibration import Calibration
 from IoIO.horizons import GALSATS
@@ -134,6 +135,51 @@ def read_wcs(fname):
             category=FITSFixedWarning)
         hdr = getheader(fname)
         return WCS(hdr)
+
+def cor_rot_to(ccd_in, **kwargs):
+    """Add rotation of ND_params to photometry.rot_to"""
+
+    ccd = rot_to(ccd_in, **kwargs)
+    # Rotate two points on each edge of the ND filter into the new WCS and
+    # calculate the new ND_params with those.  Note that rot_to works with
+    # whatever binned image we gave it and returns a WCS relevant to that.
+    # But we expect our (final) ND_params in unbinned coordinates.  So
+    # work with binned ND_params first and then unbin before writing to property
+    ND_params_in = ccd_in.ND_params_binned(ccd_in.ND_params)
+    ND_ref_y_in = ccd_in.y_binned(ccd_in.ND_ref_y)
+
+    # The ND_edges are x coordinates.  
+    ys = np.repeat(ND_ref_y_in, 2) + np.asarray((-200, 200))
+    ND_edges_in, _ = ccd_in.ND_edges(ys, ND_params_in, ND_ref_y_in)
+
+    rot_lefts = pixel_to_pixel(ccd_in.wcs, ccd.wcs, ND_edges_in[:,0], ys)
+    rot_rights = pixel_to_pixel(ccd_in.wcs, ccd.wcs, ND_edges_in[:,1], ys)
+
+    if rot_lefts[0][0] > rot_rights[0][0]:
+        # For raw IoIO images, east is right, so WCS flips them.  We don't
+        # need to worry about top/bottom, since y is the independent
+        # variable for creating the ND_params
+        rot_lefts, rot_rights = (rot_rights, rot_lefts)
+
+    # slopes (rise/run) with y-axis being the "run" and now order = FORTRAN
+    rot_ND00 = ((rot_lefts[0][0] - rot_lefts[0][1])
+                / (rot_lefts[1][0] - rot_lefts[1][1]))
+    rot_ND01 = ((rot_rights[0][0] - rot_rights[0][1])
+                / (rot_rights[1][0] - rot_rights[1][1]))
+    rot_ND_ref_y = ccd.shape[0]/2
+
+    # Now solve for intercepts.  From CordDataBase.ND_edges()
+    # es = ND_params[1,:] + ND_params[0,:]*(y - ND_ref_y)
+    #rot_lefts[0][0] = rot_ND10 + rot_ND00*(rot_lefts[0][1] - rot_ND_ref_y)
+    rot_ND10 = rot_lefts[0][0] - rot_ND00*(rot_lefts[1][0] - rot_ND_ref_y)
+    rot_ND11 = rot_rights[0][0] - rot_ND00*(rot_rights[1][0] - rot_ND_ref_y)
+
+    rot_ND_params = ((rot_ND00, rot_ND01),
+                     (rot_ND10, rot_ND11))
+
+    ccd.ND_params = ccd.ND_params_unbinned(np.asarray(rot_ND_params))
+    ccd.ND_ref_y = ccd.y_unbinned(rot_ND_ref_y)
+    return ccd
 
 def cardinal_directions(wcs):
     """Returns matrix of -1, 0, 1s indicating general pixel to world
