@@ -70,6 +70,9 @@ GALSAT_OBS_COL_TO_META = ['RA', 'DEC', 'ang_width', 'r', 'r_rate',
 # equator of the IPT is less than that [woudl like a reference]
 JUNO_JMAG_VIP4 = 290.8*u.deg
 CENTRIFUGAL_EQUATOR_AMPLITUDE = 6.8*u.deg
+CONNERNEY18_JUP_MAG_NPOL_SYSIII = 286.61*u.deg
+#JUP_MAG
+PHIPPS21_IPT_AMP = 6.3*u.deg
 
 @async_to_sync
 class RateLimitedHorizonsClass(HorizonsClass):

@@ -43,7 +43,8 @@ from IoIO.utils import (FITS_GLOB_LIST, sum_ccddata, multi_glob,
 from IoIO.cordata_base import CorDataBase
 from IoIO.photometry import (SOLVE_TIMEOUT, Photometry,
                              PhotometryArgparseMixin, rot_wcs, rot_to)
-from IoIO.cormultipipe import CorMultiPipeBinnedOK, nd_filter_mask
+from IoIO.cormultipipe import (CorMultiPipeBinnedOK, nd_filter_mask,
+                               objctradec_to_obj_center)
 from IoIO.calibration import Calibration
 from IoIO.horizons import GALSATS
 
@@ -137,7 +138,10 @@ def read_wcs(fname):
         return WCS(hdr)
 
 def cor_rot_to(ccd_in, **kwargs):
-    """Add rotation of ND_params to photometry.rot_to"""
+    """Add rotation of ND_params and recentering of obj_center to
+    photometry.rot_to
+
+    """
 
     ccd = rot_to(ccd_in, **kwargs)
     # Rotate two points on each edge of the ND filter into the new WCS and
@@ -179,6 +183,8 @@ def cor_rot_to(ccd_in, **kwargs):
 
     ccd.ND_params = ccd.ND_params_unbinned(np.asarray(rot_ND_params))
     ccd.ND_ref_y = ccd.y_unbinned(rot_ND_ref_y)
+    # Put the obj_center (pixels) into the rotated coordinate frame
+    ccd = objctradec_to_obj_center(ccd)    
     return ccd
 
 def cardinal_directions(wcs):
@@ -220,9 +226,7 @@ def pierflip(wcs):
     """Pierflip rotates the FOV by 180 deg"""
     return rot_wcs(wcs, 180*u.deg)
 
-def mask_galsats(ccd_in, galsat_mask_side=None, **kwargs):
-    if galsat_mask_side is None:
-        galsat_mask_side = GALSAT_MASK_SIDE
+def mask_galsats(ccd_in, galsat_mask_side=GALSAT_MASK_SIDE, **kwargs):
     assert galsat_mask_side.unit == u.pixel
     ccd = ccd_in.copy()
     galsat_mask = np.zeros_like(ccd.mask)
