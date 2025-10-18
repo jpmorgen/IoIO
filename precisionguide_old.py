@@ -562,9 +562,11 @@ class ObsTerminator():
         # return (not MC.Telescope.Tracking
         #         or MC.Telescope.Altitude < MC.horizon_limit_value)
 
-    def end_of_obs(self, MC):
+    def end_of_obs(self, MC, exptime=0):
+        # exptime is to take long exposures into consideration, which
+        # occationally go past the ACP interval buffer (see IoIO_old)
         t = time.time()
-        if self.Tend is not None and t > self.Tend:
+        if self.Tend is not None and t > self.Tend - exptime:
             log.info('End of observation reached')
             return True
         if self.below_horizon(MC, self.horizon_limit):

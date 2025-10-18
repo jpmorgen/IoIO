@@ -226,7 +226,9 @@ def pierflip(wcs):
     """Pierflip rotates the FOV by 180 deg"""
     return rot_wcs(wcs, 180*u.deg)
 
-def mask_galsats(ccd_in, galsat_mask_side=GALSAT_MASK_SIDE, **kwargs):
+def mask_galsats(ccd_in, galsat_mask_side=None, **kwargs):
+    if galsat_mask_side is None:
+        galsat_mask_side = GALSAT_MASK_SIDE
     assert galsat_mask_side.unit == u.pixel
     ccd = ccd_in.copy()
     galsat_mask = np.zeros_like(ccd.mask)

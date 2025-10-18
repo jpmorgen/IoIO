@@ -1222,7 +1222,12 @@ def ACP_IPT_Na_R_IPT4x_Na(args, cal=True):
 def ACP_IPT_Na_R(args, cal=True):
     Tstart = time.time()
     Tend = Tstart + float(args.interval)
-    # Use the default horizon stuff in precisionguide_old 
+    # Use the default horizon stuff in precisionguide_old
+    # UserActions.wsc defines a 120s buffer after the end the interval
+    # to finish the task before ACP will abort the exposure, thus
+    # raising an error in this Python script.  The 120s is good for
+    # centering and short exposures, but does make a difference in our
+    # 5 min exposures
     obs_terminator = pg.ObsTerminator(Tend)
     with pg.PrecisionGuide("CorObsData", "IoIO") as P:
         # This with block enables us to turn off some things in
@@ -1419,14 +1424,14 @@ def ACP_IPT_Na_R(args, cal=True):
                 #                binning=4,
                 #                filt=0)
                 exptime=300
-                if obs_terminator.end_of_obs(P.MC):
+                if obs_terminator.end_of_obs(P.MC, exptime=exptime):
                     log.error('End of observation')
                     return
                 P.MC.acquire_im(pg.uniq_fname('SII_on-band_', d),
                                 exptime=exptime,
                                 filt=1)
                 exptime=60
-                if obs_terminator.end_of_obs(P.MC):
+                if obs_terminator.end_of_obs(P.MC, exptime=exptime):
                     log.error('End of observation')
                     return
                 P.MC.acquire_im(pg.uniq_fname('SII_off-band_', d),
@@ -1440,16 +1445,16 @@ def ACP_IPT_Na_R(args, cal=True):
 
                 log.info('Collecting Na')
                 exptime=60
-                if obs_terminator.end_of_obs(P.MC):
+                if obs_terminator.end_of_obs(P.MC, exptime=exptime):
                     log.error('End of observation')
                     return
                 P.MC.acquire_im(pg.uniq_fname('Na_off-band_', d),
                                 exptime=exptime,
                                 filt=3)
-                if obs_terminator.end_of_obs(P.MC):
+                exptime=300
+                if obs_terminator.end_of_obs(P.MC, exptime=exptime):
                     log.error('End of observation')
                     return
-                exptime=300
                 P.MC.acquire_im(pg.uniq_fname('Na_on-band_', d),
                                 exptime=exptime,
                                 filt=6)
