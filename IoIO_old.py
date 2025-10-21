@@ -1229,7 +1229,8 @@ def ACP_IPT_Na_R(args, cal=True):
     # centering and short exposures, but does make a difference in our
     # 5 min exposures
     obs_terminator = pg.ObsTerminator(Tend)
-    with pg.PrecisionGuide("CorObsData", "IoIO") as P:
+    with pg.PrecisionGuide("CorObsData", "IoIO",
+                           obs_terminator=obs_terminator) as P:
         # This with block enables us to turn off some things in
         # PrecisionGuide that ACP needsgraceful __exit__.  Instantiating
         # PrecisionGuide is unlikely to cause errors, since it just
