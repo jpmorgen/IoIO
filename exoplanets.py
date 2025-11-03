@@ -86,6 +86,9 @@ def barytime(ccd_in, bmp_meta=None, **kwargs):
 # --> Consider putting Qatars in here to resolve to real stars 
 def ensure_star_name(object_name):
     """Removes exoplanet designation so Simbad can resolve star"""
+    if object_name[0:6] == 'Qatar-':
+        #log.info('removing - from Qatar-N[a-z]')
+        object_name = 'Qatar' + object_name[6:]
     if object_name == 'Iota-2 Cyg':
         # Total hack to avoid special case
         return object_name
@@ -292,7 +295,10 @@ def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
                             **kwargs)
 
 def list_exoplanets_one_dir(directory,
-                            glob_include=GLOB_INCLUDE):
+                            glob_include=GLOB_INCLUDE,
+                            sim=None):
+    #sim = sim or ExoSimbad()
+    # For some reason, sharing this object led to server
     sim = ExoSimbad()
     # This is how SIMBAD/astroquery is listing them as of end of 2024
     # or so
@@ -346,7 +352,8 @@ def parallel_list_exoplanets(raw_data_root=RAW_DATA_ROOT,
         return []
     sim = ExoSimbad()
     wwk = WorkerWithKwargs(list_exoplanets_one_dir,
-                           glob_include=glob_include)
+                           glob_include=glob_include,
+                           sim=sim)
     ncp = num_can_process(num_processes)
     with Pool(processes=ncp) as p:
         exoplanet_obs_in_dirs = p.map(wwk.worker, dirs)

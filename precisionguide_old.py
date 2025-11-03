@@ -1389,13 +1389,20 @@ class MaxImControl():
         if not self.CCDCamera.GuiderRunning:
             log.warning('Guider not running')
             return None
+        start = time.time()
+        now = start
         this_norm = 0
         running_total = 0
         running_sq = 0
         for i in range(n):
             assert self.weather_server.Safe, ('Weather is not safe!')
-            # --> Need a timeout
             while self.CCDCamera.GuiderNewMeasurement is False:
+                if time.time() > start + self.guider_max_settle_time:
+                    log.error(f'Took more than {self.guider_max_settle_time}s to get an RMS guider measurement, terminating guider_cycle')
+                    return (np.nan, np.nan)
+                if self.obs_terminator.end_of_obs(self):
+                    log.error('End of observation reached, terminating guider_cycle')
+                    return (np.nan, np.nan)
                 time.sleep(self.loop_sleep_time)
             # As per MaxIm documentation, reading these clears
             # GuiderNewMeasurement
@@ -1508,12 +1515,15 @@ class MaxImControl():
                                     self.CCDCamera.GuiderXStarPosition))
             tp_coords = cp_coords + step_dp
             log.debug('Setting to: ' + str(tp_coords[::-1]))
-            # !!! TRANSPOSE !!!
+            # !!! TRANSPOSE !!! [this shouldn't take any time]
             self.CCDCamera.GuiderMoveStar(tp_coords[1], tp_coords[0])
             if self.obs_terminator.end_of_obs(self):
-                log.error('End of observation reached, terminating move_with_guuide_box')
+                log.error('End of observation reached just after CCDCamera.GuiderMoveStar, terminating move_with_guide_box')
                 return False
             self.guider_settle()
+            if self.obs_terminator.end_of_obs(self):
+                log.error('End of observation reached, just after guider_settle, terminating move_with_guide_box')
+                return False
         
         ## Give it a few extra cycles to make sure it has stuck
         ## (though even this might be too short)
@@ -2450,6 +2460,10 @@ guide_box_log_file : str
         if self.MC.CCDCamera.GuiderRunning:
             log.debug('CENTERING TARGET WITH GUIDEBOX MOVES')
             if not self.MC.move_with_guide_box(dw_coords):
+                if self.obs_terminator.end_of_obs(self.MC):
+                    log.error('End of observation reached, terminating center_loop')
+                    return False
+                
                 if recursive_count > 1:
                     log.error('center: Failed to center target using guidebox moves after two tries')
                     return False                        
@@ -2458,6 +2472,9 @@ guide_box_log_file : str
                 # --> Consider using center here instead of move_with_guider_slews
                 self.center_loop(dead_zone=dead_zone,
                                  dead_zone_move=dead_zone_move)
+                if self.obs_terminator.end_of_obs(self.MC):
+                    log.error('End of observation reached, terminating center_loop')
+                    return False
                 #self.MC.move_with_guider_slews(dw_coords)
                 # --> Need to add logic to capture guider stuff,
                 # though filter should be the same.  It is just
@@ -2467,18 +2484,18 @@ guide_box_log_file : str
                 log.debug('RESTARTING GUIDER AND CENTERING WITH GUIDEBOX MOVES')
                 self.MC.guider_start()
                 recursive_count += 1
-                self.center(recursive_count=recursive_count,
-                            dead_zone=dead_zone,
-                            dead_zone_move=dead_zone_move)
+                return self.center(recursive_count=recursive_count,
+                                   dead_zone=dead_zone,
+                                   dead_zone_move=dead_zone_move)
         else:
             log.debug('CENTERING TARGET WITH GUIDER SLEWS')
             self.MC.move_with_guider_slews(dw_coords)
             if self.MC.guider_commanded_running:
                 log.debug('Guider was turned off unexpectedly.  Turning it back on and recentering with guidebox moves')
                 self.MC.guider_start()
-                self.center(recursive_count=recursive_count,
-                            dead_zone=dead_zone,
-                            dead_zone_move=dead_zone_move)
+                return self.center(recursive_count=recursive_count,
+                                   dead_zone=dead_zone,
+                                   dead_zone_move=dead_zone_move)
         return True
 
     def center_loop(self,
@@ -2531,6 +2548,7 @@ guide_box_log_file : str
                                             tolerance=tolerance,
                                             max_tries=max_tries)
                 if start_PrecisionGuide:
+                    # --> At the moment this is not used
                     # We have moved the telescope, so our Obs
                     self.reinitialize()
                     self.update_flex_pix_rate(0)
