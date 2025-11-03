@@ -114,7 +114,8 @@ default_guide_box_command_file = os.path.join(raw_data_root, 'GuideBoxCommand.tx
 default_guide_box_log_file = os.path.join(raw_data_root, 'GuideBoxLog.txt')
 
 run_level_main_astrometry = os.path.join(
-    raw_data_root, '2023-08_Astrometry/Main_Astrometry_East_of_Pier.fit')
+    raw_data_root, '2025_08_Astrometry/Main_Astrometry_East_of_Pier.fit')
+    #raw_data_root, '2023-08_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2023-07_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2022-09_Astrometry/Main_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2022-05_Astrometry/Main_Astrometry_East_of_Pier.fit')
@@ -129,7 +130,8 @@ run_level_main_astrometry = os.path.join(
     #raw_data_root, '2018-04_Astrometry/PinPointSolutionEastofPier.fit')
 
 run_level_guider_astrometry = os.path.join(
-    raw_data_root, '2023-08_Astrometry/Guider_Astrometry_East_of_Pier.fit')
+    raw_data_root, '2025_08_Astrometry/Guider_Astrometry_East_of_Pier.fit')
+    #raw_data_root, '2023-08_Astrometry/Guider_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2023-07_Astrometry/Guider_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2022-09_Astrometry/Guider_Astrometry_East_of_Pier.fit')
     #raw_data_root, '2022-05_Astrometry/Guider_Astrometry_East_of_Pier.fit')
@@ -2188,14 +2190,15 @@ guide_box_log_file : str
         if value and self._GuideBoxMoverSubprocess is None:
             # --> I may need a better path to this
             # https://stackoverflow.com/questions/4152963/get-the-name-of-current-script-with-python
-            Tend = self.obs_terminator.Tend or ''
+            subprocess_args = ['python',
+                               #'ioio.py',
+                               __file__,
+                               'GuideBoxMover',
+                               self.guide_box_command_file]
+            if self.obs_terminator.Tend is not None:
+                subprocess_args.append(str(self.obs_terminator.Tend))
             self._GuideBoxMoverSubprocess \
-                = subprocess.Popen(['python',
-                                    #'ioio.py',
-                                    __file__,
-                                    'GuideBoxMover',
-                                    self.guide_box_command_file,
-                                    Tend])
+                = subprocess.Popen(subprocess_args)
             # Make sure we are up and running before moving on
             # --> Needs a timeout
             while self._GuideBoxMoverSubprocess is None:
@@ -3385,6 +3388,9 @@ def cmd_guide(args):
 # --> a guidebox command
 def GuideBoxMover(args):
     log.debug('Starting GuideBoxMover')
+    # Default argparse Tend is 0.  0 is falsey. 'or' keeps looking for
+    # Truey values until it gets to the last element.  The last
+    # element is returned no matter what
     Tend = args.Tend or None
     obs_terminator = ObsTerminator(Tend=Tend,
                                    horizon_limit=horizon_limit,
@@ -3551,8 +3557,9 @@ if __name__ == "__main__":
     GuideBox_parser.add_argument(
         'command_file', help='Full path to file used to pass rates from GuideBoxCommander  to GuideBoxMover')
     GuideBox_parser.add_argument(
-        'Tend', help='Time in UNIX seconds past which observations are invalid',
-        default='')
+        'Tend', type=float,
+        default=0,
+        help='If non-zero, time in UNIX seconds after which GuideBoxMover will be terminated.  Either way, sundown angle is also used to determine when to shut system off.  Default=0')
     GuideBox_parser.set_defaults(func=GuideBoxMover)
 
     Collector_parser = subparsers.add_parser(

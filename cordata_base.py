@@ -85,28 +85,36 @@ ND_REF_Y = sx694.naxis2 / 2
 #    = [[-3.32901729e-01, -3.21280155e-01],
 #       [ 1.26037690e+03,  1.38195602e+03]]
 
-# Fri Aug 25 00:04:27 2023 EDT  jpmorgen@snipe
+## Fri Aug 25 00:04:27 2023 EDT  jpmorgen@snipe
+#RUN_LEVEL_DEFAULT_ND_PARAMS \
+#    = [[-3.70095154e-01, -3.57945037e-01],
+#       [ 1.26900000e+03,  1.37000000e+03]]
+
+# Thu Oct 30 21:09:41 2025 EDT  jpmorgen@snipe
+# I fogot to change these.  These are from Aug 3 2025
 RUN_LEVEL_DEFAULT_ND_PARAMS \
-    = [[-3.70095154e-01, -3.57945037e-01],
-       [ 1.26900000e+03,  1.37000000e+03]]
+    = [[2.30864638e-01, 2.43044997e-01],
+       [1.21200000e+03, 1.32800000e+03]]
 
 def run_level_default_ND_params(hdr):
     """Returns run_level_default_ND_params for the DATE-OBS in hdr"""
-    # Note ifs don't quite bracket ND_params in a nice way, so pay
-    # attention when adding subsequent adjustments
     date_obs = hdr['DATE-OBS']
+    if date_obs > '2025-08-03T00:00:00':
+        return np.asarray(RUN_LEVEL_DEFAULT_ND_PARAMS)
+    if date_obs > '2023-08-25T00:00:00':
+        return np.asarray([[-3.70095154e-01, -3.57945037e-01],
+                           [ 1.26900000e+03,  1.37000000e+03]])
     if date_obs > '2021-04-25T00:00:00':
-        ND_params = np.asarray(RUN_LEVEL_DEFAULT_ND_PARAMS)
-    elif date_obs > '2019-04-12T00:00:00':
-        ND_params = np.asarray([[1.40749551e-02, 2.36320869e-02],
-                                [1.24240593e+03, 1.33789081e+03]])
-    elif date_obs > '2019-02-08T00:00:00':
-        ND_params = np.asarray([[  4.65269008e-03,   8.76050569e-03],
-                                [  1.27189987e+03,   1.37717911e+03]])
-    else:
-        ND_params = np.asarray([[  3.63686271e-01,   3.68675375e-01],
-                                [  1.28303305e+03,   1.39479846e+03]])
-    return ND_params
+        return np.asarray([[-3.32901729e-01, -3.21280155e-01],
+                           [ 1.26037690e+03,  1.38195602e+03]])
+    if date_obs > '2019-04-12T00:00:00':
+        return np.asarray([[1.40749551e-02, 2.36320869e-02],
+                           [1.24240593e+03, 1.33789081e+03]])
+    if date_obs > '2019-02-08T00:00:00':
+        return np.asarray([[  4.65269008e-03,   8.76050569e-03],
+                           [  1.27189987e+03,   1.37717911e+03]])
+    return np.asarray([[  3.63686271e-01,   3.68675375e-01],
+                       [  1.28303305e+03,   1.39479846e+03]])
 
 def overscan_estimate(ccd_in, meta=None, master_bias=None,
                       binsize=None, min_width=1, max_width=8, box_size=100,

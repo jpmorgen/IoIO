@@ -45,10 +45,17 @@ SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 #    = [[-3.32901729e-01, -3.21280155e-01],
 #       [ 1.26037690e+03,  1.38195602e+03]]
 
-# Fri Aug 25 00:04:27 2023 EDT  jpmorgen@snipe
+# # Fri Aug 25 00:04:27 2023 EDT  jpmorgen@snipe
+# run_level_default_ND_params \
+#     = [[-3.70095154e-01, -3.57945037e-01],
+#        [ 1.26900000e+03,  1.37000000e+03]]
+
+# Thu Oct 30 21:09:41 2025 EDT  jpmorgen@snipe
+# I fogot to change these.  These are from Aug 3 2025
 run_level_default_ND_params \
-    = [[-3.70095154e-01, -3.57945037e-01],
-       [ 1.26900000e+03,  1.37000000e+03]]
+    = [[2.30864638e-01, 2.43044997e-01],
+       [1.21200000e+03, 1.32800000e+03]]
+
 
 # Temporary set to 2 during really hazy weather 
 guider_nd_Filter_number = 3

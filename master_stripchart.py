@@ -13,11 +13,8 @@ from IoIO.na_nebula import (BASE as NA_NEBULA_BASE, NA_NEBULA_ROOT,
                             plot_na_nebula_surf_brights)
 from IoIO.torus import (BASE as TORUS_BASE, TORUS_ROOT,
                         plot_ansa_surf_brights, plot_torus_epsilons,
-                        plot_torus_ansa_pos, plot_dawn_r_stddev,
-                        plot_dusk_r_stddev, plot_dawn_y_stddev,
-                        plot_dusk_y_stddev, plot_dawn_cont,
-                        plot_dusk_cont, plot_dawn_slope,
-                        plot_dusk_slope)
+                        plot_torus_ansa_pos, plot_ansa_r_cont,
+                        plot_ansa_r_slope)
 from IoIO.mme import MODEL, plot_mme, plot_mme_corr
 from IoIO.juno import juno_pj_axis
 
@@ -141,6 +138,30 @@ def master_stripchart(
                 **kwargs)
         elif plotname == 'ansa_dusk_r_stddev':
             plot_dusk_r_stddev(
+                t_torus, 
+                fig=fig, ax=ax,
+                tlim=(start, stop),
+                **kwargs)
+        elif plotname == 'plot_dawn_slope':
+            plot_dawn_slope(
+                t_torus, 
+                fig=fig, ax=ax,
+                tlim=(start, stop),
+                **kwargs)
+        elif plotname == 'plot_dusk_slope':
+            plot_dusk_slope(
+                t_torus, 
+                fig=fig, ax=ax,
+                tlim=(start, stop),
+                **kwargs)
+        elif plotname == 'plot_ansa_r_cont':
+            plot_ansa_r_cont(
+                t_torus, 
+                fig=fig, ax=ax,
+                tlim=(start, stop),
+                **kwargs)
+        elif plotname == 'plot_ansa_r_slope':
+            plot_ansa_r_slope(
                 t_torus, 
                 fig=fig, ax=ax,
                 tlim=(start, stop),

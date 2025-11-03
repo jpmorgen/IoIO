@@ -1643,6 +1643,7 @@ def plot_column(t,
                 max_time_gap=15*u.day,
                 colname=None,
                 err_colname=None,
+                scale=1,
                 fmt='',
                 fig=None,
                 ax=None,
@@ -1668,6 +1669,10 @@ def plot_column(t,
     err_colname : str
         Data column name (optional).  If not None, ax.errorbar will be
         used
+
+    scale : float
+        Scale factor to apply to column data before plotting
+        Default is `1'
 
     max_time_gap : timdelta-like
         For line plots, gaps in time larger than this will cause the
@@ -1706,7 +1711,7 @@ def plot_column(t,
     datetimes = np.append(
         datetimes, datetimes[last_contig_idx] + med_dt)
     sort_idx = np.argsort(datetimes)
-    vals = t[colname]
+    vals = t[colname] * scale
     ngaps = len(last_contig_idx)
     npts = len(vals) + ngaps
     vals = fill_plot_col(vals, ngaps)

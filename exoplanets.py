@@ -5,6 +5,7 @@ import re
 import os
 import glob
 import argparse
+from multiprocessing import Pool
 
 import numpy as np
 
@@ -17,7 +18,7 @@ from astroquery.simbad import SimbadClass
 
 import ccdproc as ccdp
 
-from bigmultipipe import prune_pout
+from bigmultipipe import WorkerWithKwargs, num_can_process, prune_pout
 from ccdmultipipe import as_single
 
 from IoIO.utils import (reduced_dir, get_dirs_dates, multi_glob)
@@ -290,16 +291,8 @@ def exoplanet_tree(raw_data_root=RAW_DATA_ROOT,
                             keep_fits=keep_fits,
                             **kwargs)
 
-def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
-                    glob_include=GLOB_INCLUDE,
-                    start=None,
-                    stop=None):
-    """List exoplanet observation present in raw_data_root"""
-    dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
-    dirs, _ = zip(*dirs_dates)
-    if len(dirs) == 0:
-        log.warning('No directories found')
-        return []
+def list_exoplanets_one_dir(directory,
+                            glob_include=GLOB_INCLUDE):
     sim = ExoSimbad()
     # This is how SIMBAD/astroquery is listing them as of end of 2024
     # or so
@@ -308,54 +301,128 @@ def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
     #                        'I', 'u', 'g', 'r', 'i', 'z', 'G')
     #sim.add_votable_fields('V')
     exoplanet_obs = []
-    for directory in dirs:
-        all_files = multi_glob(directory, glob_list=glob_include)
-        if len(all_files) == 0:
-            continue
-        collection = ccdp.ImageFileCollection(
-            filenames=all_files,
-            keywords=['date-obs', 'object', 'filter', 'exptime'])
-        texos = collection.values('object', unique=True)
-        for exo in texos:
-            star = ensure_star_name(exo)
-            simbad_results = sim.query_object(star)
-            if simbad_results is None or len(simbad_results) == 0:
-                log.warning(f'Simbad did not resolve: {exo} host {star}')
+    all_files = multi_glob(directory, glob_list=glob_include)
+    if len(all_files) == 0:
+        return []
+    collection = ccdp.ImageFileCollection(
+        filenames=all_files,
+        keywords=['date-obs', 'object', 'filter', 'exptime'])
+    texos = collection.values('object', unique=True)
+    for exo in texos:
+        star = ensure_star_name(exo)
+        simbad_results = sim.query_object(star)
+        if simbad_results is None or len(simbad_results) == 0:
+            log.warning(f'Simbad did not resolve: {exo} host {star}')
+            vband = np.nan
+        else:
+            try:
+                vband = simbad_results['V'][0]
+            except Exception as e:
                 vband = np.nan
-            else:
-                try:
-                    vband = simbad_results['V'][0]
-                except Exception as e:
-                    vband = np.nan
-                
-            tc = collection.filter(object=exo)
-            date_obss = tc.values('date-obs')
-            tts = Time(date_obss, format='fits')
-            if (np.max(tts) - np.min(tts) < MIN_TRANSIT_OBS_TIME):
-                continue
-            # Standardize to no spaces
-            exo = exo.replace(' ', '')
-            date, _ = date_obss[0].split('T')
-            filt_name = tc.values('filter')[0]
-            exptime = tc.values('exptime')[0]
-            exoplanet_obs.append((exo, date, filt_name, exptime, vband))
+
+        tc = collection.filter(object=exo)
+        date_obss = tc.values('date-obs')
+        tts = Time(date_obss, format='fits')
+        if (np.max(tts) - np.min(tts) < MIN_TRANSIT_OBS_TIME):
+            continue
+        # Standardize to no spaces
+        exo = exo.replace(' ', '')
+        date, _ = date_obss[0].split('T')
+        filt_name = tc.values('filter')[0]
+        exptime = tc.values('exptime')[0]
+        exoplanet_obs.append((exo, date, filt_name, exptime, vband))
+    return exoplanet_obs
+    
+def parallel_list_exoplanets(raw_data_root=RAW_DATA_ROOT,
+                             glob_include=GLOB_INCLUDE,
+                             start=None,
+                             stop=None,
+                             num_processes=None):
+    """List exoplanet observation present in raw_data_root"""
+    dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
+    dirs, _ = zip(*dirs_dates)
+    if len(dirs) == 0:
+        log.warning('No directories found')
+        return []
+    sim = ExoSimbad()
+    wwk = WorkerWithKwargs(list_exoplanets_one_dir,
+                           glob_include=glob_include)
+    ncp = num_can_process(num_processes)
+    with Pool(processes=ncp) as p:
+        exoplanet_obs_in_dirs = p.map(wwk.worker, dirs)
+    # flatten
+    exoplanet_obs = [exoplanet for exoplanet_obs in exoplanet_obs_in_dirs
+                     for exoplanet in exoplanet_obs]
     return exoplanet_obs
 
+
+##def list_exoplanets(raw_data_root=RAW_DATA_ROOT,
+##                    glob_include=GLOB_INCLUDE,
+##                    start=None,
+##                    stop=None):
+##    """List exoplanet observation present in raw_data_root"""
+##    dirs_dates = get_dirs_dates(raw_data_root, start=start, stop=stop)
+##    dirs, _ = zip(*dirs_dates)
+##    if len(dirs) == 0:
+##        log.warning('No directories found')
+##        return []
+##    sim = ExoSimbad()
+##    # This is how SIMBAD/astroquery is listing them as of end of 2024
+##    # or so
+##    # --> Broken at the moment Wed May 21 22:06:34 2025 EDT  jpmorgen@snipe
+##    #sim.add_votable_fields('U', 'B', 'V', 'R',
+##    #                        'I', 'u', 'g', 'r', 'i', 'z', 'G')
+##    #sim.add_votable_fields('V')
+##    exoplanet_obs = []
+##    for directory in dirs:
+##        all_files = multi_glob(directory, glob_list=glob_include)
+##        if len(all_files) == 0:
+##            continue
+##        collection = ccdp.ImageFileCollection(
+##            filenames=all_files,
+##            keywords=['date-obs', 'object', 'filter', 'exptime'])
+##        texos = collection.values('object', unique=True)
+##        for exo in texos:
+##            star = ensure_star_name(exo)
+##            simbad_results = sim.query_object(star)
+##            if simbad_results is None or len(simbad_results) == 0:
+##                log.warning(f'Simbad did not resolve: {exo} host {star}')
+##                vband = np.nan
+##            else:
+##                try:
+##                    vband = simbad_results['V'][0]
+##                except Exception as e:
+##                    vband = np.nan
+##                
+##            tc = collection.filter(object=exo)
+##            date_obss = tc.values('date-obs')
+##            tts = Time(date_obss, format='fits')
+##            if (np.max(tts) - np.min(tts) < MIN_TRANSIT_OBS_TIME):
+##                continue
+##            # Standardize to no spaces
+##            exo = exo.replace(' ', '')
+##            date, _ = date_obss[0].split('T')
+##            filt_name = tc.values('filter')[0]
+##            exptime = tc.values('exptime')[0]
+##            exoplanet_obs.append((exo, date, filt_name, exptime, vband))
+##    return exoplanet_obs
+
 def print_list_exoplanets(**kwargs):
-            exoplanet_obs = list_exoplanets(**kwargs)
-            exos_dates = list(zip(*exoplanet_obs))
-            exos = list(exos_dates[0])
-            counts = [(e, exos.count(e))
-                       for e in set(exos)]
-            print(f'Total number of attempted transit observations: {len(exoplanet_obs)}')
-            print('Exoplanets observed on date:')
-            # The dates are sorted in order already
-            for e in exoplanet_obs: print(e)
-            print('\nExoplanet observation counts:')
-            # Sort the counts by name
-            counts.sort(key=lambda tup: tup[0])
-            for c in counts: print(c)
-            print(f'Number of planets observed: {len(counts)}')
+            #exoplanet_obs = list_exoplanets(**kwargs)
+    exoplanet_obs = parallel_list_exoplanets(**kwargs)
+    exos_dates = list(zip(*exoplanet_obs))
+    exos = list(exos_dates[0])
+    counts = [(e, exos.count(e))
+              for e in set(exos)]
+    print(f'Total number of attempted transit observations: {len(exoplanet_obs)}')
+    print('Exoplanets observed on date:')
+    # The dates are sorted in order already
+    for e in exoplanet_obs: print(e)
+    print('\nExoplanet observation counts:')
+    # Sort the counts by name
+    counts.sort(key=lambda tup: tup[0])
+    for c in counts: print(c)
+    print(f'Number of planets observed: {len(counts)}')
 
 class ExoArgparseMixin:
     def add_expo_calc(self, 
@@ -412,7 +479,8 @@ class ExoArgparseHandler(ExoArgparseMixin, CorPhotometryArgparseMixin,
             return
         if args.list_exoplanets:
             print_list_exoplanets(raw_data_root=args.raw_data_root,
-                                  start=args.start, stop=args.stop)
+                                  start=args.start, stop=args.stop,
+                                  num_processes=args.num_processes)
             return
         c = CalArgparseHandler.cmd(self, args)
         join_tolerance = args.join_tolerance*u.Unit(args.join_tolerance_unit)

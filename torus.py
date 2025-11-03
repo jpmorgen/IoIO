@@ -391,11 +391,11 @@ def draw_ansa_boxes(ax,
                              edgecolor='w',
                              facecolor='none')
     right = patches.Rectangle((right_outer.value, -ansa_dy.value),
-                             (right_inner-right_outer).value,
-                             ansa_dy.value*2,
-                             linewidth=1,
-                             edgecolor='w',
-                             facecolor='none')
+                              (right_inner-right_outer).value,
+                              ansa_dy.value*2,
+                              linewidth=1,
+                              edgecolor='w',
+                              facecolor='none')
     ax.add_patch(left)
     ax.add_patch(right)
 
@@ -423,11 +423,11 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
     ccd = ccd_in.copy()
     if bmp_meta is None:
         bmp_meta = {}
-    ccd = ccd_meta_to_bmp_meta(ccd, bmp_meta=bmp_meta,
-                               ccd_meta_to_bmp_meta_keys=
-                               [('Jupiter_PDObsLon', u.deg),
-                                ('Jupiter_PDObsLat', u.deg),
-                                ('Jupiter_PDSunLon', u.deg)])
+        ccd = ccd_meta_to_bmp_meta(ccd, bmp_meta=bmp_meta,
+                                   ccd_meta_to_bmp_meta_keys=
+                                   [('Jupiter_PDObsLon', u.deg),
+                                    ('Jupiter_PDObsLat', u.deg),
+                                    ('Jupiter_PDSunLon', u.deg)])
 
     # Prepare to create a multi-panel plot.  I play a little
     # fast-and-lose with plot_planet_subim, since it does the figure
@@ -455,8 +455,8 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
     min_vprof = np.min((vprof_axes[0].get_xlim(), vprof_axes[1].get_xlim()))
     for ax in vprof_axes:
         ax.set_xlim((min_vprof, max_vprof))
-    vprof_axes[0].invert_xaxis()
-    
+        vprof_axes[0].invert_xaxis()
+        
     in_name = os.path.basename(ccd_in.meta['RAWFNAME'])
     in_name, in_ext = os.path.splitext(in_name)
     in_name = f'{in_name}_reduction{in_ext}'
@@ -473,14 +473,14 @@ def characterize_ansas(ccd_in, bmp_meta=None, galsat_mask_side=None,
 def closest_galsat_to_jupiter(ccd_in, bmp_meta=None, **kwargs):
     if bmp_meta is None:
         bmp_meta = {}
-    ccd = ccd_in.copy()
-    galsats = list(GALSATS.keys())
-    g = galsats[0]
-    ra = ccd.meta[f'{g}_RA']
-    dec = ccd.meta[f'{g}_DEC']
-    jup_sc = SkyCoord(ra, dec, unit=u.deg)
-    galsats = galsats[1:]
-    min_ang = 90*u.deg
+        ccd = ccd_in.copy()
+        galsats = list(GALSATS.keys())
+        g = galsats[0]
+        ra = ccd.meta[f'{g}_RA']
+        dec = ccd.meta[f'{g}_DEC']
+        jup_sc = SkyCoord(ra, dec, unit=u.deg)
+        galsats = galsats[1:]
+        min_ang = 90*u.deg
     for g in galsats:
         ra = ccd.meta[f'{g}_RA']
         dec = ccd.meta[f'{g}_DEC']
@@ -578,10 +578,10 @@ def create_torus_day_table(
                      'ansa_left_r_peak', 'ansa_right_r_peak']
     if 'epsilon' in t_torus.colnames:
         biweight_cols.extend(['epsilon', 'epsilon_err'])
-    added_cols = add_daily_biweights(t_torus,
-                                     day_col='ijdlt',
-                                     colnames=biweight_cols)
-    # Create day_table
+        added_cols = add_daily_biweights(t_torus,
+                                         day_col='ijdlt',
+                                         colnames=biweight_cols)
+        # Create day_table
     day_table_cols = ['ijdlt'] + added_cols
     day_table = unique(t_torus[day_table_cols], keys='ijdlt')
     cdts = contiguous_sections(day_table, 'ijdlt', max_jd_gap)
@@ -659,8 +659,8 @@ def add_medfilt(t, colname, mask_col='mask', medfilt_width=21, mode='mirror'):
         bad_mask = t[mask_col]
     else:
         bad_mask = False
-    # mirror might be a little more physical than reflect, though
-    # edges are just hard, period
+        # mirror might be a little more physical than reflect, though
+        # edges are just hard, period
     meds = nan_median_filter(t[colname], mask=bad_mask,
                              size=medfilt_width, mode=mode)
     #bad_mask = np.logical_or(bad_mask, np.isnan(t[colname]))
@@ -669,7 +669,7 @@ def add_medfilt(t, colname, mask_col='mask', medfilt_width=21, mode='mirror'):
     #meds = median_filter(vals, size=medfilt_width, mode='reflect')
     #t[f'{colname}_medfilt'][~bad_mask] = meds
     t[f'{colname}_medfilt'] = meds
-                  
+    
 def plot_axhlines(ax, hlines=None, **kwargs):
     if hlines is None:
         return
@@ -684,8 +684,8 @@ def plot_axvlines(ax, vlines=None, **kwargs):
             vline, color = vline
         else:
             color = None
-        vline = date.fromisoformat(vline)
-        ax.axvline(vline, color=color)
+            vline = date.fromisoformat(vline)
+            ax.axvline(vline, color=color)
 
 def plot_ansa_surf_brights(t_torus, torus_day_table,
                            fig=None, ax=None,
@@ -776,21 +776,21 @@ def add_epsilon_cols(t,
         out_prefix = prefix
     if out_err_postfix is None:
         out_err_postfix = err_postfix
-    right_col = f'{prefix}ansa_right_r_peak{postfix}'
-    left_col = f'{prefix}ansa_left_r_peak{postfix}'
-    r_peak = t[right_col]
-    l_peak = t[left_col]
-    av_peak = (np.abs(r_peak) + np.abs(l_peak)) / 2
-    epsilon = -(r_peak + l_peak) / av_peak
-    t[f'{out_prefix}{outbase}{postfix}'] = epsilon
-    left_err = t[f'{err_prefix}ansa_left_r_peak{err_postfix}']
-    right_err = t[f'{err_prefix}ansa_right_r_peak{err_postfix}']
-    denom_var = left_err**2 + right_err**2
-    num_var = denom_var / 2
-    epsilon_err = epsilon * ((denom_var / (r_peak + l_peak)**2)
-                             + (num_var / av_peak**2))**0.5
-    epsilon_err = np.abs(epsilon_err)
-    t[f'{out_prefix}{outbase}{postfix}{out_err_postfix}'] = epsilon_err
+        right_col = f'{prefix}ansa_right_r_peak{postfix}'
+        left_col = f'{prefix}ansa_left_r_peak{postfix}'
+        r_peak = t[right_col]
+        l_peak = t[left_col]
+        av_peak = (np.abs(r_peak) + np.abs(l_peak)) / 2
+        epsilon = -(r_peak + l_peak) / av_peak
+        t[f'{out_prefix}{outbase}{postfix}'] = epsilon
+        left_err = t[f'{err_prefix}ansa_left_r_peak{err_postfix}']
+        right_err = t[f'{err_prefix}ansa_right_r_peak{err_postfix}']
+        denom_var = left_err**2 + right_err**2
+        num_var = denom_var / 2
+        epsilon_err = epsilon * ((denom_var / (r_peak + l_peak)**2)
+                                 + (num_var / av_peak**2))**0.5
+        epsilon_err = np.abs(epsilon_err)
+        t[f'{out_prefix}{outbase}{postfix}{out_err_postfix}'] = epsilon_err
 
 def plot_torus_epsilons(t_torus, torus_day_table,
                         fig=None, ax=None,
@@ -844,7 +844,7 @@ def plot_torus_epsilons(t_torus, torus_day_table,
 
 def east_from_io(t, left_colnames):
     """Creates new left and right columns that read in eastward shift
-from Io's orbit.  Returns a new table so as to not mess up the original unless the original already has the eastward shift columns
+    from Io's orbit.  Returns a new table so as to not mess up the original unless the original already has the eastward shift columns
 
     """
     already_done = ['east_shift_{left_colname}' in t.colnames
@@ -960,10 +960,10 @@ def ansa_sysIII(t_torus, #torus_day_table,
     dusk_east_shift = st_torus['east_shift_ansa_right_r_peak']
     
     h = ax.plot(dawn_sysIII, dawn_east_shift.filled(np.nan),
-             'b.', label='Dawn')
+                'b.', label='Dawn')
     handles.append(h[0])
     h = ax.plot(dusk_sysIII, dusk_east_shift.filled(np.nan),
-             'r.', label='Dusk')
+                'r.', label='Dusk')
     handles.append(h[0])
     sysIII = np.arange(0, 360)
 
@@ -973,93 +973,140 @@ def ansa_sysIII(t_torus, #torus_day_table,
     handles.append(h)
     ax.legend(ncol=3, handles=handles)
 
-def plot_ansa_r_amplitudes(t, **kwargs):
-    plot_column_vals(t, colnames=['ansa_left_r_amplitude',
-                                  'ansa_right_r_amplitude'],
-                     fmts=['b.', 'r.'],
-                     labels=['Dawn', 'Dusk'],
-                     ylabel='r Gauss amplitude ' \
-                     f'({t["ansa_left_r_amplitude"].unit})',
-                     medfilt_colname='ansa_right_r_amplitude',
-                     medfilt_collabel='Dusk medfilt',                    
-                     **kwargs)
+### The plotting routines that use plot_column_vals are obsolete
+##def plot_ansa_r_amplitudes(t, **kwargs):
+##    plot_column_vals(t, colnames=['ansa_left_r_amplitude',
+##                                  'ansa_right_r_amplitude'],
+##                     fmts=['b.', 'r.'],
+##                     labels=['Dawn', 'Dusk'],
+##                     ylabel='r Gauss amplitude ' \
+##                     f'({t["ansa_left_r_amplitude"].unit})',
+##                     medfilt_colname='ansa_right_r_amplitude',
+##                     medfilt_collabel='Dusk medfilt',                    
+##                     **kwargs)
+##
+##def plot_ansa_r_stddevs(t, **kwargs):
+##    # Too mixed in with large error bars
+##    plot_column_vals(t, colnames=['ansa_left_r_stddev',
+##                                  'ansa_right_r_stddev'],
+##                     fmts=['b.', 'r.'],
+##                     labels=['Dawn', 'Dusk'],
+##                     ylabel='r Gauss stddev ' \
+##                     f'({t["ansa_left_r_stddev"].unit})',
+##                     medfilt_colname='ansa_right_r_stddev',
+##                     medfilt_collabel='Dusk medfilt',
+##                     **kwargs)
+##
+##def plot_dawn_r_stddev(t, **kwargs):
+##    # Dawn and dusk modulations at the 0.15 Rj level, but they are not
+##    # convincingly correlated with peak positions.  They are corelated
+##    # with surface brightness & r amplitude in some cases, possibly
+##    # via the bright = broad correlation that Nick has noted
+##    plot_column_vals(t, colnames=['ansa_left_r_stddev'],
+##                     fmts=['b.'],
+##                     labels=['Dawn'],
+##                     ylabel='r Gauss stddev ' \
+##                     f'({t["ansa_left_r_stddev"].unit})',
+##                     medfilt_colname='ansa_left_r_stddev',
+##                     medfilt_collabel='Dawn medfilt',
+##                     ylim=(0.1, 0.5),
+##                     **kwargs)
+##def plot_dusk_r_stddev(t, **kwargs):
+##    plot_column_vals(t, colnames=['ansa_right_r_stddev'],
+##                     fmts=['r.'],
+##                     labels=['Dusk'],
+##                     ylabel='r Gauss stddev ' \
+##                     f'({t["ansa_right_r_stddev"].unit})',
+##                     medfilt_colname='ansa_right_r_stddev',
+##                     medfilt_collabel='Dusk medfilt',
+##                     ylim=(0.1, 0.5),
+##                     **kwargs)
+##
+##def plot_ansa_y_peaks(t, **kwargs):
+##    # This shows flat trend
+##    plot_column_vals(t, colnames=['ansa_left_y_peak',
+##                                  'ansa_right_y_peak'],
+##                     fmts=['b.', 'r.'],
+##                     labels=['Dawn', 'Dusk'],
+##                     ylabel='y peak pos' \
+##                     f'({t["ansa_left_y_peak"].unit})',
+##                     medfilt_colname=None,
+##                     **kwargs)
+##
+##def plot_dawn_y_stddev(t, **kwargs):
+##    plot_column_vals(t, colnames=['ansa_left_y_stddev'],
+##                     fmts=['b.'],
+##                     labels=['Dawn'],
+##                     ylabel='y Gauss stddev' \
+##                     f'({t["ansa_left_y_stddev"].unit})',
+##                     medfilt_colname='ansa_left_y_stddev',
+##                     medfilt_collabel='Dawn medfilt',
+##                     **kwargs)
+##def plot_dusk_y_stddev(t, **kwargs):
+##    plot_column_vals(t, colnames=['ansa_right_y_stddev'],
+##                     fmts=['r.'],
+##                     labels=['Dusk'],
+##                     ylabel='y Gauss stddev' \
+##                     f'({t["ansa_right_y_stddev"].unit})',
+##                     medfilt_colname='ansa_right_y_stddev',
+##                     medfilt_collabel='Dusk medfilt',
+##                     **kwargs)
 
-def plot_ansa_r_stddevs(t, **kwargs):
-    # Too mixed in with large error bars
-    plot_column_vals(t, colnames=['ansa_left_r_stddev',
-                                  'ansa_right_r_stddev'],
-                     fmts=['b.', 'r.'],
-                     labels=['Dawn', 'Dusk'],
-                     ylabel='r Gauss stddev ' \
-                     f'({t["ansa_left_r_stddev"].unit})',
-                     medfilt_colname='ansa_right_r_stddev',
-                     medfilt_collabel='Dusk medfilt',
+def plot_ansa_r_cont(t_torus,
+                     fig=None, ax=None,
+                     tlim=None, ylim=(0, 3000),
+                     **kwargs):
+    fig = fig or plt.figure()
+    ax = ax or fig.add_subplot()
+    handles = []
+    h = plot_column(t_torus, colname='ansa_left_cont',
+                    err_colname='ansa_left_cont_err',
+                    fmt='b.', label='dawn',
+                    alpha=0.1,
+                    fig=fig, ax=ax,                    
                      **kwargs)
+    handles.append(h)
+    h = plot_column(t_torus, colname='ansa_right_cont',
+                    err_colname='ansa_right_cont_err',
+                    fmt='r.', label='dusk',
+                    alpha=0.1,
+                    fig=fig, ax=ax,                    
+                     **kwargs)
+    handles.append(h)
+    ax.set_xlim(tlim)
+    ylabel=f'r continuum ({t_torus["ansa_left_cont"].unit})'
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(ylim)
+    ax.legend(ncol=1, handles=handles)
 
-def plot_dawn_r_stddev(t, **kwargs):
-    # Dawn and dusk modulations at the 0.15 Rj level, but they are not
-    # convincingly correlated with peak positions.  They are corelated
-    # with surface brightness & r amplitude in some cases, possibly
-    # via the bright = broad correlation that Nick has noted
-    plot_column_vals(t, colnames=['ansa_left_r_stddev'],
-                     fmts=['b.'],
-                     labels=['Dawn'],
-                     ylabel='r Gauss stddev ' \
-                     f'({t["ansa_left_r_stddev"].unit})',
-                     medfilt_colname='ansa_left_r_stddev',
-                     medfilt_collabel='Dawn medfilt',
-                     ylim=(0.1, 0.5),
+def plot_ansa_r_slope(t_torus,
+                      fig=None, ax=None,
+                      tlim=None, ylim=(0, 400),
+                      **kwargs):
+    fig = fig or plt.figure()
+    ax = ax or fig.add_subplot()
+    handles = []
+    h = plot_column(t_torus, colname='ansa_left_slope',
+                    err_colname='ansa_left_slope_err',
+                    fmt='b.', label='dawn',
+                    alpha=0.1,
+                    fig=fig, ax=ax,                    
                      **kwargs)
-def plot_dusk_r_stddev(t, **kwargs):
-    plot_column_vals(t, colnames=['ansa_right_r_stddev'],
-                     fmts=['r.'],
-                     labels=['Dusk'],
-                     ylabel='r Gauss stddev ' \
-                     f'({t["ansa_right_r_stddev"].unit})',
-                     medfilt_colname='ansa_right_r_stddev',
-                     medfilt_collabel='Dusk medfilt',
-                     ylim=(0.1, 0.5),
+    handles.append(h)
+    h = plot_column(t_torus, colname='ansa_right_slope',
+                    err_colname='ansa_right_slope_err',
+                    scale=-1,
+                    fmt='r.', label='dusk',
+                    alpha=0.1,
+                    fig=fig, ax=ax,                    
                      **kwargs)
+    handles.append(h)
+    ax.set_xlim(tlim)
+    ylabel=f'|r slope ({t_torus["ansa_left_slope"].unit})'
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(ylim)
+    ax.legend(ncol=1, handles=handles)
 
-def plot_ansa_y_peaks(t, **kwargs):
-    # This shows flat trend
-    plot_column_vals(t, colnames=['ansa_left_y_peak',
-                                  'ansa_right_y_peak'],
-                     fmts=['b.', 'r.'],
-                     labels=['Dawn', 'Dusk'],
-                     ylabel='y peak pos' \
-                     f'({t["ansa_left_y_peak"].unit})',
-                     medfilt_colname=None,
-                     **kwargs)
-
-def plot_dawn_y_stddev(t, **kwargs):
-    plot_column_vals(t, colnames=['ansa_left_y_stddev'],
-                     fmts=['b.'],
-                     labels=['Dawn'],
-                     ylabel='y Gauss stddev' \
-                     f'({t["ansa_left_y_stddev"].unit})',
-                     medfilt_colname='ansa_left_y_stddev',
-                     medfilt_collabel='Dawn medfilt',
-                     **kwargs)
-def plot_dusk_y_stddev(t, **kwargs):
-    plot_column_vals(t, colnames=['ansa_right_y_stddev'],
-                     fmts=['r.'],
-                     labels=['Dusk'],
-                     ylabel='y Gauss stddev' \
-                     f'({t["ansa_right_y_stddev"].unit})',
-                     medfilt_colname='ansa_right_y_stddev',
-                     medfilt_collabel='Dusk medfilt',
-                     **kwargs)
-
-def plot_dawn_cont(t, **kwargs):
-    plot_column_vals(t, colnames=['ansa_left_cont'],
-                     fmts=['b.'],
-                     labels=['Dawn'],
-                     ylabel='r continuum' \
-                     f'({t["ansa_left_cont"].unit})',
-                     medfilt_colname='ansa_left_cont',
-                     medfilt_collabel='Dawn medfilt',
-                     **kwargs)
 def plot_dusk_cont(t, **kwargs):
     plot_column_vals(t, colnames=['ansa_right_cont'],
                      fmts=['r.'],

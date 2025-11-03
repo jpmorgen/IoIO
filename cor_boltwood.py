@@ -156,7 +156,7 @@ class CorBoltwood():
         try:
             be = self.boltwood_entry(ccd)
         except Exception as e:
-            log.error(f'RAWFNAME of problem: {ccd.meta["RAWFNAME"]} {e}')
+            log.warning(f'RAWFNAME of problem: {ccd.meta["RAWFNAME"]} {e}')
             return ccd
         if be is None:
             return ccd

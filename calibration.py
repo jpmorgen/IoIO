@@ -1756,7 +1756,7 @@ class Calibration():
     # --> well, weighted by difference in time
 
     def best_flat(self, fname_ccd_or_hdr):
-        """Returns filename of best-matched flat for a file"""
+        """Returns filename of best-matched flat for a file.  ND filter angle changes are done occasionally so the best-matched flat will be the last flat recorded BEFORE the file"""
         if isinstance(fname_ccd_or_hdr, Header):
             hdr = fname_ccd_or_hdr
         elif isinstance(fname_ccd_or_hdr, CCDData):
