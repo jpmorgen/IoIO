@@ -50,12 +50,19 @@ SII_filt_crop = np.asarray(((350, 550), (1900, 2100)))
 #     = [[-3.70095154e-01, -3.57945037e-01],
 #        [ 1.26900000e+03,  1.37000000e+03]]
 
+## Sat Aug 02 01:30:47 2025 UTC  IoIO@IoIO1U2
+#run_level_default_ND_params \
+#    = [[2.31128952e-01, 2.41932896e-01],
+#       [1.23700000e+03, 1.35200000e+03]]
+
+# OOPS!  Accidently set the above in torus_rot branch, not (also) in main
+# Discovered & redid...
+
 # Thu Oct 30 21:09:41 2025 EDT  jpmorgen@snipe
-# I fogot to change these.  These are from Aug 3 2025
+# I forgot to change these.  These are from Aug 3 2025
 run_level_default_ND_params \
     = [[2.30864638e-01, 2.43044997e-01],
        [1.21200000e+03, 1.32800000e+03]]
-
 
 # Temporary set to 2 during really hazy weather 
 guider_nd_Filter_number = 3
