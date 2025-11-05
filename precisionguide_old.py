@@ -540,9 +540,20 @@ class FakeWeather():
 
 # --> This really needs to be in MaxImControl
 class ObsTerminator():
-    """Determines when an observation will end"""
+    """Determines when an observation will end
+
+    Parameters
+    ----------
+    Tend : number-like
+        Observation end time in UNIX seconds
+        Default is `None'
+
+    horizon_limit : number-like
+        ....
+    """
+
     def __init__(self,
-                 Tend=None, # unix seconds (time.time() + exposure_time)
+                 Tend=None,
                  horizon_limit=horizon_limit,
                  sundown_limit=sundown_limit):
         self.Tend = Tend
@@ -2068,11 +2079,6 @@ class PrecisionGuide():
 
 Parameters
 ----------
-MC : MaxImControl
-    MaxImControl object set up with defaults you would like to use
-    for guiding, main camera exposure, etc.  Default: MaxImControl
-    set to defaults of that object
-
 ObsClassName : str
     (Sub)class name of ObsData which will contain code that calculates 
     obj_center and desired_center coordinates.  Default: ObsData
@@ -2080,6 +2086,16 @@ ObsClassName : str
 ObsClassModule : str
     Module (.py file) containing ObsClass definition.  
     Default: current file
+
+obs_terminator : ObsTerminator
+    Object that controls the observation will end.  Default is
+    ObsTerminator set to defaults of that object
+
+MC : MaxImControl
+    MaxImControl object set up with defaults you would like to use
+    for guiding, main camera exposure, etc.  Default: MaxImControl
+    set to defaults of that object with the obs_terminator passed to
+    this object
 
 guide_box_command_file : str
     Filename used to send info to GuideBoxMover
@@ -2093,8 +2109,8 @@ guide_box_log_file : str
             self,
             ObsClassName=None, 
             ObsClassModule=None,
-            MC=None,
             obs_terminator=None,            
+            MC=None,
             guide_box_command_file=default_guide_box_command_file,
             guide_box_log_file=default_guide_box_log_file,
             **ObsClassArgs): # args to use to instantiate ObsClassName
@@ -2122,9 +2138,9 @@ guide_box_log_file : str
                 = getattr(importlib.import_module(ObsClassModule),
                           ObsClassName)
         self.ObsClassArgs = ObsClassArgs
-        if MC is None:
-            self.MC = MaxImControl()
         self.obs_terminator = obs_terminator or ObsTerminator()
+        # Make sure we load the obs_terminator we were passed into MC!
+        self.MC = MC or MaxImControl(obs_terminator=obs_terminator)
         self.guide_box_command_file = guide_box_command_file
         self.guide_box_log_file = guide_box_log_file
 
@@ -2163,6 +2179,9 @@ guide_box_log_file : str
     def __exit__(self, exception_type, exception_value, traceback):
         # Turn off everything
         self.GuideBoxMoving = False
+        # --> This should really check to see if we instantiated MC
+        # and it didn't get passed.  Or we should make it a
+        # requirement to pass an instantiated MC
         self.MC.__exit__(exception_type, exception_value, traceback)
 
     def reinitialize(self,
