@@ -8,13 +8,26 @@ from astropy import log
 
 from ccdmultipipe import as_single
 
-from cormultipipe import (RAW_DATA_ROOT,
-                          get_dirs_dates, reduced_dir,
-                          Calibration, OffCorMultiPipe, FixFnameCorMultipipe,
-                          nd_filter_mask, mask_nonlin_sat, detflux)
+from IoIO.utils import (reduced_dir, get_dirs_dates, multi_glob)
+from IoIO.cormultipipe import (RAW_DATA_ROOT, CorMultiPipeBase,
+                               mask_nonlin_sat, nd_filter_mask,
+                               detflux)
 
-class FixFnameOffCorMultipipe(FixFnameCorMultipipe, OffCorMultiPipe):
-    pass
+from IoIO.calibration import Calibration
+from IoIO.standard_star import (StandardStar, SSArgparseHandler,
+                                extinction_correct, rayleigh_convert)
+from IoIO.photometry import SOLVE_TIMEOUT, JOIN_TOLERANCE
+from IoIO.cor_photometry import (KEYS_TO_SOURCE_TABLE, CorPhotometry,
+                                 add_astrometry, write_photometry,
+                                 object_to_objctradec,
+                                 CorPhotometryArgparseMixin)
+from IoIO.horizons import comet_ephemeris
+
+#from cormultipipe import (RAW_DATA_ROOT,
+#                          get_dirs_dates, reduced_dir,
+#                          Calibration, OffCorMultiPipe, FixFnameCorMultipipe,
+#                          nd_filter_mask, mask_nonlin_sat, detflux)
+
 
 NEOWISE_ROOT = '/data/NEOWISE_2020F3'
 
@@ -25,7 +38,9 @@ if __name__ == "__main__":
     reduced_root = NEOWISE_ROOT
     reduced_root = "/tmp"
     start = "2020-07-08"
-    stop = "2021-01-01"
+    stop = "2020-07-08"
+    #stop = "2021-01-01"
+    #stop = "2020-07-15"
     dirs_dates = get_dirs_dates(data_root, start=start, stop=stop)
 
     dirs, _ = zip(*dirs_dates)
@@ -33,13 +48,18 @@ if __name__ == "__main__":
 
     glob_include = ['NEOWISE-*', 'CK20F030-*']
     c = Calibration(reduce=True)
-    cmp = FixFnameOffCorMultipipe(auto=True, calibration=c,
-                                  fits_fixed_ignore=True,
-                                  outname_ext='.fits',
-                                  post_process_list=[nd_filter_mask,
-                                                     mask_nonlin_sat,
-                                                     detflux,
-                                                     as_single])
+    standard_star_obj = StandardStar(reduce=True)
+    cmp = CorMultiPipeBase(auto=True, calibration=c,
+                           fits_fixed_ignore=True,
+                           outname_ext='.fits')#,
+                           #post_process_list=[mask_nonlin_sat,
+                           #                   nd_filter_mask,
+                           #                   comet_ephemeris,
+                           #                   detflux,
+                           #                   extinction_correct,
+                           #                   rayleigh_convert,
+                           #                   add_astrometry,
+                           #                   as_single])
     for d in dirs:
         flist = []
         for gi in glob_include:
@@ -48,7 +68,11 @@ if __name__ == "__main__":
             log.debug(f'No NEOWISE observations in {d}')
             continue
         reddir = reduced_dir(d, reduced_root)
-        pout = cmp.pipeline(flist, outdir=reddir,
+        #print(flist)
+        print(flist[0])
+        print(reddir)
+        break
+        pout = cmp.pipeline(flist[0], outdir=reddir,
                             create_outdir=True, overwrite=True)
 
 ##### directory = '/data/IoIO/raw/2020-07-08'

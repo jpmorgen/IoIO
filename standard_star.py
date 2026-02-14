@@ -1087,6 +1087,8 @@ def filter_stripchart(df=None,
         if not(plotname or show):
             continue
 
+        #print(f'nfilt = {nfilt}')
+        
         # If we made it here, we want to include a plot as output
         ax = plt.subplot(nfilt, 1, ifilt+1)
         ax.tick_params(which='both', direction='inout',

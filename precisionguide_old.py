@@ -2339,16 +2339,20 @@ guide_box_log_file : str
         if (-40 < self.MC.Telescope.Declination
             and self.MC.Telescope.Declination < +40
             and self.MC.Telescope.Altitude < 40):
-            # Change from guider pixels per 10s to main camera pixels per s
-            ra_pix_rate = -0.010/10 * plate_ratio
-            # Fri May 14 10:24:04 2021 EDT  jpmorgen@snipe
-            # This is the formal calculation, but intuition tells me
-            # it is too big of a swing to make at once
-            #dec_pix_rate = +0.051/10 * plate_ratio
-            #dec_pix_rate = +0.030/10 * plate_ratio
-            # Indeed, this should probably get pretty close
-            dec_pix_rate = +0.037/10 * plate_ratio
-            # Note Pythonic transpose
+            # Sat Jan 17 18:25:15 2026 EST  jpmorgen@snipe
+            # Wondering if I am moving the telescope too much
+            ra_pix_rate = 0
+            dec_pix_rate = 0
+            # # Change from guider pixels per 10s to main camera pixels per s
+            # ra_pix_rate = -0.010/10 * plate_ratio
+            # # Fri May 14 10:24:04 2021 EDT  jpmorgen@snipe
+            # # This is the formal calculation, but intuition tells me
+            # # it is too big of a swing to make at once
+            # #dec_pix_rate = +0.051/10 * plate_ratio
+            # #dec_pix_rate = +0.030/10 * plate_ratio
+            # # Indeed, this should probably get pretty close
+            # dec_pix_rate = +0.037/10 * plate_ratio
+            # # Note Pythonic transpose
             return self.GuideBoxCommander(np.asarray((dec_pix_rate, ra_pix_rate)))
 
 

@@ -416,6 +416,7 @@ log.setLevel('DEBUG')
 
 
 
+#plot_comet_obsdates(include_PSIScope=True)
 plot_comet_obsdates(include_PSIScope=False)
 #print(comets_in_dir('/data/IoIO/raw/20200806/'))
 #print(comets_in_dir('/data/IoIO/raw/2020-07-28'))

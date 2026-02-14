@@ -14,7 +14,8 @@ from IoIO.na_nebula import (BASE as NA_NEBULA_BASE, NA_NEBULA_ROOT,
 from IoIO.torus import (BASE as TORUS_BASE, TORUS_ROOT,
                         plot_ansa_surf_brights, plot_torus_epsilons,
                         plot_torus_ansa_pos, plot_ansa_r_cont,
-                        plot_ansa_r_slope)
+                        plot_ansa_r_slope, plot_ansa_r_peak_to_zero_sb,
+                        plot_ansa_r_val)
 from IoIO.mme import MODEL, plot_mme, plot_mme_corr
 from IoIO.juno import juno_pj_axis
 
@@ -162,6 +163,18 @@ def master_stripchart(
                 **kwargs)
         elif plotname == 'plot_ansa_r_slope':
             plot_ansa_r_slope(
+                t_torus, 
+                fig=fig, ax=ax,
+                tlim=(start, stop),
+                **kwargs)
+        elif plotname == 'plot_ansa_r_peak_to_zero_sb':
+            plot_ansa_r_peak_to_zero_sb(
+                t_torus, 
+                fig=fig, ax=ax,
+                tlim=(start, stop),
+                **kwargs)
+        elif plotname == 'plot_ansa_r_val':
+            plot_ansa_r_val(
                 t_torus, 
                 fig=fig, ax=ax,
                 tlim=(start, stop),

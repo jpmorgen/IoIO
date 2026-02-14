@@ -973,6 +973,182 @@ def ansa_sysIII(t_torus, #torus_day_table,
     handles.append(h)
     ax.legend(ncol=3, handles=handles)
 
+# --> These continuum parameter ylims would be nice things to add to
+# --> the masking and/or fitting sections of the code.
+def plot_ansa_r_cont(t_torus,
+                     fig=None, ax=None,
+                     tlim=None, ylim=(0, 3000),
+                     **kwargs):
+    fig = fig or plt.figure()
+    ax = ax or fig.add_subplot()
+    handles = []
+    h = plot_column(t_torus, colname='ansa_left_cont',
+                    err_colname='ansa_left_cont_err',
+                    fmt='b.', label='dawn',
+                    alpha=0.1,
+                    fig=fig, ax=ax,                    
+                     **kwargs)
+    handles.append(h)
+    h = plot_column(t_torus, colname='ansa_right_cont',
+                    err_colname='ansa_right_cont_err',
+                    fmt='r.', label='dusk',
+                    alpha=0.1,
+                    fig=fig, ax=ax,                    
+                     **kwargs)
+    handles.append(h)
+    ax.set_xlim(tlim)
+    ylabel=f'r continuum ({t_torus["ansa_left_cont"].unit})'
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(ylim)
+    ax.legend(ncol=1, handles=handles)
+
+def plot_ansa_r_slope(t_torus,
+                      fig=None, ax=None,
+                      tlim=None, ylim=(0, 400),
+                      **kwargs):
+    fig = fig or plt.figure()
+    ax = ax or fig.add_subplot()
+    handles = []
+    h = plot_column(t_torus, colname='ansa_left_slope',
+                    err_colname='ansa_left_slope_err',
+                    fmt='b.', label='dawn',
+                    alpha=0.1,
+                    fig=fig, ax=ax,                    
+                     **kwargs)
+    handles.append(h)
+    h = plot_column(t_torus, colname='ansa_right_slope',
+                    err_colname='ansa_right_slope_err',
+                    scale=-1,
+                    fmt='r.', label='dusk',
+                    alpha=0.1,
+                    fig=fig, ax=ax,                    
+                     **kwargs)
+    handles.append(h)
+    ax.set_xlim(tlim)
+    ylabel=f'|r slope ({t_torus["ansa_left_slope"].unit})'
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(ylim)
+    ax.legend(ncol=1, handles=handles)
+
+def plot_ansa_r_peak_to_zero_sb(t_torus_in, # Temporary until install columns
+                                fig=None, ax=None,
+                                tlim=None, ylim=(1, 5),
+                                **kwargs):
+    fig = fig or plt.figure()
+    ax = ax or fig.add_subplot()
+    handles = []
+    t_torus = t_torus_in.copy()
+    # 6 -- 12 Rj is a good limit to this
+    
+    zero_sb = -t_torus['ansa_right_cont'] / t_torus['ansa_right_slope']
+    zero_sb_err = (((t_torus['ansa_right_cont_err']
+                   / t_torus['ansa_right_cont'])**2
+                   + (t_torus['ansa_right_slope_err']
+                   / t_torus['ansa_right_slope'])**2)**0.5
+                   * abs(zero_sb))
+    r_peak_to_zero_sb = zero_sb - t_torus['ansa_right_r_peak']
+    t_torus['ansa_right_r_zero_sb'] = zero_sb
+    t_torus['ansa_right_r_zero_sb_err'] = zero_sb_err
+    t_torus['ansa_right_r_peak_to_zero_sb'] = r_peak_to_zero_sb
+    h = plot_column(t_torus, colname='ansa_right_r_peak_to_zero_sb',
+                    fmt='r.', label='dusk',
+                    fig=fig, ax=ax,                    
+                     **kwargs)
+    #h = plot_column(t_torus, colname='ansa_right_r_zero_sb',
+    #                fmt='r.', label='dusk',
+    #                fig=fig, ax=ax,                    
+    #                 **kwargs)
+    #h = plot_column(t_torus, colname='ansa_right_r_zero_sb',
+    #                err_colname='ansa_right_r_zero_sb_err',
+    #                fmt='r.', label='dusk',
+    #                alpha=0.1,
+    #                fig=fig, ax=ax,                    
+    #                 **kwargs)
+    handles.append(h)
+
+    zero_sb = -t_torus['ansa_left_cont'] / t_torus['ansa_left_slope']
+    zero_sb_err = (((t_torus['ansa_left_cont_err']
+                   / t_torus['ansa_left_cont'])**2
+                   + (t_torus['ansa_left_slope_err']
+                   / t_torus['ansa_left_slope'])**2)**0.5
+                   * abs(zero_sb))
+    r_peak_to_zero_sb = t_torus['ansa_left_r_peak'] - zero_sb
+    t_torus['ansa_left_r_zero_sb'] = zero_sb
+    t_torus['ansa_left_r_zero_sb_err'] = zero_sb_err
+    t_torus['ansa_left_r_peak_to_zero_sb'] = r_peak_to_zero_sb
+    h = plot_column(t_torus, colname='ansa_left_r_peak_to_zero_sb',
+                    fmt='b.', label='dawn',
+                    fig=fig, ax=ax,                    
+                     **kwargs)
+    #h = plot_column(t_torus, colname='ansa_left_r_zero_sb',
+    #                scale=-1,
+    #                fmt='b.', label='dawn',
+    #                fig=fig, ax=ax,                    
+    #                 **kwargs)
+    #h = plot_column(t_torus, colname='ansa_left_r_zero_sb',
+    #                err_colname='ansa_left_r_zero_sb_err',
+    #                scale=-1,
+    #                fmt='b.', label='dawn',
+    #                alpha=0.1,
+    #                fig=fig, ax=ax,                    
+    #                 **kwargs)
+    handles.append(h)
+    ax.set_xlim(tlim)
+    #ylabel=f'|r| of zero SB ({t_torus["ansa_right_r_zero_sb"].unit})'
+    ylabel=f'r peak to zero cont ({t_torus["ansa_right_r_zero_sb"].unit})'
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(ylim)
+    ax.legend(ncol=1, handles=handles)
+    
+def plot_ansa_r_val(t_torus_in, # Temporary until install columns
+                    ansa_r_val=0.2*u.R_jup,
+                    fig=None, ax=None,
+                    tlim=None, ylim=(0, 1000),
+                    **kwargs):
+    """Plot fitted r profile at a particular r_val outside of r_peak"""
+    fig = fig or plt.figure()
+    ax = ax or fig.add_subplot()
+    handles = []
+    t_torus = t_torus_in.copy()
+    # Dawn side, note negative offset from peak on that side!
+    r_model = (models.Gaussian1D(mean=t_torus['ansa_left_r_peak'],
+                                stddev=t_torus['ansa_left_r_stddev'],
+                                amplitude=t_torus['ansa_left_r_amplitude'])
+               + models.Polynomial1D(1, c0=t_torus['ansa_left_cont'],
+                                     c1=t_torus['ansa_left_slope']))
+    sb = r_model(t_torus['ansa_left_r_peak'] - ansa_r_val)
+    t_torus['ansa_left_r_val_sb'] = sb
+    h = plot_column(t_torus, colname='ansa_left_r_val_sb',
+                    #err_colname='ansa_left_slope_err',
+                    fmt='b.', label='dawn',
+                    alpha=0.1,
+                    fig=fig, ax=ax,                    
+                     **kwargs)
+    handles.append(h)
+    r_model = (models.Gaussian1D(mean=t_torus['ansa_right_r_peak'],
+                                stddev=t_torus['ansa_right_r_stddev'],
+                                amplitude=t_torus['ansa_right_r_amplitude'])
+               + models.Polynomial1D(1, c0=t_torus['ansa_right_cont'],
+                                     c1=t_torus['ansa_right_slope']))
+    sb = r_model(t_torus['ansa_right_r_peak'] + ansa_r_val)
+    t_torus['ansa_right_r_val_sb'] = sb
+    h = plot_column(t_torus, colname='ansa_right_r_val_sb',
+                    #err_colname='ansa_right_slope_err',
+                    fmt='r.', label='dusk',
+                    alpha=0.1,
+                    fig=fig, ax=ax,                    
+                     **kwargs)
+    handles.append(h)
+    ax.set_xlim(tlim)
+    Rj = r'R$_\mathrm{J}$'
+    sb_unit = t_torus['ansa_right_r_amplitude'].unit
+    ylabel=f'Fit rad. prof. val |{ansa_r_val.value} {Rj}| from peak ({sb_unit})'
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(ylim)
+    ax.legend(ncol=1, handles=handles)
+
+
+
 ### The plotting routines that use plot_column_vals are obsolete
 ##def plot_ansa_r_amplitudes(t, **kwargs):
 ##    plot_column_vals(t, colnames=['ansa_left_r_amplitude',
@@ -1051,91 +1227,36 @@ def ansa_sysIII(t_torus, #torus_day_table,
 ##                     medfilt_colname='ansa_right_y_stddev',
 ##                     medfilt_collabel='Dusk medfilt',
 ##                     **kwargs)
-
-def plot_ansa_r_cont(t_torus,
-                     fig=None, ax=None,
-                     tlim=None, ylim=(0, 3000),
-                     **kwargs):
-    fig = fig or plt.figure()
-    ax = ax or fig.add_subplot()
-    handles = []
-    h = plot_column(t_torus, colname='ansa_left_cont',
-                    err_colname='ansa_left_cont_err',
-                    fmt='b.', label='dawn',
-                    alpha=0.1,
-                    fig=fig, ax=ax,                    
-                     **kwargs)
-    handles.append(h)
-    h = plot_column(t_torus, colname='ansa_right_cont',
-                    err_colname='ansa_right_cont_err',
-                    fmt='r.', label='dusk',
-                    alpha=0.1,
-                    fig=fig, ax=ax,                    
-                     **kwargs)
-    handles.append(h)
-    ax.set_xlim(tlim)
-    ylabel=f'r continuum ({t_torus["ansa_left_cont"].unit})'
-    ax.set_ylabel(ylabel)
-    ax.set_ylim(ylim)
-    ax.legend(ncol=1, handles=handles)
-
-def plot_ansa_r_slope(t_torus,
-                      fig=None, ax=None,
-                      tlim=None, ylim=(0, 400),
-                      **kwargs):
-    fig = fig or plt.figure()
-    ax = ax or fig.add_subplot()
-    handles = []
-    h = plot_column(t_torus, colname='ansa_left_slope',
-                    err_colname='ansa_left_slope_err',
-                    fmt='b.', label='dawn',
-                    alpha=0.1,
-                    fig=fig, ax=ax,                    
-                     **kwargs)
-    handles.append(h)
-    h = plot_column(t_torus, colname='ansa_right_slope',
-                    err_colname='ansa_right_slope_err',
-                    scale=-1,
-                    fmt='r.', label='dusk',
-                    alpha=0.1,
-                    fig=fig, ax=ax,                    
-                     **kwargs)
-    handles.append(h)
-    ax.set_xlim(tlim)
-    ylabel=f'|r slope ({t_torus["ansa_left_slope"].unit})'
-    ax.set_ylabel(ylabel)
-    ax.set_ylim(ylim)
-    ax.legend(ncol=1, handles=handles)
-
-def plot_dusk_cont(t, **kwargs):
-    plot_column_vals(t, colnames=['ansa_right_cont'],
-                     fmts=['r.'],
-                     labels=['Dusk'],
-                     ylabel='r continuum' \
-                     f'({t["ansa_right_cont"].unit})',
-                     medfilt_colname='ansa_right_cont',
-                     medfilt_collabel='Dusk medfilt',
-                     **kwargs)
-
-def plot_dawn_slope(t, **kwargs):
-    plot_column_vals(t, colnames=['ansa_left_slope'],
-                     fmts=['b.'],
-                     labels=['Dawn'],
-                     ylabel='r slope' \
-                     f'({t["ansa_left_slope"].unit})',
-                     medfilt_colname='ansa_left_slope',
-                     medfilt_collabel='Dawn medfilt',
-                     **kwargs)
-def plot_dusk_slope(t, **kwargs):
-    plot_column_vals(t, colnames=['ansa_right_slope'],
-                     scale=[-1],
-                     fmts=['r.'],
-                     labels=['Dusk'],
-                     ylabel='r slope' \
-                     f'({t["ansa_right_slope"].unit})',
-                     medfilt_colname='ansa_right_slope',
-                     medfilt_collabel='Dusk medfilt',
-                     **kwargs)
+##
+##def plot_dusk_cont(t, **kwargs):
+##    plot_column_vals(t, colnames=['ansa_right_cont'],
+##                     fmts=['r.'],
+##                     labels=['Dusk'],
+##                     ylabel='r continuum' \
+##                     f'({t["ansa_right_cont"].unit})',
+##                     medfilt_colname='ansa_right_cont',
+##                     medfilt_collabel='Dusk medfilt',
+##                     **kwargs)
+##
+##def plot_dawn_slope(t, **kwargs):
+##    plot_column_vals(t, colnames=['ansa_left_slope'],
+##                     fmts=['b.'],
+##                     labels=['Dawn'],
+##                     ylabel='r slope' \
+##                     f'({t["ansa_left_slope"].unit})',
+##                     medfilt_colname='ansa_left_slope',
+##                     medfilt_collabel='Dawn medfilt',
+##                     **kwargs)
+##def plot_dusk_slope(t, **kwargs):
+##    plot_column_vals(t, colnames=['ansa_right_slope'],
+##                     scale=[-1],
+##                     fmts=['r.'],
+##                     labels=['Dusk'],
+##                     ylabel='r slope' \
+##                     f'({t["ansa_right_slope"].unit})',
+##                     medfilt_colname='ansa_right_slope',
+##                     medfilt_collabel='Dusk medfilt',
+##                     **kwargs)
 
 def torus_directory(directory,
                     outdir=None,

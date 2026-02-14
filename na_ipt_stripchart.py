@@ -23,7 +23,7 @@ outdir = '/data/IoIO/analysis/'
 #master_stripchart(t_na, t_torus, nplots=2, figsize = [11, 7],
 #                  outname='/home/jpmorgen/Papers/io/IoIO_2017--2023_Sublimation_JGR/Na_SII_time_sequence.png')
 
-#t_na = QTable.read('/data/IoIO/Na_nebula/Na_nebula_cleaned.ecsv')
+#t_na = QTable.read('/data/IoIO/Na_nebula/Na_nebuqla_cleaned.ecsv')
 #t_torus = QTable.read('/data/IoIO/Torus/Torus_cleaned.ecsv')
 #torus_day_table = 
 ##t_torus = QTable.read('/data/IoIO/Torus/Torus.ecsv')
@@ -32,21 +32,37 @@ outdir = '/data/IoIO/analysis/'
 #t_na = t_na[~t_na['mask']]
 #t_torus = t_torus[~t_torus['mask']]
 
-#figsize = None
-#figsize = (7.5,5.5)
-#master_stripchart(plots=['na_nebula',
-#                         'ansa_brights'],
-#                  figsize=figsize,
-#                 **table_dict)
-
 figsize = None
-figsize = (7.5,5.5)
-master_stripchart(plots=['ansa_brights',
-                         'plot_ansa_r_cont',
-                         'plot_ansa_r_slope',
-                         ],
+figsize = (8,5.5)
+#figsize = (8,6.5)
+#figsize = (7.5,5.5)
+master_stripchart(plots=['na_nebula',
+                         'ansa_brights'],
                   figsize=figsize,
-                  **table_dict)
+                 **table_dict)
+
+# master_stripchart(plots=['ansa_brights',
+#                          'plot_ansa_r_val'],
+#                   **table_dict)
+
+# figsize = None
+# figsize = (7.5,5.5)a
+# master_stripchart(plots=['ansa_brights',
+#                          #'plot_ansa_r_cont',
+#                          #'plot_ansa_r_slope',
+#                          'plot_ansa_r_peak_to_zero_sb',
+#                          ],
+#                   figsize=figsize,
+#                   **table_dict)
+
+# figsize = None
+# figsize = (7.5,5.5)
+# master_stripchart(plots=['ansa_brights',
+#                          'plot_ansa_r_cont',
+#                          'plot_ansa_r_slope',
+#                          ],
+#                   figsize=figsize,
+#                   **table_dict)
 
 #figsize = (6, 3)
 #master_stripchart(plots=['ansa_brights'],
@@ -70,10 +86,16 @@ master_stripchart(plots=['ansa_brights',
 #mask = table_dict['t_torus']['ansa_left_r_stddev'] < 0.45*u.Rjup
 #table_dict['t_torus'] = table_dict['t_torus'][mask]
 #
-#master_stripchart(plots=['na_nebula',
-#                         'ansa_brights',
-#                         'ansa_pos'],
-#                  **table_dict)
+# master_stripchart(plots=['na_nebula',
+#                          'ansa_brights',
+#                          'ansa_pos'],
+#                   **table_dict)
+
+#master_stripchart(plots=['ansa_brights',
+#                         'ansa_pos',
+#                         'mme',
+#                         'mme_corr'],
+#                         **table_dict)
 
 #master_stripchart(plots=['na_nebula',
 #                         'ansa_brights',
