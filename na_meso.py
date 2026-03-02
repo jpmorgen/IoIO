@@ -887,9 +887,17 @@ class NaMeso:
         self.add_best_na_meso()
         ax = plt.subplot(3, 2, 6)
         plt.errorbar(self.qtable['tavg'].datetime,
-                     self.qtable['meso_or_model'].value,
-                     self.qtable['meso_or_model_err'].value,
+                     self.qtable['measured_meso'].value,
+                     self.qtable['measured_meso_err'].value,
                      fmt=('k.'))
+        plt.errorbar(self.qtable['tavg'].datetime,
+                     self.qtable['model_meso'].value,
+                     self.qtable['model_meso_err'].value,
+                     fmt=('r.'))
+        #plt.errorbar(self.qtable['tavg'].datetime,
+        #             self.qtable['meso_or_model'].value,
+        #             self.qtable['meso_or_model_err'].value,
+        #             fmt=('k.'))
         plt.xlabel(f'Date')
         unit = self.qtable['meso_or_model'].unit
         plt.ylabel(f'Best meso Na ({unit})')

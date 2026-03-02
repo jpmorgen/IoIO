@@ -444,13 +444,13 @@ def plot_na_nebula_surf_brights(
                         colname=bwt_col,
                         err_colname=std_col,
                         fmt='.',
-                        label=f'{av_ap.value} R$_\mathrm{{J}}$ ',
+                        label=f'{av_ap.value}' + r' R$_\mathrm{{J}}$ ',
                         alpha=0.25,
                         fig=fig, ax=ax)
         err_handles.append(h)
         h = plot_column(na_nebula_day_table,
                         colname=medfilt_colname,
-                        label=f'{av_ap.value} R$_\mathrm{{J}}$ medfilt',
+                        label=f'{av_ap.value}' + r' R$_\mathrm{{J}}$ medfilt',
                         linewidth=2,
                         fig=fig, ax=ax)
         line_handles.append(h)
