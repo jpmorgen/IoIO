@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 """Reduce files for Elisabeth Adams XRP project"""
 
 import re

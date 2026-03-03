@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 """Run standard star photometry pipeline for the IoIO coronagraph"""
 
