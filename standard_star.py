@@ -498,7 +498,7 @@ def exposure_correct_plot(exposure_correct_data,
     # Plot our exposure correction data
     f = plt.figure()
     ax = plt.subplot()
-    plt.plot(plot_dates, exposure_corrects, 'k.')
+    plt.plot_date(plot_dates, exposure_corrects, 'k.')
 
     # Fit a constant offset to each segment in which we have a
     # constant latency
@@ -514,18 +514,21 @@ def exposure_correct_plot(exposure_correct_data,
                                                       ignore_nan=True)
         mad_std_exposure_correct = mad_std(exposure_corrects[sidx],
                                            ignore_nan=True)
-        plt.plot([mindate, maxdate],
-                 [biweight_exposure_correct]*2, 'r-')
+        # plot_date is depreciated, but I would need to refactor away
+        # the pandas dataframe to use astropy QTables, dates, etc.
+        plt.plot_date([mindate, maxdate],
+                      [biweight_exposure_correct]*2, 'r-')
 
-        plt.plot([mindate, maxdate],
-                 [biweight_exposure_correct-mad_std_exposure_correct]*2,
-                 'k--')
-        plt.plot([mindate, maxdate],
-                 [biweight_exposure_correct+mad_std_exposure_correct]*2,
-                 'k--')
+        plt.plot_date([mindate, maxdate],
+                      [biweight_exposure_correct-mad_std_exposure_correct]*2,
+                      'k--')
+        plt.plot_date([mindate, maxdate],
+                      [biweight_exposure_correct+mad_std_exposure_correct]*2,
+                      'k--')
 
         plt.text((mindate + maxdate)/2,
-                 0.5*biweight_exposure_correct, 
+                 #0.5*biweight_exposure_correct,
+                 1, 
                  f'{biweight_exposure_correct:.2f} +/- {mad_std_exposure_correct:.2f}',
                  ha='center')#, transform=ax.get_yaxis_transform())
 
@@ -620,7 +623,7 @@ def standard_star_directory(directory,
                          'I', 'u', 'g', 'r', 'i', 'z', 'G')
     simbad_results = s.query_objects(objects)
     vega_entry = simbad_results[-1]
-    simbad_results = simbad_results[0:-2]
+    simbad_results = simbad_results[0:-1]
     # Note change to lowercase and degrees for both RA and DEC
     vega_coords = SkyCoord(vega_entry['ra'],
                            vega_entry['dec'],
@@ -1093,10 +1096,10 @@ def filter_stripchart(df=None,
         ax = plt.subplot(nfilt, 1, ifilt+1)
         ax.tick_params(which='both', direction='inout',
                        bottom=True, top=True, left=True, right=True)
-        plt.plot(filtdf['min_plot_date'], filtdf[column], 'k.')
-        plt.plot(plot_date_range, [biweight_loc + mads]*2, 'k--')
-        plt.plot(plot_date_range, [biweight_loc]*2, 'r-')
-        plt.plot(plot_date_range, [biweight_loc - mads]*2, 'k--')
+        plt.plot_date(filtdf['min_plot_date'], filtdf[column], 'k.')
+        plt.plot_date(plot_date_range, [biweight_loc + mads]*2, 'k--')
+        plt.plot_date(plot_date_range, [biweight_loc]*2, 'r-')
+        plt.plot_date(plot_date_range, [biweight_loc - mads]*2, 'k--')
         
         ax.set_xlim(plot_date_range)
         ax.set_ylim([biweight_loc - 5*mads,

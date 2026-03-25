@@ -7,16 +7,16 @@ name = "pypi"
 boltwood-parser = "*"
 moviepy = "==1.0.3"
 matplotlib = "==3.6.3"
-scipy = "==1.10"
 ccdproc = "*"
 bigmultipipe = "*"
 photutils = "*"
 astroquery = "*"
 pandas = "*"
 astropy = "==5.2.1"
-numpy = "==1.24.2"
 setuptools = "==66.1.1"
 specutils = "*"
+scipy = "==1.10"
+numpy = "==1.24.2"
 
 [dev-packages]
 
