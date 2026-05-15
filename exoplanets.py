@@ -162,9 +162,12 @@ def estimate_exposure(vmag_in, target_nonlin=BEST_NONLIN):
     #expo_correct = 2.71*u.s
     # This is now valid for the ASCOM driver install in 2025-01-12
     expo_correct = 0*u.s
-    ref_mag = 10.271*u.mag(u.electron)
-    ref_expo = 7.71*u.s
-    ref_frac_nonlin = .90
+    # Fri Apr 17 19:49:49 2026 EDT  jpmorgen@snipe
+    # Finding this is consistently low by a lot
+    # WASP-163b 
+    ref_mag = 12.663*u.mag(u.electron)
+    ref_expo = 200*u.s
+    ref_frac_nonlin = 0.8
     vmag = vmag_in*u.mag(u.electron)
     dmag = ref_mag - vmag
     expo = (target_nonlin/ref_frac_nonlin

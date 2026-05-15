@@ -36,10 +36,10 @@ figsize = None
 figsize = (8,5.5)
 #figsize = (8,6.5)
 #figsize = (7.5,5.5)
-master_stripchart(plots=['na_nebula',
-                         'ansa_brights'],
-                  figsize=figsize,
-                 **table_dict)
+# master_stripchart(plots=['na_nebula',
+#                          'ansa_brights'],
+#                   figsize=figsize,
+#                  **table_dict)
 
 # master_stripchart(plots=['ansa_brights',
 #                          'plot_ansa_r_val'],
@@ -91,21 +91,21 @@ master_stripchart(plots=['na_nebula',
 #                          'ansa_pos'],
 #                   **table_dict)
 
-#master_stripchart(plots=['ansa_brights',
-#                         'ansa_pos',
-#                         'mme',
-#                         'mme_corr'],
-#                         **table_dict)
+# master_stripchart(plots=['ansa_brights',
+#                          'ansa_pos',
+#                          'mme',
+#                          'mme_corr'],
+#                          **table_dict)
 
 #master_stripchart(plots=['na_nebula',
 #                         'ansa_brights',
 #                         'epsilons'],
 #                  **table_dict)
 
-#master_stripchart(plots=['ansa_brights',
-#                         'ansa_pos',
+master_stripchart(plots=['ansa_brights',
+                         'ansa_pos'],
 #                         'epsilons'],
-#                  **table_dict)
+                  **table_dict)
 
 #master_stripchart(t_na, t_torus,
 #                  plots=['Na_nighly_medians',
